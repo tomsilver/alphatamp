@@ -19,17 +19,17 @@ class BaseApproach(abc.ABC):
         self._rng = np.random.default_rng(seed)
 
     @abc.abstractmethod
-    def train(self, task: PlanningProblem) -> None:
-        """Run training on the given training task.
+    def train(self, problem: PlanningProblem) -> None:
+        """Run training on the given training problem.
 
-        Note that train() is called sequentially, one training task at a time. If the
-        approach uses batch training over multiple tasks, it should store tasks as they
-        are received and then call batch training at some interval.
+        Note that train() is called sequentially, one training problem at a time. If the
+        approach uses batch training over multiple problems, it should store problems as
+        they are received and then call batch training at some interval.
         """
 
     @abc.abstractmethod
-    def run_planning(self, task: PlanningProblem, timeout: float) -> Plan:
-        """Run planning on a given (eval) task.
+    def run_planning(self, problem: PlanningProblem, timeout: float) -> Plan:
+        """Run planning on a given (eval) problem.
 
         If no plan is found within the timeout, raises a TimeoutError.
 
