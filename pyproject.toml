@@ -5,12 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alphatamp"
 version = "0.1.0"
-description = "A basic starter for Python packages."
+description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "matplotlib",
-   "numpy",
+   "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
+   "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
 ]
 
 [project.optional-dependencies]
