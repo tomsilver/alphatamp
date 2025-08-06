@@ -242,4 +242,3 @@ class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, RelationalAbst
 
                 # NOTE: assuming that every previous skeleton failed.
                 prev.append(skeleton)
-                import ipdb; ipdb.set_trace()
