@@ -1,5 +1,7 @@
 """A baseline approach that runs pure planning and does not learn anything."""
 
+from typing import TypeVar
+
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
 )
@@ -18,8 +20,12 @@ from bilevel_planning.utils import (
 
 from alphatamp.approaches.base_approach import BaseApproach
 
+_O = TypeVar("_O")  # observation
+_X = TypeVar("_X")  # state
+_U = TypeVar("_U")  # action
 
-class PurePlanningApproach(BaseApproach):
+
+class PurePlanningApproach(BaseApproach[_O, _X, _U]):
     """A baseline approach that runs pure planning and does not learn anything."""
 
     def __init__(
@@ -37,10 +43,12 @@ class PurePlanningApproach(BaseApproach):
         self._max_skill_horizon = max_skill_horizon
         self._heuristic_name = heuristic_name
 
-    def train(self, problem: PlanningProblem) -> None:
+    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
         pass
 
-    def run_planning(self, problem: PlanningProblem, timeout: float) -> Plan:
+    def _run_planning(
+        self, problem: PlanningProblem[_X, _U], timeout: float
+    ) -> Plan[_X, _U]:
 
         # Create the sampler.
         trajectory_sampler = ParameterizedControllerTrajectorySampler(
