@@ -11,23 +11,23 @@ from alphatamp.approaches.collaborative_filtering_approach import (
 def test_collaborative_filtering_approach():
     """Tests for CollaborativeFilteringApproach()."""
 
-    # Test in simple PRBench environment.
+    # Test in a PRBench environment where the first skeleton won't work.
     prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o0-v0")
+    env = prbench.make("prbench/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
-        "obstruction2d", env.observation_space, env.action_space, num_obstructions=0
+        "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
     # Create the approach.
-    approach = CollaborativeFilteringApproach(env_models, seed=123)
+    approach = CollaborativeFilteringApproach(env_models, seed=123,
+                                              samples_per_step=2,
+                                              training_planning_timeout=10)
 
-    # Create a problem.
+    # Train on just one problem.
     obs, _ = env.reset(seed=123)
+    approach.train(obs)
 
-    # TODO
-    # approach.train(obs)
-
-    # Evaluation should succeed because this is an easy problem.
+    # Evaluation should succeed because we should have learned the pattern.
     plan = approach.run_planning(obs, timeout=100)
 
     for action in plan.actions:
