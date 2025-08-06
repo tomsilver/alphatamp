@@ -1,7 +1,7 @@
 """A learning approach for skeleton generation inspired by collaborative filtering."""
 
 from itertools import islice
-from typing import Callable, Hashable, Iterator, TypeVar
+from typing import Callable, Iterator, TypeVar, TypeAlias
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -10,8 +10,9 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
 from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
+from relational_structs import GroundOperator
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.structs import Goal, Plan, PlanningProblem, SesameModels
+from bilevel_planning.structs import Goal, Plan, PlanningProblem, SesameModels, RelationalAbstractState
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -25,8 +26,7 @@ from alphatamp.approaches.base_approach import BaseApproach
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
-_S = TypeVar("_S", bound=Hashable)  # abstract state
-_A = TypeVar("_A", bound=Hashable)  # abstract action
+Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
 
 
 class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
@@ -49,15 +49,10 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
         self._heuristic_name = heuristic_name
         self._skeleton_batch_size = skeleton_batch_size
 
-    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        pass
-
-    def _run_planning(
-        self, problem: PlanningProblem[_X, _U], timeout: float
-    ) -> Plan[_X, _U]:
+        # Create the planning components.
 
         # Create the sampler.
-        trajectory_sampler = ParameterizedControllerTrajectorySampler(
+        self._trajectory_sampler = ParameterizedControllerTrajectorySampler(
             controller_generator=RelationalControllerGenerator(self._env_models.skills),
             transition_function=self._env_models.transition_fn,
             state_abstractor=self._env_models.state_abstractor,
@@ -65,15 +60,16 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Create the abstract plan generator.
-        abstract_plan_generator: AbstractPlanGenerator = (
+        self._base_abstract_plan_generator = RelationalHeuristicSearchAbstractPlanGenerator(
+            self._env_models.types,
+            self._env_models.predicates,
+            self._env_models.operators,
+            self._heuristic_name,
+            seed=self._seed,
+        )
+        self._batched_abstract_plan_generator: AbstractPlanGenerator = (
             BatchRankingAbstractPlanGenerator(
-                RelationalHeuristicSearchAbstractPlanGenerator(
-                    self._env_models.types,
-                    self._env_models.predicates,
-                    self._env_models.operators,
-                    self._heuristic_name,
-                    seed=self._seed,
-                ),
+                self._base_abstract_plan_generator,
                 score_fn=self._score_skeleton,
                 batch_size=self._skeleton_batch_size,
                 seed=self._seed,
@@ -81,29 +77,39 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Create the abstract successor function (not really used).
-        abstract_successor_fn = RelationalAbstractSuccessorGenerator(
+        self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
             self._env_models.operators
         )
 
         # Finish the planner.
-        planner = SesamePlanner(
-            abstract_plan_generator,
-            trajectory_sampler,
+        self._planner = SesamePlanner(
+            self._batched_abstract_plan_generator,
+            self._trajectory_sampler,
             self._max_abstract_plans,
             self._samples_per_step,
-            abstract_successor_fn,
+            self._abstract_successor_fn,
             self._env_models.state_abstractor,
             seed=self._seed,
         )
 
+        # Store data.
+        self._data: list[dict[Skeleton, bool]] = []
+
+    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
+        pass
+
+    def _run_planning(
+        self, problem: PlanningProblem[_X, _U], timeout: float
+    ) -> Plan[_X, _U]:
+
         # Run the planner.
-        plan, _ = planner.run(problem, timeout=timeout)
+        plan, _ = self._planner.run(problem, timeout=timeout)
         if plan is None:
             raise TimeoutError("No plan found")
 
         return plan
 
-    def _score_skeleton(self, skeleton: tuple[list[_S], list[_A]]) -> float:
+    def _score_skeleton(self, skeleton: Skeleton) -> float:
         """Score skeletons.
 
         Higher is better.
@@ -112,14 +118,14 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
         return -len(skeleton[1])
 
 
-class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
+class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]):
     """Generates batches of abstract plans and then ranks them using a score function,
     where higher scores are considered better."""
 
     def __init__(
         self,
-        base_generator: AbstractPlanGenerator[_X, _S, _A],
-        score_fn: Callable[[tuple[list[_S], list[_A]]], float],
+        base_generator: AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator],
+        score_fn: Callable[[tuple[list[RelationalAbstractState], list[GroundOperator]]], float],
         batch_size: int,
         seed: int,
     ) -> None:
@@ -135,11 +141,11 @@ class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
     def __call__(
         self,
         x0: _X,
-        s0: _S,
+        s0: RelationalAbstractState,
         goal: Goal,
         timeout: float,
-        bpg: BilevelPlanningGraph[_X, _U, _S, _A],
-    ) -> Iterator[tuple[list[_S], list[_A]]]:
+        bpg: BilevelPlanningGraph[_X, _U, RelationalAbstractState, GroundOperator],
+    ) -> Iterator[Skeleton]:
         iterator = self._base_generator(x0, s0, goal, timeout, bpg)
         tiebreaking_score_fn = lambda x: (self._score_fn(x), self._rng.uniform())
         while batch := list(islice(iterator, self._batch_size)):
