@@ -19,9 +19,9 @@ def test_collaborative_filtering_approach():
     )
 
     # Create the approach.
-    approach = CollaborativeFilteringApproach(env_models, seed=123,
-                                              samples_per_step=2,
-                                              training_planning_timeout=10)
+    approach = CollaborativeFilteringApproach(
+        env_models, seed=123, samples_per_step=2, training_planning_timeout=10
+    )
 
     # Train on just one problem.
     obs, _ = env.reset(seed=123)

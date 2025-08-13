@@ -1,7 +1,7 @@
 """A learning approach for skeleton generation inspired by collaborative filtering."""
 
 from itertools import islice
-from typing import Callable, Iterator, TypeVar, TypeAlias
+from typing import Callable, Iterator, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -10,9 +10,14 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
 from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
-from relational_structs import GroundOperator
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.structs import Goal, Plan, PlanningProblem, SesameModels, RelationalAbstractState
+from bilevel_planning.structs import (
+    Goal,
+    Plan,
+    PlanningProblem,
+    RelationalAbstractState,
+    SesameModels,
+)
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -20,6 +25,7 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
+from relational_structs import GroundOperator
 
 from alphatamp.approaches.base_approach import BaseApproach
 
@@ -27,7 +33,9 @@ _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
 Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
-FrozenSkeleton: TypeAlias = tuple[tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]]
+FrozenSkeleton: TypeAlias = tuple[
+    tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
+]
 
 
 class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
@@ -65,12 +73,14 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Create the abstract plan generator.
-        self._base_abstract_plan_generator = RelationalHeuristicSearchAbstractPlanGenerator(
-            self._env_models.types,
-            self._env_models.predicates,
-            self._env_models.operators,
-            self._heuristic_name,
-            seed=self._seed,
+        self._base_abstract_plan_generator: AbstractPlanGenerator = (
+            RelationalHeuristicSearchAbstractPlanGenerator(
+                self._env_models.types,
+                self._env_models.predicates,
+                self._env_models.operators,
+                self._heuristic_name,
+                seed=self._seed,
+            )
         )
         self._batched_abstract_plan_generator: AbstractPlanGenerator = (
             BatchRankingAbstractPlanGenerator(
@@ -97,21 +107,21 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
             seed=self._seed,
         )
 
-        # TODO maybe make a different one, idk
-        self._refiner = self._planner._refiner
+        # Use the same refiner at training time that we will use at test time. Do this
+        # by stealing the refiner from the planner.
+        self._refiner = self._planner._refiner  # pylint: disable=protected-access
 
         # Store data.
         self._data: list[dict[FrozenSkeleton, bool]] = []
 
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        print("Running training on problem")  # TODO
         # Collect data for problem by generating a certain number of training
         # skeletons and attempting to refine each one. We could parallelize this but
         # I'm not sure if it would super help.
         x0 = problem.initial_state
         s0 = self._env_models.state_abstractor(x0)
-        
-        bpg = BilevelPlanningGraph()
+
+        bpg: BilevelPlanningGraph = BilevelPlanningGraph()
         bpg.add_state_node(x0)
         bpg.add_abstract_state_node(s0)
         bpg.add_state_abstractor_edge(x0, s0)
@@ -125,16 +135,16 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
             self._training_planning_timeout,
             bpg,
         ):
-            
-            # TODO remove
-            print("Training on skeleton")
-            for a in skeleton[1]:
-                print(a.short_str)
 
-            plan = self._refiner(x0, skeleton[0], skeleton[1], self._training_planning_timeout, bpg)
+            # Uncomment to debug.
+            # print("Training on skeleton")
+            # for a in skeleton[1]:
+            #     print(a.short_str)
+
+            plan = self._refiner(
+                x0, skeleton[0], skeleton[1], self._training_planning_timeout, bpg
+            )
             label = plan is not None
-            print("Label:", label)  # TODO
-            print()
             frozen_skeleton = (tuple(skeleton[0]), tuple(skeleton[1]))
             problem_data[frozen_skeleton] = label
 
@@ -151,21 +161,12 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
 
         return plan
 
-    def _score_skeleton(self, skeleton: Skeleton, failed_skeletons: list[Skeleton]) -> float:
-        """Score skeletons.
+    def _score_skeleton(
+        self, skeleton: Skeleton, failed_skeletons: list[Skeleton]
+    ) -> float:
+        """Score skeletons; higher is better."""
 
-        Higher is better.
-        """
-        # TODO do something with matrix factorization or whatever. For now, just do
-        # an extremely simple thing...
-
-        print("SCORING")
-        for a in skeleton[1]:
-            print(a.short_str)
-        print()
-
-        print("num failed skeletons:", len(failed_skeletons))
-
+        # This should be rewritten completely very soon.
         total_sim = 0.0
         total_sim_pos = 0.0
 
@@ -175,7 +176,10 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
             if frozen_skeleton not in problem_data:
                 continue
             for failed_skeleton in failed_skeletons:
-                failed_frozen_skeleton = (tuple(failed_skeleton[0]), tuple(failed_skeleton[1]))
+                failed_frozen_skeleton = (
+                    tuple(failed_skeleton[0]),
+                    tuple(failed_skeleton[1]),
+                )
                 if failed_frozen_skeleton in problem_data:
                     if not problem_data[failed_frozen_skeleton]:
                         problem_sim += 1
@@ -183,26 +187,26 @@ class CollaborativeFilteringApproach(BaseApproach[_O, _X, _U]):
             if problem_data[frozen_skeleton]:
                 total_sim_pos += 1
 
-        print("Total sim:", total_sim)
-        print("Total sim pos:", total_sim_pos)
-
         # No data so score these low.
         if total_sim == 0.0:
-            return -float('inf')
-        
+            return -float("inf")
+
         score = total_sim_pos / total_sim
-        print("Final score:", score)
-        
+
         return score
 
 
-class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]):
+class BatchRankingAbstractPlanGenerator(
+    AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]
+):
     """Generates batches of abstract plans and then ranks them using a score function,
     where higher scores are considered better."""
 
     def __init__(
         self,
-        base_generator: AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator],
+        base_generator: AbstractPlanGenerator[
+            _X, RelationalAbstractState, GroundOperator
+        ],
         score_fn: Callable[[Skeleton, list[Skeleton]], float],
         batch_size: int,
         seed: int,
@@ -212,8 +216,8 @@ class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, RelationalAbst
         self._batch_size = batch_size
         # In the future, make this public or find another workaround.
         abstract_successor_fn = (
-            self._base_generator._abstract_successor_function
-        )  # pylint: disable=protected-access
+            self._base_generator._abstract_successor_function  # pylint: disable=protected-access
+        )
         super().__init__(abstract_successor_fn, seed)
 
     def __call__(
@@ -224,19 +228,26 @@ class BatchRankingAbstractPlanGenerator(AbstractPlanGenerator[_X, RelationalAbst
         timeout: float,
         bpg: BilevelPlanningGraph[_X, _U, RelationalAbstractState, GroundOperator],
     ) -> Iterator[Skeleton]:
+
+        # This should be refactored soon.
         iterator = self._base_generator(x0, s0, goal, timeout, bpg)
         prev: list[Skeleton] = []
         while batch := list(islice(iterator, self._batch_size)):
             # NOTE: we need to reorder after every failed attempt because of prev.
             while batch:
-                tiebreaking_score_fn = lambda x: (self._score_fn(x, prev), -len(x[1]), self._rng.uniform())
+                tiebreaking_score_fn = lambda x: (
+                    self._score_fn(x, prev),
+                    -len(x[1]),
+                    self._rng.uniform(),
+                )
                 batch.sort(key=tiebreaking_score_fn)
                 skeleton = batch.pop()
-                # TODO remove
-                print("YIELDING")
-                for a in skeleton[1]:
-                    print(a.short_str)
-                print()
+
+                # Uncomment to debug.
+                # print("YIELDING")
+                # for a in skeleton[1]:
+                #     print(a.short_str)
+                # print()
 
                 yield skeleton
 
