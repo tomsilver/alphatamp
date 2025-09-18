@@ -10,8 +10,6 @@ from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 from alphatamp.approaches.non_relational_approach import (
     NonRelationalApproach,
 )
-from conftest import MAKE_VIDEOS
-from gymnasium.wrappers import RecordVideo
 
 
 def test_non_relational_approach():
@@ -43,7 +41,6 @@ def test_non_relational_approach():
     # Evaluation should take a long time due to bad heuristic.
     start_planning_time = time.time()
     plan = approach.run_planning(obs, timeout=100)
-    import ipdb; ipdb.set_trace()
 
     for action in plan.actions:
         _, _, done, _, _ = env.step(action)
