@@ -65,7 +65,7 @@ class NonRelationalApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Create a trivial heuristic factory
-        # Returns true (1) if the current abstract state is the goal state
+        # Returns true (1) cost if the current abstract state is not the goal state
         # False (0) otherwise
         def _trivial_heuristic_factory(init_s, goal):
             def _h(state):
