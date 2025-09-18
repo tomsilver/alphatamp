@@ -1,7 +1,8 @@
 """Tests for non_relational_approach.py."""
 
-import prbench
 import time
+
+import prbench
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.non_relational_approach import (
@@ -41,7 +42,7 @@ def test_non_relational_approach():
             break
     else:
         assert False, "Plan did not succeed"
-    
+
     total_planning_time = time.time() - start_planning_time
     print(total_planning_time)
     env.close()

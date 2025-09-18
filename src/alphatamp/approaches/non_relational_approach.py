@@ -64,7 +64,7 @@ class NonRelationalApproach(BaseApproach[_O, _X, _U]):
             self._env_models.operators
         )
 
-        # Create a trivial heuristic factory 
+        # Create a trivial heuristic factory
         # Returns true (1) if the current abstract state is the goal state
         # False (0) otherwise
         def _trivial_heuristic_factory(init_s, goal):
