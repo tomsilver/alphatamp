@@ -69,9 +69,7 @@ class NonRelationalApproach(BaseApproach[_O, _X, _U]):
         # False (0) otherwise
         def _trivial_heuristic_factory(init_s, goal):
             def _h(state):
-                return goal.check_abstract_state(state) or goal.check_abstract_state(
-                    init_s
-                )
+                return not goal.check_abstract_state(state)
 
             return _h
 
