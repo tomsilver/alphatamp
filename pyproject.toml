@@ -12,6 +12,8 @@ dependencies = [
    "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
    "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
    "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
+   "tomsgeoms2d@git+https://github.com/tomsilver/toms-geoms-2d",
+   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench-models"
 ]
 
 [project.optional-dependencies]
