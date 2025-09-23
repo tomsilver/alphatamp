@@ -1,7 +1,5 @@
 """Tests for non_relational_approach.py."""
 
-import time
-
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
@@ -39,7 +37,6 @@ def test_non_relational_approach():
     approach.train(obs)
 
     # Evaluation should take a long time due to bad heuristic.
-    start_planning_time = time.time()
     plan = approach.run_planning(obs, timeout=100)
 
     for action in plan.actions:
@@ -49,6 +46,4 @@ def test_non_relational_approach():
     else:
         assert False, "Plan did not succeed"
 
-    total_planning_time = time.time() - start_planning_time
-    print(total_planning_time)
     env.close()
