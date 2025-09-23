@@ -15,11 +15,13 @@ from alphatamp.approaches.non_relational_approach import (
 def test_non_relational_approach():
     """Tests for NonRelationalApproach()."""
 
-    # Test in a PRBench environment where there are multiple objects to move around.
+    # Test in a PRBench environment where robot suctions to the target object.
     prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
+
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
+
     env_models = create_bilevel_planning_models(
         "clutteredretrieval2d",
         env.observation_space,
