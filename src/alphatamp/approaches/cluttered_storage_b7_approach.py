@@ -44,7 +44,7 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        super().__init__()
+        # super().__init__(abstract_successor_function, seed)
         self._env_models = env_models
 
     def __call__(

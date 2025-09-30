@@ -18,8 +18,8 @@ def test_oracle_skeleton_generator_approach():
     prbench.register_all_environments()
     env = prbench.make("prbench/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
 
-    # if MAKE_VIDEOS:
-    env = RecordVideo(env, "unit_test_videos")
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos")
 
     # 2) Create bilevel models for this domain
     env_models = create_bilevel_planning_models(
