@@ -1,12 +1,14 @@
 """Uses an oracle skeleton generator policy for abstract planning."""
 
-from typing import TypeAlias, TypeVar
+from typing import Callable, Iterable, Iterator, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
 )
 from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
+from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
 from bilevel_planning.structs import (
+    Goal,
     Plan,
     PlanningProblem,
     RelationalAbstractState,
@@ -20,12 +22,8 @@ from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
 from relational_structs import GroundOperator
-from typing import Callable, Iterable, Iterator
 
 from alphatamp.approaches.base_approach import BaseApproach
-from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.structs import Goal
-
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -36,6 +34,7 @@ Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
 FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
+
 
 class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
     """A generator that uses oracle knowledge to generate abstract plans."""
@@ -60,8 +59,10 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         """ For the prbench/ClutteredStorage2D-b3-v0, we want to return a  plan that picks and places block0, then picks and places block1,
         then picks and places block2."""
 
-        # Look at environment models to map operators to their names 
-        operator_name_to_operator = {s.operator.name: s.operator for s in self._env_models.skills}
+        # Look at environment models to map operators to their names
+        operator_name_to_operator = {
+            s.operator.name: s.operator for s in self._env_models.skills
+        }
 
         # Lifted operators that we will use for ClutteredStorage2D-b3-v0
         PickBlockOnShelf = operator_name_to_operator["PickBlockOnShelf"]
@@ -70,18 +71,18 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         PickBlockNotOnShelf = operator_name_to_operator["PickBlockNotOnShelf"]
 
         # Map object types to their names
-        type_name_to_type = {t.name : t for t in self._env_models.types}
+        type_name_to_type = {t.name: t for t in self._env_models.types}
 
         # define 3 object types for ClutteredStorage2D-b3-v0
         block_type = type_name_to_type["target_block"]
         shelf_type = type_name_to_type["shelf"]
         robot_type = type_name_to_type["crv_robot"]
 
-        # Get the objects from the initial state, sorting them so they 
+        # Get the objects from the initial state, sorting them so they
         # match their semantic names
         block0, block1, block2 = sorted(x0.get_objects(block_type))
-        robot, = x0.get_objects(robot_type)
-        shelf, = x0.get_objects(shelf_type)
+        (robot,) = x0.get_objects(robot_type)
+        (shelf,) = x0.get_objects(shelf_type)
 
         # Creates the abstract plan by grounding the lifeted operators
         abstract_actions = [
@@ -99,11 +100,11 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         # Starting from the initial abstract state s0, apply delet and add effects of each action to the current set of atoms
         # to produce the next abstract state, and add them to abstract_states
 
-        abstract_states = [
-            s0
-        ]
+        abstract_states = [s0]
         for abstract_action in abstract_actions:
-            next_atoms = (abstract_states[-1].atoms - abstract_action.delete_effects) | abstract_action.add_effects
+            next_atoms = (
+                abstract_states[-1].atoms - abstract_action.delete_effects
+            ) | abstract_action.add_effects
             next_state = RelationalAbstractState(next_atoms, s0.objects)
             abstract_states.append(next_state)
 
