@@ -1,6 +1,6 @@
 """Oracle approach specifically for ClutteredStorage2D-b7-v0"""
 
-from typing import Callable, Iterable, Iterator, TypeAlias, TypeVar
+from typing import Iterator, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -44,6 +44,7 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
+        super().__init__(env_models, seed)
         self._env_models = env_models
 
     def __call__(
@@ -108,7 +109,8 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         ]
 
         # "Simulate" the execution of the abstract actions to get the abstract states.
-        # Starting from the initial abstract state s0, apply delet and add effects of each action to the current set of atoms
+        # Starting from the initial abstract state s0, apply delet and 
+        # add effects of each action to the current set of atoms
         # to produce the next abstract state, and add them to abstract_states
 
         abstract_states = [s0]

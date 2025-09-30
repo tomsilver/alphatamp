@@ -44,6 +44,7 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
+        super().__init__(env_models, seed)
         self._env_models = env_models
 
     def __call__(
