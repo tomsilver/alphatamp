@@ -9,10 +9,10 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
-   "prbench_models@git+https://github.com/Princeton-Robot-Planning-and-Learning//prbench-models",
-   "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
-   "prbench[geom2d]@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench.git@c897a36aedaf0721a808ed631fd615b55e1e0b69",
+   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=bilevel-planning",
+   "prbench_models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prbench-models",
+   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prbench-bilevel-planning",
+   "prbench[geom2d]@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prbench",
 ]
 
 [project.optional-dependencies]
