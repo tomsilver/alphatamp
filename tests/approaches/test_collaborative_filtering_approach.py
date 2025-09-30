@@ -1,6 +1,8 @@
 """Tests for collaborative_filtering_approach.py."""
 
 import prbench
+from conftest import MAKE_VIDEOS
+from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.collaborative_filtering_approach import (
@@ -13,10 +15,13 @@ def test_collaborative_filtering_approach():
 
     # Test in a PRBench environment where the first skeleton won't work.
     prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o1-v0")
+    env = prbench.make("prbench/Obstruction2D-o1-v0", render_mode="rgb_array")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos")
 
     # Create the approach.
     approach = CollaborativeFilteringApproach(
