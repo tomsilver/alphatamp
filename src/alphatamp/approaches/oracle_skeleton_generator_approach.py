@@ -44,7 +44,7 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        super().__init__(env_models, seed)
+        super().__init__()
         self._env_models = env_models
 
     def __call__(
@@ -57,8 +57,9 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
     ) -> Iterator[tuple[list[_S], list[_A]]]:
         """Generate abstract plans."""
 
-        """ For the prbench/ClutteredStorage2D-b3-v0, we want to return a  plan that picks and places block0, then picks and places block1,
-        then picks and places block2."""
+        # For the prbench/ClutteredStorage2D-b3-v0, we want to return
+        # a  plan that picks and places block0, then picks and places block1,
+        # then picks and places block2.
 
         # Look at environment models to map operators to their names
         operator_name_to_operator = {
@@ -98,7 +99,8 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         ]
 
         # "Simulate" the execution of the abstract actions to get the abstract states.
-        # Starting from the initial abstract state s0, apply delet and add effects of each action to the current set of atoms
+        # Starting from the initial abstract state s0, apply delet and
+        # add effects of each action to the current set of atoms
         # to produce the next abstract state, and add them to abstract_states
 
         abstract_states = [s0]

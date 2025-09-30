@@ -1,10 +1,10 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
+import imageio.v2 as iio
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
-import imageio.v2 as iio
 
 from alphatamp.approaches.cluttered_storage_b7_approach import (
     b7OracleGeneratorApproach,
@@ -18,8 +18,8 @@ def test_oracle_skeleton_generator_approach():
     prbench.register_all_environments()
     env = prbench.make("prbench/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
 
-    if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos")
+    # if MAKE_VIDEOS:
+    env = RecordVideo(env, "unit_test_videos")
 
     # 2) Create bilevel models for this domain
     env_models = create_bilevel_planning_models(

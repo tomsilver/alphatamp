@@ -1,10 +1,10 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
+import imageio.v2 as iio
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
-import imageio.v2 as iio
 
 from alphatamp.approaches.oracle_skeleton_generator_approach import (
     OracleSkeletonGeneratorApproach,

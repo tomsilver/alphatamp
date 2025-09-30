@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from _pytest.config.argparsing import Parser
 
 # Global variable that gets set with the command line --make-videos flag.
-MAKE_VIDEOS = False
+MAKE_VIDEOS = True
 
 
 def pytest_addoption(parser: "Parser") -> None:
