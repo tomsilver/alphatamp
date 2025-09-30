@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prpl-utils",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=relational-structs",
    "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=bilevel-planning",
    "prbench_models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prbench-models",
    "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@a6549280d769d12c13a3a82ca52b3f1b3ae4a5af#subdirectory=prbench-bilevel-planning",
