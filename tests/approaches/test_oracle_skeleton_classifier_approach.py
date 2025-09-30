@@ -5,30 +5,30 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.oracle_skeleton_generator_approach import (
-    OracleSkeletonGeneratorApproach,
+from alphatamp.approaches.oracle_skeleton_classifier_approach import (
+    OracleSkeletonClassifierApproach,
 )
 
 
-def test_oracle_skeleton_generator_approach():
-    """Tests for OracleSkeletonGeneratorApproach()."""
+def test_oracle_skeleton_classifier_approach():
+    """Tests for OracleSkeletonClassifierApproach()."""
 
     # Test in a PRBench environment where the first skeleton won't work.
     prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredStorage2D-b3-v0", render_mode="rgb_array")
+    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
 
     env_models = create_bilevel_planning_models(
-        "clutteredstorage2d",
+        "clutteredretrieval2d",
         env.observation_space,
         env.action_space,
-        num_blocks=3,
+        num_obstructions=1,
     )
 
     # Create the approach.
-    approach = OracleSkeletonGeneratorApproach(
+    approach = OracleSkeletonClassifierApproach(
         env_models, seed=123, samples_per_step=10, training_planning_timeout=10
     )
 
@@ -38,11 +38,7 @@ def test_oracle_skeleton_generator_approach():
     import imageio.v2 as iio
 
     img = env.render()
-    iio.imsave("debug.png", img)
-    import ipdb
-
-    ipdb.set_trace()
-
+    iio.imsave("debug_classifier.png", img)
     approach.train(obs)
 
     # Evaluation should succeed because we should have learned the pattern.
