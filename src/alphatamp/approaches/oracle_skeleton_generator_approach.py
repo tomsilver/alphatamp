@@ -37,7 +37,6 @@ FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
 
-
 class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
     """A generator that uses oracle knowledge to generate abstract plans."""
 
@@ -46,8 +45,6 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        # TODO
-        # super().__init__(abstract_successor_function, seed)
         self._env_models = env_models
 
     def __call__(
@@ -60,27 +57,33 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
     ) -> Iterator[tuple[list[_S], list[_A]]]:
         """Generate abstract plans."""
 
-        # Return the plan that picks and places block0, then picks and places block1,
-        # then picks and places block2.
+        """ For the prbench/ClutteredStorage2D-b3-v0, we want to return a  plan that picks and places block0, then picks and places block1,
+        then picks and places block2."""
+
+        # Look at environment models to map operators to their names 
         operator_name_to_operator = {s.operator.name: s.operator for s in self._env_models.skills}
 
-        # Lifted operators.
+        # Lifted operators that we will use for ClutteredStorage2D-b3-v0
         PickBlockOnShelf = operator_name_to_operator["PickBlockOnShelf"]
         PlaceBlockOnShelf = operator_name_to_operator["PlaceBlockOnShelf"]
         PlaceBlockNotOnShelf = operator_name_to_operator["PlaceBlockNotOnShelf"]
         PickBlockNotOnShelf = operator_name_to_operator["PickBlockNotOnShelf"]
 
-        # Objects.
+        # Map object types to their names
         type_name_to_type = {t.name : t for t in self._env_models.types}
+
+        # define 3 object types for ClutteredStorage2D-b3-v0
         block_type = type_name_to_type["target_block"]
         shelf_type = type_name_to_type["shelf"]
         robot_type = type_name_to_type["crv_robot"]
+
+        # Get the objects from the initial state, sorting them so they 
+        # match their semantic names
         block0, block1, block2 = sorted(x0.get_objects(block_type))
-        # block0, = sorted(x0.get_objects(block_type))
         robot, = x0.get_objects(robot_type)
         shelf, = x0.get_objects(shelf_type)
 
-        # Make abstract plan.
+        # Creates the abstract plan by grounding the lifeted operators
         abstract_actions = [
             PickBlockOnShelf.ground((robot, block0, shelf)),
             PlaceBlockNotOnShelf.ground((robot, block0, shelf)),
@@ -93,6 +96,9 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         ]
 
         # "Simulate" the execution of the abstract actions to get the abstract states.
+        # Starting from the initial abstract state s0, apply delet and add effects of each action to the current set of atoms
+        # to produce the next abstract state, and add them to abstract_states
+
         abstract_states = [
             s0
         ]
@@ -100,15 +106,6 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
             next_atoms = (abstract_states[-1].atoms - abstract_action.delete_effects) | abstract_action.add_effects
             next_state = RelationalAbstractState(next_atoms, s0.objects)
             abstract_states.append(next_state)
-        
-        print()
-        print("Abstract state:", sorted(abstract_states[0].atoms))
-        for abstract_state, abstract_action in zip(abstract_states[1:], abstract_actions, strict=True):
-            print("Abstract action:", abstract_action.short_str)
-            print("Abstract state:", sorted(abstract_state.atoms))
-
-        print("Goal:", goal)
-        import ipdb; ipdb.set_trace()
 
         return iter([(abstract_states, abstract_actions)])
 
@@ -161,6 +158,8 @@ class OracleSkeletonGeneratorApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Finish the planner.
+        # Sesame planner uses operators to check symbolic feasbility and calls skills
+        # using the sampler to attempt low-level roll-outs
         self._planner = SesamePlanner(
             self._abstract_plan_generator,
             self._trajectory_sampler,
