@@ -1,6 +1,6 @@
 """Oracle approach specifically for ClutteredStorage2D-b7-v0"""
 
-from typing import Iterator, TypeAlias, TypeVar
+from typing import Iterable, Iterator, Protocol, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -25,18 +25,34 @@ from relational_structs import GroundOperator
 
 from alphatamp.approaches.base_approach import BaseApproach
 
+
+# Fixes type issues for ci/cd checks
+class _HasGetObjects(Protocol):
+    """Typing protocol: ensures classes provide get_objects(obj_type) -> list."""
+
+    def get_objects(self, obj_type) -> list:
+        """Return a list of objects of the given type (used for typing contracts)."""
+
+
 _O = TypeVar("_O")  # observation
-_X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
-_S = TypeVar("_S")  # abstract state
-_A = TypeVar("_A")  # abstract action
+_X = TypeVar("_X", bound=_HasGetObjects)  # state
+_S = TypeVar("_S", bound=RelationalAbstractState)  # abstract state
+_A = TypeVar("_A", bound=GroundOperator)  # abstract action
 Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
 FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
 
 
-class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
+def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
+    """Return no successors; placeholder to satisfy AbstractPlanGenerator.__init__."""
+    return []
+
+
+class b7OracleAbstractPlanGenerator(
+    AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]
+):
     """A generator that uses oracle knowledge to generate abstract plans."""
 
     def __init__(
@@ -44,17 +60,18 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        # super().__init__(abstract_successor_function, seed)
+        """Initialize with env models and seed"""
+        super().__init__(noop_successor_fn, seed)
         self._env_models = env_models
 
     def __call__(
         self,
         x0: _X,
-        s0: _S,
+        s0: RelationalAbstractState,
         goal: Goal,
         timeout: float,
-        bpg: BilevelPlanningGraph[_X, _U, _S, _A],
-    ) -> Iterator[tuple[list[_S], list[_A]]]:
+        bpg: BilevelPlanningGraph[_X, _U, RelationalAbstractState, GroundOperator],
+    ) -> Iterator[tuple[list[RelationalAbstractState], list[GroundOperator]]]:
         """Generate abstract plans."""
 
         # Look at environment models to map operators to their names
@@ -85,7 +102,7 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         (shelf,) = x0.get_objects(shelf_type)
 
         # Creates the abstract plan by grounding the lifeted operators
-        abstract_actions = [
+        abstract_actions: list[GroundOperator] = [
             PickBlockOnShelf.ground((robot, block0, shelf)),
             PlaceBlockNotOnShelf.ground((robot, block0, shelf)),
             PickBlockNotOnShelf.ground((robot, block0, shelf)),
@@ -113,7 +130,7 @@ class b7OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
         # add effects of each action to the current set of atoms
         # to produce the next abstract state, and add them to abstract_states
 
-        abstract_states = [s0]
+        abstract_states: list[RelationalAbstractState] = [s0]
         for abstract_action in abstract_actions:
             next_atoms = (
                 abstract_states[-1].atoms - abstract_action.delete_effects
