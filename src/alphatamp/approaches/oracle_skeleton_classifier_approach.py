@@ -9,10 +9,11 @@ from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.bilevel_planners.sesame_planner import SesamePlanner
+from bilevel_planning.bilevel_planners.bilevel_planner import BilevelPlanner
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
+from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
+from bilevel_planning.refiners.refiner import Refiner
 from bilevel_planning.structs import (
-    Goal,
     Plan,
     PlanningProblem,
     RelationalAbstractState,
@@ -21,11 +22,19 @@ from bilevel_planning.structs import (
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySampler,
+)
 from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from relational_structs import GroundOperator
+from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
+from relational_structs import (
+    GroundAtom,
+    GroundOperator,
+    Predicate,
+)
 
 from alphatamp.approaches.base_approach import BaseApproach
 
@@ -39,24 +48,6 @@ FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
 
-from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
-    AbstractPlanGenerator,
-)
-from bilevel_planning.bilevel_planners.bilevel_planner import BilevelPlanner
-from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
-from bilevel_planning.refiners.refiner import Refiner
-from bilevel_planning.structs import Plan, PlanningProblem
-from bilevel_planning.trajectory_samplers.trajectory_sampler import (
-    TrajectorySampler,
-)
-from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
-from relational_structs import (
-    GroundAtom,
-    GroundOperator,
-    Predicate,
-)
-
 
 class OracleAbstractPlanClassifier:
     """A classifier that uses oracle knowledge to classify abstract plans."""
@@ -65,7 +56,6 @@ class OracleAbstractPlanClassifier:
         self,
         env_models: SesameModels,
     ) -> None:
-        # TODO
         # super().__init__(abstract_successor_function, seed)
         self._env_models = env_models
 
@@ -73,7 +63,7 @@ class OracleAbstractPlanClassifier:
         self,
         x0: _X,
         s_plan: list[_S],
-        a_plan: list[_A],
+        _: list[_A],
     ) -> bool:
         """Classify abstract plans."""
 
@@ -134,11 +124,8 @@ class OracleAbstractPlanClassifier:
         return True
 
 
-"""Multi-abstract plan + backtracking refinement planner."""
-
-
 class SesamePlannerWithClassifier(BilevelPlanner[_X, _U, _S, _A]):
-    """Multi-abstract plan + backtracking refinement planner that classifier that
+    """Multi-abstract plan + backtracking refinement planner with classifier that
     determines if a plan is feasible or not."""
 
     def __init__(

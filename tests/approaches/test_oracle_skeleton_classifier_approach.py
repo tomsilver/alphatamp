@@ -1,5 +1,6 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
+import imageio.v2 as iio
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
@@ -34,8 +35,6 @@ def test_oracle_skeleton_classifier_approach():
 
     # Train on just one problem.
     obs, _ = env.reset(seed=123)
-
-    import imageio.v2 as iio
 
     img = env.render()
     iio.imsave("debug_classifier.png", img)

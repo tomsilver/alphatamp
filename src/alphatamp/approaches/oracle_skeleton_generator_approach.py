@@ -110,9 +110,6 @@ class OracleAbstractPlanGenerator(AbstractPlanGenerator[_X, _S, _A]):
             print("Abstract state:", sorted(abstract_state.atoms))
 
         print("Goal:", goal)
-        import ipdb
-
-        ipdb.set_trace()
 
         return iter([(abstract_states, abstract_actions)])
 

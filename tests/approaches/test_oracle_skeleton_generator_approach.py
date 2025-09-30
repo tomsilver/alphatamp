@@ -39,9 +39,6 @@ def test_oracle_skeleton_generator_approach():
 
     img = env.render()
     iio.imsave("debug.png", img)
-    import ipdb
-
-    ipdb.set_trace()
 
     approach.train(obs)
 
