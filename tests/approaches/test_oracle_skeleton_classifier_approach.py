@@ -44,7 +44,7 @@ def test_oracle_skeleton_classifier_approach():
         _, _, done, _, _ = env.step(action)
         if done:
             break
-    # else:
-    #     assert False, "Plan did not succeed"
+    else:
+        assert False, "Plan did not succeed"
 
     env.close()
