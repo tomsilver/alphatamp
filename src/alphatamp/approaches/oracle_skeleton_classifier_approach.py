@@ -1,7 +1,6 @@
 """Uses an oracle skeleton generator policy for abstract planning."""
 
-import time
-from typing import Hashable, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -9,10 +8,6 @@ from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.bilevel_planners.bilevel_planner import BilevelPlanner
-from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
-from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
-from bilevel_planning.refiners.refiner import Refiner
 from bilevel_planning.structs import (
     Plan,
     PlanningProblem,
@@ -22,184 +17,26 @@ from bilevel_planning.structs import (
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
-from bilevel_planning.trajectory_samplers.trajectory_sampler import (
-    TrajectorySampler,
-)
 from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
-from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.pddl import (
-    GroundAtom,
     GroundOperator,
-    Predicate,
 )
 
 from alphatamp.approaches.base_approach import BaseApproach
+from alphatamp.approaches.feasibility_classifiers.sesame_planner_with_classifier import (
+    SesamePlannerWithClassifier,
+)
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
-_S = TypeVar("_S", bound=Hashable)  # abstract state
-_A = TypeVar("_A", bound=Hashable)  # abstract action
 Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
 FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
-
-
-class OracleAbstractPlanClassifier:
-    """A classifier that uses oracle knowledge to classify abstract plans."""
-
-    def __init__(
-        self,
-        env_models: SesameModels,
-    ) -> None:
-        # super().__init__(abstract_successor_function, seed)
-        self._env_models = env_models
-
-    def validate_plan(
-        self,
-        x0: ObjectCentricState | object,
-        s_plan: list[RelationalAbstractState] | list[_S],
-        _: list[_A],
-    ) -> bool:
-        """Classify abstract plans."""
-
-        # Predicates.
-        HoldingTgt = Predicate("HoldingTgt", [CRVRobotType, RectangleType])
-        HandEmpty = Predicate("HandEmpty", [CRVRobotType])
-
-        # Objects.
-        type_name_to_type = {t.name: t for t in self._env_models.types}
-        block_type = type_name_to_type["target_block"]
-        obstruction_type = type_name_to_type["rectangle"]
-        robot_type = type_name_to_type["crv_robot"]
-
-        assert isinstance(x0, ObjectCentricState)
-        (target_block,) = x0.get_objects(block_type)
-        (robot,) = x0.get_objects(robot_type)
-        obstructions = x0.get_objects(obstruction_type)
-
-        # remove target block from obstructions
-        filtered_obstructions = set()
-        for obstruction in obstructions:
-            if obstruction.name != "target_block":
-                filtered_obstructions.add(obstruction)
-
-        # Oracle abstract plan
-        empty_abstract_state_atoms: set[GroundAtom] = set()
-        empty_abstract_state_atoms.add(GroundAtom(HandEmpty, [robot]))
-        empty_abstract_state_objects = {robot, target_block} | filtered_obstructions
-        empty_abstract_state = RelationalAbstractState(
-            atoms=empty_abstract_state_atoms, objects=empty_abstract_state_objects
-        )
-
-        holding_abstract_state_atoms = set()
-        holding_abstract_state_atoms.add(GroundAtom(HoldingTgt, [robot, target_block]))
-        holding_abstract_state_objects = {robot, target_block} | filtered_obstructions
-        holding_abstract_state = RelationalAbstractState(
-            atoms=holding_abstract_state_atoms, objects=holding_abstract_state_objects
-        )
-
-        oracle_abstract_state = [empty_abstract_state, holding_abstract_state]
-
-        oracle_abstract_state_ptr = 0
-        # Classify plan only looking at state for now
-        for plan_abstract_state in s_plan:
-            assert isinstance(plan_abstract_state, RelationalAbstractState)
-            plan_atoms, plan_objects = (
-                plan_abstract_state.atoms,
-                plan_abstract_state.objects,
-            )
-            oracle_atoms, oracle_objects = (
-                oracle_abstract_state[oracle_abstract_state_ptr].atoms,
-                oracle_abstract_state[oracle_abstract_state_ptr].objects,
-            )
-
-            if plan_atoms != oracle_atoms or plan_objects != oracle_objects:
-                return False
-            oracle_abstract_state_ptr += 1
-
-        return True
-
-
-class SesamePlannerWithClassifier(BilevelPlanner[_X, _U, _S, _A]):
-    """Multi-abstract plan + backtracking refinement planner with classifier that
-    determines if a plan is feasible or not."""
-
-    def __init__(
-        self,
-        abstract_plan_generator: AbstractPlanGenerator[_X, _S, _A],
-        trajectory_sampler: TrajectorySampler[_X, _U, _S, _A],
-        max_abstract_plans: int,
-        num_sampling_attempts_per_step: int,
-        env_model: SesameModels,
-        *args,
-        **kwargs,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self._abstract_plan_generator = abstract_plan_generator
-        self._trajectory_sampler = trajectory_sampler
-        self._max_abstract_plans = max_abstract_plans
-        self._refiner: Refiner[_X, _U, _S, _A] = BacktrackingRefiner(
-            self._trajectory_sampler, num_sampling_attempts_per_step, seed=self._seed
-        )
-        self._abstract_plan_classifier = OracleAbstractPlanClassifier(
-            env_models=env_model
-        )
-
-    def run(
-        self, problem: PlanningProblem[_X, _U], timeout: float
-    ) -> tuple[Plan | None, BilevelPlanningGraph]:
-        start_time = time.perf_counter()
-
-        # Get the initial abstract state.
-        x0 = problem.initial_state
-        s0 = self._state_abstractor(x0)
-
-        # Initialize the bilevel planning graph.
-        bpg: BilevelPlanningGraph[_X, _U, _S, _A] = BilevelPlanningGraph()
-        bpg.add_state_node(x0)
-        bpg.add_abstract_state_node(s0)
-        bpg.add_state_abstractor_edge(x0, s0)
-
-        # Generate abstract plans and attempt to refine them.
-        gen = self._abstract_plan_generator(
-            x0,
-            s0,
-            problem.goal,
-            timeout,
-            bpg,
-        )
-        num_abstract_plans = 0
-
-        while (
-            num_abstract_plans < self._max_abstract_plans
-            and time.perf_counter() - start_time < timeout
-        ):
-            # Get the next abstract plan.
-            try:
-                s_plan, a_plan = next(gen)
-                num_abstract_plans += 1
-            except StopIteration:
-                break
-            # Quit early if timeout.
-            remaining_time = timeout - (time.perf_counter() - start_time)
-            if remaining_time < 0:
-                break
-
-            # Try to classify whether or not this abstract plan is valid
-            if self._abstract_plan_classifier.validate_plan(x0, s_plan, a_plan):
-                # Try to refine this abstract plan.
-                plan = self._refiner(x0, s_plan, a_plan, remaining_time, bpg)
-                # Plan successfully found.
-                if plan is not None:
-                    return plan, bpg
-
-        return None, bpg
 
 
 class OracleSkeletonClassifierApproach(BaseApproach[_O, _X, _U]):
