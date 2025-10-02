@@ -30,7 +30,8 @@ from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
 from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
-from relational_structs import (
+from relational_structs.object_centric_state import ObjectCentricState
+from relational_structs.pddl import (
     GroundAtom,
     GroundOperator,
     Predicate,
@@ -61,8 +62,8 @@ class OracleAbstractPlanClassifier:
 
     def validate_plan(
         self,
-        x0: _X,
-        s_plan: list[_S],
+        x0: ObjectCentricState | object,
+        s_plan: list[RelationalAbstractState] | list[_S],
         _: list[_A],
     ) -> bool:
         """Classify abstract plans."""
@@ -77,6 +78,7 @@ class OracleAbstractPlanClassifier:
         obstruction_type = type_name_to_type["rectangle"]
         robot_type = type_name_to_type["crv_robot"]
 
+        assert isinstance(x0, ObjectCentricState)
         (target_block,) = x0.get_objects(block_type)
         (robot,) = x0.get_objects(robot_type)
         obstructions = x0.get_objects(obstruction_type)
@@ -107,6 +109,7 @@ class OracleAbstractPlanClassifier:
         oracle_abstract_state_ptr = 0
         # Classify plan only looking at state for now
         for plan_abstract_state in s_plan:
+            assert isinstance(plan_abstract_state, RelationalAbstractState)
             plan_atoms, plan_objects = (
                 plan_abstract_state.atoms,
                 plan_abstract_state.objects,
@@ -116,7 +119,6 @@ class OracleAbstractPlanClassifier:
                 oracle_abstract_state[oracle_abstract_state_ptr].objects,
             )
 
-            # import ipdb; ipdb.set_trace()
             if plan_atoms != oracle_atoms or plan_objects != oracle_objects:
                 return False
             oracle_abstract_state_ptr += 1
