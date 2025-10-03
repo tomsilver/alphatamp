@@ -11,7 +11,6 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 from bilevel_planning.structs import (
     Plan,
     PlanningProblem,
-    RelationalAbstractState,
     SesameModels,
 )
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
@@ -20,9 +19,6 @@ from bilevel_planning.trajectory_samplers.parameterized_controller_sampler impor
 from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
-)
-from relational_structs.pddl import (
-    GroundOperator,
 )
 
 from alphatamp.approaches.base_approach import BaseApproach
@@ -33,10 +29,6 @@ from alphatamp.approaches.feasibility_classifiers.sesame_planner_with_classifier
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
-Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
-FrozenSkeleton: TypeAlias = tuple[
-    tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
-]
 
 
 class OracleSkeletonClassifierApproach(BaseApproach[_O, _X, _U]):
