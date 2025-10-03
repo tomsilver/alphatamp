@@ -10,9 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
    "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
-   "prbench_models@git+https://github.com/Princeton-Robot-Planning-and-Learning//prbench-models",
    "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
-   "prbench[geom2d]@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
+   "tomsgeoms2d",
+   "prbench-models",
 ]
 
 [project.optional-dependencies]
@@ -59,3 +60,7 @@ module = [
     "matplotlib.*",
 ]
 ignore_missing_imports = true
+
+[tool.uv.sources]
+tomsgeoms2d = { git = "https://github.com/tomsilver/toms-geoms-2d", rev = "main" }
+prbench-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prbench-models", rev = "main" }
