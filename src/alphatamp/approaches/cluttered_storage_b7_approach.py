@@ -28,13 +28,12 @@ from alphatamp.approaches.base_approach import BaseApproach
 
 _O = TypeVar("_O")  # observation
 _U = TypeVar("_U")  # action
-_X = TypeVar("_X", bound = ObjectCentricState)  # state
-_S = TypeVar("_S", bound = RelationalAbstractState)  # abstract state
-_A = TypeVar("_A", bound = GroundOperator)  # abstract action
+_X = TypeVar("_X", bound=ObjectCentricState)  # state
+_S = TypeVar("_S", bound=RelationalAbstractState)  # abstract state
+_A = TypeVar("_A", bound=GroundOperator)  # abstract action
 Skeleton: TypeAlias = tuple[list[_S], list[_A]]
-FrozenSkeleton: TypeAlias = tuple[
-    tuple[_S, ...], tuple[_A, ...]
-]
+FrozenSkeleton: TypeAlias = tuple[tuple[_S, ...], tuple[_A, ...]]
+
 
 def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
     """Return no successors; placeholder to satisfy AbstractPlanGenerator.__init__."""
