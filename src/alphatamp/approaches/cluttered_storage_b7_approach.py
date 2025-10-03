@@ -1,6 +1,6 @@
 """Oracle approach specifically for ClutteredStorage2D-b7-v0"""
 
-from typing import Iterable, Iterator, Protocol, TypeAlias, TypeVar
+from typing import Iterable, Iterator, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -21,29 +21,20 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from relational_structs import GroundOperator
+from relational_structs import GroundOperator, ObjectCentricState
 
 from alphatamp.approaches.base_approach import BaseApproach
 
 
-# Fixes type issues for ci/cd checks
-class _HasGetObjects(Protocol):
-    """Typing protocol: ensures classes provide get_objects(obj_type) -> list."""
-
-    def get_objects(self, obj_type) -> list:
-        """Return a list of objects of the given type (used for typing contracts)."""
-
-
 _O = TypeVar("_O")  # observation
 _U = TypeVar("_U")  # action
-_X = TypeVar("_X", bound=_HasGetObjects)  # state
-_S = TypeVar("_S", bound=RelationalAbstractState)  # abstract state
-_A = TypeVar("_A", bound=GroundOperator)  # abstract action
-Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
+_X = TypeVar("_X", bound = ObjectCentricState)  # state
+_S = TypeVar("_S", bound = RelationalAbstractState)  # abstract state
+_A = TypeVar("_A", bound = GroundOperator)  # abstract action
+Skeleton: TypeAlias = tuple[list[_S], list[_A]]
 FrozenSkeleton: TypeAlias = tuple[
-    tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
+    tuple[_S, ...], tuple[_A, ...]
 ]
-
 
 def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
     """Return no successors; placeholder to satisfy AbstractPlanGenerator.__init__."""
