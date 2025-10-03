@@ -1,40 +1,25 @@
 """A base approach that does not have access to a simulator."""
 
 import abc
-from typing import Generic, TypeVar
+from dataclasses import dataclass
+from typing import Callable, Generic, TypeVar
 
-import numpy as np
 from bilevel_planning.structs import (
     LiftedSkill,
-    Plan,
-    PlanningProblem,
     RelationalAbstractGoal,
     RelationalAbstractState,
-    SesameModels,
 )
+from gymnasium.spaces import Space
 from prpl_utils.gym_agent import Agent
+from relational_structs import (
+    LiftedOperator,
+    Predicate,
+    Type,
+)
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
-
-import abc
-from dataclasses import dataclass
-from functools import cached_property
-from typing import Any, Callable, Generic, Literal, Sequence, TypeVar
-
-import numpy as np
-from gymnasium.spaces import Space
-from prpl_utils.utils import consistent_hash
-from relational_structs import (
-    GroundAtom,
-    GroundOperator,
-    LiftedOperator,
-    Object,
-    Predicate,
-    Type,
-    Variable,
-)
 
 
 @dataclass(frozen=True)
@@ -66,8 +51,7 @@ class SimulatorFreeBaseApproach(abc.ABC, Generic[_O, _X, _U], Agent[_O, _U]):
         seed: int,
     ) -> None:
         self._env_models = env_models
-        self._seed = seed
-        self._rng = np.random.default_rng(seed)
+        super().__init__(seed)
 
     @abc.abstractmethod
     def _get_action(self) -> _U:
