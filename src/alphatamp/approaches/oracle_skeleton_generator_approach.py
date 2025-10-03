@@ -25,7 +25,6 @@ from relational_structs import GroundOperator, ObjectCentricState
 
 from alphatamp.approaches.base_approach import BaseApproach
 
-
 _O = TypeVar("_O")  # observation
 _U = TypeVar("_U")  # action
 _X = TypeVar("_X", bound=ObjectCentricState)  # state
