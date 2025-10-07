@@ -7,17 +7,22 @@ from bilevel_planning.structs import (
     SesameModels,
 )
 from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
+from relational_structs import GroundOperator
 from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.pddl import (
     GroundAtom,
     Predicate,
 )
 
+from alphatamp.approaches.feasibility_classifiers.base_feasibility_classifier import (
+    BaseFeasibilityClassifier,
+)
+
 _S = TypeVar("_S", bound=Hashable)  # abstract state
 _A = TypeVar("_A", bound=Hashable)  # abstract action
 
 
-class OracleAbstractPlanClassifier:
+class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
     """A classifier that uses oracle knowledge to classify abstract plans."""
 
     def __init__(
@@ -29,9 +34,9 @@ class OracleAbstractPlanClassifier:
 
     def validate_plan(
         self,
-        x0: ObjectCentricState | object,
-        s_plan: list[RelationalAbstractState] | list[_S],
-        _: list[_A],
+        x0: ObjectCentricState,
+        abstract_states: list[RelationalAbstractState],
+        abstract_actions: list[GroundOperator],
     ) -> bool:
         """Classify abstract plans."""
 
@@ -75,7 +80,7 @@ class OracleAbstractPlanClassifier:
 
         oracle_abstract_state_ptr = 0
         # Classify plan only looking at state for now
-        for plan_abstract_state in s_plan:
+        for plan_abstract_state in abstract_states:
             assert isinstance(plan_abstract_state, RelationalAbstractState)
             plan_atoms, plan_objects = (
                 plan_abstract_state.atoms,

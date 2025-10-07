@@ -1,6 +1,6 @@
 """Uses an oracle skeleton generator policy for abstract planning."""
 
-from typing import TypeAlias, TypeVar
+from typing import TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
