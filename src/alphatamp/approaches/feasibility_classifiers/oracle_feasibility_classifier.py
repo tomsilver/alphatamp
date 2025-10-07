@@ -20,6 +20,7 @@ from alphatamp.approaches.feasibility_classifiers.base_feasibility_classifier im
 
 _S = TypeVar("_S", bound=Hashable)  # abstract state
 _A = TypeVar("_A", bound=Hashable)  # abstract action
+_X = TypeVar("_X")
 
 
 class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
@@ -34,9 +35,9 @@ class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
 
     def validate_plan(
         self,
-        x0: ObjectCentricState,
-        abstract_states: list[RelationalAbstractState],
-        abstract_actions: list[GroundOperator],
+        x0: ObjectCentricState | _X,
+        abstract_states: list[RelationalAbstractState] | list[_S],
+        abstract_actions: list[GroundOperator] | list[_A],
     ) -> bool:
         """Classify abstract plans."""
 
