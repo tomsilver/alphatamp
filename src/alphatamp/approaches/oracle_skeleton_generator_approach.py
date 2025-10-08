@@ -49,7 +49,7 @@ class OracleAbstractPlanGenerator(
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        """Initialize with env models and seed"""
+        """Initialize with env models and seed."""
         super().__init__(noop_successor_fn, seed)
         self._env_models = env_models
 

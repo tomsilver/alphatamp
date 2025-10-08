@@ -1,22 +1,21 @@
 """A simulator-free approach that learns and uses a feasibility classifier."""
 
-import time
 from typing import Any, TypeVar
 
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
 from bilevel_planning.structs import (
     ParameterizedController,
-    RelationalAbstractState,
 )
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
-from relational_structs.object_centric_state import ObjectCentricState
-from relational_structs.pddl import GroundOperator
 
+from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
+    BaseAbstractExplorer,
+)
+from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifiers.feasibility_classifier_learner import (
     FeasibilityClassifierLearner,
 )
@@ -38,6 +37,7 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self,
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
         feasibility_classifier_learner: FeasibilityClassifierLearner,
+        train_explorer: BaseAbstractExplorer[_O, _X, _U],
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
@@ -65,80 +65,34 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan_step: int = 0
         self._current_controller: ParameterizedController | None = None
         self._last_observation: _O | None = None
-        self._timestep = 0
+
+        # Explorers.
+        self._train_explorer = train_explorer
+        self._exploit_explorer: ExploitExplorer = ExploitExplorer(
+            self._env_models, self._feasibility_classifier_learner, seed
+        )
 
     def reset(
         self,
         obs: _O,
         info: dict[str, Any],
     ) -> None:
-        start_time = time.perf_counter()
 
+        explorer = None
         # During training, use the explorer to choose actions.
         if self._train_or_eval == "train":
-            # Will need to implement in future PRs
-            pass
+            explorer = self._train_explorer
+        else:
+            # During evaluation, use the feasibility classifier to plan.
+            assert self._train_or_eval == "eval"
+            explorer = self._exploit_explorer
 
-        # During evaluation, use the feasibility classifier to plan.
-        assert self._train_or_eval == "eval"
-
-        # Get the current feasibility classifier.
-        abstract_plan_classifier = self._feasibility_classifier_learner.get_classifier()
-
-        # Plan with the feasibility classifier.
-
-        # Get the initial abstract state.
-        x0 = self._env_models.observation_to_state(obs)
-        s0 = self._env_models.state_abstractor(x0)
-        goal = self._env_models.goal_deriver(x0)
-
-        # Initialize the bilevel planning graph.
-        bpg: BilevelPlanningGraph[_X, _U, RelationalAbstractState, GroundOperator] = (
-            BilevelPlanningGraph()
-        )
-        bpg.add_state_node(x0)
-        bpg.add_abstract_state_node(s0)
-        bpg.add_state_abstractor_edge(x0, s0)
-
-        # Generate abstract plans and DO NOT attempt to refine them.
-        gen = self._abstract_plan_generator(
-            x0,
-            s0,
-            goal,
-            self._eval_planning_timeout,
-            bpg,
-        )
-        num_abstract_plans = 0
-
-        while (
-            num_abstract_plans < self._max_abstract_plans
-            and time.perf_counter() - start_time < self._eval_planning_timeout
-        ):
-            # Get the next abstract plan.
-            try:
-                s_plan, a_plan = next(gen)
-                num_abstract_plans += 1
-            except StopIteration:
-                break
-            # Quit early if timeout.
-            remaining_time = self._eval_planning_timeout - (
-                time.perf_counter() - start_time
-            )
-            if remaining_time < 0:
-                break
-
-            # Try to classify whether or not this abstract plan is valid.
-            assert isinstance(x0, ObjectCentricState)
-            if abstract_plan_classifier.validate_plan(x0, s_plan, a_plan):
-
-                # If abstract plan is valid, return the plan.
-                self._current_abstract_plan_step = 0
-                self._current_abstract_plan = (s_plan, a_plan)
-                self._current_controller = None
-                self._last_observation = obs
-                return
-
-        raise RuntimeError("No abstract plan found.")
+        # Use the explorer to create the current abstract plan.
+        self._current_abstract_plan_step = 0
+        self._current_controller = None
+        self._last_observation = obs
+        self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+        self._timestep = 0
 
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None

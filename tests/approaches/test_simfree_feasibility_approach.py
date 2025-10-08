@@ -1,13 +1,13 @@
 """Tests for simfree_feasibility_approach.py."""
 
 import time
-from typing import cast
 
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
+from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
 )
@@ -17,7 +17,9 @@ from alphatamp.approaches.feasibility_classifiers.static_feasibility_classifier 
 from alphatamp.approaches.simfree_feasibility_approach import (
     SimFreeFeasiblityApproach,
 )
-from alphatamp.approaches.simulator_free_base_approach import SimulatorFreeSesameModels
+from alphatamp.approaches.simulator_free_base_approach import (
+    sesame_models_to_sim_free,
+)
 
 
 def test_static_classifier_simfree_feasibility_approach():
@@ -37,16 +39,24 @@ def test_static_classifier_simfree_feasibility_approach():
         num_obstructions=1,
     )
 
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
     # Create the oracle classifier.
     oracle_classifier = OracleAbstractPlanClassifier(env_models)
 
     # Create the static feasibility learner.
     static_feasibility_classifier = StaticFeasibilityClassifier(oracle_classifier)
 
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, static_feasibility_classifier, 123
+    )
+
     # Create the approach.
     approach = SimFreeFeasiblityApproach(
-        env_models=cast(SimulatorFreeSesameModels, env_models),
+        env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
+        train_explorer=train_explorer,
         seed=123,
     )
 
@@ -54,6 +64,30 @@ def test_static_classifier_simfree_feasibility_approach():
     obs, _ = env.reset(seed=123)
 
     # Reset the approach on the observation.
+    # Train.
+    approach.train()
+    approach.reset(obs, {})
+
+    start_time = time.time()
+    timeout = 4
+    task_completed = False
+
+    while time.time() - start_time < timeout:
+        action = approach.step()
+
+        obs, reward, done, _, _ = env.step(action)
+
+        # Given new observation from the environment, update the approach
+        approach.update(obs, float(reward), done, {})
+        if done:
+            task_completed = True
+            break
+
+    # Eval.
+    # Train on just one problem.
+    obs, _ = env.reset(seed=123)
+
+    approach.eval()
     approach.reset(obs, {})
 
     start_time = time.time()

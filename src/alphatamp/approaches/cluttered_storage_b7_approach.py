@@ -1,4 +1,4 @@
-"""Oracle approach specifically for ClutteredStorage2D-b7-v0"""
+"""Oracle approach specifically for ClutteredStorage2D-b7-v0."""
 
 from typing import Iterable, Iterator, TypeAlias, TypeVar
 
@@ -49,7 +49,7 @@ class b7OracleAbstractPlanGenerator(
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        """Initialize with env models and seed"""
+        """Initialize with env models and seed."""
         super().__init__(noop_successor_fn, seed)
         self._env_models = env_models
 
