@@ -8,6 +8,7 @@ from bilevel_planning.structs import (
     LiftedSkill,
     RelationalAbstractGoal,
     RelationalAbstractState,
+    SesameModels,
 )
 from gymnasium.spaces import Space
 from prpl_utils.gym_agent import Agent
@@ -40,6 +41,23 @@ class SimulatorFreeSesameModels(Generic[_O, _X, _U]):
     def operators(self) -> set[LiftedOperator]:
         """Access the lifted operators from the lifted skills."""
         return {s.operator for s in self.skills}
+
+
+def sesame_models_to_sim_free(
+    models: SesameModels[_O, _X, _U],
+) -> SimulatorFreeSesameModels[_O, _X, _U]:
+    """Strip the transition model from the sesame models."""
+    return SimulatorFreeSesameModels(
+        observation_space=models.observation_space,
+        state_space=models.state_space,
+        action_space=models.action_space,
+        types=models.types,
+        predicates=models.predicates,
+        observation_to_state=models.observation_to_state,
+        state_abstractor=models.state_abstractor,
+        goal_deriver=models.goal_deriver,
+        skills=models.skills,
+    )
 
 
 class SimulatorFreeBaseApproach(abc.ABC, Generic[_O, _X, _U], Agent[_O, _U]):
