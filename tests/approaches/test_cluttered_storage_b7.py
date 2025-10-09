@@ -6,7 +6,7 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage_b7_approach import (
+from alphatamp.approaches.cluttered_storage.cluttered_storage_b7_approach import (
     b7OracleGeneratorApproach,
 )
 
