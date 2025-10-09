@@ -1,6 +1,7 @@
 """Oracle policy"""
 
 from typing import TypeVar
+
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
 )
@@ -34,9 +35,9 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
         self,
         env_models: SesameModels,
         seed: int = 123,
-        max_abstract_plans: int = 8, # how many abstract plan candidates to evaluate overall
-        max_skill_horizon: int = 80, # cap for how long a single skill runs
-        num_sampling_attempts_per_step: int = 8 # how many controller samples to try for each operator step
+        max_abstract_plans: int = 8,  # how many abstract plan candidates to evaluate overall
+        max_skill_horizon: int = 80,  # cap for how long a single skill runs
+        num_sampling_attempts_per_step: int = 8,  # how many controller samples to try for each operator step
     ):
         super().__init__(env_models, seed)
         self._max_abstract_plans = max_abstract_plans
@@ -44,7 +45,7 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
         self._num_sampling_attempts_per_step = num_sampling_attempts_per_step
 
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        # No training 
+        # No training
         return
 
     # input to _run_planning is problem, which contains the initial concrete state, goal (abstract), and spaces
@@ -55,16 +56,12 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
 
         # 1) Given a abstract step, trajectory sampler executes parameterized controllers ("skills"). 'How to Move'
         trajectory_sampler = ParameterizedControllerTrajectorySampler(
-
             # controllers are skills (place book, pick up book) and parameterizations (different ways to pick it up)
             controller_generator=RelationalControllerGenerator(self._env_models.skills),
-
-            #for each controller, simulate it using transition function
+            # for each controller, simulate it using transition function
             transition_function=self._env_models.transition_fn,
-
             # then map concrete back to abstract so goal condition can be checked
             state_abstractor=self._env_models.state_abstractor,
-
             # when to stop the roll out
             max_trajectory_steps=self._max_skill_horizon,
         )
@@ -83,6 +80,7 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
                 return goal.check_abstract_state(state) or goal.check_abstract_state(
                     init_s
                 )
+
             return _h
 
         # 4) Abstract plan generator
@@ -90,7 +88,7 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
         # Call the successor function repeatedly to get sequence of operators and use a heuristic to see which branch should be explored first
         # starts from abstract version of inital concrete state
 
-        #Is it like a BFS like prof had mentioned before?
+        # Is it like a BFS like prof had mentioned before?
         abstract_plan_generator: AbstractPlanGenerator = (
             HeuristicSearchAbstractPlanGenerator(
                 _trivial_goal_heuristic_factory,
@@ -99,7 +97,7 @@ class BookshelfPolicy(BaseApproach[_O, _X, _U]):
             )
         )
 
-        # This runs a heuristic search over abstract plans, and will be very slow, and 
+        # This runs a heuristic search over abstract plans, and will be very slow, and
 
         # 5) Tie it together with Sesame and run
         planner = SesamePlanner(
