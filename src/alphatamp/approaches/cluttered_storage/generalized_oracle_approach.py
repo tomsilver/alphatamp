@@ -1,6 +1,6 @@
-"""Oracle approach specifically for ClutteredStorage2D-b7-v0."""
+"""Oracle approach specifically for ClutteredStorage2D-b7-v0"""
 
-from typing import Iterable, Iterator, TypeAlias, TypeVar
+from typing import Any, Iterable, Iterator, TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
@@ -21,7 +21,8 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from relational_structs import GroundOperator, ObjectCentricState
+from prbench.envs.geom2d.utils import is_inside_shelf
+from relational_structs import GroundOperator, Object, ObjectCentricState
 
 from alphatamp.approaches.base_approach import BaseApproach
 
@@ -39,7 +40,7 @@ def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
     return []
 
 
-class b7OracleAbstractPlanGenerator(
+class OracleAbstractPlanGenerator(
     AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]
 ):
     """A generator that uses oracle knowledge to generate abstract plans."""
@@ -49,7 +50,7 @@ class b7OracleAbstractPlanGenerator(
         env_models: SesameModels,
         seed: int,
     ) -> None:
-        """Initialize with env models and seed."""
+        """Initialize with env models and seed"""
         super().__init__(noop_successor_fn, seed)
         self._env_models = env_models
 
@@ -82,37 +83,45 @@ class b7OracleAbstractPlanGenerator(
         shelf_type = type_name_to_type["shelf"]
         robot_type = type_name_to_type["crv_robot"]
 
-        # Get the objects from the initial state, sorting them so they
-        # match their semantic names
-        block0, block1, block2, block3, block4, block5, block6 = sorted(
-            x0.get_objects(block_type)
-        )
+        # Get the objects from the initial state
+        blocks = sorted(x0.get_objects(block_type))
         (robot,) = x0.get_objects(robot_type)
         (shelf,) = x0.get_objects(shelf_type)
 
-        # Creates the abstract plan by grounding the lifeted operators
-        abstract_actions: list[GroundOperator] = [
-            PickBlockOnShelf.ground((robot, block0, shelf)),
-            PlaceBlockNotOnShelf.ground((robot, block0, shelf)),
-            PickBlockNotOnShelf.ground((robot, block0, shelf)),
-            PlaceBlockOnShelf.ground((robot, block0, shelf)),
-            PickBlockOnShelf.ground((robot, block1, shelf)),
-            PlaceBlockNotOnShelf.ground((robot, block1, shelf)),
-            PickBlockNotOnShelf.ground((robot, block1, shelf)),
-            PlaceBlockOnShelf.ground((robot, block1, shelf)),
-            PickBlockOnShelf.ground((robot, block2, shelf)),
-            PlaceBlockNotOnShelf.ground((robot, block2, shelf)),
-            PickBlockNotOnShelf.ground((robot, block2, shelf)),
-            PlaceBlockOnShelf.ground((robot, block2, shelf)),
-            PickBlockNotOnShelf.ground((robot, block3, shelf)),
-            PlaceBlockOnShelf.ground((robot, block3, shelf)),
-            PickBlockNotOnShelf.ground((robot, block4, shelf)),
-            PlaceBlockOnShelf.ground((robot, block4, shelf)),
-            PickBlockNotOnShelf.ground((robot, block5, shelf)),
-            PlaceBlockOnShelf.ground((robot, block5, shelf)),
-            PickBlockNotOnShelf.ground((robot, block6, shelf)),
-            PlaceBlockOnShelf.ground((robot, block6, shelf)),
-        ]
+        # When PRBench checks collisions, it recomputes 2D body of each
+        # obj. _static_object_body_cache is a dict to speed this up, but
+        # is private to the env, so I use a static cache.
+        static_cache: dict[Object, Any] = {}
+        blocks_on_shelf = []
+        blocks_not_on_shelf = []
+
+        # explicitly sort blocks into blocks_on_shelf and blocks_not_on_shelf
+        for block in blocks:
+            if is_inside_shelf(x0, block, shelf, static_cache):
+                blocks_on_shelf.append(block)
+            else:
+                blocks_not_on_shelf.append(block)
+
+        # Creates the abstract plan by grounding the lifted operators
+        # Appends sets of actions to abstract_actions depending on num_blocks_on_shelf
+        abstract_actions: list[GroundOperator] = []
+        for block in blocks_on_shelf:
+            # block is on the shelf, so remove it from shelf
+            abstract_actions.extend(
+                [
+                    PickBlockOnShelf.ground((robot, block, shelf)),
+                    PlaceBlockNotOnShelf.ground((robot, block, shelf)),
+                    PickBlockNotOnShelf.ground((robot, block, shelf)),
+                    PlaceBlockOnShelf.ground((robot, block, shelf)),
+                ]
+            )
+        for block in blocks_not_on_shelf:
+            abstract_actions.extend(
+                [
+                    PickBlockNotOnShelf.ground((robot, block, shelf)),
+                    PlaceBlockOnShelf.ground((robot, block, shelf)),
+                ]
+            )
 
         # "Simulate" the execution of the abstract actions to get the abstract states.
         # Starting from the initial abstract state s0, apply delete and
@@ -130,7 +139,7 @@ class b7OracleAbstractPlanGenerator(
         return iter([(abstract_states, abstract_actions)])
 
 
-class b7OracleGeneratorApproach(BaseApproach[_O, _X, _U]):
+class GeneralizedOracleApproach(BaseApproach[_O, _X, _U]):
     """Uses an oracle skeleton generator policy for abstract planning."""
 
     def __init__(
@@ -166,7 +175,7 @@ class b7OracleGeneratorApproach(BaseApproach[_O, _X, _U]):
 
         # Create the abstract plan generator.
         self._abstract_plan_generator: AbstractPlanGenerator = (
-            b7OracleAbstractPlanGenerator(
+            OracleAbstractPlanGenerator(
                 self._env_models,
                 seed=self._seed,
             )

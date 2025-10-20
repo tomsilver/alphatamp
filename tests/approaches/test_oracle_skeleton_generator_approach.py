@@ -6,7 +6,7 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.oracle_skeleton_generator_approach import (
+from alphatamp.approaches.cluttered_storage.oracle_skeleton_generator_approach import (
     OracleSkeletonGeneratorApproach,
 )
 
