@@ -2,20 +2,17 @@
 actions."""
 
 import random
-import time
 from typing import TypeVar
 
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
 from bilevel_planning.structs import (
     RelationalAbstractState,
 )
 from bilevel_planning.utils import (
     cached_all_ground_operators,
 )
-from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.pddl import GroundOperator
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
@@ -71,7 +68,6 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
         # Get the initial abstract state.
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
-        goal = self._env_models.goal_deriver(x0)
 
         # Get set of lifted operators and ground them
         operators = self._env_models.operators

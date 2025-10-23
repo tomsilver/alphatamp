@@ -150,3 +150,7 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_action = self._get_action()
         self._timestep += 1
         return self._last_action
+
+    def get_abstract_plan(self) -> Skeleton | None:
+        """Return the current abstract plan."""
+        return self._current_abstract_plan
