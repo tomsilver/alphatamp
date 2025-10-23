@@ -10,11 +10,11 @@ from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.abstract_explorers.random_explorer import RandomExplorer
+from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (  # pylint:disable=line-too-long
+    StaticFeasibilityClassifierLearner,
+)
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
-)
-from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (
-    StaticFeasibilityClassifierLearner,
 )
 from alphatamp.approaches.simfree_feasibility_approach import (
     SimFreeFeasiblityApproach,
@@ -47,7 +47,9 @@ def test_static_classifier_simfree_feasibility_approach():
     oracle_classifier = OracleAbstractPlanClassifier(env_models)
 
     # Create the static feasibility learner.
-    static_feasibility_classifier = StaticFeasibilityClassifierLearner(oracle_classifier)
+    static_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        oracle_classifier
+    )
 
     # Create the train explorer.
     train_explorer = ExploitExplorer(
@@ -137,12 +139,12 @@ def test_random_explorer_simfree_feasibility_approach():
     oracle_classifier = OracleAbstractPlanClassifier(env_models)
 
     # Create the static feasibility learner.
-    static_feasibility_classifier = StaticFeasibilityClassifierLearner(oracle_classifier)
+    static_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        oracle_classifier
+    )
 
     # Create the train explorer.
-    train_explorer = RandomExplorer(
-        sim_free_env_models, seed=123, max_plan_length=6
-    )
+    train_explorer = RandomExplorer(sim_free_env_models, seed=123, max_plan_length=6)
 
     # Create the approach.
     approach = SimFreeFeasiblityApproach(

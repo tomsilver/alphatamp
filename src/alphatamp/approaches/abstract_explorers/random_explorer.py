@@ -15,7 +15,6 @@ from relational_structs.pddl import GroundOperator
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
 )
-
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )

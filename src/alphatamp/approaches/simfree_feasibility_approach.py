@@ -19,7 +19,7 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
 )
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
-from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (
+from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
 from alphatamp.approaches.simulator_free_base_approach import (
