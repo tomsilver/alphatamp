@@ -1,8 +1,8 @@
 """Tests for simfree_feasibility_approach.py."""
 
-import random
 import time
 
+import numpy as np
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
@@ -155,7 +155,7 @@ def test_random_explorer_simfree_feasibility_approach():
     # Train on two problems.
     training_data = []
     for _ in range(2):
-        seed = random.randint(0, 1000)
+        seed = np.random.randint(1000)
         obs, _ = env.reset(seed=seed)
 
         # Reset the approach on the observation.
