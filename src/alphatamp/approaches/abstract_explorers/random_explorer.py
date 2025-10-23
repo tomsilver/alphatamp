@@ -1,9 +1,9 @@
 """An random abstract plan explorer that returns a fixed length plan with random
 actions."""
 
-import random
 from typing import TypeVar
 
+import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -59,6 +59,7 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
 
         self._planning_timeout = planning_timeout
         self._max_plan_length = max_plan_length
+        self._rng = np.random.default_rng(seed=seed)
 
     def generate_abstract_plan(
         self, obs: _O
@@ -77,10 +78,10 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
         s_plan = [s0]
         a_plan = []
         for _ in range(self._max_plan_length):
-            next_random_abstract_action = random.choice(list(grounded_operators))
 
-            # import ipdb
-            # ipdb.set_trace()
+            next_random_abstract_action: GroundOperator = self._rng.choice(
+                np.array(list(grounded_operators), dtype=object)
+            )
 
             next_atoms = (
                 s_plan[-1].atoms - next_random_abstract_action.delete_effects

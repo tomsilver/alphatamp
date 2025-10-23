@@ -8,6 +8,9 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 from bilevel_planning.structs import (
     ParameterizedController,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
@@ -140,7 +143,11 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_controller.observe(x)
 
         # Take one more low-level action.
-        self._last_action = self._current_controller.step()
+        try:
+            self._last_action = self._current_controller.step()
+        except (TrajectorySamplingFailure, IndexError):
+            raise RuntimeError("Unable to take next low-level step!")
+
         assert self._last_action is not None
 
         return self._last_action

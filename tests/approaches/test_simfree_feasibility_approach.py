@@ -175,7 +175,7 @@ def test_random_explorer_simfree_feasibility_approach():
         while time.time() - start_time < timeout:
             try:
                 action = approach.step()
-            except Exception as e:
+            except RuntimeError as e:
                 task_status = e
                 break
 
