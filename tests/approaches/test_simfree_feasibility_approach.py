@@ -22,6 +22,7 @@ from alphatamp.approaches.simfree_feasibility_approach import (
 from alphatamp.approaches.simulator_free_base_approach import (
     sesame_models_to_sim_free,
 )
+from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 
 
 def test_static_classifier_simfree_feasibility_approach():
@@ -175,7 +176,7 @@ def test_random_explorer_simfree_feasibility_approach():
         while time.time() - start_time < timeout:
             try:
                 action = approach.step()
-            except RuntimeError as e:
+            except ApproachStepError as e:
                 task_status = e
                 break
 
