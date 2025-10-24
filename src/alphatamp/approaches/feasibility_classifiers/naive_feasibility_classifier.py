@@ -42,9 +42,9 @@ class NaiveFeasibilityClassifier(BaseFeasibilityClassifier):
 
         skeleton_plan = (abstract_states, abstract_actions)
 
-        # If classifier hasn't seen plan before, return false
+        # If classifier hasn't seen plan before, optimistically return true
         if skeleton_plan not in self._skeleton_success_frequency:
-            return False
+            return True
 
         # Otherwise, check if success frequency is above threshold
         successes, failures = self._skeleton_success_frequency[skeleton_plan]
