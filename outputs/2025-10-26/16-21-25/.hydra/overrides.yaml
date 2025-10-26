@@ -1,0 +1,4 @@
+- seed=0
+- benchmark.num_blocks=3
+- approach=oracle
+- timeout_sec=60

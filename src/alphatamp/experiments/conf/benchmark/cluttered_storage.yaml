@@ -1,0 +1,3 @@
+_target_: alphatamp.experiments.cluttered_storage.ClutteredStorageBenchmark
+name: cluttered_storage
+num_blocks: 3

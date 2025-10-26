@@ -1,0 +1,7 @@
+defaults:
+  - benchmark: cluttered_storage     # where n_blocks lives
+  - approach: oracle                 # or pure_planner
+  - _self_
+
+seed: 0
+timeout_sec: 60
