@@ -1,15 +1,14 @@
 """Tests for ngram_approach.py."""
 
 import prbench
+import pytest
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.ngram_approach import NGramApproach
 
 
 def test_ngram_approach() -> None:
-    """
-    Test NGramApproach on Obstruction2D environment.
-    """
+    """Test NGramApproach on Obstruction2D environment."""
 
     prbench.register_all_environments()
     env = prbench.make("prbench/Obstruction2D-o1-v0")
@@ -69,13 +68,12 @@ def test_ngram_approach() -> None:
 
     print("Test passed: Plan successfully executed!")
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
 
 
+@pytest.mark.slow
 def test_ngram_approach_no_training() -> None:
-    """
-    Test that the approach works even without training data.
-    """
+    """Test that the approach works even without training data."""
     prbench.register_all_environments()
     env = prbench.make("prbench/Obstruction2D-o0-v0")  # No obstruction (easier)
     env_models = create_bilevel_planning_models(
@@ -105,12 +103,11 @@ def test_ngram_approach_no_training() -> None:
 
     print("Test passed: Approach works without training data!")
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
 
 
 def test_ngram_generalization() -> None:
-    """
-    Test that n-grams learned on one problem generalize to another.
+    """Test that n-grams learned on one problem generalize to another.
 
     Train on seed=123, test on seed=456.
     """
@@ -147,4 +144,4 @@ def test_ngram_generalization() -> None:
 
     print("Test passed: N-grams generalized to new problem!")
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]

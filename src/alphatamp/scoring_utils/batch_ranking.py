@@ -43,9 +43,7 @@ class BatchRankingAbstractPlanGenerator(
         )
         super().__init__(abstract_successor_fn, seed)
 
-    def _scores_discriminate(
-        self, batch: list[Skeleton], prev: list[Skeleton]
-    ) -> bool:
+    def _scores_discriminate(self, batch: list[Skeleton], prev: list[Skeleton]) -> bool:
         """Check if scoring function provides discriminatory information.
 
         Returns False if all scores are nearly identical (within epsilon).
@@ -61,7 +59,6 @@ class BatchRankingAbstractPlanGenerator(
 
         return score_range > DISCRIMINATORY_THRESHOLD
 
-    # TODO: add priority queue version to avoid too many sorts
     def __call__(
         self,
         x0: _X,

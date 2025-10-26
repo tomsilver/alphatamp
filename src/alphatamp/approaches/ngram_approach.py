@@ -1,3 +1,5 @@
+"""N-gram approach for learning operator sequence patterns in TAMP."""
+
 from __future__ import annotations
 
 from typing import TypeAlias, TypeVar
@@ -40,20 +42,26 @@ OperatorSequence: TypeAlias = tuple[LiftedOperator, ...] | tuple[GroundOperator,
 
 
 class TrieNode:
+    """Node in a trie data structure for tracking failed skeleton prefixes."""
+
     def __init__(self) -> None:
+        """Initialize a trie node."""
         self.children: dict[GroundOperator, TrieNode] = {}
         self.is_failed: bool = False
 
+
 class FailedSkeletonTrie:
+    """Trie data structure for efficient failed skeleton prefix checking.
+
+    Skeletons that failed to refine are added to the trie. The trie is then used to
+    prune skeletons that extend any failed prefixes.
     """
-    Trie data structure for efficient failed skeleton prefix checking.
-    Skeletons that failed to refine are added to the trie.
-    The trie is then used to prune skeletons that extend any failed prefixes.
-    """
+
     def __init__(self) -> None:
         self.root = TrieNode()
 
     def add_failed_skeleton(self, skeleton_ops: tuple[GroundOperator, ...]) -> None:
+        """Add a failed skeleton to the trie."""
         # Ignore empty skeletons
         if not skeleton_ops:
             return
@@ -70,9 +78,7 @@ class FailedSkeletonTrie:
         current.is_failed = True
 
     def extends_failed_prefix(self, skeleton_ops: tuple[GroundOperator, ...]) -> bool:
-        """
-        Check if skeleton extends any failed skeleton prefix.
-        """
+        """Check if skeleton extends any failed skeleton prefix."""
         current = self.root
 
         for op in skeleton_ops:
@@ -88,9 +94,8 @@ class FailedSkeletonTrie:
 
 
 class NGramApproach(BaseApproach[_O, _X, _U]):
-    """
-    Learn operator sequence patterns using n-grams.
-    Each n-gram is tracked with success/failure counts across training problems.
+    """Learn operator sequence patterns using n-grams. Each n-gram is tracked with
+    success/failure counts across training problems.
 
     Supports two modes for n-gram extraction:
     1. Lifted: Abstract away object identities (block0, block1)
@@ -117,8 +122,7 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         use_grounded_ngrams: bool = True,
         failure_penalty_mode: bool = True,
     ):
-        """
-        Initialize the lifted n-gram approach.
+        """Initialize the lifted n-gram approach.
 
         laplace_smoothing_k_success: Pseudo-count for successes in Laplace smoothing.
         laplace_smoothing_k_failure: Pseudo-count for failures in Laplace smoothing.
@@ -200,24 +204,22 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         self._refiner = self._planner._refiner  # pylint: disable=protected-access
 
     def _extract_operator_sequence(self, skeleton: Skeleton) -> OperatorSequence:
-        """
-        Extract operator sequence from skeleton (lifted or grounded based on config).
-        """
+        """Extract operator sequence from skeleton (lifted or grounded based on
+        config)."""
         _, operators = skeleton
 
         # Grounded mode
         if self._use_grounded_ngrams:
-            
             return tuple(operators)
-        else:
-            # Lifted mode: op.parent gets the lifted operator.
-            return tuple(op.parent for op in operators)
+
+        # Lifted mode: op.parent gets the lifted operator.
+        return tuple(op.parent for op in operators if op.parent is not None)
 
     def _extract_ngrams(
         self, operator_sequence: OperatorSequence
     ) -> list[OperatorSequence]:
-        """
-        Extract all n-grams from an operator sequence.
+        """Extract all n-grams from an operator sequence.
+
         Works with both lifted and grounded operator sequences.
         """
         ngrams = []
@@ -234,9 +236,7 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
     def _update_ngram_stats(
         self, operator_sequence: OperatorSequence, success: bool
     ) -> None:
-        """
-        Update n-gram statistics with a new skeleton result.
-        """
+        """Update n-gram statistics with a new skeleton result."""
         ngrams = self._extract_ngrams(operator_sequence)
 
         for ngram in ngrams:
@@ -251,8 +251,8 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
                 self._ngram_stats[ngram] = (success_count, fail_count + 1)
 
     def _compute_smoothed_success_rate(self, ngram: OperatorSequence) -> float:
-        """
-        Compute Laplace-smoothed success rate for an n-gram.
+        """Compute Laplace-smoothed success rate for an n-gram.
+
         Formula: (success_count + k_success) / (total_count + k_success + k_failure)
         """
         if ngram in self._ngram_stats:
@@ -273,9 +273,7 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         return smoothed_rate
 
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        """
-        Train on a single problem to learn n-gram patterns.
-        """
+        """Train on a single problem to learn n-gram patterns."""
         x0 = problem.initial_state
         s0 = self._env_models.state_abstractor(x0)
 
@@ -320,17 +318,15 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
     def _run_planning(
         self, problem: PlanningProblem[_X, _U], timeout: float
     ) -> Plan[_X, _U]:
-        """
-        Run planning using learned n-gram patterns to score skeletons.
-        """
+        """Run planning using learned n-gram patterns to score skeletons."""
         # Reset online learning counter for new problem
         self._num_failures_processed = 0
 
-        plan, bpg = self._planner.run(problem, timeout=timeout)
+        plan, _ = self._planner.run(problem, timeout=timeout)
 
         if plan is None:
             raise TimeoutError("No plan found")
-        
+
         return plan
 
     def _score_skeleton(
@@ -373,15 +369,13 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         # Score based on mode
         if self._failure_penalty_mode:
             return self._score_failure_mode(ngrams)
-        else:
-            return self._score_success_mode(ngrams)
+        return self._score_success_mode(ngrams)
 
     def _score_success_mode(self, ngrams: list[OperatorSequence]) -> float:
-        """
-        Score skeleton by pursuing successful n-gram patterns.
+        """Score skeleton by pursuing successful n-gram patterns.
 
-        Sum up success rates of all n-grams, weighted by length.
-        Longer n-grams (more specific) get more weight.
+        Sum up success rates of all n-grams, weighted by length. Longer n-grams (more
+        specific) get more weight.
         """
         total_score = 0.0
         total_weight = 0.0
@@ -405,9 +399,8 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         # Return weighted average
         if total_weight > 0:
             return total_score / total_weight
-        else:
-            # Fallback: assign very low score if no n-grams to score
-            return float("-inf")
+        # Fallback: assign very low score if no n-grams to score
+        return float("-inf")
 
     def _score_failure_mode(self, ngrams: list[OperatorSequence]) -> float:
         """
@@ -442,9 +435,7 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
             # Give more weight to longer n-grams
             weight = len(ngram)
             # Ramp up confidence weight with more observations
-            observation_confidence = min(
-                1.0, total_observations / 10.0
-            ) 
+            observation_confidence = min(1.0, total_observations / 10.0)
 
             penalty = weight * failure_rate * observation_confidence
             total_penalty += penalty
@@ -453,10 +444,10 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         return -total_penalty
 
     def get_ngram_summary(self) -> dict[tuple[str, ...], dict[str, float]]:
-        """
-        Get summary of learned n-gram statistics for analysis/debugging.
-        Converts operator n-grams to string representations for readability.
-        Works with both lifted and grounded n-grams.
+        """Get summary of learned n-gram statistics for analysis/debugging.
+
+        Converts operator n-grams to string representations for readability. Works with
+        both lifted and grounded n-grams.
         """
         summary = {}
 
