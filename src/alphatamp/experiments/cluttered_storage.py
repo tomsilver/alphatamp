@@ -9,10 +9,13 @@ from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 @dataclass
 class ClutteredStorageBenchmark:
+    """Hydra-instantiable benchmark for ClutteredStorage2D environment."""
+
     num_blocks: int = 3
     name: str = "cluttered_storage"
 
     def make_env_and_models(self, seed: int):
+        """Create env, model set, and initial observation."""
         prbench.register_all_environments()
         env_id = f"prbench/ClutteredStorage2D-b{self.num_blocks}-v0"
         env = prbench.make(env_id)
