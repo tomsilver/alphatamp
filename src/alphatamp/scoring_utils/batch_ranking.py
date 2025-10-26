@@ -43,6 +43,25 @@ class BatchRankingAbstractPlanGenerator(
         )
         super().__init__(abstract_successor_fn, seed)
 
+    def _scores_discriminate(
+        self, batch: list[Skeleton], prev: list[Skeleton]
+    ) -> bool:
+        """Check if scoring function provides discriminatory information.
+
+        Returns False if all scores are nearly identical (within epsilon).
+        """
+        if len(batch) <= 1:
+            return False  # No point in reordering a single skeleton
+
+        scores = [self._score_fn(skeleton, prev) for skeleton in batch]
+        score_range = max(scores) - min(scores)
+
+        # If scores vary by less than this threshold, don't reorder
+        DISCRIMINATORY_THRESHOLD = 0.01
+
+        return score_range > DISCRIMINATORY_THRESHOLD
+
+    # TODO: add priority queue version to avoid too many sorts
     def __call__(
         self,
         x0: _X,
@@ -58,13 +77,19 @@ class BatchRankingAbstractPlanGenerator(
         while batch := list(islice(iterator, self._batch_size)):
             # NOTE: we need to reorder after every failed attempt because of prev.
             while batch:
-                tiebreaking_score_fn = lambda x: (
-                    self._score_fn(x, prev),
-                    -len(x[1]),
-                    self._rng.uniform(),
-                )
-                batch.sort(key=tiebreaking_score_fn)
-                skeleton = batch.pop()
+                # Only reorder if scoring function is discriminatory
+                # Otherwise, preserve base generator's order
+                if self._scores_discriminate(batch, prev):
+                    tiebreaking_score_fn = lambda x: (
+                        self._score_fn(x, prev),
+                        -len(x[1]),
+                        self._rng.uniform(),
+                    )
+                    batch.sort(key=tiebreaking_score_fn)
+                    skeleton = batch.pop()
+                else:
+                    # Use base generator's order (first in batch)
+                    skeleton = batch.pop(0)
 
                 # Uncomment to debug.
                 # print("YIELDING")
@@ -75,4 +100,6 @@ class BatchRankingAbstractPlanGenerator(
                 yield skeleton
 
                 # NOTE: assuming that every previous skeleton failed.
+                # This works with SesamePlanner, but may not be true in general.
+                # SesamePlanner generally stops after the first success.
                 prev.append(skeleton)
