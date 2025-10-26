@@ -1,8 +1,11 @@
 # Tiny adapter for run_experiments.py
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 import prbench
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+
 
 @dataclass
 class ClutteredStorageBenchmark:
@@ -33,4 +36,3 @@ class ClutteredStorageBenchmark:
             if done:
                 return True, num
         return False, num
-
