@@ -1,4 +1,0 @@
-success,cost,duration,seed,n_blocks,approach_name
-True,1031,40.07802539599652,123,7,{'_target_': 'alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach'}
-True,252,5.71662436099723,123,3,{'_target_': 'alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach'}
-True,1031,44.55310490800184,123,7,{'_target_': 'alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach'}

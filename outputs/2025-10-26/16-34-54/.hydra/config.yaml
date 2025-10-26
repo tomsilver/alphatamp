@@ -1,9 +1,0 @@
-benchmark:
-  _target_: alphatamp.experiments.cluttered_storage.ClutteredStorageBenchmark
-  name: cluttered_storage
-  num_blocks: 3
-approach:
-  _target_: alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach
-  name: oracle
-seed: 123
-timeout_sec: 120
