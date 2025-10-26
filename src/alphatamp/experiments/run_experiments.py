@@ -52,7 +52,9 @@ def main(cfg: DictConfig):
     env.close()
 
 
-def _run_task_evaluation(env, bench, approach, obs, timeout: float) -> dict[str, object]:
+def _run_task_evaluation(
+    env, bench, approach, obs, timeout: float
+) -> dict[str, object]:
     """Run planning once and compute metrics"""
     start_time = time.perf_counter()
     plan = approach.run_planning(obs, timeout=timeout)
