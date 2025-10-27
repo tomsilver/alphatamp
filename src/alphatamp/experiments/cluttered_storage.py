@@ -1,4 +1,5 @@
-# Tiny adapter for run_experiments.py
+"""Tiny adapter for run_experiments.py"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

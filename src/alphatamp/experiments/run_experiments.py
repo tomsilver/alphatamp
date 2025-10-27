@@ -6,9 +6,7 @@ import os
 import time
 
 import hydra
-import numpy as np
 import pandas as pd
-from hydra.utils import get_class
 from omegaconf import DictConfig
 
 
@@ -69,4 +67,4 @@ def _run_task_evaluation(
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pylint: disable=no-value-for-parameter
