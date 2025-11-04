@@ -1,0 +1,7 @@
+defaults:
+  - env: cluttered_storage
+  - approach: oracle # or pure_planner
+  - _self_
+
+seed: 0
+timeout_sec: 60
