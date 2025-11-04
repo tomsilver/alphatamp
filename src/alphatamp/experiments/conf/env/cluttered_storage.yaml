@@ -1,0 +1,4 @@
+id: "prbench/ClutteredStorage2D-b3-v0"
+model_name: "clutteredstorage2d"
+model_kwargs:
+  num_blocks: 3
