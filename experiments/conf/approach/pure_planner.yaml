@@ -1,1 +1,1 @@
-_target_: src.alphatamp.approaches.pure_planning_approach.PurePlanningApproach
+_target_: alphatamp.approaches.pure_planning_approach.PurePlanningApproach
