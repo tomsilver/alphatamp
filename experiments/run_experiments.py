@@ -63,7 +63,7 @@ def main(cfg: DictConfig):
     else:
         df.to_csv(results_path)
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
 
 
 def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object]:
