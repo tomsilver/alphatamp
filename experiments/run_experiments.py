@@ -1,14 +1,18 @@
 """Run a single experiment or Hydra multirun sweep.
 This module instantiates a benchmark and apporach, then executes
-planning and gets metrics."""
+planning and gets metrics.
+
+To run: Run "python experiments/run_experiments.py" from the alphatamp root directory (alphatamp/)
+Note: If you're failing, try running "uv pip install -e ." before the line above.
+"""
 
 import os
 import time
 
 import hydra
 import pandas as pd
-from omegaconf import DictConfig
 import prbench
+from omegaconf import DictConfig
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 
@@ -29,12 +33,12 @@ def main(cfg: DictConfig):
         cfg.env.model_name,
         env.observation_space,
         env.action_space,
-        **cfg.env.model_kwargs # unpacks dict into keyword args
+        **cfg.env.model_kwargs,  # unpacks dict into keyword args
     )
 
     # Build approach
     approach = hydra.utils.instantiate(cfg.approach, env_models, seed)
-    approach.train(obs) 
+    approach.train(obs)
 
     metrics = _run_task_evaluation(
         env=env, approach=approach, obs=obs, timeout=float(cfg.timeout_sec)
@@ -59,9 +63,7 @@ def main(cfg: DictConfig):
     env.close()
 
 
-def _run_task_evaluation(
-    env, approach, obs, timeout: float
-) -> dict[str, object]:
+def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object]:
     """Run planning once and compute metrics"""
     start_time = time.perf_counter()
     plan = approach.run_planning(obs, timeout=timeout)
@@ -73,6 +75,7 @@ def _run_task_evaluation(
     metrics["cost"] = num_actions  # plan len was chosen arbitrarily
     metrics["duration"] = dur
     return metrics
+
 
 def _check_success(env, plan) -> tuple[bool, int]:
     """Step the plan; return (success, num_actions)."""

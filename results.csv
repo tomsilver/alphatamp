@@ -1,0 +1,2 @@
+,success,cost,duration,seed,approach_name
+0,True,477,57.280306777975056,0,{'_target_': 'alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach'}

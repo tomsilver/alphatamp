@@ -1,0 +1,9 @@
+env:
+  id: prbench/ClutteredStorage2D-b3-v0
+  model_name: clutteredstorage2d
+  model_kwargs:
+    num_blocks: 3
+approach:
+  _target_: alphatamp.approaches.cluttered_storage.generalized_oracle_approach.GeneralizedOracleApproach
+seed: 0
+timeout_sec: 60
