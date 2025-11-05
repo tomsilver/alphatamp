@@ -2,8 +2,10 @@
 This module instantiates a benchmark and apporach, then executes
 planning and gets metrics.
 
-To run: Run "python experiments/run_experiments.py" from the alphatamp root directory (alphatamp/)
-Note: If you're failing, try running "uv pip install -e ." before the line above.
+To run: Run "python experiments/run_experiments.py"
+from the alphatamp root directory (alphatamp/)
+Note: If you're failing, try running "uv pip install -e ."
+before the line above.
 """
 
 import os
@@ -12,6 +14,7 @@ import time
 import hydra
 import pandas as pd
 import prbench
+from gymnasium import Env
 from omegaconf import DictConfig
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
@@ -25,7 +28,7 @@ def main(cfg: DictConfig):
 
     # Build env
     prbench.register_all_environments()
-    env = prbench.make(cfg.env.id)
+    env: Env = prbench.make(cfg.env.id)
     obs, _ = env.reset(seed=seed)
 
     # Build env models
