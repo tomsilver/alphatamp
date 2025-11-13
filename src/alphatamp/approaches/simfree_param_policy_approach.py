@@ -129,6 +129,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def _energy_function(self, x, params) -> float:
         return 0.0
+    
+    def _resample_controller(self, x):
+        """Resample parameters and reset the controller with the specified observation."""
+
+        assert self._current_abstract_plan is not None
+
+        # Get the current abstract action and controller.
+        a = self._current_abstract_plan[1][self._current_abstract_plan_step]
+
+        # Recreate controller
+        self._current_controller = self._controller_generator(a)
+        energy_function = self._abstract_action_to_energy_function[a]
+
+        # Sample new params
+        parameter_policy = ParameterPolicy(self._current_controller, energy_function)
+        optimal_params = parameter_policy.sample_parameters(x, self._rng)
+
+        # Reset + observe
+        self._current_controller.reset(x, optimal_params)
+        self._current_controller.observe(x)
 
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None
@@ -185,14 +205,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_controller.observe(x)
 
         # Take one more low-level action.
-        try:
-            self._last_action = self._current_controller.step()
-        except (TrajectorySamplingFailure, IndexError) as e:
-            raise ApproachStepError("Unable to take next low-level step!", e)
+        while True:
+            try:
+                self._last_action = self._current_controller.step()
+                assert self._last_action is not None
 
-        assert self._last_action is not None
+                return self._last_action
+            # if low level action failed, resample parameters!
+            except TrajectorySamplingFailure as e:
+                self._resample_controller(x)
+                continue
 
-        return self._last_action
+            except IndexError as e:
+                self._resample_controller(x)
+                raise ApproachStepError("Index Error!", e)
+
 
     def step(self) -> _U:
         """Get the next action to take."""

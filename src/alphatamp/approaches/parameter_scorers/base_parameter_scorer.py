@@ -1,6 +1,6 @@
 import scikit-learn
 
-class EnergyFunction:
+class BaseParameterScorer:
     def __init__(self):
         pass
 

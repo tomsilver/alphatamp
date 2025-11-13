@@ -3,16 +3,13 @@
 import math
 from typing import Any
 from matplotlib.pylab import Generator
-from prbench.envs.geom2d.structs import SE2Pose
-from prbench_models.geom2d.utils import Geom2dRobotController
 
-from alphatamp.approaches.sampling_energy_functions.base_energy_function import EnergyFunction
+from alphatamp.approaches.parameter_scorers.base_parameter_scorer import BaseParameterScorer
 from bilevel_planning.structs import ParameterizedController
-from relational_structs import ObjectCentricState
 
 
 class ParameterPolicy:
-    def __init__(self, controller: ParameterizedController, energy_function: EnergyFunction) -> None:
+    def __init__(self, controller: ParameterizedController, energy_function: BaseParameterScorer) -> None:
         self._controller = controller
         
         self._energy_function = energy_function
