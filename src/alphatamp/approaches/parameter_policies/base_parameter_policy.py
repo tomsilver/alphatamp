@@ -5,12 +5,14 @@ from typing import Any
 from matplotlib.pylab import Generator
 from prbench.envs.geom2d.structs import SE2Pose
 from prbench_models.geom2d.utils import Geom2dRobotController
+
+from alphatamp.approaches.sampling_energy_functions.base_energy_function import EnergyFunction
 from bilevel_planning.structs import ParameterizedController
 from relational_structs import ObjectCentricState
 
 
-class ParameterPolicy(Geom2dRobotController):
-    def __init__(self, controller: ParameterizedController, energy_function) -> None:
+class ParameterPolicy:
+    def __init__(self, controller: ParameterizedController, energy_function: EnergyFunction) -> None:
         self._controller = controller
         
         self._energy_function = energy_function
@@ -25,7 +27,7 @@ class ParameterPolicy(Geom2dRobotController):
             params = self._controller.sample_parameters(x, rng)
 
             # Now we score the params based on the energy function
-            energy_score = self._energy_function(x, params)
+            energy_score = self._energy_function.score(x, params)
 
             if energy_score > optimal_score:
                 optimal_score = energy_score
@@ -36,16 +38,7 @@ class ParameterPolicy(Geom2dRobotController):
     def update_distribution(self, data):
         # given some data, update the energy function
         # minimizing BCE loss
-        pass
-
-
-    def _generate_waypoints(self, state: ObjectCentricState) -> list[tuple[SE2Pose, float]]:
-        assert isinstance(self._controller, Geom2dRobotController)
-        return self._controller._generate_waypoints(state)
-    
-    def _get_vacuum_actions(self) -> tuple[float, float]:
-        assert isinstance(self._controller, Geom2dRobotController)
-        return self._controller._get_vacuum_actions()
+        self._energy_function.train(data)
     
 
     
