@@ -123,31 +123,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer
             )
 
-    # def _update_parameter_policies(self):
-    #     pass
-
-    # def _plan_to_practice(self):
-    #     pass
-
-    # def _select_skill(self):
-    #     skills = self._env_models.skills
-
-    #     pass
-
-    # def _estimate_competence(self, skills):
-    #     for skill in skills:
-    #         pass
-    #     pass
-
-    # def _extrapolate_competence(self):
-    #     pass
-
-    # def _situate_competence(self):
-    #     pass
-
-    # def _energy_function(self, x, params) -> float:
-    #     return 0.0
-
     def _resample_controller(self, x) -> None:
         """Resample parameters and reset the controller with the specified
         observation."""
@@ -233,17 +208,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         max_resamples_error = RuntimeError("Low-level planner resampled too many times")
         raise ApproachStepError("Max Parameter Resamples reached", max_resamples_error)
-
-    # def train_parameter_policy(self, data):
-    #     """
-    #         Given past successes and failures of abstract plans and parameters,
-    #         train the param policy
-    #     """
-    #     for scoring_function in self._abstract_action_to_scoring_function.values():
-
-    #         # Need to segment the data that is useful for each scoring function
-    #         features, labels = data
-    #         scoring_function.train(features, labels)
 
     def step(self) -> _U:
         """Get the next action to take."""
