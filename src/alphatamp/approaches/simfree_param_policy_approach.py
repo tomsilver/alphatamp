@@ -217,7 +217,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             try:
                 self._last_action = self._current_controller.step()
-                assert self._last_action
+                assert self._last_action is not None
 
                 return self._last_action
             # if low level action failed, resample parameters!

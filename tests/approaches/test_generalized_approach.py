@@ -1,6 +1,5 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
-import imageio.v2 as iio
 import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
@@ -36,9 +35,6 @@ def test_generalized_oracle_approach():
 
     # Train the approach
     obs, _ = env.reset(seed=123)
-
-    img = env.render()
-    iio.imsave("debug.png", img)
 
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
