@@ -1,11 +1,11 @@
 """Base class for a parameter scorer that returns how good a certain parameter is."""
 
 import abc
-from typing import Any, List, Tuple, TypeVar
+from typing import Any, TypeVar
 
 _X = TypeVar("_X")  # state
-Datastore = List[Tuple[Any]]
-Labels = List[Any]
+Datastore = list[tuple[Any]]
+Labels = list[Any]
 
 
 class ParameterScorer(abc.ABC):

@@ -1,14 +1,14 @@
 """A parameter scorer that uses a MLP classifier for scoring."""
 
-from typing import Any, List, Tuple, TypeVar
+from typing import Any, TypeVar
 
 from sklearn.neural_network import MLPClassifier
 
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
 _X = TypeVar("_X")  # state
-Datastore = List[Tuple[Any]]
-Labels = List[Any]
+Datastore = list[tuple[Any]]
+Labels = list[Any]
 
 
 class ClassifierScorer(ParameterScorer):
