@@ -1,6 +1,6 @@
 import scikit-learn
 
-class BaseParameterScorer:
+class ParameterScorer:
     def __init__(self):
         pass
 

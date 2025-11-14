@@ -28,10 +28,11 @@ from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )
 from alphatamp.approaches.parameter_policies.base_parameter_policy import ParameterPolicy
+from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from prbench_models.geom2d.utils import Geom2dRobotController
 
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
-from alphatamp.structs import Skeleton
+from alphatamp.structs import Skeleton, GroundOperator
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -50,6 +51,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
         max_abstract_plans: int = 10,
+        max_resamples: int = 5,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -80,7 +82,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._env_models, self._feasibility_classifier_learner, seed
         )
 
-        self._abstract_action_to_energy_function = {}
+        self._max_resamples = max_resamples
+        self._abstract_action_to_scoring_function: dict[GroundOperator, ParameterScorer] = {}
 
     def reset(
         self,
@@ -140,10 +143,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Recreate controller
         self._current_controller = self._controller_generator(a)
-        energy_function = self._abstract_action_to_energy_function[a]
+        scoring_function = self._abstract_action_to_scoring_function[a]
 
         # Sample new params
-        parameter_policy = ParameterPolicy(self._current_controller, energy_function)
+        parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, self._rng)
 
         # Reset + observe
@@ -191,10 +194,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             a = self._current_abstract_plan[1][self._current_abstract_plan_step]
 
             self._current_controller = self._controller_generator(a)
-            energy_function = self._abstract_action_to_energy_function[a]
+            scoring_function = self._abstract_action_to_scoring_function[a]
 
             # Get parameter policy
-            parameter_policy = ParameterPolicy(self._current_controller, energy_function)
+            parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
             optimal_params = parameter_policy.sample_parameters(x, self._rng)
 
             # Reset the controller on the optimal parameters
@@ -205,7 +208,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_controller.observe(x)
 
         # Take one more low-level action.
-        while True:
+        for _ in range(self._max_resamples):
             try:
                 self._last_action = self._current_controller.step()
                 assert self._last_action is not None
@@ -219,6 +222,20 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             except IndexError as e:
                 self._resample_controller(x)
                 raise ApproachStepError("Index Error!", e)
+        
+        max_resamples_error = RuntimeError(
+                    "Low-level planner resampled too many times"
+        )
+        raise ApproachStepError("Max Parameter Resamples reached", max_resamples_error)
+
+    def train_parameter_policy(self, data):
+        """
+            Given past successes and failures of abstract plans and parameters, 
+            train the param policy
+        """
+        for scoring_function in self._abstract_action_to_scoring_function.values():
+            scoring_function.train(data)
+        
 
 
     def step(self) -> _U:

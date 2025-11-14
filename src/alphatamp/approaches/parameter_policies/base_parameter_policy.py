@@ -4,12 +4,12 @@ import math
 from typing import Any
 from matplotlib.pylab import Generator
 
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import BaseParameterScorer
+from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from bilevel_planning.structs import ParameterizedController
 
 
 class ParameterPolicy:
-    def __init__(self, controller: ParameterizedController, energy_function: BaseParameterScorer) -> None:
+    def __init__(self, controller: ParameterizedController, energy_function: ParameterScorer) -> None:
         self._controller = controller
         
         self._energy_function = energy_function
