@@ -14,6 +14,7 @@ dependencies = [
    "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
    "tomsgeoms2d",
    "prbench-models",
+   "scikit-learn"
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,7 @@ exclude = ["venv/*", ".venv/*"]
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
+    "sklearn.*",
 ]
 ignore_missing_imports = true
 
