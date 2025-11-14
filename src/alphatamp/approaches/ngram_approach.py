@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TypeAlias, TypeVar
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
@@ -286,6 +287,9 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
         skeleton_count = 0
         success_count = 0
 
+        success_sequences: list[OperatorSequence] = []
+        failed_sequences: list[OperatorSequence] = []
+
         # Generate skeletons from base generator
         for skeleton in self._base_abstract_plan_generator(
             x0,
@@ -307,13 +311,22 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
 
             if success:
                 success_count += 1
+                success_sequences.append(operator_sequence)
             else:
                 # Add failed skeleton to prefix trie (ground operators)
                 ground_prefix = tuple(skeleton[1])
                 self._failed_skeleton_trie.add_failed_skeleton(ground_prefix)
+                failed_sequences.append(operator_sequence)
 
+        print(f"Skeletons tried: {skeleton_count}, successes: {success_count}")
+
+        for operator_sequence in success_sequences:
             # Update n-gram statistics
-            self._update_ngram_stats(operator_sequence, success)
+            self._update_ngram_stats(operator_sequence, True)
+
+        for operator_sequence in failed_sequences:
+            # Update n-gram statistics
+            self._update_ngram_stats(operator_sequence, False)
 
     def _run_planning(
         self, problem: PlanningProblem[_X, _U], timeout: float
@@ -471,3 +484,15 @@ class NGramApproach(BaseApproach[_O, _X, _U]):
             }
 
         return summary
+
+    def snapshot_ngrams(self) -> dict[OperatorSequence, tuple[int, int]]:
+        """Snapshot current n-gram statistics."""
+        return deepcopy(self._ngram_stats)
+
+    def load_ngrams(self, stats: dict[OperatorSequence, tuple[int, int]]) -> None:
+        """Load n-gram statistics from a snapshot."""
+        self._ngram_stats = deepcopy(stats)
+
+    def get_num_ngrams(self) -> int:
+        """Get number of unique n-grams learned."""
+        return len(self._ngram_stats)

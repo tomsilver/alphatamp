@@ -1,8 +1,8 @@
 """Tests for transfer learning with NGramApproach across complexity levels."""
 
 import argparse
-import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,16 +21,7 @@ from alphatamp.approaches.pure_planning_approach import PurePlanningApproach
 try:
     from conftest import MAKE_VIDEOS
 except ModuleNotFoundError:
-    # Running as standalone script - add tests directory to path
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    try:
-        from conftest import MAKE_VIDEOS
-    except ModuleNotFoundError:
-        # If still can't import, use default value
-        MAKE_VIDEOS = False
-        print(
-            "Warning: Could not import MAKE_VIDEOS from conftest, defaulting to False"
-        )
+    MAKE_VIDEOS = False
 
 # Environment configurations: {env_name: [complexity_levels]}
 ENV_CONFIGS = {
@@ -44,13 +35,14 @@ ENV_CONFIGS = {
 }
 
 # Default configuration
+# ----------------------------------------------------------------------------
 DEFAULT_ENV_NAME = "Obstruction2D"
 COMPLEXITY_LEVELS = ENV_CONFIGS[DEFAULT_ENV_NAME]  # Default to Obstruction2D
 
 NUM_TEST_SEEDS = 10  # Number of test seeds for averaging
 NUM_TRAIN_PROBLEMS = 10  # Number of training problems per complexity level
-TRAIN_SEED_START = 0
-TEST_SEED_START = 100  # Avoid overlap with training seeds
+TRAIN_SEED_START = 0  # Starting seed for training problems
+TEST_SEED_START = 10000  # Avoid overlap with training seeds
 
 # Timeouts (in seconds)
 TRAINING_TIMEOUT = 30
@@ -60,27 +52,81 @@ DEFAULT_MAX_ABSTRACT_PLANS = 50
 # Number of samples per planning step
 DEFAULT_SAMPLES_PER_STEP = 2
 
-# Environment-specific timeouts (optional, uses defaults if not specified)
-TEST_TIMEOUT_BY_COMPLEXITY: dict[str, float] = {
-    "o0": 30,
-    "o1": 60,
-    "o2": 90,
-    "o3": 120,
-    "o4": 150,
+# Maximum n-gram size
+DEFAULT_MAX_NGRAM_SIZE = 100
+
+
+@dataclass(frozen=True)
+class ComplexityConfig:
+    """Configuration for a specific complexity level."""
+
+    timeout: float = DEFAULT_TEST_TIMEOUT
+    max_abstract_plans: int = DEFAULT_MAX_ABSTRACT_PLANS
+
+
+# Environment-specific complexity configurations
+# Currently only implemented for Obstruction2D, can be extended as needed
+COMPLEXITY_CONFIGS: dict[str, ComplexityConfig] = {
+    "o0": ComplexityConfig(timeout=30, max_abstract_plans=20),
+    "o1": ComplexityConfig(timeout=60, max_abstract_plans=30),
+    "o2": ComplexityConfig(timeout=90, max_abstract_plans=40),
+    "o3": ComplexityConfig(timeout=120, max_abstract_plans=50),
+    "o4": ComplexityConfig(timeout=150, max_abstract_plans=60),
 }
 
-# Environment-specific planning budgets
-MAX_ABSTRACT_PLANS_BY_COMPLEXITY: dict[str, int] = {
-    "o0": 20,
-    "o1": 30,
-    "o2": 40,
-    "o3": 50,
-    "o4": 60,
-}
+
+def _get_complexity_config(complexity: str) -> ComplexityConfig:
+    """Get complexity configuration for a given complexity level."""
+    return COMPLEXITY_CONFIGS.get(
+        complexity,
+        ComplexityConfig(),  # Default config
+    )
+
+
+def make_ngram_approach(
+    env_models: Any,
+    max_abstract_plans: int,
+    *,
+    seed: int = 123,
+    max_ngram_size: int = DEFAULT_MAX_NGRAM_SIZE,
+    samples_per_step: int = DEFAULT_SAMPLES_PER_STEP,
+    use_grounded_ngrams: bool = True,
+    failure_penalty_mode: bool = True,
+) -> NGramApproach:
+    """Create NGramApproach with consistent configuration."""
+    return NGramApproach(
+        env_models,
+        seed=seed,
+        max_abstract_plans=max_abstract_plans,
+        samples_per_step=samples_per_step,
+        max_ngram_size=max_ngram_size,
+        training_planning_timeout=TRAINING_TIMEOUT,
+        use_grounded_ngrams=use_grounded_ngrams,
+        failure_penalty_mode=failure_penalty_mode,
+    )
+
+
+def make_pure_approach(
+    env_models: Any,
+    max_abstract_plans: int,
+    *,
+    seed: int = 123,
+    samples_per_step: int = DEFAULT_SAMPLES_PER_STEP,
+) -> PurePlanningApproach:
+    """Create PurePlanningApproach with consistent configuration."""
+    return PurePlanningApproach(
+        env_models,
+        seed=seed,
+        samples_per_step=samples_per_step,
+        max_abstract_plans=max_abstract_plans,
+    )
 
 
 def _measure_ttf_and_execute(
-    approach: Any, env: Any, obs: Any, timeout: float = 60.0
+    approach: Any,
+    env: Any,
+    obs: Any,
+    timeout: float = 60.0,
 ) -> float:
     """Measure TTF and execute the plan in the environment (for video generation)."""
     start = time.perf_counter()
@@ -91,10 +137,7 @@ def _measure_ttf_and_execute(
         # Execute plan in environment to generate video frames
         if plan is not None:
             for action in plan.actions:
-                _, _, done, _, _ = env.step(action)
-                if done:
-                    break
-
+                env.step(action)
         return ttf
     except TimeoutError:
         return float("inf")
@@ -184,7 +227,7 @@ def _test_approach_on_seed(  # pylint: disable=too-many-arguments,too-many-posit
     environment_name: str,
     test_complexity: str,
     test_seed: int,
-    video_folder: str | None = None,
+    video_folder: Path | None = None,
 ) -> float:
     """Test an approach on a single seed (helper function)."""
     test_env, _ = _create_env_and_models(
@@ -194,12 +237,13 @@ def _test_approach_on_seed(  # pylint: disable=too-many-arguments,too-many-posit
     if MAKE_VIDEOS and video_folder:
         test_env = RecordVideo(
             test_env,
-            video_folder,
+            str(video_folder),
             name_prefix=f"{approach_name}_seed{test_seed}",
         )
 
     test_obs, _ = test_env.reset(seed=test_seed)
-    timeout = TEST_TIMEOUT_BY_COMPLEXITY.get(test_complexity, DEFAULT_TEST_TIMEOUT)
+    cfg = _get_complexity_config(test_complexity)
+    timeout = cfg.timeout
 
     ttf = _measure_ttf_and_execute(approach, test_env, test_obs, timeout=timeout)
     test_env.close()
@@ -213,18 +257,21 @@ def _compute_average_ttf(  # pylint: disable=too-many-arguments,too-many-positio
     environment_name: str,
     test_complexity: str,
     num_seeds: int = NUM_TEST_SEEDS,
-    video_base_folder: str | None = None,
+    video_base_folder: Path | None = None,
 ) -> tuple[float, list[float]]:
     """Compute average TTF over multiple test seeds."""
     ttfs = []
-    timeout = TEST_TIMEOUT_BY_COMPLEXITY.get(test_complexity, DEFAULT_TEST_TIMEOUT)
+
+    cfg = _get_complexity_config(test_complexity)
+    timeout = cfg.timeout
 
     for i in range(num_seeds):
         test_seed = TEST_SEED_START + i
 
         # Video folder for this seed
         if video_base_folder:
-            video_folder = f"{video_base_folder}/seed{test_seed}"
+            video_folder = video_base_folder / f"seed_{test_seed}"
+            video_folder.mkdir(parents=True, exist_ok=True)
         else:
             video_folder = None
 
@@ -307,11 +354,23 @@ def save_heatmap(
 @pytest.mark.slow
 def test_transfer_matrix(  # pylint: disable=too-many-locals
     environment: str | None = None,
+    max_ngram_size: int = DEFAULT_MAX_NGRAM_SIZE,
+    samples_per_step: int = DEFAULT_SAMPLES_PER_STEP,
+    make_videos: bool = False,
+    use_grounded_ngrams: bool = True,
+    failure_penalty_mode: bool = True,
+    num_train_problems: int = NUM_TRAIN_PROBLEMS,
+    num_test_seeds: int = NUM_TEST_SEEDS,
 ) -> None:
     """Pairwise transfer evaluation across complexity levels.
 
     Args:
         environment: Environment name. If None, uses DEFAULT_ENV_NAME.
+        max_ngram_size: Maximum n-gram size to use.
+        samples_per_step: Number of samples per planning step.
+        make_videos: Whether to record videos of planning executions.
+        use_grounded_ngrams: Whether to use grounded operators for n-grams.
+        failure_penalty_mode: Whether to score by avoiding failures.
     """
     if environment is None:
         environment = DEFAULT_ENV_NAME
@@ -332,7 +391,9 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
     pure_ttfs = np.zeros((num_levels, num_levels))
     ttf_ratio_matrix = np.zeros((num_levels, num_levels))
 
-    output_dir = Path(f"unit_test_videos/transfer_matrix/{environment.lower()}")
+    output_dir = Path(
+        f"unit_test_videos/transfer_matrix/{environment.lower()}_NGRAM{max_ngram_size}"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n" + "=" * 70)
@@ -345,43 +406,40 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
     print("=" * 70)
     print(f"Environment: {environment}")
     print(f"Complexities: {complexity_levels}")
-    print(f"Training problems per complexity: {NUM_TRAIN_PROBLEMS}")
+    print(f"Training problems per complexity: {num_train_problems}")
     print("=" * 70)
 
     trained_ngram_stats = {}
 
     for train_complexity in complexity_levels:
         print(
-            f"\nTraining on {train_complexity} " f"({NUM_TRAIN_PROBLEMS} problems)..."
+            f"\nTraining on {train_complexity} " f"({num_train_problems} problems)..."
         )
 
         # Create environment models for training
         _, train_env_models = _create_env_and_models(environment, train_complexity)
 
         # Create temporary approach for training
-        train_max_plans = MAX_ABSTRACT_PLANS_BY_COMPLEXITY.get(
-            train_complexity, DEFAULT_MAX_ABSTRACT_PLANS
-        )
+        cfg = _get_complexity_config(train_complexity)
+        train_max_plans = cfg.max_abstract_plans
 
-        # IMPORTANT: grounded or lifted, failure/success mode
-        train_approach: NGramApproach = NGramApproach(
+        train_approach = make_ngram_approach(
             train_env_models,
-            seed=123,
-            samples_per_step=DEFAULT_SAMPLES_PER_STEP,
-            training_planning_timeout=TRAINING_TIMEOUT,
-            max_abstract_plans=train_max_plans,
-            use_grounded_ngrams=False,
-            failure_penalty_mode=True,
+            train_max_plans,
+            max_ngram_size=max_ngram_size,
+            samples_per_step=samples_per_step,
+            use_grounded_ngrams=use_grounded_ngrams,
+            failure_penalty_mode=failure_penalty_mode,
         )
 
         # Train on multiple problems
         _train_approach_helper(
-            train_approach, environment, train_complexity, NUM_TRAIN_PROBLEMS
+            train_approach, environment, train_complexity, num_train_problems
         )
 
         # Cache learned patterns
         # pylint: disable=protected-access
-        trained_ngram_stats[train_complexity] = train_approach._ngram_stats.copy()
+        trained_ngram_stats[train_complexity] = train_approach.snapshot_ngrams()
 
         ngram_count = len(trained_ngram_stats[train_complexity])
         print(f"Learned {ngram_count} unique n-grams")
@@ -392,7 +450,7 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
     print("=" * 70)
     print(f"Environment: {environment}")
     print(f"Test complexities: {complexity_levels}")
-    print(f"Test seeds per complexity: {NUM_TEST_SEEDS}")
+    print(f"Test seeds per complexity: {num_test_seeds}")
     print("=" * 70)
 
     # Cache pure planning results for each test complexity
@@ -405,28 +463,26 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
         _, test_env_models = _create_env_and_models(environment, test_complexity)
 
         # Create pure planning baseline
-        max_plans = MAX_ABSTRACT_PLANS_BY_COMPLEXITY.get(
-            test_complexity, DEFAULT_MAX_ABSTRACT_PLANS
-        )
-        pure_approach: PurePlanningApproach = PurePlanningApproach(
+        cfg = _get_complexity_config(test_complexity)
+        max_plans = cfg.max_abstract_plans
+
+        pure_approach = make_pure_approach(
             test_env_models,
-            seed=123,
-            samples_per_step=DEFAULT_SAMPLES_PER_STEP,
-            max_abstract_plans=max_plans,
+            max_plans,
+            samples_per_step=samples_per_step,
         )
 
         # Test pure planning approach (only once per test complexity!)
         video_folder_pure = None
-        if MAKE_VIDEOS:
-            base = f"unit_test_videos/transfer_matrix/{environment.lower()}"
-            video_folder_pure = f"{base}/pure_{test_complexity}/Pure_Planning"
+        if make_videos:
+            video_folder_pure = output_dir / f"pure_{test_complexity}/Pure_Planning"
 
         avg_pure, ttfs_pure = _compute_average_ttf(
             pure_approach,
             "pure",
             environment,
             test_complexity,
-            NUM_TEST_SEEDS,
+            num_test_seeds,
             video_folder_pure,
         )
 
@@ -445,7 +501,7 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
     print(f"Environment: {environment}")
     print(f"Train complexities: {complexity_levels}")
     print(f"Test complexities: {complexity_levels}")
-    print(f"Test seeds per pair: {NUM_TEST_SEEDS}")
+    print(f"Test seeds per pair: {num_test_seeds}")
     total_tests = num_levels * num_levels
     msg = f"Total test cases: {total_tests} learned tests (pure cached)"
     print(msg)
@@ -464,39 +520,37 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
             # Create environment models for testing
             _, test_env_models = _create_env_and_models(environment, test_complexity)
 
-            max_plans = MAX_ABSTRACT_PLANS_BY_COMPLEXITY.get(
-                test_complexity, DEFAULT_MAX_ABSTRACT_PLANS
-            )
+            # Get max abstract plans for test complexity
+            cfg = _get_complexity_config(test_complexity)
+            max_plans = cfg.max_abstract_plans
 
             # Create learned approach and transfer pre-trained patterns
-            learned_approach: NGramApproach = NGramApproach(
+            learned_approach = make_ngram_approach(
                 test_env_models,
-                seed=123,
-                samples_per_step=DEFAULT_SAMPLES_PER_STEP,
-                training_planning_timeout=TRAINING_TIMEOUT,
-                max_abstract_plans=max_plans,
-                use_grounded_ngrams=False,
-                failure_penalty_mode=True,
+                max_plans,
+                max_ngram_size=max_ngram_size,
+                samples_per_step=samples_per_step,
+                use_grounded_ngrams=use_grounded_ngrams,
+                failure_penalty_mode=failure_penalty_mode,
             )
+
             # Transfer cached patterns (no training!)
-            # pylint: disable=protected-access
-            learned_approach._ngram_stats = trained_ngram_stats[train_complexity].copy()
+            learned_approach.load_ngrams(trained_ngram_stats[train_complexity])
 
             # Test learned approach
             print(f"\nTesting Learned approach on {test_complexity}:")
-            num_ngrams = len(learned_approach._ngram_stats)
+            num_ngrams = learned_approach.get_num_ngrams()
             print(f"Using {num_ngrams} n-grams from " f"{train_complexity} training")
             video_folder_learned = None
-            if MAKE_VIDEOS:
-                base = f"unit_test_videos/transfer_matrix/{environment.lower()}"
-                video_folder_learned = f"{base}/{pair_name}/Learned"
+            if make_videos:
+                video_folder_learned = output_dir / f"{pair_name}/Learned"
 
             avg_learned, _ = _compute_average_ttf(
                 learned_approach,
                 "learned",
                 environment,
                 test_complexity,
-                NUM_TEST_SEEDS,
+                num_test_seeds,
                 video_folder_learned,
             )
 
@@ -560,9 +614,64 @@ if __name__ == "__main__":
         help="Number of samples per planning step (default: 2)",
     )
 
+    parser.add_argument(
+        "--max-ngram-size",
+        type=int,
+        default=3,
+        help="Maximum n-gram size to use (default: 3)",
+    )
+
+    parser.add_argument(
+        "--make-videos",
+        action="store_true",
+        help="Whether to record videos of the planning executions (default: False)",
+    )
+
+    parser.add_argument(
+        "--use-grounded-ngrams",
+        action="store_true",
+        default=True,
+        help="Use grounded operators for n-grams (default: True)",
+    )
+
+    parser.add_argument(
+        "--use-lifted-ngrams",
+        dest="use_grounded_ngrams",
+        action="store_false",
+        help="Use lifted operators for n-grams instead of grounded",
+    )
+
+    parser.add_argument(
+        "--failure-penalty-mode",
+        action="store_true",
+        default=True,
+        help="Score by avoiding failures (default: True)",
+    )
+
+    parser.add_argument(
+        "--success-pursuit-mode",
+        dest="failure_penalty_mode",
+        action="store_false",
+        help="Score by pursuing successes instead of avoiding failures",
+    )
+
+    parser.add_argument(
+        "--num-test-seeds",
+        type=int,
+        default=NUM_TEST_SEEDS,
+        help=f"Number of test seeds per complexity (default: {NUM_TEST_SEEDS})",
+    )
+
+    parser.add_argument(
+        "--num-train-problems",
+        type=int,
+        default=NUM_TRAIN_PROBLEMS,
+        help=f"Number of training problems per complexity \
+            (default: {NUM_TRAIN_PROBLEMS})",
+    )
+
     args = parser.parse_args()
-    DEFAULT_TEST_TIMEOUT = args.timeout
-    DEFAULT_SAMPLES_PER_STEP = args.samples_per_step
+    MAKE_VIDEOS = args.make_videos
 
     if args.list_envs:
         print("Available environments and complexities:")
@@ -571,4 +680,13 @@ if __name__ == "__main__":
             print(f"{env_name:25s} {', '.join(complexities)}")
         print("=" * 60)
     else:
-        test_transfer_matrix(environment=args.env)
+        test_transfer_matrix(
+            environment=args.env,
+            max_ngram_size=args.max_ngram_size,
+            samples_per_step=args.samples_per_step,
+            make_videos=args.make_videos,
+            use_grounded_ngrams=args.use_grounded_ngrams,
+            failure_penalty_mode=args.failure_penalty_mode,
+            num_test_seeds=args.num_test_seeds,
+            num_train_problems=args.num_train_problems,
+        )

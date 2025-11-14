@@ -32,7 +32,7 @@ def _score_skeleton(skeleton: Skeleton, _: list[Skeleton]) -> float:
     return len(skeleton[0])
 
 
-def test_batch_ranking():
+def test_batch_ranking() -> None:
     """Tests for BatchRankingAbstractPlanGenerator()."""
 
     # Test in a PRBench environment where the first skeleton won't work.
@@ -81,4 +81,4 @@ def test_batch_ranking():
 
     assert isinstance(batched_abstract_plan_generator, AbstractPlanGenerator)
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
