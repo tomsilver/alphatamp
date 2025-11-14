@@ -1,24 +1,23 @@
-"""Base class for a parameter scorer that returns how good a certain parameter is."""
+"""A naive parameter scorer that only returns 1."""
 
-import abc
 from typing import Any, List, Tuple, TypeVar
+
+from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
 _X = TypeVar("_X")  # state
 Datastore = List[Tuple[Any]]
 Labels = List[Any]
 
 
-class ParameterScorer(abc.ABC):
-    """Base class for a parameter scorer that returns how good a certain parameter
-    is."""
+class NaiveScorer(ParameterScorer):
+    """A naive parameter scorer that only returns 1."""
 
     def __init__(self):
         pass
 
-    @abc.abstractmethod
     def train(self, features: Datastore, labels: Labels):
         """Given training data, update parameter scorer."""
 
-    @abc.abstractmethod
     def score(self, x: _X, params: Any) -> float:
         """Score the parameter given the low-level state."""
+        return 1

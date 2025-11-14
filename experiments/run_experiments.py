@@ -1,6 +1,5 @@
-"""Run a single experiment or Hydra multirun sweep.
-This module instantiates a benchmark and apporach, then executes
-planning and gets metrics.
+"""Run a single experiment or Hydra multirun sweep. This module instantiates a benchmark
+and apporach, then executes planning and gets metrics.
 
 To run: Run "python experiments/run_experiments.py"
 from the alphatamp root directory (alphatamp/)
@@ -67,7 +66,7 @@ def main(cfg: DictConfig):
 
 
 def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object]:
-    """Run planning once and compute metrics"""
+    """Run planning once and compute metrics."""
     start_time = time.perf_counter()
     plan = approach.run_planning(obs, timeout=timeout)
     dur = time.perf_counter() - start_time

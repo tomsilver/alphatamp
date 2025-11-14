@@ -1,6 +1,5 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
-import math
 from typing import Any, TypeVar
 
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
@@ -14,6 +13,7 @@ from bilevel_planning.trajectory_samplers.trajectory_sampler import (
 )
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
+    cached_all_ground_operators,
 )
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
@@ -23,16 +23,16 @@ from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExpl
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
+from alphatamp.approaches.parameter_policies.base_parameter_policy import (
+    ParameterPolicy,
+)
+from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
 )
-from alphatamp.approaches.parameter_policies.base_parameter_policy import ParameterPolicy
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
-from prbench_models.geom2d.utils import Geom2dRobotController
-
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
-from alphatamp.structs import Skeleton, GroundOperator
+from alphatamp.structs import GroundOperator, Skeleton
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -47,6 +47,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
         feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
+        parameter_scorer: ParameterScorer,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
@@ -83,7 +84,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
         self._max_resamples = max_resamples
-        self._abstract_action_to_scoring_function: dict[GroundOperator, ParameterScorer] = {}
+        self._abstract_action_to_scoring_function: dict[
+            GroundOperator, ParameterScorer
+        ] = {}
+        self._parameter_scorer = parameter_scorer
 
     def reset(
         self,
@@ -107,51 +111,62 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan = explorer.generate_abstract_plan(obs)
         self._timestep = 0
 
-    def _update_parameter_policies(self):
-        pass
+        x0 = self._env_models.observation_to_state(obs)
+        s0 = self._env_models.state_abstractor(x0)
 
-    def _plan_to_practice(self):
-        pass
+        # Get set of lifted operators and ground them
+        operators = self._env_models.operators
+        grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
-    
-    def _select_skill(self):
-        skills = self._env_models.skills
+        for grounded_operator in grounded_operators:
+            self._abstract_action_to_scoring_function[grounded_operator] = (
+                self._parameter_scorer
+            )
 
-        pass
-    
-    def _estimate_competence(self, skills):
-        for skill in skills:
-            pass
-        pass
+    # def _update_parameter_policies(self):
+    #     pass
 
-    def _extrapolate_competence(self):
-        pass
+    # def _plan_to_practice(self):
+    #     pass
 
-    def _situate_competence(self):
-        pass
+    # def _select_skill(self):
+    #     skills = self._env_models.skills
 
-    def _energy_function(self, x, params) -> float:
-        return 0.0
-    
-    def _resample_controller(self, x):
-        """Resample parameters and reset the controller with the specified observation."""
+    #     pass
+
+    # def _estimate_competence(self, skills):
+    #     for skill in skills:
+    #         pass
+    #     pass
+
+    # def _extrapolate_competence(self):
+    #     pass
+
+    # def _situate_competence(self):
+    #     pass
+
+    # def _energy_function(self, x, params) -> float:
+    #     return 0.0
+
+    def _resample_controller(self, x) -> None:
+        """Resample parameters and reset the controller with the specified
+        observation."""
 
         assert self._current_abstract_plan is not None
 
         # Get the current abstract action and controller.
         a = self._current_abstract_plan[1][self._current_abstract_plan_step]
 
-        # Recreate controller
+        # Recreate controller and query scoring function
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
 
-        # Sample new params
+        # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, self._rng)
 
-        # Reset + observe
+        # Reset controller
         self._current_controller.reset(x, optimal_params)
-        self._current_controller.observe(x)
 
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None
@@ -190,53 +205,45 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x = self._env_models.observation_to_state(self._last_observation)
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
-            # Get the current abstract action and controller.
-            a = self._current_abstract_plan[1][self._current_abstract_plan_step]
-
-            self._current_controller = self._controller_generator(a)
-            scoring_function = self._abstract_action_to_scoring_function[a]
-
-            # Get parameter policy
-            parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
-            optimal_params = parameter_policy.sample_parameters(x, self._rng)
-
-            # Reset the controller on the optimal parameters
-            self._current_controller.reset(x, optimal_params)
+            self._resample_controller(x)
         # We are using the same controller as before.
         else:
-            assert self._current_controller is not None
+            assert self._current_controller
             self._current_controller.observe(x)
 
         # Take one more low-level action.
         for _ in range(self._max_resamples):
+            assert self._current_controller
+
             try:
                 self._last_action = self._current_controller.step()
-                assert self._last_action is not None
+                assert self._last_action
 
                 return self._last_action
             # if low level action failed, resample parameters!
-            except TrajectorySamplingFailure as e:
+            except TrajectorySamplingFailure:
                 self._resample_controller(x)
+                self._current_controller.observe(x)
                 continue
 
             except IndexError as e:
                 self._resample_controller(x)
+                self._current_controller.observe(x)
                 raise ApproachStepError("Index Error!", e)
-        
-        max_resamples_error = RuntimeError(
-                    "Low-level planner resampled too many times"
-        )
+
+        max_resamples_error = RuntimeError("Low-level planner resampled too many times")
         raise ApproachStepError("Max Parameter Resamples reached", max_resamples_error)
 
-    def train_parameter_policy(self, data):
-        """
-            Given past successes and failures of abstract plans and parameters, 
-            train the param policy
-        """
-        for scoring_function in self._abstract_action_to_scoring_function.values():
-            scoring_function.train(data)
-        
+    # def train_parameter_policy(self, data):
+    #     """
+    #         Given past successes and failures of abstract plans and parameters,
+    #         train the param policy
+    #     """
+    #     for scoring_function in self._abstract_action_to_scoring_function.values():
 
+    #         # Need to segment the data that is useful for each scoring function
+    #         features, labels = data
+    #         scoring_function.train(features, labels)
 
     def step(self) -> _U:
         """Get the next action to take."""

@@ -1,42 +1,43 @@
-"""A base class for a parameter policy wrapper over a ParameterizedController"""
+"""A base class for a parameter policy wrapper over a ParameterizedController."""
 
 import math
-from typing import Any
+from typing import Any, TypeVar
+
+from bilevel_planning.structs import ParameterizedController
 from matplotlib.pylab import Generator
 
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
-from bilevel_planning.structs import ParameterizedController
+
+_X = TypeVar("_X")  # state
 
 
 class ParameterPolicy:
-    def __init__(self, controller: ParameterizedController, energy_function: ParameterScorer) -> None:
-        self._controller = controller
-        
-        self._energy_function = energy_function
-        self._param_sample_count = 100
-        # need to get 
-        pass
+    """A base class for a parameter policy wrapper over a ParameterizedController."""
 
-    def sample_parameters(self, x: Any, rng: Generator) -> Any:
+    def __init__(
+        self,
+        controller: ParameterizedController,
+        scoring_function: ParameterScorer,
+        param_sample_count=10,
+    ) -> None:
+        self._controller = controller
+        self._scoring_function = scoring_function
+        self._param_sample_count = param_sample_count
+
+    def sample_parameters(self, x: _X, rng: Generator) -> Any:
+        """Sample controller parameter given low-level state."""
+
         optimal_params = None
         optimal_score = -math.inf
         for _ in range(self._param_sample_count):
+            # Get initial parameters from controller
             params = self._controller.sample_parameters(x, rng)
 
             # Now we score the params based on the energy function
-            energy_score = self._energy_function.score(x, params)
+            energy_score = self._scoring_function.score(x, params)
 
             if energy_score > optimal_score:
                 optimal_score = energy_score
                 optimal_params = params
 
         return optimal_params
-    
-    def update_distribution(self, data):
-        # given some data, update the energy function
-        # minimizing BCE loss
-        self._energy_function.train(data)
-    
-
-    
-
