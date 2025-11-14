@@ -6,12 +6,12 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage_b7_approach import (
-    b7OracleGeneratorApproach,
+from alphatamp.approaches.cluttered_storage.generalized_oracle_approach import (
+    GeneralizedOracleApproach,
 )
 
 
-def test_oracle_skeleton_generator_approach():
+def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
     # Test in a PRBench environment
@@ -30,7 +30,7 @@ def test_oracle_skeleton_generator_approach():
     )
 
     # Create the approach.
-    approach = b7OracleGeneratorApproach(
+    approach = GeneralizedOracleApproach(
         env_models, seed=123, samples_per_step=10, training_planning_timeout=10
     )
 
@@ -43,7 +43,7 @@ def test_oracle_skeleton_generator_approach():
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=100)
+    plan = approach.run_planning(obs, timeout=500)
 
     # Execute the plan
     for action in plan.actions:

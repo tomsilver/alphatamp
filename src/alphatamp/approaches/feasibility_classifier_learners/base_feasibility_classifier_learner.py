@@ -8,7 +8,7 @@ from alphatamp.approaches.feasibility_classifiers.base_feasibility_classifier im
 )
 
 
-class FeasibilityClassifierLearner:
+class BaseFeasibilityClassifierLearner:
     """Base Classifier Learner that trains the feasibility classifier based on past
     experiences."""
 

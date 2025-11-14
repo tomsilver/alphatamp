@@ -8,6 +8,9 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 from bilevel_planning.structs import (
     ParameterizedController,
 )
+from bilevel_planning.trajectory_samplers.trajectory_sampler import (
+    TrajectorySamplingFailure,
+)
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
@@ -16,13 +19,14 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
 )
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
-from alphatamp.approaches.feasibility_classifiers.feasibility_classifier_learner import (
-    FeasibilityClassifierLearner,
+from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
+    BaseFeasibilityClassifierLearner,
 )
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
 )
+from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import Skeleton
 
 _O = TypeVar("_O")  # observation
@@ -36,7 +40,7 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def __init__(
         self,
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
-        feasibility_classifier_learner: FeasibilityClassifierLearner,
+        feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
         seed: int,
         heuristic_name: str = "hff",
@@ -102,7 +106,12 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         while True:
             # If we ran out of actions, raise an error.
             if self._current_abstract_plan_step >= len(self._current_abstract_plan[1]):
-                raise RuntimeError("Abstract planning ran out of actions.")
+                out_of_actions_error = RuntimeError(
+                    "Abstract planning ran out of actions."
+                )
+                raise ApproachStepError(
+                    "Abstract planning ran out of actions.", out_of_actions_error
+                )
 
             # Get the next abstract state.
             ns = self._current_abstract_plan[0][self._current_abstract_plan_step + 1]
@@ -140,7 +149,11 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_controller.observe(x)
 
         # Take one more low-level action.
-        self._last_action = self._current_controller.step()
+        try:
+            self._last_action = self._current_controller.step()
+        except (TrajectorySamplingFailure, IndexError) as e:
+            raise ApproachStepError("Unable to take next low-level step!", e)
+
         assert self._last_action is not None
 
         return self._last_action
@@ -150,3 +163,7 @@ class SimFreeFeasiblityApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_action = self._get_action()
         self._timestep += 1
         return self._last_action
+
+    def get_abstract_plan(self) -> Skeleton | None:
+        """Return the current abstract plan."""
+        return self._current_abstract_plan
