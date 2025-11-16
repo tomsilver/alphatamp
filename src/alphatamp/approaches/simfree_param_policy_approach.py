@@ -1,5 +1,7 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
+from collections import defaultdict
+
 from typing import Any, TypeVar
 
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
@@ -89,8 +91,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             GroundOperator, ParameterScorer
         ] = {}
         self._parameter_scorer = parameter_scorer
-        self._parameter_dataset: list[tuple[Any, str]] = []
+        self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
         self._most_recent_parameter = None
+        self._most_recent_abstract_action = None
 
     def reset(
         self,
@@ -115,7 +118,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._timestep = 0
         self._most_recent_parameter = None
-        self._parameter_dataset = []
+        self._most_recent_abstract_action = None
+        self._parameter_dataset = defaultdict(list)
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -139,9 +143,24 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             )
             # Store last successful parameter
             if done:
-                self._parameter_dataset.append((self._most_recent_parameter, "success"))
+                self._add_most_recent_parameter_to_dataset("success")
         self._last_observation = obs
         self._last_info = info
+
+    def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
+        """ Train each abstract action's parameter policy given dataset."""
+
+        for ground_operator, scoring_function in self._abstract_action_to_scoring_function.items():
+            # Segment data for each ground operator.
+            if ground_operator.name in parameter_dataset:
+                features_and_labels = parameter_dataset[ground_operator.name]
+
+                features, labels = map(list, zip(*features_and_labels))
+                scoring_function.train(features, labels)
+
+    def _add_most_recent_parameter_to_dataset(self, training_label: str):
+        assert self._most_recent_parameter and self._most_recent_abstract_action 
+        self._parameter_dataset[self._most_recent_abstract_action].append((self._most_recent_parameter, training_label))
 
     def _resample_controller(self, x) -> None:
         """Resample parameters and reset the controller with the specified
@@ -160,6 +179,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
+        self._most_recent_abstract_action = a.name
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -193,9 +213,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 # Store successful parameter
                 if self._train_or_eval == "train":
-                    self._parameter_dataset.append(
-                        (self._most_recent_parameter, "success")
-                    )
+                    self._add_most_recent_parameter_to_dataset("success")
             # We have found a step in the plan where the next state is not yet reached.
             else:
                 # if it is the first step, we also need to reset a new controller
@@ -228,9 +246,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             except TrajectorySamplingFailure:
                 # If training, store the previous parameter
                 if self._train_or_eval == "train":
-                    self._parameter_dataset.append(
-                        (self._most_recent_parameter, "failure")
-                    )
+                    self._add_most_recent_parameter_to_dataset("failure")
 
                 self._resample_controller(x)
                 self._current_controller.observe(x)
@@ -254,6 +270,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the current abstract plan."""
         return self._current_abstract_plan
 
-    def get_parameter_dataset(self) -> list[tuple[Any, str]]:
+    def get_parameter_dataset(self) -> defaultdict[str, list]:
         """Return the collected parameter dataset."""
         return self._parameter_dataset

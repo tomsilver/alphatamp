@@ -232,3 +232,91 @@ def test_classifier_scorer_simfree_feasibility_approach():
     parameter_dataset = approach.get_parameter_dataset()
     assert len(parameter_dataset) == 0, "Should not store parameters."
     env.close()
+
+
+def test_train_scorer_simfree_feasbility_approach():
+    
+    training_data = {
+        "test": [((0.6299402045896808, 0.927407258525167, 0.12710809229482242), 'success'), ((0.2652161321933526, 0.6520188384409447, 0.927480196623524), 'success'), ((0.10609773749426321, 0.15332923005332866, 0.16022568832130613), 'success')]
+
+    }
+
+    """Tests for SimFreeParamPolicyApproach()."""
+
+    # Test in a PRBench environment.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier.
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Train the feasibility learner to classify plans
+    # pick up the target block first as infeasible
+
+    filtered_action_strs = [("PickTgt", 0), ("target_block", 0)]
+    filter_classifier.update_classifier(None, filtered_action_strs)
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer
+    configs = {"hidden_layer_sizes": (10, 10)}
+    classifier_scorer = ClassifierScorer(configs)
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer=classifier_scorer,
+        seed=123,
+    )
+
+    # Train on just one problem.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    # Train.
+    approach.train()
+    approach.reset(obs, {})
+
+    start_time = time.time()
+    timeout = 10
+
+    while time.time() - start_time < timeout:
+        try:
+            action = approach.step()
+        except ApproachStepError:
+            break
+
+        obs, reward, done, _, _ = env.step(action)
+
+        # Given new observation from the environment, update the approach
+        approach.update(obs, float(reward), done, {})
+        if done:
+            break
+
+    parameter_dataset = approach.get_parameter_dataset()
+
+    print(parameter_dataset)
+
+    assert parameter_dataset, "Did not find any parameters"
