@@ -40,7 +40,10 @@ class NaiveFeasibilityClassifier(BaseFeasibilityClassifier):
     ) -> bool:
         """Validate the feasibility of the given abstract plan."""
 
-        skeleton_plan: FrozenSkeleton = (tuple(abstract_states), tuple(abstract_actions))
+        skeleton_plan: FrozenSkeleton = (
+            tuple(abstract_states),
+            tuple(abstract_actions),
+        )
 
         # If classifier hasn't seen plan before, optimistically return true
         if skeleton_plan not in self._skeleton_success_frequency:

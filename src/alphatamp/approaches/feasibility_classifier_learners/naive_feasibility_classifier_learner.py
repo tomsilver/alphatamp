@@ -11,7 +11,7 @@ from alphatamp.approaches.feasibility_classifiers.base_feasibility_classifier im
 from alphatamp.approaches.feasibility_classifiers.naive_feasibility_classifier import (
     NaiveFeasibilityClassifier,
 )
-from alphatamp.structs import Skeleton
+from alphatamp.structs import FrozenSkeleton
 
 
 class NaiveFeasibilityClassifierLearner(BaseFeasibilityClassifierLearner):
@@ -20,7 +20,7 @@ class NaiveFeasibilityClassifierLearner(BaseFeasibilityClassifierLearner):
     def __init__(self, classifier: NaiveFeasibilityClassifier):
         self.classifier = classifier
 
-    def train_classifier(self, experience: Tuple[Skeleton, str]):
+    def train_classifier(self, experience: Tuple[FrozenSkeleton, str]):
         """Train the classifier given most recent experience."""
         self.classifier.update_classifier([experience])
 
