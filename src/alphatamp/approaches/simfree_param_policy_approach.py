@@ -83,11 +83,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._env_models, self._feasibility_classifier_learner, seed
         )
 
+        # Parameter policy.
         self._max_resamples = max_resamples
         self._abstract_action_to_scoring_function: dict[
             GroundOperator, ParameterScorer
         ] = {}
         self._parameter_scorer = parameter_scorer
+        self._parameter_dataset: list[tuple[Any, str]] = []
+        self._most_recent_parameter = None
 
     def reset(
         self,
@@ -109,7 +112,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_controller = None
         self._last_observation = obs
         self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+
         self._timestep = 0
+        self._most_recent_parameter = None
+        self._parameter_dataset = []
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -122,6 +128,20 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._abstract_action_to_scoring_function[grounded_operator] = (
                 self._parameter_scorer
             )
+
+    def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
+        """Record the reward and next observation following an action."""
+        assert self._last_observation is not None
+        assert self._last_action is not None
+        if self._train_or_eval == "train":
+            self._learn_from_transition(
+                self._last_observation, self._last_action, obs, reward, done, info
+            )
+            # Store last successful parameter
+            if done:
+                self._parameter_dataset.append((self._most_recent_parameter, "success"))
+        self._last_observation = obs
+        self._last_info = info
 
     def _resample_controller(self, x) -> None:
         """Resample parameters and reset the controller with the specified
@@ -139,6 +159,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, self._rng)
+        self._most_recent_parameter = optimal_params
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -161,14 +182,20 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Get the next abstract state.
             ns = self._current_abstract_plan[0][self._current_abstract_plan_step + 1]
 
-            # If we have reached the next abstract state, advance the current plan step.
             assert self._last_observation is not None
             x = self._env_models.observation_to_state(self._last_observation)
             s = self._env_models.state_abstractor(x)
 
+            # If we have reached the next abstract state, advance the current plan step.
             if s == ns:
                 self._current_abstract_plan_step += 1
                 advanced = True
+
+                # Store successful parameter
+                if self._train_or_eval == "train":
+                    self._parameter_dataset.append(
+                        (self._most_recent_parameter, "success")
+                    )
             # We have found a step in the plan where the next state is not yet reached.
             else:
                 # if it is the first step, we also need to reset a new controller
@@ -181,22 +208,30 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
             self._resample_controller(x)
+
         # We are using the same controller as before.
         else:
             assert self._current_controller
             self._current_controller.observe(x)
 
-        # Take one more low-level action.
+        # Try to resample a max number of times before giving up.
         for _ in range(self._max_resamples):
             assert self._current_controller
 
             try:
+                # Take one more low-level action.
                 self._last_action = self._current_controller.step()
                 assert self._last_action is not None
 
                 return self._last_action
-            # if low level action failed, resample parameters!
+            # If low level action failed, resample parameters!
             except TrajectorySamplingFailure:
+                # If training, store the previous parameter
+                if self._train_or_eval == "train":
+                    self._parameter_dataset.append(
+                        (self._most_recent_parameter, "failure")
+                    )
+
                 self._resample_controller(x)
                 self._current_controller.observe(x)
                 continue
@@ -218,3 +253,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan(self) -> Skeleton | None:
         """Return the current abstract plan."""
         return self._current_abstract_plan
+
+    def get_parameter_dataset(self) -> list[tuple[Any, str]]:
+        """Return the collected parameter dataset."""
+        return self._parameter_dataset
