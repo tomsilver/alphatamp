@@ -23,6 +23,7 @@ dependencies = [
    "scikit-learn"
 ]
 
+
 [project.optional-dependencies]
 develop = [
     "black",
