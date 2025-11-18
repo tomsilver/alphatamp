@@ -1,21 +1,22 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
-import kinder
+import imageio.v2 as iio
+import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage.generalized_oracle_approach import (
-    GeneralizedOracleApproach,
+from alphatamp.approaches.cluttered_storage.llm_approach import (
+    GeneralizedLLMOracleApproach,
 )
 
 
 def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
-    # Test in a kinder environment
-    kinder.register_all_environments()
-    env = kinder.make("kinder/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
+    # Test in a PRBench environment
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredStorage2D-b3-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -25,21 +26,24 @@ def test_generalized_oracle_approach():
         "clutteredstorage2d",
         env.observation_space,
         env.action_space,
-        num_blocks=15,
+        num_blocks=3,
     )
 
     # Create the approach.
-    approach = GeneralizedOracleApproach(
+    approach = GeneralizedLLMOracleApproach(
         env_models, seed=123, samples_per_step=10, training_planning_timeout=10
     )
 
     # Train the approach
     obs, _ = env.reset(seed=123)
 
+    img = env.render()
+    iio.imsave("debug.png", img)
+
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=500)
+    plan = approach.run_planning(obs, timeout=120)
 
     # Execute the plan
     for action in plan.actions:
