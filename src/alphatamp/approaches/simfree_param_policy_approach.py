@@ -3,8 +3,8 @@
 import pickle
 from collections import defaultdict
 import pickle
+from collections import defaultdict
 from pathlib import Path
-
 from typing import Any, TypeVar
 
 import numpy as np
@@ -339,9 +339,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def save_parameter_dataset(self, path: str | Path) -> None:
         """Save the collected parameter dataset to disk as a pickle.
 
-        The dataset is converted to a plain dict before pickling to avoid
-        issues with pickle-ing defaultdict directly across different Python
-        versions/environments.
+        The dataset is converted to a plain dict before pickling to avoid issues with
+        pickle-ing defaultdict directly across different Python versions/environments.
         """
         p = Path(path)
         if not p.parent.exists():
