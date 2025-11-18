@@ -63,15 +63,13 @@ def test_naive_scorer_simfree_feasibility_approach():
         sim_free_env_models, static_feasibility_classifier, 123
     )
 
-    # Create the naive parameter scorer
-    naive_scorer = NaiveScorer()
-
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer=naive_scorer,
+        parameter_scorer_class=NaiveScorer,  # Use Naive Scorer
+        parameter_scorer_configs={"configs": {}},
         seed=123,
     )
 
@@ -167,14 +165,14 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     # Create the classifier parameter scorer
     configs = {"hidden_layer_sizes": (10, 10)}
-    classifier_scorer = ClassifierScorer(configs)
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer=classifier_scorer,
+        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_configs={"configs": configs},
         seed=123,
     )
 
@@ -282,14 +280,14 @@ def test_train_scorer_simfree_feasbility_approach():
 
     # Create the classifier parameter scorer
     configs = {"hidden_layer_sizes": (10, 10)}
-    classifier_scorer = ClassifierScorer(configs)
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer=classifier_scorer,
+        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_configs={"configs": configs},
         seed=123,
     )
 

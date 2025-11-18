@@ -51,7 +51,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
         feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
-        parameter_scorer: ParameterScorer,
+        parameter_scorer_class: type[ParameterScorer],
+        parameter_scorer_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
@@ -92,10 +93,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_action_to_scoring_function: dict[
             GroundOperator, ParameterScorer
         ] = {}
-        self._parameter_scorer = parameter_scorer
+        self._parameter_scorer_class = parameter_scorer_class
+        self._parameter_scorer_configs = parameter_scorer_configs
         self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
         self._most_recent_parameter: Any | None = None
-        self._most_recent_abstract_action: str | None = None
+        self._most_recent_abstract_action_descriptor: str | None = None
 
     def reset(
         self,
@@ -120,7 +122,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._timestep = 0
         self._most_recent_parameter = None
-        self._most_recent_abstract_action = None
+        self._most_recent_abstract_action_descriptor = None
         self._parameter_dataset = defaultdict(list)
 
         x0 = self._env_models.observation_to_state(obs)
@@ -131,8 +133,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
         for grounded_operator in grounded_operators:
+            # Create new parameter scorer instances per grounded operators.
             self._abstract_action_to_scoring_function[grounded_operator] = (
-                self._parameter_scorer
+                self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
@@ -153,22 +156,44 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Train each abstract action's parameter policy given dataset."""
 
         for (
-            ground_operator,
+            abstract_action,
             scoring_function,
         ) in self._abstract_action_to_scoring_function.items():
             # Segment data for each ground operator.
 
-            if ground_operator.name in parameter_dataset:
-                features_and_labels = parameter_dataset[ground_operator.name]
+            abstract_action_descriptor = abstract_action.short_str
+            if abstract_action_descriptor in parameter_dataset:
+                features_and_labels = parameter_dataset[abstract_action_descriptor]
 
-                features = np.array([item[0][0] for item in features_and_labels])
-                labels = np.array([item[0][1] for item in features_and_labels])
+                features_list = []
+                labels_list = []
+
+                # Generate a row in the training dataset.
+                for datapoint in features_and_labels:
+                    for state, parameter, label in datapoint:
+                        state_arr = np.array(state)
+                        parameter_arr = np.array(parameter)
+
+                        # The features are the state observation and the parameter.
+                        feature_arr = np.concatenate([state_arr, parameter_arr])
+                        label_arr = np.array(label)
+
+                        features_list.append(feature_arr)
+                        labels_list.append(label_arr)
+
+                features = np.vstack(features_list)
+                labels = np.vstack(labels_list)
+
+                # Train the scoring function for each grounded skill.
                 scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
-        assert self._most_recent_parameter and self._most_recent_abstract_action
-        self._parameter_dataset[self._most_recent_abstract_action].append(
-            (self._most_recent_parameter, training_label)
+        assert (
+            self._most_recent_parameter and self._most_recent_abstract_action_descriptor
+        )
+        assert self._last_observation is not None
+        self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
+            (self._last_observation, self._most_recent_parameter, training_label)
         )
 
     def _resample_controller(self, x) -> None:
@@ -190,7 +215,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
-        self._most_recent_abstract_action = a.name
+        self._most_recent_abstract_action_descriptor = a.short_str
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -222,9 +247,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._current_abstract_plan_step += 1
                 advanced = True
 
-                # Store successful parameter
-                if self._train_or_eval == "train":
-                    self._add_most_recent_parameter_to_dataset("success")
             # We have found a step in the plan where the next state is not yet reached.
             else:
                 # if it is the first step, we also need to reset a new controller
@@ -252,10 +274,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._last_action = self._current_controller.step()
                 assert self._last_action is not None
 
+                # If low-level action is successful, store it.
+                if self._train_or_eval == "train":
+                    self._add_most_recent_parameter_to_dataset("success")
+
                 return self._last_action
             # If low level action failed, resample parameters!
             except TrajectorySamplingFailure:
-                # If training, store the previous parameter
+                # If training, store the previous parameter.
                 if self._train_or_eval == "train":
                     self._add_most_recent_parameter_to_dataset("failure")
 

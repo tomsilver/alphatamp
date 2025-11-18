@@ -15,7 +15,7 @@ _X = TypeVar("_X")  # state
 class ClassifierScorer(ParameterScorer):
     """A parameter scorer that uses a MLP classifier for scoring."""
 
-    def __init__(self, configs, saved_classifier=None):
+    def __init__(self, configs: dict, saved_classifier=None):
         self._classifier = (
             MLPClassifier(hidden_layer_sizes=configs["hidden_layer_sizes"])
             if not saved_classifier

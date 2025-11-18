@@ -12,7 +12,7 @@ _X = TypeVar("_X")  # state
 class NaiveScorer(ParameterScorer):
     """A naive parameter scorer that only returns 1."""
 
-    def __init__(self):
+    def __init__(self, configs: dict):
         pass
 
     def train(self, features: np.ndarray, labels: np.ndarray):

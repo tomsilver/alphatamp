@@ -12,7 +12,7 @@ class ParameterScorer(abc.ABC):
     """Base class for a parameter scorer that returns how good a certain parameter
     is."""
 
-    def __init__(self):
+    def __init__(self, configs: dict):
         pass
 
     @abc.abstractmethod
