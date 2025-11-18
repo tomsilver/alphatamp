@@ -1,11 +1,11 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
-from collections import defaultdict
 import pickle
+from collections import defaultdict
 from pathlib import Path
-
 from typing import Any, TypeVar
 
+import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -94,8 +94,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         ] = {}
         self._parameter_scorer = parameter_scorer
         self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
-        self._most_recent_parameter = None
-        self._most_recent_abstract_action = None
+        self._most_recent_parameter: Any | None = None
+        self._most_recent_abstract_action: str | None = None
 
     def reset(
         self,
@@ -150,19 +150,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_info = info
 
     def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
-        """ Train each abstract action's parameter policy given dataset."""
+        """Train each abstract action's parameter policy given dataset."""
 
-        for ground_operator, scoring_function in self._abstract_action_to_scoring_function.items():
+        for (
+            ground_operator,
+            scoring_function,
+        ) in self._abstract_action_to_scoring_function.items():
             # Segment data for each ground operator.
+
             if ground_operator.name in parameter_dataset:
                 features_and_labels = parameter_dataset[ground_operator.name]
 
-                features, labels = map(list, zip(*features_and_labels))
+                features = np.array([item[0][0] for item in features_and_labels])
+                labels = np.array([item[0][1] for item in features_and_labels])
                 scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
-        assert self._most_recent_parameter and self._most_recent_abstract_action 
-        self._parameter_dataset[self._most_recent_abstract_action].append((self._most_recent_parameter, training_label))
+        assert self._most_recent_parameter and self._most_recent_abstract_action
+        self._parameter_dataset[self._most_recent_abstract_action].append(
+            (self._most_recent_parameter, training_label)
+        )
 
     def _resample_controller(self, x) -> None:
         """Resample parameters and reset the controller with the specified
@@ -172,6 +179,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Get the current abstract action and controller.
         a = self._current_abstract_plan[1][self._current_abstract_plan_step]
+
+        assert a is not None
 
         # Recreate controller and query scoring function
         self._current_controller = self._controller_generator(a)
@@ -279,9 +288,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def save_parameter_dataset(self, path: str | Path) -> None:
         """Save the collected parameter dataset to disk as a pickle.
 
-        The dataset is converted to a plain dict before pickling to avoid
-        issues with pickle-ing defaultdict directly across different Python
-        versions/environments.
+        The dataset is converted to a plain dict before pickling to avoid issues with
+        pickle-ing defaultdict directly across different Python versions/environments.
         """
         p = Path(path)
         if not p.parent.exists():

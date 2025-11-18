@@ -2,11 +2,11 @@
 
 from typing import Any, TypeVar
 
+import numpy as np
+
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
 _X = TypeVar("_X")  # state
-Datastore = list[tuple[Any]]
-Labels = list[Any]
 
 
 class NaiveScorer(ParameterScorer):
@@ -15,9 +15,9 @@ class NaiveScorer(ParameterScorer):
     def __init__(self):
         pass
 
-    def train(self, features: Datastore, labels: Labels):
+    def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
 
-    def score(self, x: _X, params: Any) -> float:
+    def score(self, x: _X, parameter: Any) -> float:
         """Score the parameter given the low-level state."""
         return 1

@@ -1,4 +1,5 @@
-"""Tests for saving and loading parameter dataset pickles."""
+"""Tests for saving and loading parameter dataset pickles for the
+SimFreeParamPolicyApproach."""
 
 import pickle
 from pathlib import Path
@@ -9,8 +10,7 @@ from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
 )
 
-
-FIXTURE_PATH = Path("tests/fixtures") / "parameter_dataset.pkl"
+FIXTURE_PATH = Path("tests/datasets") / "test_parameter_dataset.pkl"
 
 
 def test_write_parameter_dataset_pickle():

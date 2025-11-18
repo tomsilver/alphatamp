@@ -3,9 +3,9 @@
 import abc
 from typing import Any, TypeVar
 
+import numpy as np
+
 _X = TypeVar("_X")  # state
-Datastore = list[tuple[Any]]
-Labels = list[Any]
 
 
 class ParameterScorer(abc.ABC):
@@ -16,9 +16,9 @@ class ParameterScorer(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def train(self, features: Datastore, labels: Labels):
+    def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
 
     @abc.abstractmethod
-    def score(self, x: _X, params: Any) -> float:
+    def score(self, x: _X, parameter: Any) -> float:
         """Score the parameter given the low-level state."""

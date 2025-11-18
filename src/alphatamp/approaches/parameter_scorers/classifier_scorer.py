@@ -2,6 +2,7 @@
 
 from typing import Any, TypeVar
 
+import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.neural_network import MLPClassifier
 from sklearn.utils.validation import check_is_fitted
@@ -9,8 +10,6 @@ from sklearn.utils.validation import check_is_fitted
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
 _X = TypeVar("_X")  # state
-Datastore = list[tuple[Any]]
-Labels = list[Any]
 
 
 class ClassifierScorer(ParameterScorer):
@@ -23,14 +22,15 @@ class ClassifierScorer(ParameterScorer):
             else saved_classifier
         )
 
-    def train(self, features: Datastore, labels: Labels):
+    def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
         self._classifier.fit(features, labels)
+        print(self._classifier.best_loss_)
 
-    def score(self, x: _X, params: Any) -> float:
+    def score(self, x: _X, parameter: Any) -> float:
         """Score the parameter given the low-level state."""
         try:
             check_is_fitted(self._classifier)
-            return self._classifier.predict((x, params))[0]
+            return self._classifier.predict((x, parameter))[0]
         except NotFittedError:
             return 1.0
