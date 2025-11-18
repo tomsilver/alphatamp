@@ -1,6 +1,8 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
 from collections import defaultdict
+import pickle
+from pathlib import Path
 
 from typing import Any, TypeVar
 
@@ -273,3 +275,33 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_parameter_dataset(self) -> defaultdict[str, list]:
         """Return the collected parameter dataset."""
         return self._parameter_dataset
+
+    def save_parameter_dataset(self, path: str | Path) -> None:
+        """Save the collected parameter dataset to disk as a pickle.
+
+        The dataset is converted to a plain dict before pickling to avoid
+        issues with pickle-ing defaultdict directly across different Python
+        versions/environments.
+        """
+        p = Path(path)
+        if not p.parent.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+        # Convert to regular dict for portability.
+        to_dump = dict(self._parameter_dataset)
+        with p.open("wb") as f:
+            pickle.dump(to_dump, f)
+
+    @staticmethod
+    def load_parameter_dataset(path: str | Path) -> defaultdict[str, list]:
+        """Load a parameter dataset pickle from disk and return as defaultdict.
+
+        Raises FileNotFoundError if the path does not exist.
+        """
+        p = Path(path)
+        with p.open("rb") as f:
+            raw = pickle.load(f)
+
+        dd: defaultdict[str, list] = defaultdict(list)
+        if isinstance(raw, dict):
+            dd.update(raw)
+        return dd
