@@ -32,6 +32,9 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
+from bilevel_planning.structs import (
+    RelationalAbstractState,
+)
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
