@@ -185,18 +185,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 labels = np.vstack(labels_list)
 
                 # Train the scoring function for each grounded skill.
+                print(abstract_action)
+                print()
                 scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
+        """Label the parameter as successful (1) or failure (0)."""
         assert (
             self._most_recent_parameter and self._most_recent_abstract_action_descriptor
         )
         assert self._last_observation is not None
+        label = 1 if training_label == "success" else 0
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
-            (self._last_observation, self._most_recent_parameter, training_label)
+            (self._last_observation, self._most_recent_parameter, label)
         )
 
-    def _resample_controller(self, x) -> None:
+    def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
         observation."""
 
@@ -211,9 +215,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
 
+        # import ipdb
+        # from sklearn.utils.validation import check_is_fitted
+
+        # ipdb.set_trace()
+
         # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
-        optimal_params = parameter_policy.sample_parameters(x, self._rng)
+        optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
 
@@ -258,7 +267,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x = self._env_models.observation_to_state(self._last_observation)
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
-            self._resample_controller(x)
+            self._resample_controller(x, self._last_observation)
 
         # We are using the same controller as before.
         else:
@@ -285,12 +294,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 if self._train_or_eval == "train":
                     self._add_most_recent_parameter_to_dataset("failure")
 
-                self._resample_controller(x)
+                self._resample_controller(x, self._last_observation)
                 self._current_controller.observe(x)
                 continue
 
             except IndexError as e:
-                self._resample_controller(x)
+                self._resample_controller(x, self._last_observation)
                 self._current_controller.observe(x)
                 raise ApproachStepError("Index Error!", e)
 

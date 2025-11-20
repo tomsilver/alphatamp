@@ -5,7 +5,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 
-_X = TypeVar("_X")  # state
+_O = TypeVar("_O")  # observation
 
 
 class ParameterScorer(abc.ABC):
@@ -20,5 +20,5 @@ class ParameterScorer(abc.ABC):
         """Given training data, update parameter scorer."""
 
     @abc.abstractmethod
-    def score(self, x: _X, parameter: Any) -> float:
-        """Score the parameter given the low-level state."""
+    def score(self, obs: _O, parameter: Any) -> float:
+        """Score the parameter given the low-level observation."""

@@ -6,7 +6,7 @@ import numpy as np
 
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
-_X = TypeVar("_X")  # state
+_O = TypeVar("_O")  # observation
 
 
 class NaiveScorer(ParameterScorer):
@@ -18,6 +18,6 @@ class NaiveScorer(ParameterScorer):
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
 
-    def score(self, x: _X, parameter: Any) -> float:
-        """Score the parameter given the low-level state."""
+    def score(self, obs: _O, parameter: Any) -> float:
+        """Score the parameter given the low-level observation."""
         return 1

@@ -9,7 +9,7 @@ from sklearn.utils.validation import check_is_fitted
 
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 
-_X = TypeVar("_X")  # state
+_O = TypeVar("_O")  # observation
 
 
 class ClassifierScorer(ParameterScorer):
@@ -25,12 +25,16 @@ class ClassifierScorer(ParameterScorer):
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
         self._classifier.fit(features, labels)
-        print(self._classifier.best_loss_)
+        print(self._classifier.classes_)
 
-    def score(self, x: _X, parameter: Any) -> float:
-        """Score the parameter given the low-level state."""
+    def score(self, obs: _O, parameter: Any) -> float:
+        """Score the parameter given the low-level observation."""
         try:
             check_is_fitted(self._classifier)
-            return self._classifier.predict((x, parameter))[0]
+            state_arr = np.array(obs)
+            parameter_arr = np.array(parameter)
+            feature_arr = np.concatenate([state_arr, parameter_arr])
+            features = feature_arr.reshape(1, -1)
+            return self._classifier.predict_proba(features)[:, 1][0]
         except NotFittedError:
             return 1.0
