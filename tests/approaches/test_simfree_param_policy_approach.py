@@ -232,7 +232,7 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     parameter_dataset = approach.get_parameter_dataset()
 
-    assert len(parameter_dataset) == 0, "Should not store parameters."
+    assert len(parameter_dataset) == 3, "Should not store additional parameters."
     env.close()
 
 
@@ -310,7 +310,7 @@ def test_train_scorer_simfree_feasbility_approach():
     for abstract_action, data in chain(
         success_dataset.items(), failure_dataset.items()
     ):
-        combined_dataset[abstract_action].append(data)
+        combined_dataset[abstract_action].extend(data)
 
     approach.train_parameter_policy(combined_dataset)
 

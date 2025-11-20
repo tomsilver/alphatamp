@@ -30,9 +30,6 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
-from bilevel_planning.structs import (
-    RelationalAbstractState,
-)
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
@@ -144,7 +141,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
-    def _learn_from_transition(self, obs: _O, act: _U, next_obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
+    def _learn_from_transition(
+        self,
+        obs: _O,
+        act: _U,
+        next_obs: _O,
+        reward: float,
+        done: bool,
+        info: dict[str, Any],
+    ) -> None:
         if done:
             # Store last successful parameter
             self._add_most_recent_parameter_to_dataset("success")
@@ -158,7 +163,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if self._train_or_eval == "train":
             self._learn_from_transition(
                 self._last_observation, self._last_action, obs, reward, done, info
-            )     
+            )
         self._last_observation = obs
         self._last_info = info
 
@@ -172,16 +177,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Generate a row in the training dataset.
         for datapoint in features_and_labels:
-            for state, parameter, label in datapoint:
-                state_arr = np.array(state)
-                parameter_arr = np.array(parameter)
+            state, parameter, label = datapoint
+            state_arr = np.array(state)
+            parameter_arr = np.array(parameter)
 
-                # The features are the state observation and the parameter.
-                feature_arr = np.concatenate([state_arr, parameter_arr])
-                label_arr = np.array(label)
+            # The features are the state observation and the parameter.
+            feature_arr = np.concatenate([state_arr, parameter_arr])
+            label_arr = np.array(label)
 
-                features_list.append(feature_arr)
-                labels_list.append(label_arr)
+            features_list.append(feature_arr)
+            labels_list.append(label_arr)
 
         features = np.vstack(features_list)
         labels = np.vstack(labels_list)
@@ -308,20 +313,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             return self._last_action
         # If low level action failed, resample parameters!
-        except TrajectorySamplingFailure:
+        except (TrajectorySamplingFailure, IndexError) as e:
             # If training, store the previous parameter.
             if self._train_or_eval == "train":
                 self._add_most_recent_parameter_to_dataset("failure")
                 self._add_abstract_plan_to_dataset("failure")
 
-            self._resample_controller(x, self._last_observation)
-            self._current_controller.observe(x)
-
-        except IndexError as e:
-            self._resample_controller(x, self._last_observation)
-            self._current_controller.observe(x)
-            self._add_abstract_plan_to_dataset("failure")
-            raise ApproachStepError("Index Error!", e)
+            # Raise ApproachStepError
+            raise ApproachStepError("Trajectory Error!", e)
 
     def step(self) -> _U:
         """Get the next action to take."""
