@@ -182,8 +182,6 @@ def test_classifier_scorer_simfree_feasibility_approach():
     approach.train()
     approach.reset(obs, {})
 
-    print(approach.get_abstract_plan())
-
     start_time = time.time()
     timeout = 10
 
@@ -355,6 +353,10 @@ def test_train_scorer_simfree_feasbility_approach():
     # Create the naive classifier.
     filter_classifier = FilterFeasibilityClassifier()
 
+    # Filter bad abstract plans
+    filtered_action_strs = [("PickTgt", 0), ("target_block", 0), ("obstruction6", 0)]
+    filter_classifier.update_classifier(None, filtered_action_strs)
+
     # Create the naive feasibility learner.
     filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
         filter_classifier
@@ -378,6 +380,13 @@ def test_train_scorer_simfree_feasbility_approach():
         seed=123,
     )
 
+    # Eval.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    approach.eval()
+    approach.reset(obs, {})
+
     # Load in successful training dataset from pickle.
     path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
     success_dataset = approach.load_parameter_dataset(path)
@@ -385,14 +394,6 @@ def test_train_scorer_simfree_feasbility_approach():
     # Load in unsuccessful training dataset from pickle.
     path = Path("tests/datasets") / "failure_classifier_parameter_dataset.pkl"
     failure_dataset = approach.load_parameter_dataset(path)
-
-    # Train on just one problem.
-    obs, _ = env.reset(seed=123)
-
-    # Reset the approach on the observation.
-    # Train.
-    approach.train()
-    approach.reset(obs, {})
 
     # Train the scorer on both datasets.
     combined_dataset = defaultdict(list)
@@ -402,3 +403,24 @@ def test_train_scorer_simfree_feasbility_approach():
         combined_dataset[abstract_action].append(data)
 
     approach.train_parameter_policy(combined_dataset)
+
+    # Evaluate the approach on environment.
+    start_time = time.time()
+    timeout = 20
+    task_completed = False
+    while time.time() - start_time < timeout:
+        try:
+            action = approach.step()
+        except ApproachStepError:
+            break
+
+        obs, reward, done, _, _ = env.step(action)
+
+        # Given new observation from the environment, update the approach
+        approach.update(obs, float(reward), done, {})
+        if done:
+            task_completed = True
+            break
+
+    assert task_completed, "Plan did not succeed"
+    env.close()
