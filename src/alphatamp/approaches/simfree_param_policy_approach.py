@@ -298,10 +298,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             assert self._current_controller
             self._current_controller.observe(x)
 
-        # Try to resample a max number of times before giving up.
-        # for _ in range(self._max_resamples):
         assert self._current_controller
 
+        # Try to take a low-level action from the controller.
         try:
             # Take one more low-level action.
             self._last_action = self._current_controller.step()
@@ -312,7 +311,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._add_most_recent_parameter_to_dataset("success")
 
             return self._last_action
-        # If low level action failed, resample parameters!
+        # If low level action failed, store the parameter that failed!
         except (TrajectorySamplingFailure, IndexError) as e:
             # If training, store the previous parameter.
             if self._train_or_eval == "train":
