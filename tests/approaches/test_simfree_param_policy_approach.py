@@ -405,7 +405,7 @@ def test_train_scorer_simfree_feasbility_approach():
     for abstract_action, data in chain(
         success_dataset.items(), failure_dataset.items()
     ):
-        combined_dataset[abstract_action].append(data)
+        combined_dataset[abstract_action].extend(data)
 
     approach.train_parameter_policy(combined_dataset)
 
