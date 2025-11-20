@@ -30,6 +30,9 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
+from bilevel_planning.structs import (
+    RelationalAbstractState,
+)
 from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
@@ -99,6 +102,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_parameter: Any | None = None
         self._most_recent_abstract_action_descriptor: str | None = None
 
+        # Abstract Plan Dataset
+        self._abstract_plan_dataset: list = []
+
     def reset(
         self,
         obs: _O,
@@ -123,7 +129,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._timestep = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
-        self._parameter_dataset = defaultdict(list)
+        # self._parameter_dataset = defaultdict(list)
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -138,6 +144,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
+    def _learn_from_transition(self, obs: _O, act: _U, next_obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
+        if done:
+            # Store last successful parameter
+            self._add_most_recent_parameter_to_dataset("success")
+            self._add_abstract_plan_to_dataset("success")
+            self.train_parameter_policy(self._parameter_dataset)
+
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
         assert self._last_observation is not None
@@ -145,10 +158,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if self._train_or_eval == "train":
             self._learn_from_transition(
                 self._last_observation, self._last_action, obs, reward, done, info
-            )
-            # Store last successful parameter
-            if done:
-                self._add_most_recent_parameter_to_dataset("success")
+            )     
         self._last_observation = obs
         self._last_info = info
 
@@ -207,6 +217,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
             (self._last_observation, self._most_recent_parameter, label)
         )
+
+    def _add_abstract_plan_to_dataset(self, training_label: str):
+        assert self._current_abstract_plan
+
+        label = 1 if training_label == "success" else 0
+        self._abstract_plan_dataset.append((self._current_abstract_plan, label))
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -278,36 +294,34 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_controller.observe(x)
 
         # Try to resample a max number of times before giving up.
-        for _ in range(self._max_resamples):
-            assert self._current_controller
+        # for _ in range(self._max_resamples):
+        assert self._current_controller
 
-            try:
-                # Take one more low-level action.
-                self._last_action = self._current_controller.step()
-                assert self._last_action is not None
+        try:
+            # Take one more low-level action.
+            self._last_action = self._current_controller.step()
+            assert self._last_action is not None
 
-                # If low-level action is successful, store it.
-                if self._train_or_eval == "train":
-                    self._add_most_recent_parameter_to_dataset("success")
+            # If low-level action is successful, store it.
+            if self._train_or_eval == "train":
+                self._add_most_recent_parameter_to_dataset("success")
 
-                return self._last_action
-            # If low level action failed, resample parameters!
-            except TrajectorySamplingFailure:
-                # If training, store the previous parameter.
-                if self._train_or_eval == "train":
-                    self._add_most_recent_parameter_to_dataset("failure")
+            return self._last_action
+        # If low level action failed, resample parameters!
+        except TrajectorySamplingFailure:
+            # If training, store the previous parameter.
+            if self._train_or_eval == "train":
+                self._add_most_recent_parameter_to_dataset("failure")
+                self._add_abstract_plan_to_dataset("failure")
 
-                self._resample_controller(x, self._last_observation)
-                self._current_controller.observe(x)
-                continue
+            self._resample_controller(x, self._last_observation)
+            self._current_controller.observe(x)
 
-            except IndexError as e:
-                self._resample_controller(x, self._last_observation)
-                self._current_controller.observe(x)
-                raise ApproachStepError("Index Error!", e)
-
-        max_resamples_error = RuntimeError("Low-level planner resampled too many times")
-        raise ApproachStepError("Max Parameter Resamples reached", max_resamples_error)
+        except IndexError as e:
+            self._resample_controller(x, self._last_observation)
+            self._current_controller.observe(x)
+            self._add_abstract_plan_to_dataset("failure")
+            raise ApproachStepError("Index Error!", e)
 
     def step(self) -> _U:
         """Get the next action to take."""
