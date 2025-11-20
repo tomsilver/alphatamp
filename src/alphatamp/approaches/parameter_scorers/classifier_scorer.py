@@ -25,7 +25,6 @@ class ClassifierScorer(ParameterScorer):
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
         self._classifier.fit(features, labels)
-        print(self._classifier.classes_)
 
     def score(self, obs: _O, parameter: Any) -> float:
         """Score the parameter given the low-level observation."""

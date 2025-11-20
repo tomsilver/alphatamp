@@ -211,8 +211,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 features, labels = self._generate_training_data(features_and_labels)
 
                 # Train the scoring function for each grounded skill.
-                print(abstract_action)
-                print()
                 scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
@@ -246,11 +244,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Recreate controller and query scoring function
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
-
-        # import ipdb
-        # from sklearn.utils.validation import check_is_fitted
-
-        # ipdb.set_trace()
 
         # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
