@@ -259,7 +259,12 @@ def test_train_scorer_simfree_feasbility_approach():
     filter_classifier = FilterFeasibilityClassifier()
 
     # Filter bad abstract plans
-    filtered_action_strs = [("PickTgt", 0), ("target_block", 0), ("obstruction6", 0)]
+    filtered_action_strs = [
+        ("PickTgt", 0),
+        ("target_block", 0),
+        ("obstruction5", 0),
+        ("obstruction6", 0),
+    ]
     filter_classifier.update_classifier(None, filtered_action_strs)
 
     # Create the naive feasibility learner.
@@ -311,7 +316,7 @@ def test_train_scorer_simfree_feasbility_approach():
 
     # Evaluate the approach on environment.
     start_time = time.time()
-    timeout = 20
+    timeout = 10
     task_completed = False
     while time.time() - start_time < timeout:
         try:

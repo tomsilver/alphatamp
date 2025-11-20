@@ -152,6 +152,32 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
+    def _generate_training_data(
+        self, features_and_labels: list
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Reformat training data into numpy arrays."""
+
+        features_list = []
+        labels_list = []
+
+        # Generate a row in the training dataset.
+        for datapoint in features_and_labels:
+            for state, parameter, label in datapoint:
+                state_arr = np.array(state)
+                parameter_arr = np.array(parameter)
+
+                # The features are the state observation and the parameter.
+                feature_arr = np.concatenate([state_arr, parameter_arr])
+                label_arr = np.array(label)
+
+                features_list.append(feature_arr)
+                labels_list.append(label_arr)
+
+        features = np.vstack(features_list)
+        labels = np.vstack(labels_list)
+
+        return (features, labels)
+
     def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
 
@@ -165,28 +191,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             if abstract_action_descriptor in parameter_dataset:
                 features_and_labels = parameter_dataset[abstract_action_descriptor]
 
-                features_list = []
-                labels_list = []
-
-                # Generate a row in the training dataset.
-                for datapoint in features_and_labels:
-                    for state, parameter, label in datapoint:
-                        state_arr = np.array(state)
-                        parameter_arr = np.array(parameter)
-
-                        # The features are the state observation and the parameter.
-                        feature_arr = np.concatenate([state_arr, parameter_arr])
-                        label_arr = np.array(label)
-
-                        features_list.append(feature_arr)
-                        labels_list.append(label_arr)
-
-                features = np.vstack(features_list)
-                labels = np.vstack(labels_list)
+                # Generate training data.
+                features, labels = self._generate_training_data(features_and_labels)
 
                 # Train the scoring function for each grounded skill.
-                print(abstract_action)
-                print()
                 scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
@@ -214,11 +222,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Recreate controller and query scoring function
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
-
-        # import ipdb
-        # from sklearn.utils.validation import check_is_fitted
-
-        # ipdb.set_trace()
 
         # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
