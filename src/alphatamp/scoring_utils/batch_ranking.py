@@ -43,22 +43,6 @@ class BatchRankingAbstractPlanGenerator(
         )
         super().__init__(abstract_successor_fn, seed)
 
-    def _scores_discriminate(self, batch: list[Skeleton], prev: list[Skeleton]) -> bool:
-        """Check if scoring function provides discriminatory information.
-
-        Returns False if all scores are nearly identical (within epsilon).
-        """
-        if len(batch) <= 1:
-            return False  # No point in reordering a single skeleton
-
-        scores = [self._score_fn(skeleton, prev) for skeleton in batch]
-        score_range = max(scores) - min(scores)
-
-        # If scores vary by less than this threshold, don't reorder
-        DISCRIMINATORY_THRESHOLD = 0.01
-
-        return score_range > DISCRIMINATORY_THRESHOLD
-
     def __call__(
         self,
         x0: _X,
@@ -74,16 +58,33 @@ class BatchRankingAbstractPlanGenerator(
         while batch := list(islice(iterator, self._batch_size)):
             # NOTE: we need to reorder after every failed attempt because of prev.
             while batch:
+                # Optimization: Compute scores once per iteration
+                # We zip with index to track original position
+                scored_candidates = []
+                scores = []
+                for i, skel in enumerate(batch):
+                    score = self._score_fn(skel, prev)
+                    scores.append(score)
+                    scored_candidates.append((i, skel, score))
+
+                score_range = max(scores) - min(scores) if scores else 0.0
+                DISCRIMINATORY_THRESHOLD = 0.01
+
                 # Only reorder if scoring function is discriminatory
-                # Otherwise, preserve base generator's order
-                if self._scores_discriminate(batch, prev):
-                    tiebreaking_score_fn = lambda x: (
-                        self._score_fn(x, prev),
-                        -len(x[1]),
-                        self._rng.uniform(),
-                    )
-                    batch.sort(key=tiebreaking_score_fn)
-                    skeleton = batch.pop()
+                if len(batch) > 1 and score_range > DISCRIMINATORY_THRESHOLD:
+                    # Find the best skeleton without sorting the whole list in-place.
+                    # We want to maximize: (score, -len(plan), random)
+                    # This matches the logic of batch.sort() + batch.pop()
+
+                    def priority_fn(item):
+                        _, skel, score = item
+                        return (score, -len(skel[1]), self._rng.uniform())
+
+                    # Find index of the best candidate
+                    best_idx, _, _ = max(scored_candidates, key=priority_fn)
+
+                    # Remove and yield the best one
+                    skeleton = batch.pop(best_idx)
                 else:
                     # Use base generator's order (first in batch)
                     skeleton = batch.pop(0)
