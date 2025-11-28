@@ -336,19 +336,23 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the collected parameter dataset."""
         return self._parameter_dataset
 
-    def save_parameter_dataset(self, path: str | Path) -> None:
-        """Save the collected parameter dataset to disk as a pickle.
+    def get_abstract_plan_dataset(self) -> list:
+        """Return the collected abstract plan dataset."""
+        return self._abstract_plan_dataset
 
-        The dataset is converted to a plain dict before pickling to avoid issues with
-        pickle-ing defaultdict directly across different Python versions/environments.
-        """
-        p = Path(path)
-        if not p.parent.exists():
-            p.parent.mkdir(parents=True, exist_ok=True)
-        # Convert to regular dict for portability.
-        to_dump = dict(self._parameter_dataset)
-        with p.open("wb") as f:
-            pickle.dump(to_dump, f)
+    def save_datasets(self, directory: str | Path) -> None:
+        """Save the collected dataset to disk as a pickle."""
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+
+        datasets = {
+            "parameter_dataset.pkl": dict(self._parameter_dataset),
+            "abstract_plan_dataset.pkl": self._abstract_plan_dataset,
+        }
+
+        for filename, data in datasets.items():
+            with (directory / filename).open("wb") as f:
+                pickle.dump(data, f)
 
     @staticmethod
     def load_parameter_dataset(path: str | Path) -> defaultdict[str, list]:
@@ -364,3 +368,18 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if isinstance(raw, dict):
             dd.update(raw)
         return dd
+
+    @staticmethod
+    def load_abstract_plan_dataset(path: str | Path) -> list:
+        """Load a abstract plan dataset pickle from disk and return as list.
+
+        Raises FileNotFoundError if the path does not exist.
+        """
+        p = Path(path)
+        with p.open("rb") as f:
+            raw = pickle.load(f)
+
+        l: list = []
+        if isinstance(raw, list):
+            l = raw
+        return l
