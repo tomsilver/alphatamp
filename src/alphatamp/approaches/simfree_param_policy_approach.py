@@ -228,7 +228,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert self._current_abstract_plan
 
         label = 1 if training_label == "success" else 0
-        self._abstract_plan_dataset.append((self._current_abstract_plan, label))
+
+        # Add the completed abstract plan up to the point where this function is called
+        self._abstract_plan_dataset.append((self._current_abstract_plan[:self._current_abstract_plan_step + 1], label))
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -278,6 +280,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             # If we have reached the next abstract state, advance the current plan step.
             if s == ns:
+                self._add_abstract_plan_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
 
