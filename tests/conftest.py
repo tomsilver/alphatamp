@@ -25,3 +25,6 @@ def pytest_configure(config: "Config") -> None:
     """Set global configuration values after command-line options are parsed."""
     global MAKE_VIDEOS  # pylint:disable=global-statement
     MAKE_VIDEOS = config.getoption("--make-videos")
+    # Skip slow tests by default
+    if not config.option.markexpr:
+        config.option.markexpr = "not slow"
