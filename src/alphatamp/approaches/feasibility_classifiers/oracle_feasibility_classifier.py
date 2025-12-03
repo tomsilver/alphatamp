@@ -57,7 +57,7 @@ class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
         (target_block,) = x0.get_objects(block_type)
         (robot,) = x0.get_objects(robot_type)
         obstructions = x0.get_objects(obstruction_type)
-        (target_region, ) = x0.get_objects(region_type)
+        (target_region,) = x0.get_objects(region_type)
 
         # remove target block from obstructions
         filtered_obstructions = set()
@@ -82,13 +82,23 @@ class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
 
         inside_target_abstract_state_atoms = set()
         inside_target_abstract_state_atoms.add(GroundAtom(HandEmpty, [robot]))
-        inside_target_abstract_state_atoms.add(GroundAtom(Inside, [target_block, target_region]))
-        inside_target_abstract_state_objects = {robot, target_block} | filtered_obstructions
+        inside_target_abstract_state_atoms.add(
+            GroundAtom(Inside, [target_block, target_region])
+        )
+        inside_target_abstract_state_objects = {
+            robot,
+            target_block,
+        } | filtered_obstructions
         inside_target_abstract_state = RelationalAbstractState(
-            atoms=inside_target_abstract_state_atoms, objects=inside_target_abstract_state_objects
+            atoms=inside_target_abstract_state_atoms,
+            objects=inside_target_abstract_state_objects,
         )
 
-        oracle_abstract_state = [empty_abstract_state, holding_abstract_state, inside_target_abstract_state]
+        oracle_abstract_state = [
+            empty_abstract_state,
+            holding_abstract_state,
+            inside_target_abstract_state,
+        ]
 
         oracle_abstract_state_ptr = 0
         # Classify plan only looking at state for now
