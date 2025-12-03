@@ -44,17 +44,20 @@ class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
         # Predicates.
         HoldingTgt = Predicate("HoldingTgt", [CRVRobotType, RectangleType])
         HandEmpty = Predicate("HandEmpty", [CRVRobotType])
+        Inside = Predicate("Inside", [RectangleType, RectangleType])
 
         # Objects.
         type_name_to_type = {t.name: t for t in self._env_models.types}
         block_type = type_name_to_type["target_block"]
         obstruction_type = type_name_to_type["rectangle"]
         robot_type = type_name_to_type["crv_robot"]
+        region_type = type_name_to_type["target_region"]
 
         assert isinstance(x0, ObjectCentricState)
         (target_block,) = x0.get_objects(block_type)
         (robot,) = x0.get_objects(robot_type)
         obstructions = x0.get_objects(obstruction_type)
+        (target_region,) = x0.get_objects(region_type)
 
         # remove target block from obstructions
         filtered_obstructions = set()
@@ -77,7 +80,25 @@ class OracleAbstractPlanClassifier(BaseFeasibilityClassifier):
             atoms=holding_abstract_state_atoms, objects=holding_abstract_state_objects
         )
 
-        oracle_abstract_state = [empty_abstract_state, holding_abstract_state]
+        inside_target_abstract_state_atoms = set()
+        inside_target_abstract_state_atoms.add(GroundAtom(HandEmpty, [robot]))
+        inside_target_abstract_state_atoms.add(
+            GroundAtom(Inside, [target_block, target_region])
+        )
+        inside_target_abstract_state_objects = {
+            robot,
+            target_block,
+        } | filtered_obstructions
+        inside_target_abstract_state = RelationalAbstractState(
+            atoms=inside_target_abstract_state_atoms,
+            objects=inside_target_abstract_state_objects,
+        )
+
+        oracle_abstract_state = [
+            empty_abstract_state,
+            holding_abstract_state,
+            inside_target_abstract_state,
+        ]
 
         oracle_abstract_state_ptr = 0
         # Classify plan only looking at state for now

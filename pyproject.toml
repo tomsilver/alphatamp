@@ -9,11 +9,15 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
-    "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
-   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
-   "tomsgeoms2d",
-   "prbench-models",
+   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=bilevel-planning",
+   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench-bilevel-planning",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench",
+   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench-models",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prpl-utils",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prpl-llm-utils",
+   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=toms-geoms-2d",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=relational-structs",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
    "scikit-learn"
@@ -69,7 +73,3 @@ module = [
     "sklearn.*",
 ]
 ignore_missing_imports = true
-
-[tool.uv.sources]
-tomsgeoms2d = { git = "https://github.com/tomsilver/toms-geoms-2d", rev = "main" }
-prbench-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prbench-models", rev = "main" }
