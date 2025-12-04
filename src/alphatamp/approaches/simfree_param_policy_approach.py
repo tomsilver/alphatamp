@@ -1,7 +1,11 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
+import pickle
+from collections import defaultdict
+from pathlib import Path
 from typing import Any, TypeVar
 
+import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -47,7 +51,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
         feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
-        parameter_scorer: ParameterScorer,
+        parameter_scorer_class: type[ParameterScorer],
+        parameter_scorer_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
@@ -88,9 +93,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_action_to_scoring_function: dict[
             GroundOperator, ParameterScorer
         ] = {}
-        self._parameter_scorer = parameter_scorer
-        self._parameter_dataset: list[tuple[Any, str]] = []
-        self._most_recent_parameter = None
+        self._parameter_scorer_class = parameter_scorer_class
+        self._parameter_scorer_configs = parameter_scorer_configs
+        self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
+        self._most_recent_parameter: Any | None = None
+        self._most_recent_abstract_action_descriptor: str | None = None
+
+        # Abstract Plan Dataset
+        self._abstract_plan_dataset: list = []
 
     def reset(
         self,
@@ -115,7 +125,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._timestep = 0
         self._most_recent_parameter = None
-        self._parameter_dataset = []
+        self._most_recent_abstract_action_descriptor = None
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -125,9 +135,25 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
         for grounded_operator in grounded_operators:
+            # Create new parameter scorer instances per grounded operators.
             self._abstract_action_to_scoring_function[grounded_operator] = (
-                self._parameter_scorer
+                self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
+
+    def _learn_from_transition(
+        self,
+        obs: _O,
+        act: _U,
+        next_obs: _O,
+        reward: float,
+        done: bool,
+        info: dict[str, Any],
+    ) -> None:
+        if done:
+            # Store last successful parameter
+            self._add_most_recent_parameter_to_dataset("success")
+            self._add_abstract_plan_to_dataset("success")
+            # self.train_parameter_policy(self._parameter_dataset)
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -137,13 +163,72 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._learn_from_transition(
                 self._last_observation, self._last_action, obs, reward, done, info
             )
-            # Store last successful parameter
-            if done:
-                self._parameter_dataset.append((self._most_recent_parameter, "success"))
         self._last_observation = obs
         self._last_info = info
 
-    def _resample_controller(self, x) -> None:
+    def _generate_training_data(
+        self, features_and_labels: list
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Reformat training data into numpy arrays."""
+
+        features_list = []
+        labels_list = []
+
+        # Generate a row in the training dataset.
+        for datapoint in features_and_labels:
+            state, parameter, label = datapoint
+            state_arr = np.array(state)
+            parameter_arr = np.array(parameter)
+
+            # The features are the state observation and the parameter.
+            feature_arr = np.append(state_arr, parameter_arr)
+            label_arr = np.array(label)
+
+            features_list.append(feature_arr)
+            labels_list.append(label_arr)
+
+        features = np.vstack(features_list)
+        labels = np.vstack(labels_list)
+
+        return (features, labels)
+
+    def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
+        """Train each abstract action's parameter policy given dataset."""
+
+        for (
+            abstract_action,
+            scoring_function,
+        ) in self._abstract_action_to_scoring_function.items():
+            # Segment data for each ground operator.
+
+            abstract_action_descriptor = abstract_action.short_str
+            if abstract_action_descriptor in parameter_dataset:
+                features_and_labels = parameter_dataset[abstract_action_descriptor]
+
+                # Generate training data.
+                features, labels = self._generate_training_data(features_and_labels)
+
+                # Train the scoring function for each grounded skill.
+                scoring_function.train(features, labels)
+
+    def _add_most_recent_parameter_to_dataset(self, training_label: str):
+        """Label the parameter as successful (1) or failure (0)."""
+        assert (
+            self._most_recent_parameter and self._most_recent_abstract_action_descriptor
+        )
+        assert self._last_observation is not None
+        label = 1 if training_label == "success" else 0
+        self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
+            (self._last_observation, self._most_recent_parameter, label)
+        )
+
+    def _add_abstract_plan_to_dataset(self, training_label: str):
+        assert self._current_abstract_plan
+
+        label = 1 if training_label == "success" else 0
+        self._abstract_plan_dataset.append((self._current_abstract_plan, label))
+
+    def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
         observation."""
 
@@ -152,14 +237,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Get the current abstract action and controller.
         a = self._current_abstract_plan[1][self._current_abstract_plan_step]
 
+        assert a is not None
+
         # Recreate controller and query scoring function
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
 
         # Sample new params from the Parameter Policy
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
-        optimal_params = parameter_policy.sample_parameters(x, self._rng)
+        optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
         self._most_recent_parameter = optimal_params
+        self._most_recent_abstract_action_descriptor = a.short_str
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -191,11 +279,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._current_abstract_plan_step += 1
                 advanced = True
 
-                # Store successful parameter
-                if self._train_or_eval == "train":
-                    self._parameter_dataset.append(
-                        (self._most_recent_parameter, "success")
-                    )
             # We have found a step in the plan where the next state is not yet reached.
             else:
                 # if it is the first step, we also need to reset a new controller
@@ -207,42 +290,35 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x = self._env_models.observation_to_state(self._last_observation)
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
-            self._resample_controller(x)
+            self._resample_controller(x, self._last_observation)
 
         # We are using the same controller as before.
         else:
             assert self._current_controller
             self._current_controller.observe(x)
 
-        # Try to resample a max number of times before giving up.
-        for _ in range(self._max_resamples):
-            assert self._current_controller
+        assert self._current_controller
 
-            try:
-                # Take one more low-level action.
-                self._last_action = self._current_controller.step()
-                assert self._last_action is not None
+        # Try to take a low-level action from the controller.
+        try:
+            # Take one more low-level action.
+            self._last_action = self._current_controller.step()
+            assert self._last_action is not None
 
-                return self._last_action
-            # If low level action failed, resample parameters!
-            except TrajectorySamplingFailure:
-                # If training, store the previous parameter
-                if self._train_or_eval == "train":
-                    self._parameter_dataset.append(
-                        (self._most_recent_parameter, "failure")
-                    )
+            # If low-level action is successful, store it.
+            if self._train_or_eval == "train":
+                self._add_most_recent_parameter_to_dataset("success")
 
-                self._resample_controller(x)
-                self._current_controller.observe(x)
-                continue
+            return self._last_action
+        # If low level action failed, store the parameter that failed!
+        except (TrajectorySamplingFailure, IndexError) as e:
+            # If training, store the previous parameter.
+            if self._train_or_eval == "train":
+                self._add_most_recent_parameter_to_dataset("failure")
+                self._add_abstract_plan_to_dataset("failure")
 
-            except IndexError as e:
-                self._resample_controller(x)
-                self._current_controller.observe(x)
-                raise ApproachStepError("Index Error!", e)
-
-        max_resamples_error = RuntimeError("Low-level planner resampled too many times")
-        raise ApproachStepError("Max Parameter Resamples reached", max_resamples_error)
+            # Raise ApproachStepError
+            raise ApproachStepError("Trajectory Error!", e)
 
     def step(self) -> _U:
         """Get the next action to take."""
@@ -254,6 +330,35 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the current abstract plan."""
         return self._current_abstract_plan
 
-    def get_parameter_dataset(self) -> list[tuple[Any, str]]:
+    def get_parameter_dataset(self) -> defaultdict[str, list]:
         """Return the collected parameter dataset."""
         return self._parameter_dataset
+
+    def save_parameter_dataset(self, path: str | Path) -> None:
+        """Save the collected parameter dataset to disk as a pickle.
+
+        The dataset is converted to a plain dict before pickling to avoid issues with
+        pickle-ing defaultdict directly across different Python versions/environments.
+        """
+        p = Path(path)
+        if not p.parent.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+        # Convert to regular dict for portability.
+        to_dump = dict(self._parameter_dataset)
+        with p.open("wb") as f:
+            pickle.dump(to_dump, f)
+
+    @staticmethod
+    def load_parameter_dataset(path: str | Path) -> defaultdict[str, list]:
+        """Load a parameter dataset pickle from disk and return as defaultdict.
+
+        Raises FileNotFoundError if the path does not exist.
+        """
+        p = Path(path)
+        with p.open("rb") as f:
+            raw = pickle.load(f)
+
+        dd: defaultdict[str, list] = defaultdict(list)
+        if isinstance(raw, dict):
+            dd.update(raw)
+        return dd

@@ -1,6 +1,7 @@
 """Tests for simfree_param_policy_approach.py."""
 
 import time
+from pathlib import Path
 
 import prbench
 from conftest import MAKE_VIDEOS
@@ -60,15 +61,13 @@ def test_naive_scorer_simfree_feasibility_approach():
         sim_free_env_models, static_feasibility_classifier, 123
     )
 
-    # Create the naive parameter scorer
-    naive_scorer = NaiveScorer()
-
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer=naive_scorer,
+        parameter_scorer_class=NaiveScorer,  # Use Naive Scorer
+        parameter_scorer_configs={"configs": {}},
         seed=123,
     )
 
@@ -164,14 +163,14 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     # Create the classifier parameter scorer
     configs = {"hidden_layer_sizes": (10, 10)}
-    classifier_scorer = ClassifierScorer(configs)
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer=classifier_scorer,
+        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_configs={"configs": configs},
         seed=123,
     )
 
@@ -201,17 +200,20 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     parameter_dataset = approach.get_parameter_dataset()
 
-    print(parameter_dataset)
-
     assert parameter_dataset, "Did not find any parameters"
 
+    path = Path("tests/datasets/success_classifier_parameter_dataset.pkl")
+    approach.save_parameter_dataset(path)
+
     # Eval.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=124)
+
+    # Filter obstruction 6
+    filtered_action_strs = [("obstruction6", 0)]
+    filter_classifier.update_classifier(None, filtered_action_strs)
 
     approach.eval()
     approach.reset(obs, {})
-
-    print(approach.get_abstract_plan())
 
     start_time = time.time()
     timeout = 10
@@ -230,5 +232,96 @@ def test_classifier_scorer_simfree_feasibility_approach():
             break
 
     parameter_dataset = approach.get_parameter_dataset()
-    assert len(parameter_dataset) == 0, "Should not store parameters."
+
+    assert len(parameter_dataset) == 4, "Should not store additional parameters."
+    env.close()
+
+
+def test_train_scorer_simfree_feasbility_approach():
+    """Tests for SimFreeParamPolicyApproach()."""
+
+    # Test in a PRBench environment.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier.
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Filter bad abstract plans
+    filtered_action_strs = [
+        ("PickTgt", 0),
+        ("target_block", 0),
+        ("obstruction5", 0),
+        ("obstruction6", 0),
+    ]
+    filter_classifier.update_classifier(None, filtered_action_strs)
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer
+    configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_configs={"configs": configs},
+        seed=123,
+    )
+
+    # Eval.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    approach.eval()
+    approach.reset(obs, {})
+
+    # Load in successful training dataset from pickle.
+    path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
+    success_dataset = approach.load_parameter_dataset(path)
+
+    # Train the scorer on the datasets.
+    approach.train_parameter_policy(success_dataset)
+
+    # Evaluate the approach on environment.
+    start_time = time.time()
+    timeout = 10
+    task_completed = False
+    while time.time() - start_time < timeout:
+        try:
+            action = approach.step()
+        except ApproachStepError:
+            break
+
+        obs, reward, done, _, _ = env.step(action)
+
+        # Given new observation from the environment, update the approach
+        approach.update(obs, float(reward), done, {})
+        if done:
+            task_completed = True
+            break
+
+    assert task_completed, "Plan did not succeed"
     env.close()
