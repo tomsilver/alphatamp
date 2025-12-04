@@ -126,7 +126,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._timestep = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
-        # self._parameter_dataset = defaultdict(list)
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -154,7 +153,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Store last successful parameter
             self._add_most_recent_parameter_to_dataset("success")
             self._add_abstract_plan_to_dataset("success")
-            self.train_parameter_policy(self._parameter_dataset)
+            # self.train_parameter_policy(self._parameter_dataset)
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -182,7 +181,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             parameter_arr = np.array(parameter)
 
             # The features are the state observation and the parameter.
-            feature_arr = np.concatenate([state_arr, parameter_arr])
+            feature_arr = np.append(state_arr, parameter_arr)
             label_arr = np.array(label)
 
             features_list.append(feature_arr)

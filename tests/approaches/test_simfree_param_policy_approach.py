@@ -1,8 +1,6 @@
 """Tests for simfree_param_policy_approach.py."""
 
 import time
-from collections import defaultdict
-from itertools import chain
 from pathlib import Path
 
 import prbench
@@ -204,8 +202,11 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     assert parameter_dataset, "Did not find any parameters"
 
+    path = Path("tests/datasets/success_classifier_parameter_dataset.pkl")
+    approach.save_parameter_dataset(path)
+
     # Eval.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=124)
 
     # Filter obstruction 6
     filtered_action_strs = [("obstruction6", 0)]
@@ -232,7 +233,7 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     parameter_dataset = approach.get_parameter_dataset()
 
-    assert len(parameter_dataset) == 3, "Should not store additional parameters."
+    assert len(parameter_dataset) == 4, "Should not store additional parameters."
     env.close()
 
 
@@ -301,18 +302,8 @@ def test_train_scorer_simfree_feasbility_approach():
     path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
     success_dataset = approach.load_parameter_dataset(path)
 
-    # Load in unsuccessful training dataset from pickle.
-    path = Path("tests/datasets") / "failure_classifier_parameter_dataset.pkl"
-    failure_dataset = approach.load_parameter_dataset(path)
-
-    # Train the scorer on both datasets.
-    combined_dataset = defaultdict(list)
-    for abstract_action, data in chain(
-        success_dataset.items(), failure_dataset.items()
-    ):
-        combined_dataset[abstract_action].extend(data)
-
-    approach.train_parameter_policy(combined_dataset)
+    # Train the scorer on the datasets.
+    approach.train_parameter_policy(success_dataset)
 
     # Evaluate the approach on environment.
     start_time = time.time()

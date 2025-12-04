@@ -32,7 +32,7 @@ class ClassifierScorer(ParameterScorer):
             check_is_fitted(self._classifier)
             state_arr = np.array(obs)
             parameter_arr = np.array(parameter)
-            feature_arr = np.concatenate([state_arr, parameter_arr])
+            feature_arr = np.append(state_arr, parameter_arr)
             features = feature_arr.reshape(1, -1)
             return self._classifier.predict_proba(features)[:, 1][0]
         except NotFittedError:
