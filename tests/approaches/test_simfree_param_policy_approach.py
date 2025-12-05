@@ -18,8 +18,8 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
 )
-from alphatamp.approaches.parameter_scorers.classifier_scorer import ClassifierScorer
-from alphatamp.approaches.parameter_scorers.naive_scorer import NaiveScorer
+from alphatamp.approaches.scorers.classifier_parameter_scorer import ClassifierParameterScorer
+from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
 )
@@ -66,7 +66,7 @@ def test_naive_scorer_simfree_feasibility_approach():
         env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=NaiveScorer,  # Use Naive Scorer
+        parameter_scorer_class=NaiveParameterScorer,  # Use Naive Scorer
         parameter_scorer_configs={"configs": {}},
         seed=123,
     )
@@ -169,7 +169,7 @@ def test_dataset_collection_simfree_feasibility_approach():
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_class=ClassifierParameterScorer,
         parameter_scorer_configs={"configs": configs},
         seed=123,
     )
@@ -252,7 +252,7 @@ def test_save_datasets_simfree_feasibility_approach():
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_class=ClassifierParameterScorer,
         parameter_scorer_configs={"configs": configs},
         seed=123,
     )
@@ -373,7 +373,7 @@ def test_train_scorer_simfree_feasbility_approach():
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
+        parameter_scorer_class=ClassifierParameterScorer,
         parameter_scorer_configs={"configs": configs},
         seed=123,
     )

@@ -30,7 +30,7 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
+from alphatamp.approaches.scorers.base_scorer import BaseScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
@@ -51,7 +51,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
         feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
-        parameter_scorer_class: type[ParameterScorer],
+        parameter_scorer_class: type[BaseScorer],
         parameter_scorer_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
@@ -90,9 +90,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Parameter policy.
         self._max_resamples = max_resamples
-        self._abstract_action_to_scoring_function: dict[
-            GroundOperator, ParameterScorer
-        ] = {}
+        self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
         self._parameter_scorer_class = parameter_scorer_class
         self._parameter_scorer_configs = parameter_scorer_configs
         self._parameter_dataset: defaultdict[str, list] = defaultdict(list)

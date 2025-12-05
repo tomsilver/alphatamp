@@ -1,28 +1,148 @@
 from collections import defaultdict
 
 import numpy as np
+import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
+from alphatamp.approaches.scorers.regressor_abstract_action_scorer import AbstractActionScorer
 from alphatamp.structs import GroundOperator, RelationalAbstractState, Skeleton
 
 
+def create_abstract_plan_sequence(abstract_plan: Skeleton, feature_dim: int = 2) -> tuple[np.ndarray, int]:
+    """Create a sequence embedding for an abstract plan.
+    
+    Each timestep represents a state-action pair. The sequence has shape (seq_len, feature_dim)
+    where each row is [hash(state), hash(action)].
+    
+    Args:
+        abstract_plan: The abstract plan (Skeleton) containing states and actions
+        feature_dim: Dimension of features per timestep (default: 2 for state+action)
+    
+    Returns:
+        A tuple of (sequence array of shape (seq_len, feature_dim), sequence length)
+    """
+    states, actions = abstract_plan
+    # Each timestep is a state-action pair
+    # We need at least one state (initial state), and actions correspond to transitions
+    seq_len = len(actions)  # Number of actions = number of timesteps
+    if seq_len == 0:
+        # Empty plan - return a single timestep with initial state
+        if len(states) > 0:
+            return np.array([[hash(states[0]), 0.0]], dtype=np.float32), 1
+        return np.array([[0.0, 0.0]], dtype=np.float32), 1
+    
+    sequence = []
+    for i in range(seq_len):
+        # For each action, use the state before the action and the action itself
+        state_idx = min(i, len(states) - 1)
+        state_hash = hash(states[state_idx])
+        action_hash = hash(actions[i])
+        sequence.append([float(state_hash), float(action_hash)])
+    
+    return np.array(sequence, dtype=np.float32), seq_len
+
+
 class QNetwork:
-    def __init__(self):
-        self._model = nn.Sequential(
-            nn.Linear(10, 10),
-            nn.ReLU(),
-            nn.Linear(10, 1),
+    def __init__(self, input_dim: int = 2, hidden_dim: int = 64, num_layers: int = 2, lr: float = 0.001):
+        """Initialize the Q-network with LSTM.
+        
+        Args:
+            input_dim: Dimension of input features per timestep (default: 2 for state+action)
+            hidden_dim: Dimension of hidden layers
+            num_layers: Number of LSTM layers
+            lr: Learning rate for optimizer
+        """
+        self._lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self._fc = nn.Linear(hidden_dim, 1)
+        self._optimizer = torch.optim.Adam(
+            list(self._lstm.parameters()) + list(self._fc.parameters()), 
+            lr=lr
         )
-        self._optimizer = torch.optim.Adam(self._model.parameters(), lr=0.001)
+        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._lstm.to(self._device)
+        self._fc.to(self._device)
+        self._input_dim = input_dim
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
-        return self._model(x)
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the network.
+        
+        Args:
+            x: Padded input tensor of shape (batch_size, max_seq_len, input_dim)
+            lengths: Tensor of actual sequence lengths, shape (batch_size,)
+        
+        Returns:
+            Output tensor of shape (batch_size, 1)
+        """
+        # Pack padded sequences
+        packed = pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
+        
+        # LSTM forward pass
+        lstm_out, (h_n, c_n) = self._lstm(packed)
+        
+        # Use the last hidden state from the last layer
+        # h_n shape: (num_layers, batch_size, hidden_dim)
+        last_hidden = h_n[-1]  # Take the last layer, shape: (batch_size, hidden_dim)
+        
+        # Pass through fully connected layer
+        output = self._fc(last_hidden)  # Shape: (batch_size, 1)
+        
+        return output
 
-    def train(self, features: np.ndarray, labels: np.ndarray) -> None:
+    def predict(self, abstract_plan: Skeleton) -> float:
+        """Predict Q-value for a single abstract plan.
+        
+        Args:
+            abstract_plan: The abstract plan to predict Q-value for
+        
+        Returns:
+            Predicted Q-value as a float
+        """
+        self._lstm.eval()
+        self._fc.eval()
+        with torch.no_grad():
+            sequence, seq_len = create_abstract_plan_sequence(abstract_plan, self._input_dim)
+            
+            # Convert to tensor and add batch dimension
+            x = torch.FloatTensor(sequence).unsqueeze(0).to(self._device)  # (1, seq_len, input_dim)
+            lengths = torch.tensor([seq_len], dtype=torch.long)
+            
+            prediction = self.forward(x, lengths)
+            return prediction.cpu().item()
+    
+    def train_step(
+        self, 
+        features: list[torch.Tensor], 
+        targets: torch.Tensor,
+        lengths: torch.Tensor,
+        loss_fn: nn.Module
+    ) -> float:
+        """Perform a single training step.
+        
+        Args:
+            features: List of sequence tensors, each of shape (seq_len, input_dim)
+            targets: Target Q-values tensor of shape (batch_size, 1)
+            lengths: Tensor of actual sequence lengths, shape (batch_size,)
+            loss_fn: Loss function
+        
+        Returns:
+            The loss value
+        """
+        assert loss_fn is not None
+        self._lstm.train()
+        self._fc.train()
         self._optimizer.zero_grad()
-        loss = self._model(features, labels)
+        
+        # Pad sequences to the same length
+        padded_features = pad_sequence(features, batch_first=True)  # (batch_size, max_len, input_dim)
+        padded_features = padded_features.to(self._device)
+        
+        predictions = self.forward(padded_features, lengths)
+        loss = loss_fn(predictions, targets)
         loss.backward()
+        self._optimizer.step()
+        
+        return loss.item()
 
 
 def create_marginal_q_caches() -> tuple[dict[str, float], dict[str, int]]:
@@ -59,7 +179,7 @@ def conditional_abstract_action_q_value(
     history_states: list[RelationalAbstractState],
     history_actions: list[GroundOperator],
     current_action: GroundOperator,
-    trained_abstract_action_scorers: dict[GroundOperator, ParameterScorer],
+    trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
 ) -> float:
     """Compute Q_abstract((s_{n-1}, a_{n-1}) | (s_0, a_1, s_1, a_2, ..., a_{n-2})).
 
@@ -88,14 +208,11 @@ def conditional_abstract_action_q_value(
     return conditional_abstract_plan_score
 
 
-def abstract_sequence_q_value(
+def abstract_plan_q_value(
     abstract_plan: Skeleton,
     q_value_cache: dict,
     gamma: float,
-    parameter_dataset: defaultdict[str, list],
-    trained_skill_scorers: dict[GroundOperator, ParameterScorer],
-    marginal_q_cache: dict | None = None,
-    dataset_size_cache: dict[str, int] | None = None,
+    trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
 ) -> float:
     """Recursively compute Q_abstract((s_0, a_1, s_1, a_2, ..., a_{n-1})).
 
@@ -111,10 +228,7 @@ def abstract_sequence_q_value(
         abstract_plan: The abstract plan (Skeleton) containing states and actions
         q_value_cache: Dictionary to cache Q-values for sequences (keyed by tuple representation)
         gamma: Discount factor γ for the update rule
-        parameter_dataset: Dataset mapping abstract action descriptors to parameter data
         trained_skill_scorers: Dictionary mapping abstract actions to trained parameter scorers
-        marginal_q_cache: Optional cache dictionary for marginal Q-values (keyed by action descriptor)
-        dataset_size_cache: Optional cache dictionary tracking dataset sizes (keyed by action descriptor)
 
     Returns:
         The Q_abstract value for the sequence
@@ -133,27 +247,23 @@ def abstract_sequence_q_value(
     # Get current Q-value from cache (default to 0.0 if not present)
     current_q_value = q_value_cache.get(sequence_key, 0.0)
 
-    # Compute Q̂_abstract recursively
+    # Compute Q_hat_abstract recursively
     if len(actions) == 1:
-        # Base case: single action, Q_abstract for empty prefix is 0
+        # Base case: single action, Q_abstract for empty prefix is 
         q_prefix = 0.0
     else:
         # Recursive case: compute Q_abstract for shorter sequence
         prefix_states = states[:-1]  # s_0, s_1, ..., s_{n-2}
         prefix_actions = actions[:-1]  # a_1, a_2, ..., a_{n-2}
         prefix_abstract_plan = (prefix_states, prefix_actions)
-        q_prefix = abstract_sequence_q_value(
+        q_prefix = abstract_plan_q_value(
             prefix_abstract_plan,
             q_value_cache,
             gamma,
-            parameter_dataset,
-            trained_skill_scorers,
-            marginal_q_cache,
-            dataset_size_cache,
+            trained_abstract_action_scorers,
         )
 
     # Compute conditional Q-value: Q_abstract((s_{n-1}, a_{n-1}) | history)
-    current_state = states[-1]  # s_{n-1}
     current_action = actions[-1]  # a_{n-1}
     history_states = states[:-1]  # s_0, s_1, ..., s_{n-2}
     history_actions = actions[:-1]  # a_1, a_2, ..., a_{n-2}
@@ -161,15 +271,11 @@ def abstract_sequence_q_value(
     conditional_q_value = conditional_abstract_action_q_value(
         history_states,
         history_actions,
-        current_state,
         current_action,
-        parameter_dataset,
-        trained_skill_scorers,
-        marginal_q_cache,
-        dataset_size_cache,
+        trained_abstract_action_scorers,
     )
 
-    # Compute Q̂_abstract
+    # Compute Q_hat_abstract
     q_hat = q_prefix + conditional_q_value
 
     # Update Q-value using the update rule
@@ -181,6 +287,121 @@ def abstract_sequence_q_value(
     return updated_q_value
 
 
-def estimated_abstract_plan_q_value(abstract_plan: Skeleton, q_function: QNetwork):
-    """Estimate the Q-value for an abstract plan."""
-    pass
+def estimated_abstract_plan_q_value(abstract_plan: Skeleton, q_network: QNetwork) -> float:
+    """Estimate the Q-value for an abstract plan using the trained Q-network.
+    
+    Args:
+        abstract_plan: The abstract plan (Skeleton) to estimate Q-value for
+        q_network: The trained Q-network
+    
+    Returns:
+        The estimated Q-value
+    """
+    return q_network.predict(abstract_plan)
+
+
+def train_q_network(
+    q_network: QNetwork,
+    abstract_plans: list[Skeleton],
+    q_value_cache: dict,
+    gamma: float,
+    trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
+    batch_size: int = 32,
+    num_epochs: int = 10,
+    verbose: bool = True,
+) -> list[float]:
+    """Train the Q-network to regress onto abstract_plan_q_value.
+    
+    Args:
+        q_network: The Q-network to train
+        abstract_plans: List of abstract plans to use for training
+        q_value_cache: Dictionary to cache Q-values for sequences
+        gamma: Discount factor for the update rule
+        trained_abstract_action_scorers: Dictionary mapping abstract actions to trained abstract action scorers
+        batch_size: Batch size for training
+        num_epochs: Number of training epochs
+        verbose: Whether to print training progress
+    
+    Returns:
+        List of average losses per epoch
+    """
+    # Compute target Q-values for all abstract plans
+    if verbose:
+        print("Computing target Q-values...")
+    
+    target_q_values = []
+    valid_plans = []
+    
+    for abstract_plan in abstract_plans:
+        try:
+            target_q = abstract_plan_q_value(
+                abstract_plan,
+                q_value_cache,
+                gamma,
+                trained_abstract_action_scorers,
+            )
+            target_q_values.append(target_q)
+            valid_plans.append(abstract_plan)
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Skipping plan due to error: {e}")
+            continue
+    
+    if len(valid_plans) == 0:
+        raise ValueError("No valid abstract plans for training")
+    
+    # Convert abstract plans to sequence embeddings
+    if verbose:
+        print("Converting abstract plans to sequences...")
+    
+    sequences = []
+    sequence_lengths = []
+    for plan in valid_plans:
+        sequence, seq_len = create_abstract_plan_sequence(plan, q_network._input_dim)
+        sequences.append(torch.FloatTensor(sequence))
+        sequence_lengths.append(seq_len)
+    
+    # Convert targets to tensor
+    targets_tensor = torch.FloatTensor(np.array(target_q_values)).unsqueeze(1).to(q_network._device)
+    
+    # Training loop
+    if verbose:
+        print(f"Training Q-network on {len(valid_plans)} plans for {num_epochs} epochs...")
+    
+    epoch_losses = []
+    loss_fn = nn.MSELoss()
+    
+    # Create indices for shuffling
+    num_samples = len(sequences)
+    indices = np.arange(num_samples)
+    
+    for epoch in range(num_epochs):
+        epoch_loss = 0.0
+        num_batches = 0
+        
+        # Shuffle data
+        np.random.shuffle(indices)
+        
+        # Train in batches
+        for i in range(0, num_samples, batch_size):
+            batch_indices = indices[i:i + batch_size]
+            
+            # Get batch sequences and lengths
+            batch_sequences = [sequences[idx] for idx in batch_indices]
+            batch_lengths = torch.tensor([sequence_lengths[idx] for idx in batch_indices], dtype=torch.long)
+            batch_targets = targets_tensor[batch_indices]
+            
+            loss = q_network.train_step(batch_sequences, batch_targets, batch_lengths, loss_fn)
+            epoch_loss += loss
+            num_batches += 1
+        
+        avg_loss = epoch_loss / num_batches if num_batches > 0 else 0.0
+        epoch_losses.append(avg_loss)
+        
+        if verbose and (epoch + 1) % max(1, num_epochs // 10) == 0:
+            print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
+    
+    if verbose:
+        print("Training completed!")
+    
+    return epoch_losses

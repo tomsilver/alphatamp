@@ -7,12 +7,12 @@ from sklearn.exceptions import NotFittedError
 from sklearn.neural_network import MLPClassifier
 from sklearn.utils.validation import check_is_fitted
 
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
+from alphatamp.approaches.scorers.base_scorer import BaseScorer
 
 _O = TypeVar("_O")  # observation
 
 
-class ClassifierScorer(ParameterScorer):
+class ClassifierParameterScorer(BaseScorer):
     """A parameter scorer that uses a MLP classifier for scoring."""
 
     def __init__(self, configs: dict, saved_classifier=None):
