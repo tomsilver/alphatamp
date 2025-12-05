@@ -25,7 +25,7 @@ def test_generalized_oracle_approach():
         "clutteredstorage2d",
         env.observation_space,
         env.action_space,
-        num_blocks=15,
+        num_blocks=7,
     )
 
     # Create the approach.

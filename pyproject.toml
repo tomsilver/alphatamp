@@ -27,7 +27,6 @@ dependencies = [
    "kinder-models",
 ]
 
-
 [project.optional-dependencies]
 develop = [
     "black",
