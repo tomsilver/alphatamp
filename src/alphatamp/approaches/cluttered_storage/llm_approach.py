@@ -129,7 +129,6 @@ class LLMAbstractPlanGenerator(
                 "temperature": 0.0,
             },
         )
-
         plan_fn = synthesize_python_function_with_llm(
             model=self._llm,
             function_name="generate_oracle_plan",
