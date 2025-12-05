@@ -36,7 +36,7 @@ from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
-from alphatamp.structs import GroundOperator, Skeleton
+from alphatamp.structs import GroundOperator, Skeleton, FrozenSkeleton
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -102,6 +102,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Abstract Plan Dataset
         self._abstract_plan_dataset: list = []
 
+        # Abstract Skill Dataset
+        self._abstract_skill_dataset: defaultdict[str, defaultdict[FrozenSkeleton, int]] = defaultdict(lambda: defaultdict(int))
+
     def reset(
         self,
         obs: _O,
@@ -153,7 +156,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Store last successful parameter
             self._add_most_recent_parameter_to_dataset("success")
             self._add_abstract_plan_to_dataset("success")
-            # self.train_parameter_policy(self._parameter_dataset)
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -218,9 +220,23 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
         assert self._last_observation is not None
         label = 1 if training_label == "success" else 0
+
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
             (self._last_observation, self._most_recent_parameter, label)
         )
+
+    def _add_most_recent_abstract_action_to_dataset(self, training_label: str):
+        """Label the abstract action as successful (1) or failure (0)."""
+        assert self._most_recent_abstract_action_descriptor
+        assert self._current_abstract_plan
+
+        label = 0 if training_label == "success" else 1
+
+        prev_abstract_states = tuple(self._current_abstract_plan[0][: self._current_abstract_plan_step])
+        prev_abstract_actions = tuple(self._current_abstract_plan[1][: self._current_abstract_plan_step])
+
+        # Store the number of times the abstract action given the previous abstract plan needed to be resampled.
+        self._abstract_skill_dataset[self._most_recent_abstract_action_descriptor][(prev_abstract_states, prev_abstract_actions)] += label
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -280,6 +296,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             # If we have reached the next abstract state, advance the current plan step.
             if s == ns:
+                self._add_most_recent_abstract_action_to_dataset("success")
                 self._add_abstract_plan_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
@@ -304,26 +321,31 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         assert self._current_controller
 
-        # Try to take a low-level action from the controller.
-        try:
-            # Take one more low-level action.
-            self._last_action = self._current_controller.step()
-            assert self._last_action is not None
+        for attempt_num in range(self._max_resamples):
+            # Try to take a low-level action from the controller.
+            try:
+                # Take one more low-level action.
+                self._last_action = self._current_controller.step()
+                assert self._last_action is not None
 
-            # If low-level action is successful, store it.
-            if self._train_or_eval == "train":
-                self._add_most_recent_parameter_to_dataset("success")
+                # If low-level action is successful, store it.
+                if self._train_or_eval == "train":
+                    self._add_most_recent_parameter_to_dataset("success")
 
-            return self._last_action
-        # If low level action failed, store the parameter that failed!
-        except (TrajectorySamplingFailure, IndexError) as e:
-            # If training, store the previous parameter.
-            if self._train_or_eval == "train":
-                self._add_most_recent_parameter_to_dataset("failure")
-                self._add_abstract_plan_to_dataset("failure")
+                return self._last_action
+            # If low level action failed, store the parameter that failed!
+            except (TrajectorySamplingFailure, IndexError) as e:
+                # If training, store the previous parameter.
+                if self._train_or_eval == "train":  
+                    self._add_most_recent_abstract_action_to_dataset("failure")
+                    self._add_most_recent_parameter_to_dataset("failure")
+                    self._add_abstract_plan_to_dataset("failure")
 
-            # Raise ApproachStepError
-            raise ApproachStepError("Trajectory Error!", e)
+                if attempt_num == self._max_resamples - 1:
+                    # Raise ApproachStepError
+                    raise ApproachStepError("Trajectory Error!", e)
+                
+        raise RuntimeError("Should not reach this point")
 
     def step(self) -> _U:
         """Get the next action to take."""
@@ -342,6 +364,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan_dataset(self) -> list:
         """Return the collected abstract plan dataset."""
         return self._abstract_plan_dataset
+    
+    def get_abstract_skill_dataset(self) -> defaultdict[str, defaultdict[Skeleton, int]]:
+        """Return the collected abstract skill dataset."""
+        return self._abstract_skill_dataset
 
     def save_datasets(self, directory: str | Path) -> None:
         """Save the collected dataset to disk as a pickle."""
@@ -351,6 +377,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         datasets = {
             "parameter_dataset.pkl": dict(self._parameter_dataset),
             "abstract_plan_dataset.pkl": self._abstract_plan_dataset,
+            "abstract_skill_dataset.pkl": {k: list(v.items()) for k, v in self._abstract_skill_dataset.items()},
         }
 
         for filename, data in datasets.items():
