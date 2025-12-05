@@ -1,5 +1,5 @@
 """
-llm_ppl_approach.py
+Approach that uses an LLM to generate an policy, given the oracle in the prompt
 """
 
 # -- from generalized oracle -- 
@@ -115,8 +115,8 @@ class LLMOracleAbstractPlanGenerator(
         # prpl-llm-utils expects a Query, not a raw string
         query = Query(
             prompt=prompt,
-            imgs=None,
-            hyperparameters={"temperature": 0.0},
+            imgs=None, # look into this 
+            hyperparameters={"temperature": 0.0, },
         )
         # THIS ARG ORDER MATTERS:
         #   model, function_name, examples, prompt, reprompt_checks
@@ -129,9 +129,257 @@ class LLMOracleAbstractPlanGenerator(
         return plan_fn
     
     def _build_prompt(self, s0: RelationalAbstractState) -> str:
-        ops = "\n".join(f"- {op.name}" for op in self._env_models.operators)
+        # Include operator signatures with parameter types and order
+        ops = "\n".join(
+            f"- {op.name}({', '.join(f'{p.name}:{p.type.name}' for p in op.parameters)})"
+            for op in self._env_models.operators
+        )
         obs = "\n".join(f"- {obj.name} ({obj.type.name})" for obj in sorted(s0.objects, key=lambda o: o.name))
         prompt = f"""
+You are an oracle high-level planner for a Sesame TAMP system.
+
+-------------------------------------
+Operators:
+{ops}
+
+Objects:
+{obs}
+-------------------------------------
+
+Object API
+----------
+Each obj has:
+- obj.name  (e.g., "block0")
+- obj.type.name  (e.g., "target_block")
+Never use obj.type_name.                    # interesting that I need to add this, 
+
+Task
+----
+Write a Python function that returns a FIXED abstract plan (list of action dicts),
+ignoring the goal. Each action dict:
+
+{{
+  "operator_name": "<operator in env_models.operators>",
+  "arguments": ["obj1", "obj2", ...]  # object names from abstract_state
+}}
+
+DEBUG BASELINE (ALWAYS THE SAME)
+--------------------------------
+1. Select objects exactly as:
+
+    robot = next(o for o in abstract_state.objects if o.type.name=="crv_robot")
+    shelf = next(o for o in abstract_state.objects if o.type.name=="shelf")
+    blocks = sorted(
+        [o for o in abstract_state.objects if o.type.name=="target_block"],
+        key=lambda o: o.name
+    )
+    block0, block1, block2 = blocks[:3]
+
+2. Return this fixed plan:
+
+    [
+      {{"operator_name":"PickBlockOnShelf",
+       "arguments":[robot.name, block0.name, shelf.name]}},
+      {{"operator_name":"PlaceBlockNotOnShelf",
+       "arguments":[robot.name, block0.name, shelf.name]}},
+      {{"operator_name":"PickBlockNotOnShelf",
+       "arguments":[robot.name, block0.name, shelf.name]}},
+      {{"operator_name":"PlaceBlockOnShelf",
+       "arguments":[robot.name, block0.name, shelf.name]}},
+
+      {{"operator_name":"PickBlockNotOnShelf",
+       "arguments":[robot.name, block1.name, shelf.name]}},
+      {{"operator_name":"PlaceBlockOnShelf",
+       "arguments":[robot.name, block1.name, shelf.name]}},
+
+      {{"operator_name":"PickBlockNotOnShelf",
+       "arguments":[robot.name, block2.name, shelf.name]}},
+      {{"operator_name":"PlaceBlockOnShelf",
+       "arguments":[robot.name, block2.name, shelf.name]}},
+    ]
+
+Function Signature
+------------------
+from typing import List, Dict, Any
+
+def generate_oracle_plan(abstract_state, goal, env_models) -> List[Dict[str, Any]]:
+    \"\"\"
+    Return the fixed debug plan above.
+    Use obj.type.name.
+    Use operator names exactly as in env_models.operators.
+    Ignore the goal completely.
+    \"\"\"
+"""
+#---------------------------------------------------------------------------------------------
+
+        prompt2 = f"""
+You are an oracle high-level planner for a Sesame TAMP system.
+-------------------------------------
+Operators (with parameter order):
+{ops}
+
+Objects:
+{obs}
+-------------------------------------
+Task
+----
+Write a Python function that returns a FIXED abstract plan (list of action dicts),
+ignoring the goal. Each action dict:
+
+{{
+  "operator_name": "<operator name>",
+  "arguments": ["obj1", "obj2", ...]  # MUST match operator parameter order!
+}}
+
+Function Signature
+------------------
+from typing import List, Dict, Any
+
+def generate_oracle_plan(abstract_state, goal, env_models) -> List[Dict[str, Any]]:
+    \"\"\"
+    Return a plan that places all the blocks on the shelf.
+    There are some existing blocks in the shelf that you should remove first.
+    Use operator names exactly as in env_models.operators.
+    Ignore the goal completely.
+    \"\"\"
+    
+"""
+        return prompt2.strip()
+
+    def _ground(self, llm_plan: List[Dict[str, Any]], 
+                s0: RelationalAbstractState) -> list[GroundOperator]:
+        name_to_op = {s.operator.name: s.operator for s in self._env_models.skills}
+        name_to_obj = {obj.name: obj for obj in s0.objects}
+        actions = []
+        for step in llm_plan:
+            op = name_to_op[step["operator_name"]]
+            objs = [name_to_obj[n] for n in step["arguments"]]
+            actions.append(op.ground(tuple(objs)))
+        return actions
+
+class GeneralizedLLMOracleApproach(BaseApproach[_O, _X, _U]):
+    """Uses an oracle skeleton generator policy for abstract planning."""
+
+    def __init__(
+        self,
+        env_models: SesameModels,
+        seed: int,
+        max_abstract_plans: int = 10,
+        samples_per_step: int = 10,
+        max_skill_horizon: int = 100,
+        heuristic_name: str = "hff",
+        skeleton_batch_size: int = 100,
+        num_training_skeletons_per_problem: int = 10,
+        training_planning_timeout: float = 5,
+    ):
+        super().__init__(env_models, seed)
+        self._max_abstract_plans = max_abstract_plans
+        self._samples_per_step = samples_per_step
+        self._max_skill_horizon = max_skill_horizon
+        self._heuristic_name = heuristic_name
+        self._skeleton_batch_size = skeleton_batch_size
+        self._num_training_skeletons_per_problem = num_training_skeletons_per_problem
+        self._training_planning_timeout = training_planning_timeout
+
+        # Create the planning components.
+
+        # Create the sampler.
+        self._trajectory_sampler = ParameterizedControllerTrajectorySampler(
+            controller_generator=RelationalControllerGenerator(self._env_models.skills),
+            transition_function=self._env_models.transition_fn,
+            state_abstractor=self._env_models.state_abstractor,
+            max_trajectory_steps=self._max_skill_horizon,
+        )
+
+        # Create the llm
+        cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
+        llm = OpenAIModel("gpt-4.1", cache) # use a better model
+        # Create the abstract plan generator.
+        self._abstract_plan_generator: AbstractPlanGenerator = (
+            LLMOracleAbstractPlanGenerator(
+                self._env_models,
+                seed=self._seed,
+                llm=llm,
+            )
+        )
+
+        # Create the abstract successor function (not really used).
+        self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
+            self._env_models.operators
+        )
+
+        # Finish the planner.
+        # Sesame planner uses operators to check symbolic feasbility and calls skills
+        # using the sampler to attempt low-level roll-outs
+        self._planner = SesamePlanner(
+            self._abstract_plan_generator,
+            self._trajectory_sampler,
+            self._max_abstract_plans,
+            self._samples_per_step,
+            self._abstract_successor_fn,
+            self._env_models.state_abstractor,
+            seed=self._seed,
+        )
+
+    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
+        pass
+
+    def _run_planning(
+        self, problem: PlanningProblem[_X, _U], timeout: float
+    ) -> Plan[_X, _U]:
+
+        # Run the planner.
+        plan, _ = self._planner.run(problem, timeout=timeout)
+        if plan is None:
+            raise TimeoutError("No plan found")
+
+        return plan
+
+
+
+""" High level next steps:
+0. Sesame model is a base class that defines the interface between high level and low level
+1. Env model is a SesameModel object, specified for the environment
+2. I need to create a prompt that contains the skills, operators, parameters of the specific env model
+3. Once I have this prompt, how is the planning being done?
+
+With regular approach
+Abstract successor function defines what is possible -> Generate plans --> Sample plans
+
+With oracle approach
+Abstract successor function (useless) --> plan is hardcoded
+
+With LLM approach
+Abstract successor function defines what is possible --> LLM needs to factor this in and generate a plan --> sample plan 
+"""
+
+"""
+Goal: Instead of a handwritten oracle plan, use an LLM that sees the 
+Sesame models + current state + goal and return an abstract plan that 
+Sesame can execute
+
+Steps:
+1. Define an LLMORacleAbstractPlanGenerator that implements the same
+    interface as my current oracle generator, but calls an LLM
+
+2. Wrap that in an LLMOracleApproach that builds SesamePlanner with 
+    this generator
+
+3. Reuse the synthesize_python_function_with_llm pattern from 
+    llm_ppl_approach.py
+
+Data Flow:
+1. PRBench gives me a PlanningProblem with the env, a SesameModels instance
+a goal, and an initial relational abstract state
+
+2. My approach builds a Plan generator, then a sesame planner
+
+3. When sesamePlanner.run() is called, it asks the abstract plan generator
+    for candidate plans. For each plan, I do feasabiliyy checks and rollouts
+
+"""
+
+"""
 You are an oracle symbolic planner for a Sesame-based task-and-motion planning system.
 
 -------------------------------------
@@ -225,138 +473,4 @@ def generate_oracle_plan(abstract_state, goal, env_models) -> List[Dict[str, Any
     - Use operator_name strings that exactly match env_models.operators.
     \"\"\"
     ...
-"""
-        return prompt.strip()
-
-    def _ground(self, llm_plan: List[Dict[str, Any]], 
-                s0: RelationalAbstractState) -> list[GroundOperator]:
-        name_to_op = {s.operator.name: s.operator for s in self._env_models.skills}
-        name_to_obj = {obj.name: obj for obj in s0.objects}
-        actions = []
-        for step in llm_plan:
-            op = name_to_op[step["operator_name"]]
-            objs = [name_to_obj[n] for n in step["arguments"]]
-            actions.append(op.ground(tuple(objs)))
-        return actions
-
-class GeneralizedLLMOracleApproach(BaseApproach[_O, _X, _U]):
-    """Uses an oracle skeleton generator policy for abstract planning."""
-
-    def __init__(
-        self,
-        env_models: SesameModels,
-        seed: int,
-        max_abstract_plans: int = 10,
-        samples_per_step: int = 10,
-        max_skill_horizon: int = 100,
-        heuristic_name: str = "hff",
-        skeleton_batch_size: int = 100,
-        num_training_skeletons_per_problem: int = 10,
-        training_planning_timeout: float = 5,
-    ):
-        super().__init__(env_models, seed)
-        self._max_abstract_plans = max_abstract_plans
-        self._samples_per_step = samples_per_step
-        self._max_skill_horizon = max_skill_horizon
-        self._heuristic_name = heuristic_name
-        self._skeleton_batch_size = skeleton_batch_size
-        self._num_training_skeletons_per_problem = num_training_skeletons_per_problem
-        self._training_planning_timeout = training_planning_timeout
-
-        # Create the planning components.
-
-        # Create the sampler.
-        self._trajectory_sampler = ParameterizedControllerTrajectorySampler(
-            controller_generator=RelationalControllerGenerator(self._env_models.skills),
-            transition_function=self._env_models.transition_fn,
-            state_abstractor=self._env_models.state_abstractor,
-            max_trajectory_steps=self._max_skill_horizon,
-        )
-
-        # Create the llm
-        cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
-        llm = OpenAIModel("gpt-4o-mini", cache)
-        # Create the abstract plan generator.
-        self._abstract_plan_generator: AbstractPlanGenerator = (
-            LLMOracleAbstractPlanGenerator(
-                self._env_models,
-                seed=self._seed,
-                llm=llm,
-            )
-        )
-
-        # Create the abstract successor function (not really used).
-        self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
-            self._env_models.operators
-        )
-
-        # Finish the planner.
-        # Sesame planner uses operators to check symbolic feasbility and calls skills
-        # using the sampler to attempt low-level roll-outs
-        self._planner = SesamePlanner(
-            self._abstract_plan_generator,
-            self._trajectory_sampler,
-            self._max_abstract_plans,
-            self._samples_per_step,
-            self._abstract_successor_fn,
-            self._env_models.state_abstractor,
-            seed=self._seed,
-        )
-
-    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        pass
-
-    def _run_planning(
-        self, problem: PlanningProblem[_X, _U], timeout: float
-    ) -> Plan[_X, _U]:
-
-        # Run the planner.
-        plan, _ = self._planner.run(problem, timeout=timeout)
-        if plan is None:
-            raise TimeoutError("No plan found")
-
-        return plan
-
-
-
-""" High level next steps:
-0. Sesame model is a base class that defines the interface between high level and low level
-1. Env model is a SesameModel object, specified for the environment
-2. I need to create a prompt that contains the skills, operators, parameters of the specific env model
-3. Once I have this prompt, how is the planning being done?
-
-With regular approach
-Abstract successor function defines what is possible -> Generate plans --> Sample plans
-
-With oracle approach
-Abstract successor function (useless) --> plan is hardcoded
-
-With LLM approach
-Abstract successor function defines what is possible --> LLM needs to factor this in and generate a plan --> sample plan 
-"""
-
-"""
-Goal: Instead of a handwritten oracle plan, use an LLM that sees the 
-Sesame models + current state + goal and return an abstract plan that 
-Sesame can execute
-
-Steps:
-1. Define an LLMORacleAbstractPlanGenerator that implements the same
-    interface as my current oracle generator, but calls an LLM
-
-2. Wrap that in an LLMOracleApproach that builds SesamePlanner with 
-    this generator
-
-3. Reuse the synthesize_python_function_with_llm pattern from 
-    llm_ppl_approach.py
-
-Data Flow:
-1. PRBench gives me a PlanningProblem with the env, a SesameModels instance
-a goal, and an initial relational abstract state
-
-2. My approach builds a Plan generator, then a sesame planner
-
-3. When sesamePlanner.run() is called, it asks the abstract plan generator
-    for candidate plans. For each plan, I do feasabiliyy checks and rollouts
-
 """
