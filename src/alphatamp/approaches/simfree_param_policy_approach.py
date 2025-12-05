@@ -36,7 +36,7 @@ from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
-from alphatamp.structs import GroundOperator, Skeleton, FrozenSkeleton
+from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -103,7 +103,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: list = []
 
         # Abstract Skill Dataset
-        self._abstract_skill_dataset: defaultdict[str, defaultdict[FrozenSkeleton, int]] = defaultdict(lambda: defaultdict(int))
+        self._abstract_skill_dataset: defaultdict[
+            str, defaultdict[FrozenSkeleton, int]
+        ] = defaultdict(lambda: defaultdict(int))
 
     def reset(
         self,
@@ -168,7 +170,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
-    def _generate_training_data(
+    def _generate_parameter_scorer_training_data(
         self, features_and_labels: list
     ) -> tuple[np.ndarray, np.ndarray]:
         """Reformat training data into numpy arrays."""
@@ -208,7 +210,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 features_and_labels = parameter_dataset[abstract_action_descriptor]
 
                 # Generate training data.
-                features, labels = self._generate_training_data(features_and_labels)
+                features, labels = self._generate_parameter_scorer_training_data(
+                    features_and_labels
+                )
 
                 # Train the scoring function for each grounded skill.
                 scoring_function.train(features, labels)
@@ -232,11 +236,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         label = 0 if training_label == "success" else 1
 
-        prev_abstract_states = tuple(self._current_abstract_plan[0][: self._current_abstract_plan_step])
-        prev_abstract_actions = tuple(self._current_abstract_plan[1][: self._current_abstract_plan_step])
+        prev_abstract_states = tuple(
+            self._current_abstract_plan[0][: self._current_abstract_plan_step]
+        )
+        prev_abstract_actions = tuple(
+            self._current_abstract_plan[1][: self._current_abstract_plan_step]
+        )
 
         # Store the number of times the abstract action given the previous abstract plan needed to be resampled.
-        self._abstract_skill_dataset[self._most_recent_abstract_action_descriptor][(prev_abstract_states, prev_abstract_actions)] += label
+        self._abstract_skill_dataset[self._most_recent_abstract_action_descriptor][
+            (prev_abstract_states, prev_abstract_actions)
+        ] += label
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -244,9 +254,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 1 if training_label == "success" else 0
 
         # Add the completed abstract plan up to the point where this function is called
-        self._abstract_plan_dataset.append(
-            (self._current_abstract_plan[: self._current_abstract_plan_step + 1], label)
+        abstract_states = tuple(
+            self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
         )
+        abstract_actions = tuple(
+            self._current_abstract_plan[1][: self._current_abstract_plan_step + 1]
+        )
+        self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -336,7 +350,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # If low level action failed, store the parameter that failed!
             except (TrajectorySamplingFailure, IndexError) as e:
                 # If training, store the previous parameter.
-                if self._train_or_eval == "train":  
+                if self._train_or_eval == "train":
                     self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
@@ -344,7 +358,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 if attempt_num == self._max_resamples - 1:
                     # Raise ApproachStepError
                     raise ApproachStepError("Trajectory Error!", e)
-                
+
         raise RuntimeError("Should not reach this point")
 
     def step(self) -> _U:
@@ -364,10 +378,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan_dataset(self) -> list:
         """Return the collected abstract plan dataset."""
         return self._abstract_plan_dataset
-    
-    def get_abstract_skill_dataset(self) -> defaultdict[str, defaultdict[Skeleton, int]]:
+
+    def get_abstract_skill_dataset(
+        self,
+    ) -> defaultdict[str, defaultdict[FrozenSkeleton, int]]:
         """Return the collected abstract skill dataset."""
         return self._abstract_skill_dataset
+
+    def _create_abstract_plan_embedding(
+        self, abstract_plan: Skeleton | FrozenSkeleton
+    ) -> np.ndarray:
+        """Create a embedding for an abstract plan."""
+        return np.array(
+            [hash(state) for state in abstract_plan[0]]
+            + [hash(action) for action in abstract_plan[1]]
+        )
 
     def save_datasets(self, directory: str | Path) -> None:
         """Save the collected dataset to disk as a pickle."""
@@ -376,8 +401,20 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         datasets = {
             "parameter_dataset.pkl": dict(self._parameter_dataset),
-            "abstract_plan_dataset.pkl": self._abstract_plan_dataset,
-            "abstract_skill_dataset.pkl": {k: list(v.items()) for k, v in self._abstract_skill_dataset.items()},
+            "abstract_plan_dataset.pkl": list(
+                (self._create_abstract_plan_embedding(abstract_plan), training_label)
+                for abstract_plan, training_label in self._abstract_plan_dataset
+            ),
+            "abstract_skill_dataset.pkl": {
+                k: list(
+                    (
+                        self._create_abstract_plan_embedding(abstract_plan),
+                        resample_count,
+                    )
+                    for abstract_plan, resample_count in v.items()
+                )
+                for k, v in self._abstract_skill_dataset.items()
+            },
         }
 
         for filename, data in datasets.items():
