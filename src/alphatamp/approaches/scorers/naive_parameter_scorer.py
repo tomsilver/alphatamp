@@ -18,6 +18,6 @@ class NaiveParameterScorer(BaseScorer):
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
 
-    def score(self, obs: _O, parameter: Any) -> float:
+    def score(self, obs: _O, parameter: Any, *args, **kwargs) -> float:
         """Score the parameter given the low-level observation."""
         return 1

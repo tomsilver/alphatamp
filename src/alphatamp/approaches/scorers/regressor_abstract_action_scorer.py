@@ -1,7 +1,5 @@
 """An abstract action scorer that uses a MLP for scoring."""
 
-from typing import Any, TypeVar
-
 import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.neural_network import MLPRegressor
@@ -32,7 +30,7 @@ class AbstractActionScorer(BaseScorer):
             + [hash(action) for action in abstract_plan[1]]
         )
 
-    def score(self, previous_abstract_plan: Skeleton) -> float:
+    def score(self, previous_abstract_plan: Skeleton, *args, **kwargs) -> float:
         """Score the action given the previous abstract plan."""
 
         try:

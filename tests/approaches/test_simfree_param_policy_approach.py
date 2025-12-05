@@ -18,7 +18,9 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
 )
-from alphatamp.approaches.scorers.classifier_parameter_scorer import ClassifierParameterScorer
+from alphatamp.approaches.scorers.classifier_parameter_scorer import (
+    ClassifierParameterScorer,
+)
 from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,

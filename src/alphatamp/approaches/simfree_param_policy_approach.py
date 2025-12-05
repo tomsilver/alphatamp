@@ -241,7 +241,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan[1][: self._current_abstract_plan_step]
         )
 
-        # Store the number of times the abstract action given the previous abstract plan needed to be resampled.
+        # Store the number of times the abstract action
+        # given the previous abstract plan needed to be resampled.
         self._abstract_skill_dataset[self._most_recent_abstract_action_descriptor][
             (prev_abstract_states, prev_abstract_actions)
         ] += label

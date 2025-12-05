@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 from bilevel_planning.structs import ParameterizedController
 from matplotlib.pylab import Generator
 
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
+from alphatamp.approaches.scorers.base_scorer import BaseScorer
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -18,7 +18,7 @@ class ParameterPolicy:
     def __init__(
         self,
         controller: ParameterizedController,
-        scoring_function: ParameterScorer,
+        scoring_function: BaseScorer,
         param_sample_count=10,
     ) -> None:
         self._controller = controller
