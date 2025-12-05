@@ -35,12 +35,12 @@ def main(cfg: DictConfig):
         cfg.env.model_name,
         env.observation_space,
         env.action_space,
-        **cfg.env.model_kwargs # unpacks dict into keyword args
+        **cfg.env.model_kwargs,  # unpacks dict into keyword args
     )
 
     # Build approach
     approach = hydra.utils.instantiate(cfg.approach, env_models, seed)
-    approach.train(obs) 
+    approach.train(obs)
 
     metrics = _run_task_evaluation(
         env=env, approach=approach, obs=obs, timeout=float(cfg.timeout_sec)

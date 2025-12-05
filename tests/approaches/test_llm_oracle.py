@@ -2,6 +2,7 @@
 
 import imageio.v2 as iio
 import prbench
+import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
@@ -10,7 +11,10 @@ from alphatamp.approaches.cluttered_storage.llm_approach import (
     GeneralizedLLMOracleApproach,
 )
 
+runllms = pytest.mark.skipif("not config.getoption('runllms')")
 
+
+@runllms
 def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
@@ -31,11 +35,11 @@ def test_generalized_oracle_approach():
 
     # Create the approach.
     approach = GeneralizedLLMOracleApproach(
-        env_models, seed=123, samples_per_step=10, training_planning_timeout=10
+        env_models, seed=120, samples_per_step=10, training_planning_timeout=10
     )
 
     # Train the approach
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=120)
 
     img = env.render()
     iio.imsave("debug.png", img)
@@ -53,4 +57,4 @@ def test_generalized_oracle_approach():
     else:
         assert False, "Plan did not succeed"
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
