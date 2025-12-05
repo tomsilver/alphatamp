@@ -202,8 +202,8 @@ def test_parameter_dataset_simfree_feasibility_approach():
 
     assert parameter_dataset, "Did not find any parameters"
 
-    path = Path("tests/datasets/success_classifier_parameter_dataset.pkl")
-    approach.save_parameter_dataset(path)
+    path = Path("tests/datasets/")
+    approach.save_datasets(path)
 
     # Eval.
     obs, _ = env.reset(seed=124)
@@ -330,6 +330,7 @@ def test_train_scorer_simfree_feasbility_approach():
     assert task_completed, "Plan did not succeed"
     env.close()
 
+
 def test_abstract_plan_dataset_simfree_feasibility_approach():
     """Tests for SimFreeParamPolicyApproach()."""
 
@@ -338,7 +339,9 @@ def test_abstract_plan_dataset_simfree_feasibility_approach():
     env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-abstract_plan")
+        env = RecordVideo(
+            env, "unit_test_videos", name_prefix="param-policy-abstract_plan"
+        )
 
     env_models = create_bilevel_planning_models(
         "clutteredretrieval2d",
@@ -408,104 +411,4 @@ def test_abstract_plan_dataset_simfree_feasibility_approach():
     abstract_plan_dataset = approach.get_abstract_plan_dataset()
 
     assert abstract_plan_dataset, "Did not find any parameters"
-    env.close()
-
-
-def test_train_scorer_simfree_feasbility_approach():
-    """Tests for SimFreeParamPolicyApproach()."""
-
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
-
-    if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-training")
-
-    env_models = create_bilevel_planning_models(
-        "clutteredretrieval2d",
-        env.observation_space,
-        env.action_space,
-        num_obstructions=10,
-    )
-
-    sim_free_env_models = sesame_models_to_sim_free(env_models)
-
-    # Create the naive classifier.
-    filter_classifier = FilterFeasibilityClassifier()
-
-    # Filter bad abstract plans
-    filtered_action_strs = [
-        ("PickTgt", 0),
-        ("target_block", 0),
-        ("obstruction5", 0),
-        ("obstruction6", 0),
-    ]
-    filter_classifier.update_classifier(None, filtered_action_strs)
-
-    # Create the naive feasibility learner.
-    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
-        filter_classifier
-    )
-
-    # Create the train explorer.
-    train_explorer = ExploitExplorer(
-        sim_free_env_models, filter_feasibility_classifier, 123
-    )
-
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
-
-    # Create the approach.
-    approach = SimFreeParamPolicyApproach(
-        env_models=sim_free_env_models,
-        feasibility_classifier_learner=filter_feasibility_classifier,
-        train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
-        parameter_scorer_configs={"configs": configs},
-        seed=123,
-    )
-
-    # Eval.
-    obs, _ = env.reset(seed=123)
-
-    # Reset the approach on the observation.
-    approach.eval()
-    approach.reset(obs, {})
-
-    # Load in successful training dataset from pickle.
-    path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
-    success_dataset = approach.load_parameter_dataset(path)
-
-    # Load in unsuccessful training dataset from pickle.
-    path = Path("tests/datasets") / "failure_classifier_parameter_dataset.pkl"
-    failure_dataset = approach.load_parameter_dataset(path)
-
-    # Train the scorer on both datasets.
-    combined_dataset = defaultdict(list)
-    for abstract_action, data in chain(
-        success_dataset.items(), failure_dataset.items()
-    ):
-        combined_dataset[abstract_action].extend(data)
-
-    approach.train_parameter_policy(combined_dataset)
-
-    # Evaluate the approach on environment.
-    start_time = time.time()
-    timeout = 10
-    task_completed = False
-    while time.time() - start_time < timeout:
-        try:
-            action = approach.step()
-        except ApproachStepError:
-            break
-
-        obs, reward, done, _, _ = env.step(action)
-
-        # Given new observation from the environment, update the approach
-        approach.update(obs, float(reward), done, {})
-        if done:
-            task_completed = True
-            break
-
-    assert task_completed, "Plan did not succeed"
     env.close()

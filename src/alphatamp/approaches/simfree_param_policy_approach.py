@@ -2,8 +2,6 @@
 
 import pickle
 from collections import defaultdict
-import pickle
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -230,7 +228,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 1 if training_label == "success" else 0
 
         # Add the completed abstract plan up to the point where this function is called
-        self._abstract_plan_dataset.append((self._current_abstract_plan[:self._current_abstract_plan_step + 1], label))
+        self._abstract_plan_dataset.append(
+            (self._current_abstract_plan[: self._current_abstract_plan_step + 1], label)
+        )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
