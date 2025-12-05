@@ -11,10 +11,8 @@ from alphatamp.approaches.cluttered_storage.llm_approach import (
     GeneralizedLLMOracleApproach,
 )
 
-runllms = pytest.mark.skipif("not config.getoption('runllms')")
 
-
-@runllms
+@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
 def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
