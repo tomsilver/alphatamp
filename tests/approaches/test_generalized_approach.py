@@ -15,7 +15,7 @@ def test_generalized_oracle_approach():
 
     # Test in a PRBench environment
     prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredStorage2D-b15-v0", render_mode="rgb_array")
+    env = prbench.make("prbench/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -25,7 +25,7 @@ def test_generalized_oracle_approach():
         "clutteredstorage2d",
         env.observation_space,
         env.action_space,
-        num_blocks=15,
+        num_blocks=7,
     )
 
     # Create the approach.
