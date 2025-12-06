@@ -20,7 +20,8 @@ dependencies = [
    "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
-   "scikit-learn"
+   "scikit-learn",
+   "torch"
 ]
 
 [project.optional-dependencies]

@@ -35,6 +35,8 @@ from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
 )
+
+from alphatamp.approaches.q_networks.utils import create_abstract_plan_sequence 
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
 
@@ -384,15 +386,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the collected abstract skill dataset."""
         return self._abstract_skill_dataset
 
-    def _create_abstract_plan_embedding(
-        self, abstract_plan: Skeleton | FrozenSkeleton
-    ) -> np.ndarray:
-        """Create a embedding for an abstract plan."""
-        return np.array(
-            [hash(state) for state in abstract_plan[0]]
-            + [hash(action) for action in abstract_plan[1]]
-        )
-
     def save_datasets(self, directory: str | Path) -> None:
         """Save the collected dataset to disk as a pickle."""
         directory = Path(directory)
@@ -401,13 +394,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         datasets = {
             "parameter_dataset.pkl": dict(self._parameter_dataset),
             "abstract_plan_dataset.pkl": list(
-                (self._create_abstract_plan_embedding(abstract_plan), training_label)
+                (create_abstract_plan_sequence(abstract_plan), training_label)
                 for abstract_plan, training_label in self._abstract_plan_dataset
             ),
             "abstract_skill_dataset.pkl": {
                 k: list(
                     (
-                        self._create_abstract_plan_embedding(abstract_plan),
+                        create_abstract_plan_sequence(abstract_plan),
                         resample_count,
                     )
                     for abstract_plan, resample_count in v.items()

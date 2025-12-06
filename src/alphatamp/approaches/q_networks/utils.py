@@ -8,11 +8,11 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
     AbstractActionScorer,
 )
-from alphatamp.structs import GroundOperator, RelationalAbstractState, Skeleton
+from alphatamp.structs import GroundOperator, RelationalAbstractState, Skeleton, FrozenSkeleton
 
 
 def create_abstract_plan_sequence(
-    abstract_plan: Skeleton,
+    abstract_plan: Skeleton | FrozenSkeleton,
 ) -> tuple[np.ndarray, int]:
     """Create a sequence embedding for an abstract plan.
 
@@ -27,6 +27,12 @@ def create_abstract_plan_sequence(
         A tuple of (sequence array of shape (seq_len, 2), sequence length)
     """
     states, actions = abstract_plan
+
+    if isinstance(states, tuple):
+        states = list(states)
+    if isinstance(actions, tuple):
+        actions = list(actions)
+        
     # Each timestep is a state-action pair
     # We need at least one state (initial state), and actions correspond to transitions
     seq_len = len(actions)  # Number of actions = number of timesteps
@@ -47,7 +53,7 @@ def create_abstract_plan_sequence(
     return np.array(sequence, dtype=np.float32), seq_len
 
 
-class QNetwork:
+class QNetwork: 
     """Q network that returns how feasible an abstract plan might be."""
 
     def __init__(
