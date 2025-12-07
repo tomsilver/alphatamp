@@ -1,7 +1,6 @@
 """An abstract action scorer that uses a LSTM for scoring."""
 
-from torch import nn
-from torch.types import Tensor
+from torch import Tensor, nn
 
 from alphatamp.approaches.abstract_plan_classifiers.q_network import QNetwork
 from alphatamp.structs import Skeleton
@@ -21,7 +20,7 @@ class AbstractActionScorer:
 
     def train(
         self,
-        features: list[Tensor],
+        features: list,
         targets: Tensor,
         lengths: Tensor,
         loss_fn: nn.Module,
