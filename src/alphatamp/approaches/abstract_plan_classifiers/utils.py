@@ -14,27 +14,6 @@ from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
 from alphatamp.structs import GroundOperator, RelationalAbstractState, Skeleton
 
 
-def generate_training_data(
-    features_and_labels: list,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Reformat training data into numpy arrays."""
-
-    features_list = []
-
-    # Generate a row in the training dataset.
-    for datapoint in features_and_labels:
-        observation, parameter, _ = datapoint
-        observation_arr = np.array(observation)
-        parameter_arr = np.array(parameter)
-
-        # The features are the state observation and the parameter.
-        feature_arr = (observation_arr, parameter_arr)
-
-        features_list.append(feature_arr)
-
-    return features_list
-
-
 def conditional_abstract_action_q_value(
     history_states: list[RelationalAbstractState],
     history_actions: list[GroundOperator],
