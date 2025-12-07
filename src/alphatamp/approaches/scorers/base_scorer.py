@@ -1,7 +1,7 @@
 """Base class for a scoring function."""
 
 import abc
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import numpy as np
 
@@ -14,10 +14,9 @@ class BaseScorer(abc.ABC):
     def __init__(self, configs: dict):
         pass
 
-    @abc.abstractmethod
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update scorer."""
 
     @abc.abstractmethod
-    def score(self, *args, **kwargs) -> float:
+    def score(self, obs: _O, parameter: Any) -> float:
         """Score the input."""

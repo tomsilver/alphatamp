@@ -1,43 +1,37 @@
-"""An abstract action scorer that uses a MLP for scoring."""
+"""An abstract action scorer that uses a LSTM for scoring."""
 
-import numpy as np
-from sklearn.exceptions import NotFittedError
-from sklearn.neural_network import MLPRegressor
-from sklearn.utils.validation import check_is_fitted
+from torch import nn
+from torch.types import Tensor
 
-from alphatamp.approaches.scorers.base_scorer import BaseScorer
+from alphatamp.approaches.abstract_plan_classifiers.q_network import QNetwork
 from alphatamp.structs import Skeleton
 
 
-class AbstractActionScorer(BaseScorer):
+class AbstractActionScorer:
     """A abstract action scorer that uses a MLP for scoring."""
 
-    def __init__(self, configs: dict, saved_classifier=None):
-        self._regressor = (
-            MLPRegressor(hidden_layer_sizes=configs["hidden_layer_sizes"])
-            if not saved_classifier
-            else saved_classifier
+    def __init__(self, configs: dict):
+        self._regressor = QNetwork(
+            input_dim=configs["input_dim"],
+            hidden_dim=configs["hidden_dim"],
+            num_layers=configs["num_layers"],
         )
 
-    def train(self, features: np.ndarray, labels: np.ndarray):
+        self._num_epochs = configs["num_epochs"]
+
+    def train(
+        self,
+        features: list[Tensor],
+        targets: Tensor,
+        lengths: Tensor,
+        loss_fn: nn.Module,
+    ):
         """Given training data, update scorer."""
-        self._regressor.fit(features, labels)
+        for _ in range(self._num_epochs):
+            self._regressor.train_step(features, targets, lengths, loss_fn)
 
-    def _create_abstract_plan_embedding(self, abstract_plan: Skeleton) -> np.ndarray:
-        """Create a embedding for an abstract plan."""
-        return np.array(
-            [hash(state) for state in abstract_plan[0]]
-            + [hash(action) for action in abstract_plan[1]]
-        )
-
-    def score(self, previous_abstract_plan: Skeleton, *args, **kwargs) -> float:
+    def score(self, previous_abstract_plan: Skeleton) -> float:
         """Score the action given the previous abstract plan."""
 
-        try:
-            check_is_fitted(self._regressor)
-            abstract_plan_embedding = self._create_abstract_plan_embedding(
-                previous_abstract_plan
-            )
-            return self._regressor.predict(abstract_plan_embedding)[0]
-        except NotFittedError:
-            return 1.0
+        # Score should be a positive number (number of predicted resamples)
+        return max(0, self._regressor.predict(previous_abstract_plan))

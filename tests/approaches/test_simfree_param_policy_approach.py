@@ -22,6 +22,9 @@ from alphatamp.approaches.scorers.classifier_parameter_scorer import (
     ClassifierParameterScorer,
 )
 from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
+from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
+    AbstractActionScorer,
+)
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
 )
@@ -63,13 +66,26 @@ def test_naive_scorer_simfree_feasibility_approach():
         sim_free_env_models, static_feasibility_classifier, 123
     )
 
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "input_dim": 2,
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
         train_explorer=train_explorer,
         parameter_scorer_class=NaiveParameterScorer,  # Use Naive Scorer
-        parameter_scorer_configs={"configs": {}},
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
         seed=123,
     )
 
@@ -163,8 +179,16 @@ def test_dataset_collection_simfree_feasibility_approach():
         sim_free_env_models, filter_feasibility_classifier, 123
     )
 
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "input_dim": 2,
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
@@ -172,7 +196,9 @@ def test_dataset_collection_simfree_feasibility_approach():
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
         parameter_scorer_class=ClassifierParameterScorer,
-        parameter_scorer_configs={"configs": configs},
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
         seed=123,
     )
 
@@ -201,10 +227,10 @@ def test_dataset_collection_simfree_feasibility_approach():
             break
 
     abstract_plan_dataset = approach.get_abstract_plan_dataset()
-    abstract_skill_dataset = approach.get_abstract_skill_dataset()
+    abstract_action_dataset = approach.get_abstract_action_dataset()
 
     assert abstract_plan_dataset, "Did not find any abstract plans"
-    assert abstract_skill_dataset, "Did not find any abstract skills"
+    assert abstract_action_dataset, "Did not store any abstract actions data"
     env.close()
 
 
@@ -246,8 +272,16 @@ def test_save_datasets_simfree_feasibility_approach():
         sim_free_env_models, filter_feasibility_classifier, 123
     )
 
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "input_dim": 2,
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
@@ -255,7 +289,9 @@ def test_save_datasets_simfree_feasibility_approach():
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
         parameter_scorer_class=ClassifierParameterScorer,
-        parameter_scorer_configs={"configs": configs},
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
         seed=123,
     )
 
@@ -367,8 +403,16 @@ def test_train_scorer_simfree_feasbility_approach():
         sim_free_env_models, filter_feasibility_classifier, 123
     )
 
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "input_dim": 2,
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
@@ -376,7 +420,9 @@ def test_train_scorer_simfree_feasbility_approach():
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
         parameter_scorer_class=ClassifierParameterScorer,
-        parameter_scorer_configs={"configs": configs},
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
         seed=123,
     )
 
@@ -389,7 +435,7 @@ def test_train_scorer_simfree_feasbility_approach():
 
     # Load in successful training dataset from pickle.
     path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
-    success_dataset = approach.load_parameter_dataset(path)
+    success_dataset = approach.load_abstract_action_level_dataset(path)
 
     # Train the scorer on the datasets.
     approach.train_parameter_policy(success_dataset)
@@ -413,4 +459,85 @@ def test_train_scorer_simfree_feasbility_approach():
             break
 
     assert task_completed, "Plan did not succeed"
+    env.close()
+
+
+def test_train_abstract_action_scorer_simfree_feasbility_approach():
+    """Tests for training the abstract action scorers for the
+    SimFreeParamPolicyApproach()."""
+
+    # Test in a PRBench environment.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="q-function")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier.
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "input_dim": 2,
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        seed=123,
+    )
+
+    # Eval.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    approach.eval()
+    approach.reset(obs, {})
+
+    # Load in abstract action training dataset from pickle.
+    path = Path("tests/datasets") / "abstract_action_dataset.pkl"
+    dataset = approach.load_abstract_action_level_dataset(path)
+
+    # Train the abstract action scorers on the datasets.
+    approach.train_abstract_action_scorer(dataset)
+
+    abstract_action_descriptor = "'PlaceTgt(robot, target_block, target_region)'"
+
+    abstract_action_score = approach.get_abstract_action_score(
+        abstract_action_descriptor
+    )
+
+    assert abstract_action_score < 1, "Should not need any resamples!"
+
     env.close()

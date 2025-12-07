@@ -26,7 +26,7 @@ class ClassifierParameterScorer(BaseScorer):
         """Given training data, update parameter scorer."""
         self._classifier.fit(features, labels)
 
-    def score(self, obs: _O, parameter: Any, *args, **kwargs) -> float:
+    def score(self, obs: _O, parameter: Any) -> float:
         """Score the parameter given the low-level observation."""
         try:
             check_is_fitted(self._classifier)
