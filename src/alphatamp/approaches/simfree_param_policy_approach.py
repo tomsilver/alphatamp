@@ -32,6 +32,8 @@ from alphatamp.approaches.abstract_plan_classifiers.q_network import (
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
+from bilevel_planning.utils import get_all_ground_atoms_for_predicate
+
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
@@ -45,6 +47,7 @@ from alphatamp.approaches.simulator_free_base_approach import (
 )
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
+from relational_structs.pddl import GroundAtom
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -119,6 +122,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         ] = {}
         self._abstract_action_scorer_class = abstract_action_scorer_class
         self._abstract_action_scorer_configs = abstract_action_scorer_configs
+        self._all_ground_atoms: tuple[GroundAtom, ...] = ()
+        self._all_ground_operators: tuple[GroundOperator, ...] = ()
+
 
     def reset(
         self,
@@ -152,6 +158,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         operators = self._env_models.operators
         grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
+        import ipdb
+
+        ipdb.set_trace()
+        
+
+        self._all_ground_operators = tuple(sorted(grounded_operators))
+
+        # Get all the ground atoms in environment
+        predicates = self._env_models.predicates
+        all_ground_atoms = set()
+
+        for predicate in predicates:
+            all_ground_atoms.update(get_all_ground_atoms_for_predicate(predicate, s0.objects))
+
+        self._all_ground_atoms = tuple(sorted(all_ground_atoms))
+
         for grounded_operator in grounded_operators:
             # Create new parameter scorer instances per grounded operators.
             self._abstract_action_to_scoring_function[grounded_operator] = (
@@ -161,6 +183,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Create new abstract action scorer instances per grounded operators.
             self._abstract_action_to_action_scorer[grounded_operator] = (
                 self._abstract_action_scorer_class(
+                    self._all_ground_atoms,
+                    self._all_ground_operators,
                     **self._abstract_action_scorer_configs
                 )
             )
@@ -484,6 +508,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
 
+    def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
+        sequence, sequence_length = create_abstract_plan_sequence(self._all_ground_atoms, self._all_ground_operators, abstract_plan)
+        return (sequence, sequence_length, label)
+
     def save_datasets(self, directory: str | Path) -> None:
         """Save the collected dataset to disk as a pickle."""
         directory = Path(directory)
@@ -492,20 +520,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         datasets = {
             "parameter_dataset.pkl": dict(self._parameter_dataset),
             "abstract_plan_dataset.pkl": list(
-                (
-                    create_abstract_plan_sequence(abstract_plan)[0],
-                    create_abstract_plan_sequence(abstract_plan)[1],
-                    training_label,
-                )
+                self._make_data(abstract_plan, training_label)
                 for abstract_plan, training_label in self._abstract_plan_dataset
             ),
             "abstract_action_dataset.pkl": {
                 k: list(
-                    (
-                        create_abstract_plan_sequence(abstract_plan)[0],
-                        create_abstract_plan_sequence(abstract_plan)[1],
-                        resample_count,
-                    )
+                    self._make_data(abstract_plan, resample_count)
                     for abstract_plan, resample_count in v.items()
                 )
                 for k, v in self._abstract_action_dataset.items()

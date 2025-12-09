@@ -9,8 +9,10 @@ from alphatamp.structs import Skeleton
 class AbstractActionScorer:
     """A abstract action scorer that uses a MLP for scoring."""
 
-    def __init__(self, configs: dict):
+    def __init__(self, all_ground_atoms, all_ground_operators, configs: dict):
         self._regressor = QNetwork(
+            all_ground_atoms,
+            all_ground_operators,
             input_dim=configs["input_dim"],
             hidden_dim=configs["hidden_dim"],
             num_layers=configs["num_layers"],
