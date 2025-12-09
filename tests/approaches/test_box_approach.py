@@ -339,6 +339,10 @@ def test_box_vs_baseline_performance() -> None:
     """Compare BOX against baselines (Test 3)."""
     _run_box_vs_baseline_performance("o2")
 
+def test_box_o1() -> None:
+    """Test BOX approach on obstruction level o1."""
+    _run_box_vs_baseline_performance("o1")
+
 
 @pytest.mark.slow
 def test_extensive_visualization() -> None:

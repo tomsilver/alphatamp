@@ -142,6 +142,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             self._training_planning_timeout,
             bpg,
         )
+        print("[BoxApproach] Generating training skeletons...")
 
         count = 0
         for skeleton in gen:
@@ -172,6 +173,14 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         all_skeletons: Set[FrozenSkeleton] = set()
         for problem_data in self._data:
             all_skeletons.update(problem_data.keys())
+
+        # Debugging: identify if there are any problems where the set of skeletons generated
+        # is different from the overall set
+
+        for i, problem_data in enumerate(self._data):
+            missing_skeletons = all_skeletons - set(problem_data.keys())
+            if len(missing_skeletons) > 0:
+                print(f"[BoxApproach] Warning: Training problem {i} is missing {len(missing_skeletons)} skeletons from the overall vocabulary.")
         
         self._skeletons_vocab = sorted(list(all_skeletons), key=lambda s: str(s))
         self._skeleton_to_idx = {s: i for i, s in enumerate(self._skeletons_vocab)}
@@ -193,6 +202,11 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             for skel, success in problem_data.items():
                 j = self._skeleton_to_idx[skel]
                 D[i, j] = 1.0 if success else 0.0
+
+
+        # debugging: show the number of unique rows in D 
+        unique_rows = np.unique(D, axis=0)
+        print(f"[BoxApproach] Built score matrix D with shape {D.shape}, {len(unique_rows)} unique rows from {N} training problems and {M} skeletons.")
         
         # Mean vector
         self._prior_mu = np.mean(D, axis=0)
