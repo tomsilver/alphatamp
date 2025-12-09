@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch
+from relational_structs.pddl import GroundAtom
 from torch import nn
 
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
@@ -152,6 +153,8 @@ def train_q_network(
     abstract_plans: list[Skeleton],
     q_value_cache: dict,
     gamma: float,
+    all_ground_atoms: tuple[GroundAtom, ...],
+    all_ground_operators: tuple[GroundOperator, ...],
     trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
     batch_size: int = 32,
     num_epochs: int = 10,
@@ -205,7 +208,9 @@ def train_q_network(
     sequences = []
     sequence_lengths = []
     for plan in valid_plans:
-        sequence, seq_len = create_abstract_plan_sequence(plan)
+        sequence, seq_len = create_abstract_plan_sequence(
+            all_ground_atoms, all_ground_operators, plan
+        )
         sequences.append(torch.FloatTensor(sequence))
         sequence_lengths.append(seq_len)
 

@@ -2,38 +2,45 @@
 
 import numpy as np
 import torch
+from relational_structs.objects import Object
+from relational_structs.pddl import GroundAtom, GroundOperator
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 
 from alphatamp.approaches.simulator_free_base_approach import SimulatorFreeSesameModels
-from alphatamp.structs import FrozenSkeleton, Skeleton, RelationalAbstractState
-from relational_structs.pddl import GroundAtom, GroundOperator
-from relational_structs.objects import Object
+from alphatamp.structs import FrozenSkeleton, RelationalAbstractState, Skeleton
 
-def create_abstract_state_embedding(all_ground_atoms: tuple[GroundAtom, ...], abstract_state: RelationalAbstractState) ->np.ndarray:
+
+def create_abstract_state_embedding(
+    all_ground_atoms: tuple[GroundAtom, ...], abstract_state: RelationalAbstractState
+) -> np.ndarray:
     """Create an abstract state embedding that contains information about the present
     ground atoms."""
 
-    abstract_state_embedding = np.zeros((len(all_ground_atoms), 1))
+    abstract_state_embedding = np.zeros(len(all_ground_atoms))
 
     for index, ground_atom in enumerate(all_ground_atoms):
         if ground_atom in abstract_state.atoms:
             abstract_state_embedding[index] = 1
-    
+
     return abstract_state_embedding
 
-def create_abstract_actions_embedding(all_ground_operators: tuple[GroundOperator, ...], abstract_action: GroundOperator):
-    """Create an abstract action embedding that contains information about which
-    ground operator is present."""
 
-    abstract_action_embedding = np.zeros((len(all_ground_operators), 1))
+def create_abstract_actions_embedding(
+    all_ground_operators: tuple[GroundOperator, ...], abstract_action: GroundOperator
+):
+    """Create an abstract action embedding that contains information about which ground
+    operator is present."""
+
+    abstract_action_embedding = np.zeros(len(all_ground_operators))
 
     for index, ground_operator in enumerate(all_ground_operators):
         if ground_operator == abstract_action:
             abstract_action_embedding[index] = 1
             break
-    
+
     return abstract_action_embedding
+
 
 def create_abstract_plan_sequence(
     all_ground_atoms: tuple[GroundAtom, ...],
@@ -65,16 +72,25 @@ def create_abstract_plan_sequence(
     if seq_len == 0:
         # Empty plan - return a single timestep with initial state
         if len(states) > 0:
-            return np.array([[create_abstract_state_embedding(all_ground_atoms, states[0]),  np.zeros((len(all_ground_operators), 1))]], dtype=np.float32), 1
+            state_action_embedding = np.concatenate([create_abstract_state_embedding(
+                                all_ground_atoms, states[0]
+                            ), np.zeros(len(all_ground_operators))])
+            return (state_action_embedding, 1)
         return np.array([[0.0, 0.0]], dtype=np.float32), 1
 
     sequence = []
     for i in range(seq_len):
         # For each action, use the state before the action and the action itself
         state_idx = min(i, len(states) - 1)
-        state_embedding= create_abstract_state_embedding(all_ground_atoms, states[state_idx])
-        action_embedding = create_abstract_actions_embedding(all_ground_operators, actions[i])
-        sequence.append([state_embedding, action_embedding])
+        state_embedding = create_abstract_state_embedding(
+            all_ground_atoms, states[state_idx]
+        )
+        action_embedding = create_abstract_actions_embedding(
+            all_ground_operators, actions[i]
+        )
+
+        state_action_embedding = np.concatenate([state_embedding, action_embedding])
+        sequence.append(state_action_embedding)
 
     return np.array(sequence, dtype=np.float32), seq_len
 
@@ -82,12 +98,10 @@ def create_abstract_plan_sequence(
 class QNetwork:
     """Q network that returns how feasible an abstract plan might be."""
 
-
     def __init__(
         self,
         all_ground_atoms: tuple[GroundAtom, ...],
         all_ground_operators: tuple[GroundOperator, ...],
-        input_dim: int = 2,
         hidden_dim: int = 64,
         num_layers: int = 2,
         lr: float = 0.001,
@@ -95,11 +109,14 @@ class QNetwork:
         """Initialize the Q-network with LSTM.
 
         Args:
-            input_dim: Dimension of input features per timestep
+            all_ground_atoms: Tuple of all possible ground atoms in env
+            all_ground_operators: Tuple of all possible ground operators in env
             hidden_dim: Dimension of hidden layers
             num_layers: Number of LSTM layers
             lr: Learning rate for optimizer
         """
+
+        input_dim = len(all_ground_atoms) + len(all_ground_operators)
         self._lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
         self._fc = nn.Linear(hidden_dim, 1)
         self._optimizer = torch.optim.Adam(
@@ -153,7 +170,9 @@ class QNetwork:
         self._lstm.eval()
         self._fc.eval()
         with torch.no_grad():
-            sequence, seq_len = create_abstract_plan_sequence(self._all_ground_atoms, self._all_ground_operators, abstract_plan)
+            sequence, seq_len = create_abstract_plan_sequence(
+                self._all_ground_atoms, self._all_ground_operators, abstract_plan
+            )
 
             # Convert to tensor and add batch dimension
             x = (

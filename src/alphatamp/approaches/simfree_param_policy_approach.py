@@ -19,7 +19,9 @@ from bilevel_planning.trajectory_samplers.trajectory_sampler import (
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
     cached_all_ground_operators,
+    get_all_ground_atoms_for_predicate,
 )
+from relational_structs.pddl import GroundAtom
 from torch import FloatTensor, Tensor, nn
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
@@ -32,8 +34,6 @@ from alphatamp.approaches.abstract_plan_classifiers.q_network import (
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
-from bilevel_planning.utils import get_all_ground_atoms_for_predicate
-
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
@@ -47,7 +47,6 @@ from alphatamp.approaches.simulator_free_base_approach import (
 )
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
-from relational_structs.pddl import GroundAtom
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -125,7 +124,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._all_ground_atoms: tuple[GroundAtom, ...] = ()
         self._all_ground_operators: tuple[GroundOperator, ...] = ()
 
-
     def reset(
         self,
         obs: _O,
@@ -158,11 +156,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         operators = self._env_models.operators
         grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
-        import ipdb
-
-        ipdb.set_trace()
-        
-
         self._all_ground_operators = tuple(sorted(grounded_operators))
 
         # Get all the ground atoms in environment
@@ -170,7 +163,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         all_ground_atoms = set()
 
         for predicate in predicates:
-            all_ground_atoms.update(get_all_ground_atoms_for_predicate(predicate, s0.objects))
+            all_ground_atoms.update(
+                get_all_ground_atoms_for_predicate(predicate, s0.objects)
+            )
 
         self._all_ground_atoms = tuple(sorted(all_ground_atoms))
 
@@ -185,7 +180,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._abstract_action_scorer_class(
                     self._all_ground_atoms,
                     self._all_ground_operators,
-                    **self._abstract_action_scorer_configs
+                    **self._abstract_action_scorer_configs,
                 )
             )
 
@@ -311,6 +306,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                         features_and_labels
                     )
                 )
+
+                
                 loss_fn = nn.MSELoss()
                 # Train the scoring function for each grounded skill.
                 abstract_action_scorer.train(
@@ -359,7 +356,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 0 if training_label == "success" else 1
 
         prev_abstract_states = tuple(
-            self._current_abstract_plan[0][: self._current_abstract_plan_step]
+            self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
         )
         prev_abstract_actions = tuple(
             self._current_abstract_plan[1][: self._current_abstract_plan_step]
@@ -509,7 +506,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return self._abstract_action_dataset
 
     def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
-        sequence, sequence_length = create_abstract_plan_sequence(self._all_ground_atoms, self._all_ground_operators, abstract_plan)
+        sequence, sequence_length = create_abstract_plan_sequence(
+            self._all_ground_atoms, self._all_ground_operators, abstract_plan
+        )
         return (sequence, sequence_length, label)
 
     def save_datasets(self, directory: str | Path) -> None:

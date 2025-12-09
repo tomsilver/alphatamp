@@ -13,7 +13,6 @@ class AbstractActionScorer:
         self._regressor = QNetwork(
             all_ground_atoms,
             all_ground_operators,
-            input_dim=configs["input_dim"],
             hidden_dim=configs["hidden_dim"],
             num_layers=configs["num_layers"],
         )
