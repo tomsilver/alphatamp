@@ -29,7 +29,7 @@ def test_read_parameter_dataset_pickle():
     if not FIXTURE_PATH.exists():
         pytest.skip("parameter_dataset pickle not found; run write test first")
 
-    loaded = SimFreeParamPolicyApproach.load_parameter_dataset(FIXTURE_PATH)
+    loaded = SimFreeParamPolicyApproach.load_abstract_action_level_dataset(FIXTURE_PATH)
 
     assert loaded, "Loaded dataset should not be empty"
     assert "test_action" in loaded
