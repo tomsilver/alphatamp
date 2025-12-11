@@ -7,7 +7,7 @@ from alphatamp.structs import Skeleton
 
 
 class AbstractActionScorer:
-    """A abstract action scorer that uses a MLP for scoring."""
+    """A abstract action scorer that uses a LSTM for scoring."""
 
     def __init__(self, all_ground_atoms, all_ground_operators, configs: dict):
         self._regressor = QNetwork(
@@ -25,10 +25,14 @@ class AbstractActionScorer:
         targets: Tensor,
         lengths: Tensor,
         loss_fn: nn.Module,
-    ):
+    ) -> list[float]:
         """Given training data, update scorer."""
+        losses = []
         for _ in range(self._num_epochs):
-            self._regressor.train_step(features, targets, lengths, loss_fn)
+            losses.append(
+                self._regressor.train_step(features, targets, lengths, loss_fn)
+            )
+        return losses
 
     def score(self, previous_abstract_plan: Skeleton) -> float:
         """Score the action given the previous abstract plan."""

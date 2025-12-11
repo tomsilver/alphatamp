@@ -124,6 +124,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._all_ground_atoms: tuple[GroundAtom, ...] = ()
         self._all_ground_operators: tuple[GroundOperator, ...] = ()
 
+        # Loss metrics
+        self._loss_metrics: dict[str, list] = {}
+
     def reset(
         self,
         obs: _O,
@@ -309,9 +312,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 loss_fn = nn.MSELoss()
                 # Train the scoring function for each grounded skill.
-                abstract_action_scorer.train(
+                losses = abstract_action_scorer.train(
                     abstract_plan_list, resample_count, abstract_plan_lengths, loss_fn
                 )
+
+                self._loss_metrics[abstract_action_descriptor] = losses
 
     def get_abstract_action_score(self, abstract_action_str: str) -> float:
         """Evaluate the predicted resample count for the abstract action given current
@@ -503,6 +508,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     ) -> defaultdict[str, defaultdict[FrozenSkeleton, int]]:
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
+
+    def get_loss_metrics(
+        self,
+    ) -> dict[str, list]:
+        """Return the loss metrics for each abstract action."""
+        return self._loss_metrics
 
     def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
         sequence, sequence_length = create_abstract_plan_sequence(

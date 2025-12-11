@@ -498,7 +498,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
     abstract_action_configs = {
         "hidden_dim": 32,
         "num_layers": 2,
-        "num_epochs": 1,
+        "num_epochs": 5,
     }
 
     # Create the approach.
@@ -535,4 +535,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
 
     assert abstract_action_score < 1, "Should not need any resamples!"
 
+    loss_metrics = approach.get_loss_metrics()
+
+    assert loss_metrics is not None, "Should store loss metrics"
     env.close()
