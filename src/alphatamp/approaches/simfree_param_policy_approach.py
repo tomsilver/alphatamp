@@ -307,7 +307,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     )
                 )
 
-                
                 loss_fn = nn.MSELoss()
                 # Train the scoring function for each grounded skill.
                 abstract_action_scorer.train(

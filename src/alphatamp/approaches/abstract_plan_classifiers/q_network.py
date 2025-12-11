@@ -72,9 +72,12 @@ def create_abstract_plan_sequence(
     if seq_len == 0:
         # Empty plan - return a single timestep with initial state
         if len(states) > 0:
-            state_action_embedding = np.concatenate([create_abstract_state_embedding(
-                                all_ground_atoms, states[0]
-                            ), np.zeros(len(all_ground_operators))])
+            state_action_embedding = np.concatenate(
+                [
+                    create_abstract_state_embedding(all_ground_atoms, states[0]),
+                    np.zeros(len(all_ground_operators)),
+                ]
+            )
             return (state_action_embedding, 1)
         return np.array([[0.0, 0.0]], dtype=np.float32), 1
 
