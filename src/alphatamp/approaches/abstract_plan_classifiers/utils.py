@@ -1,5 +1,7 @@
 """Util functions for Q Networks."""
 
+import logging
+
 import numpy as np
 import torch
 from relational_structs.pddl import GroundAtom
@@ -171,14 +173,14 @@ def train_q_network(
             Dictionary mapping abstract actions to trained abstract action scorers
         batch_size: Batch size for training
         num_epochs: Number of training epochs
-        verbose: Whether to print training progress
+        verbose: Whether to log training progress
 
     Returns:
         List of average losses per epoch
     """
     # Compute target Q-values for all abstract plans
     if verbose:
-        print("Computing target Q-values...")
+        logging.info("Computing target Q-values...")
 
     target_q_values = []
     valid_plans = []
@@ -195,7 +197,7 @@ def train_q_network(
             valid_plans.append(abstract_plan)
         except Exception as e:
             if verbose:
-                print(f"Warning: Skipping plan due to error: {e}")
+                logging.info(f"Warning: Skipping plan due to error: {e}")
             continue
 
     if len(valid_plans) == 0:
@@ -203,7 +205,7 @@ def train_q_network(
 
     # Convert abstract plans to sequence embeddings
     if verbose:
-        print("Converting abstract plans to sequences...")
+        logging.info("Converting abstract plans to sequences...")
 
     sequences = []
     sequence_lengths = []
@@ -216,14 +218,12 @@ def train_q_network(
 
     # Convert targets to tensor
     targets_tensor = (
-        torch.FloatTensor(np.array(target_q_values))
-        .unsqueeze(1)
-        .to(q_network._device)  # pylint: disable=protected-access
+        torch.FloatTensor(np.array(target_q_values)).unsqueeze(1).to(q_network.device)
     )
 
     # Training loop
     if verbose:
-        print(
+        logging.info(
             f"Training Q-network on {len(valid_plans)} plans for {num_epochs} epochs..."
         )
 
@@ -262,9 +262,11 @@ def train_q_network(
         epoch_losses.append(avg_loss)
 
         if verbose and (epoch + 1) % max(1, num_epochs // 10) == 0:
-            print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
+            logging.info(
+                f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}"
+            )
 
     if verbose:
-        print("Training completed!")
+        logging.info("Training completed!")
 
     return epoch_losses

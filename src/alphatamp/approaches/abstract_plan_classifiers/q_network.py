@@ -17,9 +17,9 @@ def create_abstract_state_embedding(
 
     abstract_state_embedding = np.zeros(len(all_ground_atoms))
 
-    for index, ground_atom in enumerate(all_ground_atoms):
-        if ground_atom in abstract_state.atoms:
-            abstract_state_embedding[index] = 1
+    for active_ground_atom in abstract_state.atoms:
+        active_ground_atom_index = all_ground_atoms.index(active_ground_atom)
+        abstract_state_embedding[active_ground_atom_index] = 1
 
     return abstract_state_embedding
 
@@ -32,10 +32,8 @@ def create_abstract_actions_embedding(
 
     abstract_action_embedding = np.zeros(len(all_ground_operators))
 
-    for index, ground_operator in enumerate(all_ground_operators):
-        if ground_operator == abstract_action:
-            abstract_action_embedding[index] = 1
-            break
+    active_ground_operator_index = all_ground_operators.index(abstract_action)
+    abstract_action_embedding[active_ground_operator_index] = 1
 
     return abstract_action_embedding
 
@@ -123,9 +121,9 @@ class QNetwork:
         self._optimizer = torch.optim.Adam(
             list(self._lstm.parameters()) + list(self._fc.parameters()), lr=lr
         )
-        self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self._lstm.to(self._device)
-        self._fc.to(self._device)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._lstm.to(self.device)
+        self._fc.to(self.device)
         self._input_dim = input_dim
 
         # Abstract plan embeddings
@@ -177,7 +175,7 @@ class QNetwork:
 
             # Convert to tensor and add batch dimension
             x = (
-                torch.FloatTensor(sequence).unsqueeze(0).to(self._device)
+                torch.FloatTensor(sequence).unsqueeze(0).to(self.device)
             )  # (1, seq_len, input_dim)
             lengths = torch.tensor([seq_len], dtype=torch.long)
 
@@ -215,7 +213,7 @@ class QNetwork:
         padded_features = pad_sequence(
             features_3d, batch_first=True
         )  # (batch_size, max_len, input_dim)
-        padded_features = padded_features.to(self._device)
+        padded_features = padded_features.to(self.device)
 
         predictions = self.forward(padded_features, lengths)
         loss = loss_fn(predictions, targets)
