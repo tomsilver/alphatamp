@@ -2,12 +2,10 @@
 
 import numpy as np
 import torch
-from relational_structs.objects import Object
 from relational_structs.pddl import GroundAtom, GroundOperator
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_sequence
 
-from alphatamp.approaches.simulator_free_base_approach import SimulatorFreeSesameModels
 from alphatamp.structs import FrozenSkeleton, RelationalAbstractState, Skeleton
 
 
@@ -209,9 +207,13 @@ class QNetwork:
         self._fc.train()
         self._optimizer.zero_grad()
 
+        # Fix: Ensure every feature tensor is at least 2D (seq_len, input_dim)
+        # This handles the edge case where a sequence of length 1 might be passed as 1D
+        features_3d = [f.unsqueeze(0) if f.ndim == 1 else f for f in features]
+
         # Pad sequences to the same length
         padded_features = pad_sequence(
-            features, batch_first=True
+            features_3d, batch_first=True
         )  # (batch_size, max_len, input_dim)
         padded_features = padded_features.to(self._device)
 

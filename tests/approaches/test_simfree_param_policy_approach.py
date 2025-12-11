@@ -498,7 +498,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
     abstract_action_configs = {
         "hidden_dim": 32,
         "num_layers": 2,
-        "num_epochs": 10,
+        "num_epochs": 1,
     }
 
     # Create the approach.
@@ -527,7 +527,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
     # Train the abstract action scorers on the datasets.
     approach.train_abstract_action_scorer(dataset)
 
-    abstract_action_descriptor = "'PlaceTgt(robot, target_block, target_region)'"
+    abstract_action_descriptor = "PlaceTgt(robot, target_block, target_region)"
 
     abstract_action_score = approach.get_abstract_action_score(
         abstract_action_descriptor
