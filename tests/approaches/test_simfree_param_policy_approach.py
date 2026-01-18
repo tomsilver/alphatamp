@@ -226,9 +226,11 @@ def test_dataset_collection_simfree_feasibility_approach():
 
     abstract_plan_dataset = approach.get_abstract_plan_dataset()
     abstract_action_dataset = approach.get_abstract_action_dataset()
+    parameter_dataset = approach.get_parameter_dataset()
 
     assert abstract_plan_dataset, "Did not find any abstract plans"
-    assert abstract_action_dataset, "Did not store any abstract actions data"
+    assert abstract_action_dataset, "Did not store any abstract action data"
+    assert parameter_dataset, "Did not store any parameter data"
     env.close()
 
 
@@ -255,7 +257,7 @@ def test_save_datasets_simfree_feasibility_approach():
     filter_classifier = FilterFeasibilityClassifier()
 
     # Train the feasibility learner to classify plans
-    # pick up the target block first as infeasible
+    # that pick up the target block first as infeasible
 
     filtered_action_strs = [("PickTgt", 0), ("target_block", 0)]
     filter_classifier.update_classifier(None, filtered_action_strs)
@@ -316,9 +318,8 @@ def test_save_datasets_simfree_feasibility_approach():
         if done:
             break
 
-    parameter_dataset = approach.get_parameter_dataset()
-
-    assert parameter_dataset, "Did not find any parameters"
+    train_parameter_dataset = approach.get_parameter_dataset()
+    assert train_parameter_dataset, "Did not find any parameters"
 
     path = Path("tests/datasets/")
     approach.save_datasets(path)
@@ -353,13 +354,15 @@ def test_save_datasets_simfree_feasibility_approach():
         if done:
             break
 
-    parameter_dataset = approach.get_parameter_dataset()
+    eval_parameter_dataset = approach.get_parameter_dataset()
 
-    assert len(parameter_dataset) == 4, "Should not store additional parameters."
+    assert (
+        train_parameter_dataset == eval_parameter_dataset
+    ), "Should not store additional parameters."
     env.close()
 
 
-def test_train_scorer_simfree_feasbility_approach():
+def test_train_param_scorer_simfree_feasbility_approach():
     """Tests for training the parameter scorer for the SimFreeParamPolicyApproach()."""
 
     # Test in a PRBench environment.
@@ -385,8 +388,14 @@ def test_train_scorer_simfree_feasbility_approach():
     filtered_action_strs = [
         ("PickTgt", 0),
         ("target_block", 0),
+        ("obstruction2", 0),
+        ("obstruction8", 0),
         ("obstruction5", 0),
         ("obstruction6", 0),
+        ("obstruction9", 0),
+        ("obstruction4", 0),
+        ("obstruction0", 0),
+        ("obstruction1", 0),
     ]
     filter_classifier.update_classifier(None, filtered_action_strs)
 
@@ -429,16 +438,16 @@ def test_train_scorer_simfree_feasbility_approach():
     approach.eval()
     approach.reset(obs, {})
 
-    # Load in successful training dataset from pickle.
-    path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
-    success_dataset = approach.load_abstract_action_level_dataset(path)
+    # Load in training dataset from pickle.
+    path = Path("tests/datasets") / "parameter_dataset.pkl"
+    dataset = approach.load_abstract_action_level_dataset(path)
 
     # Train the scorer on the datasets.
-    approach.train_parameter_policy(success_dataset)
+    approach.train_parameter_policy(dataset)
 
     # Evaluate the approach on environment.
     start_time = time.time()
-    timeout = 10
+    timeout = 20
     task_completed = False
     while time.time() - start_time < timeout:
         try:
