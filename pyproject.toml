@@ -20,7 +20,8 @@ dependencies = [
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
    "scikit-learn",
-   "torch"
+   "torch",
+   "pymunk==7.1.0",
 ]
 
 [project.optional-dependencies]
