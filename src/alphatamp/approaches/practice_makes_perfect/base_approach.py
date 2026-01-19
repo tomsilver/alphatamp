@@ -1,4 +1,7 @@
-"""An implementation of Kumar, Silver et. al's paper Practice Makes Perfect approach."""
+"""An implementation of Kumar, Silver et.
+
+al's paper Practice Makes Perfect approach.
+"""
 
 import pickle
 from collections import defaultdict
@@ -54,8 +57,8 @@ _U = TypeVar("_U")  # action
 
 
 class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
-    """A simulator-free approach that estimates, extrapoltates, and situates 
-        skill competencies in its free time."""
+    """A simulator-free approach that estimates, extrapoltates, and situates skill
+    competencies in its free time."""
 
     def __init__(
         self,
