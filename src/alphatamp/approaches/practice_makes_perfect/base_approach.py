@@ -45,6 +45,8 @@ from alphatamp.approaches.simulator_free_base_approach import (
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
 
+from alphatamp.approaches.practice_makes_perfect.competence_models import SkillCompetenceModel, OptimisticSkillCompetenceModel, create_competence_model
+
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
@@ -112,8 +114,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._all_ground_atoms: tuple[GroundAtom, ...] = ()
         self._all_ground_operators: tuple[GroundOperator, ...] = ()
 
-        # Loss metrics
-        self._loss_metrics: dict[str, list] = {}
+        # Competence Models
+        self._current_competence_model: SkillCompetenceModel | None = None
+        self._abstract_action_to_competence_model: dict[GroundOperator, SkillCompetenceModel] = {}
 
     def reset(
         self,
@@ -166,6 +169,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
+            self._abstract_action_to_competence_model[grounded_operator] = create_competence_model("optimistic", grounded_operator.name)
+
     def _learn_from_transition(
         self,
         obs: _O,
@@ -208,6 +213,10 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
             (self._last_observation, self._most_recent_parameter, label)
         )
+
+    def _update_competence_model(self, skill_outcome):
+        """Update the current skill's competence model with the observed outcome."""
+        self._current_competence_model.observe(skill_outcome)
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -296,6 +305,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             except (TrajectorySamplingFailure, IndexError) as e:
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
+                    self._update_competence_model(False)
                     self._add_most_recent_parameter_to_dataset("failure")
 
                 # Resample Controller
