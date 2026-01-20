@@ -7,9 +7,7 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
 )
 from numpy.typing import NDArray
-from relational_structs.object_centric_state import ObjectCentricState
-from relational_structs.objects import Object
-from relational_structs.pddl import GroundAtom, GroundOperator
+from relational_structs.pddl import GroundOperator
 
 # We use the term Skeleton to refer specifically to abstract plans over relational
 # abstract states and ground operator actions.

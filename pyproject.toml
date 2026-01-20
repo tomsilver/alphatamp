@@ -22,6 +22,7 @@ dependencies = [
    "scikit-learn",
    "torch",
    "pymunk==7.1.0",
+   "scipy-stubs",
 ]
 
 [project.optional-dependencies]

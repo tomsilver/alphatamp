@@ -8,8 +8,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, TypeVar
 
-import numpy as np
-import torch
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -25,7 +23,6 @@ from bilevel_planning.utils import (
     get_all_ground_atoms_for_predicate,
 )
 from relational_structs.pddl import GroundAtom
-from torch import FloatTensor, Tensor, nn
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
@@ -41,9 +38,6 @@ from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
-from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
-    AbstractActionScorer,
-)
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
@@ -67,8 +61,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         train_explorer: BaseAbstractExplorer[_O, _X, _U],
         parameter_scorer_class: type[BaseScorer],
         parameter_scorer_configs: dict,
-        abstract_action_scorer_class: type[AbstractActionScorer],
-        abstract_action_scorer_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
@@ -116,15 +108,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Abstract Plan Dataset
         self._abstract_plan_dataset: list = []
 
-        # Abstract Action inits.
-        self._abstract_action_dataset: defaultdict[
-            str, defaultdict[FrozenSkeleton, int]
-        ] = defaultdict(lambda: defaultdict(int))
-        self._abstract_action_to_action_scorer: dict[
-            GroundOperator, AbstractActionScorer
-        ] = {}
-        self._abstract_action_scorer_class = abstract_action_scorer_class
-        self._abstract_action_scorer_configs = abstract_action_scorer_configs
+        # Ground Atoms and Operators
         self._all_ground_atoms: tuple[GroundAtom, ...] = ()
         self._all_ground_operators: tuple[GroundOperator, ...] = ()
 
@@ -182,15 +166,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
-            # Create new abstract action scorer instances per grounded operators.
-            self._abstract_action_to_action_scorer[grounded_operator] = (
-                self._abstract_action_scorer_class(
-                    self._all_ground_atoms,
-                    self._all_ground_operators,
-                    **self._abstract_action_scorer_configs,
-                )
-            )
-
     def _learn_from_transition(
         self,
         obs: _O,
@@ -202,8 +177,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     ) -> None:
         if done:
             # Store last successful parameter
-            self._add_most_recent_parameter_to_dataset("success")
-            self._add_abstract_plan_to_dataset("success")
+            pass
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -216,133 +190,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
-    def _generate_parameter_scorer_training_data(
-        self, features_and_labels: list
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Reformat training data into numpy arrays."""
-
-        features_list = []
-        labels_list = []
-
-        # Generate a row in the training dataset.
-        for datapoint in features_and_labels:
-            state, parameter, label = datapoint
-            state_arr = np.array(state)
-            parameter_arr = np.array(parameter)
-
-            # The features are the state observation and the parameter.
-            feature_arr = np.append(state_arr, parameter_arr)
-            label_arr = np.array(label)
-
-            features_list.append(feature_arr)
-            labels_list.append(label_arr)
-
-        features = np.vstack(features_list)
-        labels = np.vstack(labels_list).ravel()
-
-        return (features, labels)
-
     def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
-
-        for (
-            abstract_action,
-            scoring_function,
-        ) in self._abstract_action_to_scoring_function.items():
-            # Segment data for each ground operator.
-
-            abstract_action_descriptor = abstract_action.short_str
-            if abstract_action_descriptor in parameter_dataset:
-                features_and_labels = parameter_dataset[abstract_action_descriptor]
-
-                # Generate training data.
-                features, labels = self._generate_parameter_scorer_training_data(
-                    features_and_labels
-                )
-
-                # Train the scoring function for each grounded skill.
-                scoring_function.train(features, labels)
-
-    def _generate_abstract_action_scorer_training_data(
-        self, features_and_labels: list
-    ) -> tuple[list[FloatTensor], Tensor, Tensor]:
-        """Reformat training data into tensors."""
-
-        abstract_plan_list = []
-        abstract_plan_lengths_list = []
-        resample_count_list = []
-
-        # Generate a row in the training dataset.
-        for datapoint in features_and_labels:
-            abstract_plan, plan_len, resample_count = datapoint
-
-            # Get the features
-            abstract_plan_list.append(torch.FloatTensor(abstract_plan))
-            abstract_plan_lengths_list.append(plan_len)
-
-            # Get the targets
-            resample_count_list.append(resample_count)
-
-        # Convert targets to tensor
-        resample_count = torch.FloatTensor(np.array(resample_count_list)).unsqueeze(1)
-
-        # Convert lengths to tensor
-        abstract_plan_lengths = torch.tensor(abstract_plan_lengths_list)
-
-        return (abstract_plan_list, abstract_plan_lengths, resample_count)
-
-    def train_abstract_action_scorer(
-        self, abstract_action_dataset: defaultdict[str, list]
-    ):
-        """Train each abstract action scorer given dataset."""
-        for (
-            abstract_action,
-            abstract_action_scorer,
-        ) in self._abstract_action_to_action_scorer.items():
-            # Segment data for each ground operator.
-
-            abstract_action_descriptor = abstract_action.short_str
-            if abstract_action_descriptor in abstract_action_dataset:
-                features_and_labels = abstract_action_dataset[
-                    abstract_action_descriptor
-                ]
-
-                # Generate training data.
-                abstract_plan_list, abstract_plan_lengths, resample_count = (
-                    self._generate_abstract_action_scorer_training_data(
-                        features_and_labels
-                    )
-                )
-
-                loss_fn = nn.MSELoss()
-                # Train the scoring function for each grounded skill.
-                losses = abstract_action_scorer.train(
-                    abstract_plan_list, resample_count, abstract_plan_lengths, loss_fn
-                )
-
-                self._loss_metrics[abstract_action_descriptor] = losses
-
-    def get_abstract_action_score(self, abstract_action_str: str) -> float:
-        """Evaluate the predicted resample count for the abstract action given current
-        task plan."""
-
-        assert self._current_abstract_plan is not None
-        for (
-            abstract_action,
-            abstract_action_scorer,
-        ) in self._abstract_action_to_action_scorer.items():
-
-            abstract_action_descriptor = abstract_action.short_str
-            if abstract_action_descriptor == abstract_action_str:
-
-                score = abstract_action_scorer.score(self._current_abstract_plan)
-                return score
-        return -1
-
-    def train_q_function(self, abstract_action_dataset: defaultdict[str, list]):
-        """Train the abstract plan q function given the abstract action dataset."""
-
-        # First train the abstract action classifiers
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
@@ -359,46 +208,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
             (self._last_observation, self._most_recent_parameter, label)
         )
-
-    def _add_most_recent_abstract_action_to_dataset(self, training_label: str):
-        """Label the abstract action as successful (1) or failure (0)."""
-        assert self._most_recent_abstract_action_descriptor
-        assert self._current_abstract_plan
-
-        if self._train_or_eval == "eval":
-            return
-
-        label = 0 if training_label == "success" else 1
-
-        prev_abstract_states = tuple(
-            self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
-        )
-        prev_abstract_actions = tuple(
-            self._current_abstract_plan[1][: self._current_abstract_plan_step]
-        )
-
-        # Store the number of times the abstract action
-        # given the previous abstract plan needed to be resampled.
-        self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
-            (prev_abstract_states, prev_abstract_actions)
-        ] += label
-
-    def _add_abstract_plan_to_dataset(self, training_label: str):
-        assert self._current_abstract_plan
-
-        if self._train_or_eval == "eval":
-            return
-
-        label = 1 if training_label == "success" else 0
-
-        # Add the completed abstract plan up to the point where this function is called
-        abstract_states = tuple(
-            self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
-        )
-        abstract_actions = tuple(
-            self._current_abstract_plan[1][: self._current_abstract_plan_step + 1]
-        )
-        self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -448,8 +257,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             # If we have reached the next abstract state, advance the current plan step.
             if s == ns:
-                self._add_most_recent_abstract_action_to_dataset("success")
-                self._add_abstract_plan_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
 
@@ -489,9 +296,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             except (TrajectorySamplingFailure, IndexError) as e:
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
-                    self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
-                    self._add_abstract_plan_to_dataset("failure")
 
                 # Resample Controller
                 self._resample_controller(x, self._last_observation)
@@ -516,22 +321,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the collected parameter dataset."""
         return self._parameter_dataset
 
-    def get_abstract_plan_dataset(self) -> list:
-        """Return the collected abstract plan dataset."""
-        return self._abstract_plan_dataset
-
-    def get_abstract_action_dataset(
-        self,
-    ) -> defaultdict[str, defaultdict[FrozenSkeleton, int]]:
-        """Return the collected abstract action dataset."""
-        return self._abstract_action_dataset
-
-    def get_loss_metrics(
-        self,
-    ) -> dict[str, list]:
-        """Return the loss metrics for each abstract action."""
-        return self._loss_metrics
-
     def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
         sequence, sequence_length = create_abstract_plan_sequence(
             self._all_ground_atoms, self._all_ground_operators, abstract_plan
@@ -549,13 +338,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._make_data(abstract_plan, training_label)
                 for abstract_plan, training_label in self._abstract_plan_dataset
             ),
-            "abstract_action_dataset.pkl": {
-                k: list(
-                    self._make_data(abstract_plan, resample_count)
-                    for abstract_plan, resample_count in v.items()
-                )
-                for k, v in self._abstract_action_dataset.items()
-            },
         }
 
         for filename, data in datasets.items():

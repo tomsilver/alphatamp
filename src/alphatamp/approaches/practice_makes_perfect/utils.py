@@ -7,13 +7,13 @@ from scipy.stats._distn_infrastructure import rv_frozen
 
 
 def _beta_bernoulli_posterior_alpha_beta(
-    success_history: List[bool], alpha: float = 1.0, beta: float = 1.0
+    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
 ) -> Tuple[float, float]:
     """See https://gregorygundersen.com/blog/2020/08/19/bernoulli-beta/"""
     n = len(success_history)
     s = sum(success_history)
     alpha_n = alpha + s
-    beta_n = n - s + beta
+    beta_n = n - s + _beta
     return (alpha_n, beta_n)
 
 

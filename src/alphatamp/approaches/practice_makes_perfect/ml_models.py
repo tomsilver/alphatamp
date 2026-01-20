@@ -10,12 +10,14 @@ from typing import Callable, Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from relational_structs.object_centric_state import ObjectCentricState
+from relational_structs.objects import Object
 from scipy.stats._distn_infrastructure import rv_frozen
 from torch import Tensor, nn, optim
 from torch.distributions.categorical import Categorical
 
 from alphatamp.approaches.practice_makes_perfect import utils
-from alphatamp.structs import Array, MaxTrainIters, Object, ObjectCentricState
+from alphatamp.structs import Array, MaxTrainIters
 
 torch.use_deterministic_algorithms(mode=True)  # type: ignore
 torch.set_num_threads(1)  # fixes libglomp error on supercloud
@@ -451,7 +453,7 @@ class ImplicitMLPRegressor(PyTorchRegressor):
             # Create labels for multiclass loss. Note that the true inputs
             # are first, so the target labels are all zeros (see docstring).
             idxs = torch.zeros([num_samples], dtype=torch.int64)
-            labels = F.one_hot(idxs, num_classes=(num_negatives + 1)).float()
+            labels = F.one_hot(idxs, num_classes=num_negatives + 1).float()
             assert labels.shape == (num_samples, num_negatives + 1)
             # Note that XY is flattened and labels is not. XY is flattened
             # because we need to feed each entry through the network during
@@ -779,7 +781,8 @@ def _train_pytorch_model(
 
 # # Low-level state, current high-level (predicate) state, option taken,
 # # next low-level state, reward, done.
-# MapleQData = Tuple[ObjectCentricState, Set[GroundAtom], _Option, ObjectCentricState, float, bool]
+# MapleQData =
+# Tuple[ObjectCentricState, Set[GroundAtom], _Option, ObjectCentricState, float, bool]
 
 
 # class MapleQFunction(MLPRegressor):

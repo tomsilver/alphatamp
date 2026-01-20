@@ -738,7 +738,7 @@ class GlobalSettings:
         """A workaround for global settings that are derived from the experiment-
         specific args."""
 
-        return dict(
+        return dict(  # pylint: disable=use-dict-literal
             # The method used for perception: now only "trivial" or "sokoban".
             perceiver=defaultdict(
                 lambda: "trivial",
