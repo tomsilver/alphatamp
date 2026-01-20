@@ -1,7 +1,9 @@
 """General utility methods."""
 
-from typing import List, Tuple, Any, Set
-from scipy.stats import beta as BetaRV
+from typing import Any, List, Set, Tuple
+
+from scipy.stats import beta
+from scipy.stats._distn_infrastructure import rv_frozen
 
 
 def _beta_bernoulli_posterior_alpha_beta(
@@ -16,18 +18,22 @@ def _beta_bernoulli_posterior_alpha_beta(
 
 
 def beta_bernoulli_posterior(
-    success_history: List[bool], alpha: float = 1.0, beta: float = 1.0
-) -> BetaRV:
+    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
+) -> rv_frozen:
     """Returns the RV."""
-    alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(success_history, alpha, beta)
-    return BetaRV(alpha_n, beta_n)
+    alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(
+        success_history, alpha, _beta
+    )
+    return beta(alpha_n, beta_n)
 
 
 def beta_bernoulli_posterior_mean(
-    success_history: List[bool], alpha: float = 1.0, beta: float = 1.0
+    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
 ) -> float:
     """Faster computation to avoid instantiating BetaRV when not needed."""
-    alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(success_history, alpha, beta)
+    alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(
+        success_history, alpha, _beta
+    )
     return alpha_n / (alpha_n + beta_n)
 
 
@@ -36,7 +42,7 @@ def beta_from_mean_and_variance(
     variance: float,
     variance_lower_pad: float = 1e-6,
     variance_upper_pad: float = 1e-3,
-) -> BetaRV:
+) -> rv_frozen:
     """Recover a beta distribution given a mean and a variance.
 
     See https://stats.stackexchange.com/questions/12232/ for derivation.
@@ -46,10 +52,10 @@ def beta_from_mean_and_variance(
         min(variance, mean * (1 - mean) - variance_upper_pad), variance_lower_pad
     )
     alpha = ((1 - mean) / variance - 1 / mean) * (mean**2)
-    beta = alpha * (1 / mean - 1)
+    _beta = alpha * (1 / mean - 1)
     assert alpha > 0
-    assert beta > 0
-    rv = BetaRV(alpha, beta)
+    assert _beta > 0
+    rv = beta(alpha, _beta)
     assert abs(rv.mean() - mean) < 1e-6
     return rv
 

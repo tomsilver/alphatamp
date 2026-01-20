@@ -10,7 +10,7 @@ from typing import Callable, Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.stats import beta as BetaRV
+from scipy.stats._distn_infrastructure import rv_frozen
 from torch import Tensor, nn, optim
 from torch.distributions.categorical import Categorical
 
@@ -644,7 +644,7 @@ class MonotonicBetaRegressor(PyTorchRegressor, DistributionRegressor):
         # Just regress the mean for stability.
         return nn.MSELoss()
 
-    def predict_beta(self, x: float) -> BetaRV:
+    def predict_beta(self, x: float) -> rv_frozen:
         """Predict a beta distribution given the input."""
         mean = self._predict(np.array([x], dtype=np.float32))[0]
         return utils.beta_from_mean_and_variance(mean, self.variance)
@@ -652,7 +652,8 @@ class MonotonicBetaRegressor(PyTorchRegressor, DistributionRegressor):
     def predict_sample(self, x: Array, rng: np.random.Generator) -> Array:
         assert len(x) == 1
         rv = self.predict_beta(x[0])
-        return rv.rvs(random_state=rng).reshape(x.shape)
+        rv.rvs(size=x.shape, random_state=rng)
+        return np.array(rv, dtype=np.float32)
 
     def get_transformed_params(self) -> List[float]:
         """For interpretability."""

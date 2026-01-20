@@ -7,6 +7,7 @@ from typing import Type as TypingType
 
 import numpy as np
 from scipy.stats import beta as BetaRV
+from scipy.stats._distn_infrastructure import rv_frozen
 
 from alphatamp.approaches.practice_makes_perfect import utils
 from alphatamp.approaches.practice_makes_perfect.ml_models import MonotonicBetaRegressor
@@ -61,7 +62,7 @@ class LegacySkillCompetenceModel(SkillCompetenceModel):
         # Highly naive: group together all outcomes.
         all_outcomes = [o for co in self._cycle_observations for o in co]
         return utils.beta_bernoulli_posterior_mean(
-            all_outcomes, alpha=self._default_alpha, beta=self._default_beta
+            all_outcomes, alpha=self._default_alpha, _beta=self._default_beta
         )
 
     def predict_competence(self, num_additional_data: int) -> float:
@@ -89,7 +90,7 @@ class OptimisticSkillCompetenceModel(SkillCompetenceModel):
         nonempty_cycle_obs = self._get_nonempty_cycle_observations()
         if not nonempty_cycle_obs:
             return utils.beta_bernoulli_posterior_mean(
-                [], alpha=self._default_alpha, beta=self._default_beta
+                [], alpha=self._default_alpha, _beta=self._default_beta
             )  # default
         window = min(
             len(nonempty_cycle_obs), CFG.skill_competence_model_optimistic_window_size
@@ -97,7 +98,7 @@ class OptimisticSkillCompetenceModel(SkillCompetenceModel):
         recent_cycle_obs = nonempty_cycle_obs[-window:]
         all_outcomes = [o for co in recent_cycle_obs for o in co]
         return utils.beta_bernoulli_posterior_mean(
-            all_outcomes, alpha=self._default_alpha, beta=self._default_beta
+            all_outcomes, alpha=self._default_alpha, _beta=self._default_beta
         )
 
     def predict_competence(self, num_additional_data: int) -> float:
@@ -122,7 +123,7 @@ class OptimisticSkillCompetenceModel(SkillCompetenceModel):
             competences.append(competence)
         best_change = max(competences) - min(competences)
         gain = best_change * num_additional_data
-        return np.clip(current_competence + gain, 1e-6, 1.0)
+        return float(np.clip(current_competence + gain, 1e-6, 1.0))
 
 
 class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
@@ -132,7 +133,9 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         super().__init__(skill_name)
         self._log_prefix = f"[Competence] [{self._skill_name}]"
         # Update competence estimate after every observation.
-        self._posterior_competences = [BetaRV(self._default_alpha, self._default_beta)]
+        self._posterior_competences: List[rv_frozen] = [
+            BetaRV(self._default_alpha, self._default_beta)
+        ]
         # Model that maps number of data to competence.
         self._competence_regressor: Optional[MonotonicBetaRegressor] = None
 
@@ -141,7 +144,7 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         return "latent_variable"
 
     def get_current_competence(self) -> float:
-        return self._posterior_competences[-1].mean()
+        return float(self._posterior_competences[-1].mean())
 
     def predict_competence(self, num_additional_data: int) -> float:
         # If we haven't yet learned a regressor, default to an optimistic
@@ -157,9 +160,9 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         current_rv = self._competence_regressor.predict_beta(current_num_data)
         future_num_data = current_num_data + num_additional_data
         future_rv = self._competence_regressor.predict_beta(future_num_data)
-        gain = future_rv.mean() - current_rv.mean()
+        gain = float(future_rv.mean()) - float(current_rv.mean())
         assert gain >= -1e-6
-        return np.clip(self.get_current_competence() + gain, 0.0, 1.0)
+        return float(np.clip(self.get_current_competence() + gain, 0.0, 1.0))
 
     def observe(self, skill_outcome: bool) -> None:
         # Update the posterior competence after every observation.
@@ -170,10 +173,11 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         else:
             current_num_data = self._get_current_num_data()
             rv = self._competence_regressor.predict_beta(current_num_data)
-            alpha0, beta0 = rv.args
+            assert len(rv.args) >= 2
+            alpha0, beta0 = float(rv.args[0]), float(rv.args[1])
         current_cycle_outcomes = self._cycle_observations[-1]
         self._posterior_competences[-1] = utils.beta_bernoulli_posterior(
-            current_cycle_outcomes, alpha=alpha0, beta=beta0
+            current_cycle_outcomes, alpha=alpha0, _beta=beta0
         )
 
     def advance_cycle(self) -> None:
@@ -230,14 +234,14 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         inputs = np.reshape(num_data_before_cycle, (-1, 1))
         return inputs
 
-    def _run_map_inference(self, betas: List[BetaRV]) -> List[float]:
+    def _run_map_inference(self, betas: List[rv_frozen]) -> List[float]:
         """Compute the MAP competences given the input beta priors."""
         assert len(betas) == len(self._cycle_observations)
         map_competences: List[float] = []
         for o, rv in zip(self._cycle_observations, betas):
-            alpha, beta = rv.args
-            prv = utils.beta_bernoulli_posterior(o, alpha=alpha, beta=beta)
-            map_competences.append(prv.mean())
+            alpha, _beta = float(rv.args[0]), float(rv.args[1])  # type: ignore[misc]
+            prv = utils.beta_bernoulli_posterior(o, alpha=alpha, _beta=_beta)
+            map_competences.append(float(prv.mean()))
         return map_competences
 
 
