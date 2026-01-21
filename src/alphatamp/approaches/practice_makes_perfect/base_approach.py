@@ -2,7 +2,7 @@
 
 al's paper Practice Makes Perfect approach.
 """
-
+import numpy as np
 import pickle
 from collections import defaultdict
 from pathlib import Path
@@ -138,6 +138,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_controller = None
         self._last_observation = obs
         self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+        self._current_competence_model = None
 
         self._timestep = 0
         self._most_recent_parameter = None
@@ -195,8 +196,53 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
+    def _generate_parameter_scorer_training_data(
+        self, features_and_labels: list
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Reformat training data into numpy arrays."""
+
+        features_list = []
+        labels_list = []
+
+        # Generate a row in the training dataset.
+        for datapoint in features_and_labels:
+            state, parameter, label = datapoint
+            state_arr = np.array(state)
+            parameter_arr = np.array(parameter)
+
+            # The features are the state observation and the parameter.
+            feature_arr = np.append(state_arr, parameter_arr)
+            label_arr = np.array(label)
+
+            features_list.append(feature_arr)
+            labels_list.append(label_arr)
+
+        features = np.vstack(features_list)
+        labels = np.vstack(labels_list).ravel()
+
+        return (features, labels)
+
     def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
+
+        # Use same code 
+        for (
+            abstract_action,
+            scoring_function,
+        ) in self._abstract_action_to_scoring_function.items():
+            # Segment data for each ground operator.
+
+            abstract_action_descriptor = abstract_action.short_str
+            if abstract_action_descriptor in parameter_dataset:
+                features_and_labels = parameter_dataset[abstract_action_descriptor]
+
+                # Generate training data.
+                features, labels = self._generate_parameter_scorer_training_data(
+                    features_and_labels
+                )
+
+                # Train the scoring function for each grounded skill.
+                scoring_function.train(features, labels)
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
@@ -216,6 +262,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def _update_competence_model(self, skill_outcome):
         """Update the current skill's competence model with the observed outcome."""
+        assert self._current_competence_model
+        
         self._current_competence_model.observe(skill_outcome)
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
@@ -278,8 +326,10 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Get the last observed state.
         x = self._env_models.observation_to_state(self._last_observation)
-        # If we advanced, we need to reset a new parameterized controller.
+        # If we advanced, we need to update the current competence model.
         if advanced:
+            a = self._current_abstract_plan[1][self._current_abstract_plan_step]
+            self._current_competence_model = self._abstract_action_to_competence_model[a] 
             self._resample_controller(x, self._last_observation)
 
         # We are using the same controller as before.
