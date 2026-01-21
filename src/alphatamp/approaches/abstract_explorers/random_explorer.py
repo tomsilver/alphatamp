@@ -1,11 +1,11 @@
 """An random abstract plan explorer that returns a fixed length plan with random
 actions."""
 
-from typing import TypeVar
+from typing import TypeVar, Optional
 
 import numpy as np
 from bilevel_planning.structs import (
-    RelationalAbstractState,
+    RelationalAbstractState, RelationalAbstractGoal
 )
 from bilevel_planning.utils import (
     cached_all_ground_operators,
@@ -44,7 +44,7 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
         self._rng = np.random.default_rng(seed=seed)
 
     def generate_abstract_plan(
-        self, obs: _O
+        self, obs: _O, goal: Optional[RelationalAbstractGoal] = None
     ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
         # Randomly create abstract plan.
 

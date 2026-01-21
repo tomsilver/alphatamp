@@ -10,7 +10,7 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
 from bilevel_planning.structs import (
-    ParameterizedController,
+    ParameterizedController, RelationalAbstractGoal
 )
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -303,7 +303,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                         task_success *= abstract_action_competences[abstract_action]
 
                     expected_task_success += task_success
-        
+
             expected_task_success /= len(self._initial_state_distribution)
 
             if expected_task_success > max_expected_task_success:
@@ -321,7 +321,14 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             the agent to an abstract state where it can perform the skill. """
         
         desired_skill = self._get_desired_skill()
-        self._current_abstract_plan = explorer.generate_abstract_plan(obs) 
+        
+        # Determine the required preconditions for the desired skill to practice
+        preconditions = desired_skill.preconditions
+        goal = RelationalAbstractGoal(preconditions, self._env_models.state_abstractor)
+        
+        assert self._last_observation
+        
+        self._current_abstract_plan = self._train_explorer.generate_abstract_plan(self._last_observation, goal) 
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
