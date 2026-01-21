@@ -2,11 +2,9 @@
 entire abstract skeletons."""
 
 import abc
-from typing import Generic, TypeVar, Optional
+from typing import Generic, Optional, TypeVar
 
-from bilevel_planning.structs import (
-    RelationalAbstractState, RelationalAbstractGoal
-)
+from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
 from relational_structs.pddl import GroundOperator
 
 _O = TypeVar("_O")  # observation

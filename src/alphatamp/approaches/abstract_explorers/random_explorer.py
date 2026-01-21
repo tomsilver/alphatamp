@@ -1,12 +1,10 @@
 """An random abstract plan explorer that returns a fixed length plan with random
 actions."""
 
-from typing import TypeVar, Optional
+from typing import Optional, TypeVar
 
 import numpy as np
-from bilevel_planning.structs import (
-    RelationalAbstractState, RelationalAbstractGoal
-)
+from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
 from bilevel_planning.utils import (
     cached_all_ground_operators,
 )

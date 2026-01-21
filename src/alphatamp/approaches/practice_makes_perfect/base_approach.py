@@ -1,17 +1,15 @@
-"""An implementation of Kumar, Silver et al's paper Practice Makes Perfect approach.
-"""
-import numpy as np
+"""An implementation of Kumar, Silver et al's paper Practice Makes Perfect approach."""
+
 import pickle
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
+import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.structs import (
-    ParameterizedController, RelationalAbstractGoal
-)
+from bilevel_planning.structs import ParameterizedController, RelationalAbstractGoal
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
@@ -35,6 +33,10 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
+from alphatamp.approaches.practice_makes_perfect.competence_models import (
+    SkillCompetenceModel,
+    create_competence_model,
+)
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
@@ -43,16 +45,14 @@ from alphatamp.approaches.simulator_free_base_approach import (
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
 
-from alphatamp.approaches.practice_makes_perfect.competence_models import SkillCompetenceModel, OptimisticSkillCompetenceModel, create_competence_model
-
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
 
 
 class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
-    """A simulator-free approach that estimates, extrapoltates, and situates abstract action
-    competencies in its free time (training mode)."""
+    """A simulator-free approach that estimates, extrapoltates, and situates abstract
+    action competencies in its free time (training mode)."""
 
     def __init__(
         self,
@@ -114,7 +114,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Competence Models
         self._current_competence_model: SkillCompetenceModel | None = None
-        self._abstract_action_to_competence_model: dict[GroundOperator, SkillCompetenceModel] = {}
+        self._abstract_action_to_competence_model: dict[
+            GroundOperator, SkillCompetenceModel
+        ] = {}
 
         # State distributions
         self._initial_state_distribution: list = []
@@ -171,7 +173,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._parameter_scorer_class(**self._parameter_scorer_configs)
             )
 
-            self._abstract_action_to_competence_model[grounded_operator] = create_competence_model("optimistic", grounded_operator.name)
+            self._abstract_action_to_competence_model[grounded_operator] = (
+                create_competence_model("optimistic", grounded_operator.name)
+            )
 
     def _learn_from_transition(
         self,
@@ -260,45 +264,53 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             (self._last_observation, self._most_recent_parameter, label)
         )
 
-    def _update_competence_model(self, skill_outcome):
+    def _update_competence_model(self, skill_outcome: bool) -> None:
         """Update the current skill's competence model with the observed outcome."""
         assert self._current_competence_model
-        
+
         self._current_competence_model.observe(skill_outcome)
 
     # We need to store the initial state each time we practice skills or attempt to
-    # complete the goal so to generate the distirbutino over initial states to 
+    # complete the goal so to generate the distirbutino over initial states to
     # calculate the expected probability
 
-    def _get_desired_skill(self) -> GroundOperator:
+    def _extrapolate_skills(self) -> list[tuple[GroundOperator, float]]:
         """Use the skill competence models to determine which skill to practice.
-            We do this by calculating the expected probability of successfully completing
-            the desired goal assuming, for each skill, that we've updated the skill's competency.
-            We then return the skill that maximizes the expected probability of success. """
-        
-        max_expected_task_success = 0
-        argmax_abstract_action = None
+
+        We do this by calculating the expected probability of successfully completing
+        the desired goal assuming, for each skill, that we've updated the skill's
+        competency. We then return each skill alongside its extrapolated competency.
+        """
+
+        abstract_action_scores: list[tuple[GroundOperator, float]] = []
         abstract_action_competences = {
-            abstract_action: competence_model.get_current_competence() for abstract_action, competence_model in self._abstract_action_to_competence_model.items()
+            abs_a: comp_model.get_current_competence()
+            for abs_a, comp_model in self._abstract_action_to_competence_model.items()
         }
-        for extrapolated_abstract_action in self._abstract_action_to_competence_model.keys():
-            expected_task_success = 0
+        for (
+            extrapolated_abstract_action,
+            competency_model,
+        ) in self._abstract_action_to_competence_model.items():
+            expected_task_success = 0.0
 
             curr_competency = abstract_action_competences[extrapolated_abstract_action]
-            competency_model = self._abstract_action_to_competence_model[extrapolated_abstract_action]
-            
-            # Update the extrapolated abstract action's competency 
-            # to use the predicted competency
-            abstract_action_competences[extrapolated_abstract_action] = competency_model.predict_competence(1)
 
-            # Calculate the expected probability of task success given 
+            # Update the extrapolated abstract action's competency
+            # to use the predicted competency
+            abstract_action_competences[extrapolated_abstract_action] = (
+                competency_model.predict_competence(1)
+            )
+
+            # Calculate the expected probability of task success given
             # updated competency
             for initial_state in self._initial_state_distribution:
-                abstract_plan = self._train_explorer.generate_abstract_plan(initial_state)
+                abstract_plan = self._train_explorer.generate_abstract_plan(
+                    initial_state
+                )
 
                 if abstract_plan is not None:
                     _, abstract_actions = abstract_plan
-                    task_success = 1
+                    task_success = 1.0
                     for abstract_action in abstract_actions:
                         task_success *= abstract_action_competences[abstract_action]
 
@@ -306,29 +318,47 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             expected_task_success /= len(self._initial_state_distribution)
 
-            if expected_task_success > max_expected_task_success:
-                max_expected_task_success = expected_task_success
-                argmax_abstract_action = extrapolated_abstract_action
+            abstract_action_scores.append(
+                (extrapolated_abstract_action, expected_task_success)
+            )
 
             # Revert abstract action competency back to baseline
             abstract_action_competences[extrapolated_abstract_action] = curr_competency
-        assert argmax_abstract_action
+        assert abstract_action_scores
 
-        return argmax_abstract_action
+        abstract_action_scores.sort(key=lambda x: x[1], reverse=True)
+        return abstract_action_scores
 
-    def _generate_new_task_goal(self):
-        """Given a skill to practice, generate the abstract plan that transitions
-            the agent to an abstract state where it can perform the skill. """
-        
-        desired_skill = self._get_desired_skill()
-        
-        # Determine the required preconditions for the desired skill to practice
-        preconditions = desired_skill.preconditions
-        goal = RelationalAbstractGoal(preconditions, self._env_models.state_abstractor)
-        
+    def _generate_new_task_goal(self) -> None:
+        """Given sorted list of extrapolated skill task successes, generate the abstract
+        plan that transitions the agent to an abstract state where it can perform the
+        skill that improves the task success the most."""
+
         assert self._last_observation
-        
-        self._current_abstract_plan = self._train_explorer.generate_abstract_plan(self._last_observation, goal) 
+        skill_scores = self._extrapolate_skills()
+
+        for skill, _ in skill_scores:
+            # Determine the required preconditions for the desired skill to practice
+            preconditions = skill.preconditions
+            goal = RelationalAbstractGoal(
+                preconditions, self._env_models.state_abstractor
+            )
+
+            try:
+                self._current_abstract_plan = (
+                    self._train_explorer.generate_abstract_plan(
+                        self._last_observation, goal
+                    )
+                )
+                return
+            except RuntimeError:
+                # If no abstract plan is found, try next skill.
+                continue
+
+        # Reset pointer
+        self._current_abstract_plan_step = 0
+        # If no abstract plan is found for all skills, throw error
+        raise RuntimeError("Unable to plan for any skill")
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -393,7 +423,11 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # If we advanced, we need to update the current competence model.
         if advanced:
             a = self._current_abstract_plan[1][self._current_abstract_plan_step]
-            self._current_competence_model = self._abstract_action_to_competence_model[a] 
+            self._current_competence_model = self._abstract_action_to_competence_model[
+                a
+            ]
+            # Successful execution of skill.
+            self._update_competence_model(True)
             self._resample_controller(x, self._last_observation)
 
         # We are using the same controller as before.
@@ -403,31 +437,32 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         assert self._current_controller
 
-        for attempt_num in range(self._max_resamples):
-            # Try to take a low-level action from the controller.
-            try:
-                # Take one more low-level action.
-                self._last_action = self._current_controller.step()
-                assert self._last_action is not None
+        # Try to take a low-level action from the controller.
+        try:
+            # Take one more low-level action.
+            self._last_action = self._current_controller.step()
+            assert self._last_action is not None
 
-                # If low-level action is successful, store it.
-                if self._train_or_eval == "train":
-                    self._add_most_recent_parameter_to_dataset("success")
+            # If low-level action is successful, store it.
+            if self._train_or_eval == "train":
+                self._add_most_recent_parameter_to_dataset("success")
 
-                return self._last_action
-            # If low level action failed, store the parameter that failed!
-            except (TrajectorySamplingFailure, IndexError) as e:
-                # If training, store the previous parameter.
-                if self._train_or_eval == "train":
-                    self._update_competence_model(False)
-                    self._add_most_recent_parameter_to_dataset("failure")
+            return self._last_action
+        # If low level action failed, store the parameter that failed!
+        except (TrajectorySamplingFailure, IndexError):
+            # If training, store the previous parameter.
+            if self._train_or_eval == "train":
+                self._update_competence_model(False)
+                self._add_most_recent_parameter_to_dataset("failure")
 
-                # Resample Controller
-                self._resample_controller(x, self._last_observation)
+                # Determine new task to execute
+                self._generate_new_task_goal()
 
-                if attempt_num == self._max_resamples - 1:
-                    # Raise ApproachStepError
-                    raise ApproachStepError("Trajectory Error!", e)
+                # Return dummy action
+                assert self._env_models.action_space.shape
+                action_shape = self._env_models.action_space.shape
+                stationary_action = np.zeros(action_shape)
+                return cast(_U, stationary_action)
 
         raise RuntimeError("Should not reach this point")
 
