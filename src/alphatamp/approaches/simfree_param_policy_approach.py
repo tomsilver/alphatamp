@@ -69,7 +69,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
         max_abstract_plans: int = 10,
-        max_resamples: int = 5,
+        max_resamples: int = 100,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -234,7 +234,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             labels_list.append(label_arr)
 
         features = np.vstack(features_list)
-        labels = np.vstack(labels_list)
+        labels = np.vstack(labels_list).ravel()
 
         return (features, labels)
 
@@ -346,6 +346,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._most_recent_parameter and self._most_recent_abstract_action_descriptor
         )
         assert self._last_observation is not None
+
+        if self._train_or_eval == "eval":
+            return
+
         label = 1 if training_label == "success" else 0
 
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
@@ -356,6 +360,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Label the abstract action as successful (1) or failure (0)."""
         assert self._most_recent_abstract_action_descriptor
         assert self._current_abstract_plan
+
+        if self._train_or_eval == "eval":
+            return
 
         label = 0 if training_label == "success" else 1
 
@@ -374,6 +381,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
+
+        if self._train_or_eval == "eval":
+            return
 
         label = 1 if training_label == "success" else 0
 
@@ -478,6 +488,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
+
+                # Resample Controller
+                self._resample_controller(x, self._last_observation)
 
                 if attempt_num == self._max_resamples - 1:
                     # Raise ApproachStepError

@@ -9,15 +9,14 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=bilevel-planning",
-   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench-bilevel-planning",
-   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench",
-   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench-models",
-   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prpl-utils",
-   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prpl-llm-utils",
-   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=toms-geoms-2d",
-   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=relational-structs",
-   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@2fb2da808c5c3224dd9acb2826916102592926ce#subdirectory=prbench",
+   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=bilevel-planning",
+   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=prbench-bilevel-planning",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=prbench",
+   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=prbench-models",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=prpl-utils",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=prpl-llm-utils",
+   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=toms-geoms-2d",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@0f72cb5ccdd96989f25f4391df615919d56edbf9#subdirectory=relational-structs",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
    "scikit-learn",
