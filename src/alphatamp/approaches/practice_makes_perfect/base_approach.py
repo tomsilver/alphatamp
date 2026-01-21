@@ -264,25 +264,24 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             (self._last_observation, self._most_recent_parameter, label)
         )
 
-    def _update_competence_model(self, skill_outcome: bool) -> None:
-        """Update the current skill's competence model with the observed outcome."""
-        assert self._current_competence_model
+    def _update_competence_model(self, action_outcome: bool) -> None:
+        """Update the current abstract_actions's competence model with the observed outcome."""
+        assert self._current_competence_model is not None
 
-        self._current_competence_model.observe(skill_outcome)
+        self._current_competence_model.observe(action_outcome)
 
-    # We need to store the initial state each time we practice skills or attempt to
-    # complete the goal so to generate the distirbutino over initial states to
-    # calculate the expected probability
 
-    def _extrapolate_skills(self) -> list[tuple[GroundOperator, float]]:
-        """Use the skill competence models to determine which skill to practice.
+    def _extrapolate_abstract_action(self) -> list[tuple[GroundOperator, float]]:
+        """Use the abstract action's competence model to determine which abstract action to practice.
 
         We do this by calculating the expected probability of successfully completing
-        the desired goal assuming, for each skill, that we've updated the skill's
-        competency. We then return each skill alongside its extrapolated competency.
+        the desired goal assuming, for each abstract action, that we've updated the abstract actions's
+        competency. We then return each abstract_action alongside its extrapolated competency.
         """
 
         abstract_action_scores: list[tuple[GroundOperator, float]] = []
+
+        # Precompute the competencies for each abstract action
         abstract_action_competences = {
             abs_a: comp_model.get_current_competence()
             for abs_a, comp_model in self._abstract_action_to_competence_model.items()
@@ -330,16 +329,16 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return abstract_action_scores
 
     def _generate_new_task_goal(self) -> None:
-        """Given sorted list of extrapolated skill task successes, generate the abstract
+        """Given sorted list of extrapolated abstract action task successes, generate the abstract
         plan that transitions the agent to an abstract state where it can perform the
-        skill that improves the task success the most."""
+        abstract action that improves the task success the most."""
 
-        assert self._last_observation
-        skill_scores = self._extrapolate_skills()
+        assert self._last_observation is not None
+        abstract_action_scores = self._extrapolate_abstract_action()
 
-        for skill, _ in skill_scores:
-            # Determine the required preconditions for the desired skill to practice
-            preconditions = skill.preconditions
+        for abstract_action, _ in abstract_action_scores:
+            # Determine the required preconditions for the desired abstract action to practice
+            preconditions = abstract_action.preconditions
             goal = RelationalAbstractGoal(
                 preconditions, self._env_models.state_abstractor
             )
@@ -352,12 +351,12 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
                 return
             except RuntimeError:
-                # If no abstract plan is found, try next skill.
+                # If no abstract plan is found, try next abstract action.
                 continue
 
         # Reset pointer
         self._current_abstract_plan_step = 0
-        # If no abstract plan is found for all skills, throw error
+        # If no abstract plan is found for all abstract actions, throw error
         raise RuntimeError("Unable to plan for any skill")
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
@@ -426,7 +425,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_competence_model = self._abstract_action_to_competence_model[
                 a
             ]
-            # Successful execution of skill.
+            # Successful execution of abstract action.
             self._update_competence_model(True)
             self._resample_controller(x, self._last_observation)
 
