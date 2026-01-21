@@ -116,6 +116,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_competence_model: SkillCompetenceModel | None = None
         self._abstract_action_to_competence_model: dict[GroundOperator, SkillCompetenceModel] = {}
 
+        # State distributions
+        self._initial_state_distribution: list = []
+
     def reset(
         self,
         obs: _O,
@@ -275,28 +278,40 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         
         max_expected_task_success = 0
         argmax_abstract_action = None
+        abstract_action_competences = {
+            abstract_action: competence_model.get_current_competence() for abstract_action, competence_model in self._abstract_action_to_competence_model.items()
+        }
         for extrapolated_abstract_action in self._abstract_action_to_competence_model.keys():
             expected_task_success = 0
+
+            curr_competency = abstract_action_competences[extrapolated_abstract_action]
+            competency_model = self._abstract_action_to_competence_model[extrapolated_abstract_action]
+            
+            # Update the extrapolated abstract action's competency 
+            # to use the predicted competency
+            abstract_action_competences[extrapolated_abstract_action] = competency_model.predict_competence(1)
+
+            # Calculate the expected probability of task success given 
+            # updated competency
             for initial_state in self._initial_state_distribution:
-                _, abstract_actions = self._train_explorer.generate_abstract_plan(initial_state)
+                abstract_plan = self._train_explorer.generate_abstract_plan(initial_state)
 
-                task_success = 1
-                for abstract_action in abstract_actions:
-                    competence_model = self._abstract_action_to_competence_model[abstract_action]
-                    if abstract_action == extrapolated_abstract_action:
-                        competence = competence_model.predict_competence(1)
-                    else:
-                        competence = competence_model.get_current_competence()
-                    task_success *= competence
+                if abstract_plan is not None:
+                    _, abstract_actions = abstract_plan
+                    task_success = 1
+                    for abstract_action in abstract_actions:
+                        task_success *= abstract_action_competences[abstract_action]
 
-                expected_task_success += task_success
-
+                    expected_task_success += task_success
+        
             expected_task_success /= len(self._initial_state_distribution)
 
             if expected_task_success > max_expected_task_success:
                 max_expected_task_success = expected_task_success
                 argmax_abstract_action = extrapolated_abstract_action
-        
+
+            # Revert abstract action competency back to baseline
+            abstract_action_competences[extrapolated_abstract_action] = curr_competency
         assert argmax_abstract_action
 
         return argmax_abstract_action
