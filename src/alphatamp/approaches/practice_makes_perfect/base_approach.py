@@ -1,6 +1,4 @@
-"""An implementation of Kumar, Silver et.
-
-al's paper Practice Makes Perfect approach.
+"""An implementation of Kumar, Silver et al's paper Practice Makes Perfect approach.
 """
 import numpy as np
 import pickle
@@ -53,8 +51,8 @@ _U = TypeVar("_U")  # action
 
 
 class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
-    """A simulator-free approach that estimates, extrapoltates, and situates skill
-    competencies in its free time."""
+    """A simulator-free approach that estimates, extrapoltates, and situates abstract action
+    competencies in its free time (training mode)."""
 
     def __init__(
         self,
@@ -225,7 +223,6 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
 
-        # Use same code 
         for (
             abstract_action,
             scoring_function,
@@ -265,6 +262,51 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert self._current_competence_model
         
         self._current_competence_model.observe(skill_outcome)
+
+    # We need to store the initial state each time we practice skills or attempt to
+    # complete the goal so to generate the distirbutino over initial states to 
+    # calculate the expected probability
+
+    def _get_desired_skill(self) -> GroundOperator:
+        """Use the skill competence models to determine which skill to practice.
+            We do this by calculating the expected probability of successfully completing
+            the desired goal assuming, for each skill, that we've updated the skill's competency.
+            We then return the skill that maximizes the expected probability of success. """
+        
+        max_expected_task_success = 0
+        argmax_abstract_action = None
+        for extrapolated_abstract_action in self._abstract_action_to_competence_model.keys():
+            expected_task_success = 0
+            for initial_state in self._initial_state_distribution:
+                _, abstract_actions = self._train_explorer.generate_abstract_plan(initial_state)
+
+                task_success = 1
+                for abstract_action in abstract_actions:
+                    competence_model = self._abstract_action_to_competence_model[abstract_action]
+                    if abstract_action == extrapolated_abstract_action:
+                        competence = competence_model.predict_competence(1)
+                    else:
+                        competence = competence_model.get_current_competence()
+                    task_success *= competence
+
+                expected_task_success += task_success
+
+            expected_task_success /= len(self._initial_state_distribution)
+
+            if expected_task_success > max_expected_task_success:
+                max_expected_task_success = expected_task_success
+                argmax_abstract_action = extrapolated_abstract_action
+        
+        assert argmax_abstract_action
+
+        return argmax_abstract_action
+
+    def _generate_new_task_goal(self):
+        """Given a skill to practice, generate the abstract plan that transitions
+            the agent to an abstract state where it can perform the skill. """
+        
+        desired_skill = self._get_desired_skill()
+        self._current_abstract_plan = explorer.generate_abstract_plan(obs) 
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
