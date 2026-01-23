@@ -10,7 +10,7 @@ import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.structs import ParameterizedController, RelationalAbstractGoal
+from bilevel_planning.structs import ParameterizedController, RelationalAbstractGoal, RelationalAbstractState
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
@@ -123,6 +123,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # State distributions
         self._initial_observation_distribution: list[_O] = []
         self._max_subset_size = max_subset_size
+
+        # Continual Learning Params
+        self._new_learning_cycle = False
 
     def reset(
         self,
@@ -350,7 +353,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert self._last_observation is not None
         abstract_action_scores = self._extrapolate_abstract_action()
 
-        # print(f"Abstract action scores: ", abstract_action_scores)
+        print(f"Abstract action scores: ", abstract_action_scores)
         for abstract_action, _ in abstract_action_scores:
             # Determine the required preconditions for the desired abstract action to practice
             preconditions = abstract_action.preconditions
@@ -364,13 +367,24 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                         self._last_observation, goal
                     )
                 )
+                # Add desired abstract action to practice to plan
+                self._current_abstract_plan[1].append(abstract_action)
+                
+                # Add the resulting abstract state to plan assuming successful execution
+                abstract_state = self._current_abstract_plan[0][-1]
+                next_atoms = abstract_state.atoms | abstract_action.add_effects - abstract_action.delete_effects
+                next_abstract_state = RelationalAbstractState(next_atoms, abstract_state.objects)
+                self._current_abstract_plan[0].append(next_abstract_state)
+                
+                print(self._current_abstract_plan)
+                # Reset pointers
+                self._current_abstract_plan_step = 0
+                self._new_learning_cycle = True
                 return
             except RuntimeError:
                 # If no abstract plan is found, try next abstract action.
                 continue
 
-        # Reset pointer
-        self._current_abstract_plan_step = 0
         # If no abstract plan is found for all abstract actions, throw error
         raise RuntimeError("Unable to plan for any skill")
 
@@ -442,8 +456,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # We have found a step in the plan where the next state is not yet reached.
             else:
                 # if it is the first step, we also need to reset a new controller
-                if self._timestep == 0:
+                if self._timestep == 0 or self._new_learning_cycle:
                     advanced = True
+                    self._new_learning_cycle = False
                 break
 
         # Get the last observed state.
@@ -474,6 +489,13 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Take one more low-level action.
             self._last_action = self._current_controller.step()
             assert self._last_action is not None
+
+            terminated = self._current_controller.terminated()
+            if terminated and self._train_or_eval == "train":
+                # Successful execution of abstract action.
+                self._update_competence_model(True)
+                # Determine new task to execute
+                self._generate_new_task_goal()
 
             # If low-level action is successful, store it.
             if self._train_or_eval == "train":

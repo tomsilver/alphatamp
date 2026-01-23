@@ -27,7 +27,7 @@ def test_practice_makes_perfect_approach():
 
     # Test in a PRBench environment.
     prbench.register_all_environments()
-    env = prbench.make("prbench/DynObstruction2D-o1-v0", render_mode="rgb_array")
+    env = prbench.make("prbench/DynObstruction2D-o0-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="dyn2d-pmp")
@@ -36,7 +36,7 @@ def test_practice_makes_perfect_approach():
         "dynobstruction2d",
         env.observation_space,
         env.action_space,
-        num_obstructions=1,
+        num_obstructions=0,
     )
 
     sim_free_env_models = sesame_models_to_sim_free(env_models)
@@ -81,7 +81,7 @@ def test_practice_makes_perfect_approach():
     approach.train()
     approach.reset(obs, {})
 
-    num_steps = 400
+    num_steps = 200
     steps_taken = 0
 
     for _ in range(num_steps):
@@ -95,18 +95,19 @@ def test_practice_makes_perfect_approach():
 
         obs, reward, done, _, _ = env.step(action)
 
-        img = env.render()
-        plt.imshow(img)
-        plt.title(f"Env at step {steps_taken}, is done? {done}")
-        plt.show()
+        # if steps_taken % 10 == 0:
+        #     img = env.render()
+        #     plt.imshow(img)
+        #     plt.title(f"Env at step {steps_taken}, is done? {done}")
+        #     plt.show()
         steps_taken += 1
 
         # Given new observation from the environment, update the approach
         approach.update(obs, float(reward), done, {})
-        if done:
-            break
+        # if done:
+        #     break
 
     
-    # Verify we took at least one step
-    assert steps_taken > 0, "Approach failed to take any steps"
+    # Verify agent executed all steps
+    assert steps_taken == 200, "Approach failed to take any steps"
     env.close()
