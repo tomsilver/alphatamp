@@ -30,7 +30,7 @@ def test_practice_makes_perfect_approach():
     env = prbench.make("prbench/DynObstruction2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="dyn2d")
+        env = RecordVideo(env, "unit_test_videos", name_prefix="dyn2d-pmp")
 
     env_models = create_bilevel_planning_models(
         "dynobstruction2d",
@@ -70,12 +70,18 @@ def test_practice_makes_perfect_approach():
     # Train on just one problem.
     obs, _ = env.reset(seed=123)
 
+    import matplotlib.pyplot as plt
+
+    img = env.render()
+    plt.imshow(img)
+    plt.show()
+
     # Reset the approach on the observation.
     # Train.
     approach.train()
     approach.reset(obs, {})
 
-    num_steps = 40
+    num_steps = 400
     steps_taken = 0
 
     for _ in range(num_steps):
@@ -88,6 +94,11 @@ def test_practice_makes_perfect_approach():
         assert env.action_space.contains(action), "Action not in action space"
 
         obs, reward, done, _, _ = env.step(action)
+
+        img = env.render()
+        plt.imshow(img)
+        plt.title(f"Env at step {steps_taken}, is done? {done}")
+        plt.show()
         steps_taken += 1
 
         # Given new observation from the environment, update the approach
@@ -95,6 +106,7 @@ def test_practice_makes_perfect_approach():
         if done:
             break
 
+    
     # Verify we took at least one step
     assert steps_taken > 0, "Approach failed to take any steps"
     env.close()
