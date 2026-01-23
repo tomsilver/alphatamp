@@ -10,7 +10,11 @@ import numpy as np
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
-from bilevel_planning.structs import ParameterizedController, RelationalAbstractGoal, RelationalAbstractState
+from bilevel_planning.structs import (
+    ParameterizedController,
+    RelationalAbstractGoal,
+    RelationalAbstractState,
+)
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
@@ -195,8 +199,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         done: bool,
         info: dict[str, Any],
     ) -> None:
-        """Record the observation in initial distribution if 
-        the agent hasn't completed the first abstract action."""
+        """Record the observation in initial distribution if the agent hasn't completed
+        the first abstract action."""
         if self._current_abstract_plan_step == 0:
             self._initial_observation_distribution.append(obs)
 
@@ -275,18 +279,20 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
     def _update_competence_model(self, action_outcome: bool) -> None:
-        """Update the current abstract_actions's competence model with the observed outcome."""
+        """Update the current abstract_actions's competence model with the observed
+        outcome."""
         assert self._current_competence_model is not None
 
         self._current_competence_model.observe(action_outcome)
 
-
     def _extrapolate_abstract_action(self) -> list[tuple[GroundOperator, float]]:
-        """Use the abstract action's competence model to determine which abstract action to practice.
+        """Use the abstract action's competence model to determine which abstract action
+        to practice.
 
         We do this by calculating the expected probability of successfully completing
-        the desired goal assuming, for each abstract action, that we've updated the abstract actions's
-        competency. We then return each abstract_action alongside its extrapolated competency.
+        the desired goal assuming, for each abstract action, that we've updated the
+        abstract actions's competency. We then return each abstract_action alongside its
+        extrapolated competency.
         """
 
         abstract_action_scores: list[tuple[GroundOperator, float]] = []
@@ -320,9 +326,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # updated competency
             for distribution_id in dist_id_subset:
                 initial_obs = self._initial_observation_distribution[distribution_id]
-                abstract_plan = self._train_explorer.generate_abstract_plan(
-                    initial_obs
-                )
+                abstract_plan = self._train_explorer.generate_abstract_plan(initial_obs)
 
                 if abstract_plan is not None:
                     _, abstract_actions = abstract_plan
@@ -346,21 +350,21 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return abstract_action_scores
 
     def _generate_new_task_goal(self) -> None:
-        """Given sorted list of extrapolated abstract action task successes, generate the abstract
-        plan that transitions the agent to an abstract state where it can perform the
-        abstract action that improves the task success the most."""
+        """Given sorted list of extrapolated abstract action task successes, generate
+        the abstract plan that transitions the agent to an abstract state where it can
+        perform the abstract action that improves the task success the most."""
 
         assert self._last_observation is not None
         abstract_action_scores = self._extrapolate_abstract_action()
 
-        print(f"Abstract action scores: ", abstract_action_scores)
         for abstract_action, _ in abstract_action_scores:
-            # Determine the required preconditions for the desired abstract action to practice
+            # Determine the required preconditions for the
+            # desired abstract action to practice
             preconditions = abstract_action.preconditions
             goal = RelationalAbstractGoal(
                 preconditions, self._env_models.state_abstractor
             )
-            
+
             try:
                 self._current_abstract_plan = (
                     self._train_explorer.generate_abstract_plan(
@@ -369,14 +373,18 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
                 # Add desired abstract action to practice to plan
                 self._current_abstract_plan[1].append(abstract_action)
-                
+
                 # Add the resulting abstract state to plan assuming successful execution
                 abstract_state = self._current_abstract_plan[0][-1]
-                next_atoms = abstract_state.atoms | abstract_action.add_effects - abstract_action.delete_effects
-                next_abstract_state = RelationalAbstractState(next_atoms, abstract_state.objects)
+                next_atoms = (
+                    abstract_state.atoms
+                    | abstract_action.add_effects - abstract_action.delete_effects
+                )
+                next_abstract_state = RelationalAbstractState(
+                    next_atoms, abstract_state.objects
+                )
                 self._current_abstract_plan[0].append(next_abstract_state)
-                
-                print(self._current_abstract_plan)
+
                 # Reset pointers
                 self._current_abstract_plan_step = 0
                 self._new_learning_cycle = True
@@ -415,7 +423,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _return_dummy_action(self) -> _U:
         assert self._env_models.action_space.shape
         action_shape = self._env_models.action_space.shape
-        stationary_action = np.zeros(action_shape) 
+        stationary_action = np.zeros(action_shape)
         dummy_action = cast(_U, stationary_action)
         return dummy_action
 
@@ -466,16 +474,15 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if advanced:
             self._resample_controller(x, self._last_observation)
 
-            # If we successfully advanced, we need to update the previous competence model.
+            # If we've successfully advanced,
+            # we need to update the previous competence model.
             if self._current_abstract_plan_step > 0:
-                print("Successfully executed prior abstract action.")
                 a = self._current_abstract_plan[1][self._current_abstract_plan_step - 1]
-                self._current_competence_model = self._abstract_action_to_competence_model[
-                    a
-                ]
+                self._current_competence_model = (
+                    self._abstract_action_to_competence_model[a]
+                )
                 # Successful execution of abstract action.
                 self._update_competence_model(True)
-            
 
         # We are using the same controller as before.
         else:
@@ -503,8 +510,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             return self._last_action
         # If low level action failed, store the parameter that failed!
-        except (TrajectorySamplingFailure, IndexError) as e:
-            print("ERROR", e)
+        except (TrajectorySamplingFailure, IndexError):
             # If training, store the previous parameter.
             if self._train_or_eval == "train":
                 self._update_competence_model(False)

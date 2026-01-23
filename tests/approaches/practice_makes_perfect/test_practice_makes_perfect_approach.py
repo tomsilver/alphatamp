@@ -12,10 +12,10 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
 from alphatamp.approaches.practice_makes_perfect.base_approach import (
     PracticeMakesPerfectApproach,
 )
+from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     sesame_models_to_sim_free,
 )
@@ -70,12 +70,6 @@ def test_practice_makes_perfect_approach():
     # Train on just one problem.
     obs, _ = env.reset(seed=123)
 
-    import matplotlib.pyplot as plt
-
-    img = env.render()
-    plt.imshow(img)
-    plt.show()
-
     # Reset the approach on the observation.
     # Train.
     approach.train()
@@ -94,20 +88,15 @@ def test_practice_makes_perfect_approach():
         assert env.action_space.contains(action), "Action not in action space"
 
         obs, reward, done, _, _ = env.step(action)
-
-        # if steps_taken % 10 == 0:
-        #     img = env.render()
-        #     plt.imshow(img)
-        #     plt.title(f"Env at step {steps_taken}, is done? {done}")
-        #     plt.show()
         steps_taken += 1
 
         # Given new observation from the environment, update the approach
         approach.update(obs, float(reward), done, {})
-        # if done:
-        #     break
 
-    
     # Verify agent executed all steps
-    assert steps_taken == 200, "Approach failed to take any steps"
+    assert steps_taken == 200, "Approach failed to execute all steps"
+
+    # Verify agent is storing data during exploration
+    parameter_dataset = approach.get_parameter_dataset()
+    assert parameter_dataset, "Approach failed to store data"
     env.close()
