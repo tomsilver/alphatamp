@@ -1,7 +1,6 @@
 """An implementation of Kumar, Silver et al's paper Practice Makes Perfect approach."""
 
 import pickle
-import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -442,12 +441,11 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     raise ApproachStepError(
                         "Abstract planning ran out of actions.", out_of_actions_error
                     )
-                else:
-                    # Determine new task plan.
-                    self._generate_new_task_goal()
+                # Determine new task plan.
+                self._generate_new_task_goal()
 
-                    # Return dummy action.
-                    return self._return_dummy_action()
+                # Return dummy action.
+                return self._return_dummy_action()
 
             # Get the next abstract state.
             ns = self._current_abstract_plan[0][self._current_abstract_plan_step + 1]
