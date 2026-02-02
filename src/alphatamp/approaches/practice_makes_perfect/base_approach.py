@@ -46,7 +46,13 @@ from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeBaseApproach,
     SimulatorFreeSesameModels,
 )
+from alphatamp.approaches.utils.abstract_plan_generation_error import (
+    AbstractPlanGenerationError,
+)
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
+from alphatamp.approaches.utils.controller_actions_exhausted_error import (
+    ControllerActionsExhaustedError,
+)
 from alphatamp.structs import FrozenSkeleton, GroundOperator, Skeleton
 
 _O = TypeVar("_O")  # observation
@@ -55,7 +61,7 @@ _U = TypeVar("_U")  # action
 
 
 class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
-    """A simulator-free approach that estimates, extrapoltates, and situates abstract
+    """A simulator-free approach that estimates, extrapolates and situates abstract
     action competencies in its free time (training mode)."""
 
     def __init__(
@@ -106,9 +112,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
         self._parameter_scorer_class = parameter_scorer_class
         self._parameter_scorer_configs = parameter_scorer_configs
-        self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
+        self._parameter_dataset: defaultdict[GroundOperator, list] = defaultdict(list)
         self._most_recent_parameter: Any | None = None
-        self._most_recent_abstract_action_descriptor: str | None = None
+        self._most_recent_abstract_action: GroundOperator | None = None
 
         # Abstract Plan Dataset
         self._abstract_plan_dataset: list = []
@@ -154,7 +160,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._timestep = 0
         self._most_recent_parameter = None
-        self._most_recent_abstract_action_descriptor = None
+        self._most_recent_abstract_action = None
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -215,9 +221,10 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_info = info
 
     def _generate_parameter_scorer_training_data(
-        self, features_and_labels: list
+        self, features_and_labels: list[tuple[list, list, int]]
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Reformat training data into numpy arrays."""
+        """Reformat training data (state vector, parameter vector, one-hot label) 
+           into numpy arrays."""
 
         features_list = []
         labels_list = []
@@ -240,7 +247,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         return (features, labels)
 
-    def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
+    def train_parameter_policy(self, parameter_dataset: defaultdict[GroundOperator, list]):
         """Train each abstract action's parameter policy given dataset."""
 
         for (
@@ -249,9 +256,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         ) in self._abstract_action_to_scoring_function.items():
             # Segment data for each ground operator.
 
-            abstract_action_descriptor = abstract_action.short_str
-            if abstract_action_descriptor in parameter_dataset:
-                features_and_labels = parameter_dataset[abstract_action_descriptor]
+            if abstract_action in parameter_dataset:
+                features_and_labels = parameter_dataset[abstract_action]
 
                 # Generate training data.
                 features, labels = self._generate_parameter_scorer_training_data(
@@ -264,7 +270,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
         assert (
-            self._most_recent_parameter and self._most_recent_abstract_action_descriptor
+            self._most_recent_parameter and self._most_recent_abstract_action
         )
         assert self._last_observation is not None
 
@@ -273,7 +279,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         label = 1 if training_label == "success" else 0
 
-        self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
+        self._parameter_dataset[self._most_recent_abstract_action].append(
             (self._last_observation, self._most_recent_parameter, label)
         )
 
@@ -388,12 +394,12 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._current_abstract_plan_step = 0
                 self._new_learning_cycle = True
                 return
-            except RuntimeError:
+            except AbstractPlanGenerationError:
                 # If no abstract plan is found, try next abstract action.
                 continue
 
         # If no abstract plan is found for all abstract actions, throw error
-        raise RuntimeError("Unable to plan for any skill")
+        raise AbstractPlanGenerationError("Unable to plan for any skill")
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -414,7 +420,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
         optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
         self._most_recent_parameter = optimal_params
-        self._most_recent_abstract_action_descriptor = a.short_str
+        self._most_recent_abstract_action = a
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -492,7 +498,12 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Try to take a low-level action from the controller.
         try:
             # Take one more low-level action.
-            self._last_action = self._current_controller.step()
+            try:
+                self._last_action = self._current_controller.step()
+            except IndexError as e:
+                raise ControllerActionsExhaustedError(
+                    "Controller ran out of actions"
+                ) from e
             assert self._last_action is not None
 
             terminated = self._current_controller.terminated()
@@ -508,7 +519,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             return self._last_action
         # If low level action failed, store the parameter that failed!
-        except (TrajectorySamplingFailure, IndexError):
+        except (AbstractPlanGenerationError, TrajectorySamplingFailure, ControllerActionsExhaustedError):
             # If training, store the previous parameter.
             if self._train_or_eval == "train":
                 self._update_competence_model(False)
@@ -532,7 +543,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the current abstract plan."""
         return self._current_abstract_plan
 
-    def get_parameter_dataset(self) -> defaultdict[str, list]:
+    def get_parameter_dataset(self) -> defaultdict[GroundOperator, list]:
         """Return the collected parameter dataset."""
         return self._parameter_dataset
 

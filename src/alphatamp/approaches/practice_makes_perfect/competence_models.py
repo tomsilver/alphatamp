@@ -2,7 +2,6 @@
 
 import abc
 import logging
-from typing import List, Optional
 from typing import Type as TypingType
 
 import numpy as np
@@ -22,7 +21,7 @@ class SkillCompetenceModel(abc.ABC):
     def __init__(self, skill_name: str) -> None:
         self._skill_name = skill_name  # just for reference
         # Each list contains outcome for one cycle.
-        self._cycle_observations: List[List[bool]] = [[]]
+        self._cycle_observations: list[list[bool]] = [[]]
         # For competence prior.
         self._default_alpha, self._default_beta = (
             CFG.skill_competence_default_alpha_beta
@@ -82,7 +81,7 @@ class OptimisticSkillCompetenceModel(SkillCompetenceModel):
     def get_name(cls) -> str:
         return "optimistic"
 
-    def _get_nonempty_cycle_observations(self) -> List[List[bool]]:
+    def _get_nonempty_cycle_observations(self) -> list[list[bool]]:
         return [co for co in self._cycle_observations if co]
 
     def get_current_competence(self) -> float:
@@ -113,7 +112,7 @@ class OptimisticSkillCompetenceModel(SkillCompetenceModel):
         # Look at changes between individual cycles.
         inference_window = 1
         recency_size = CFG.skill_competence_model_optimistic_recency_size
-        competences: List[float] = []
+        competences: list[float] = []
         start = max(0, len(nonempty_cycle_obs) - recency_size)
         end = len(nonempty_cycle_obs) - inference_window + 1
         for i in range(start, end):
@@ -133,11 +132,11 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         super().__init__(skill_name)
         self._log_prefix = f"[Competence] [{self._skill_name}]"
         # Update competence estimate after every observation.
-        self._posterior_competences: List[rv_frozen] = [
+        self._posterior_competences: list[rv_frozen] = [
             BetaRV(self._default_alpha, self._default_beta)
         ]
         # Model that maps number of data to competence.
-        self._competence_regressor: Optional[MonotonicBetaRegressor] = None
+        self._competence_regressor: MonotonicBetaRegressor | None = None
 
     @classmethod
     def get_name(cls) -> str:
@@ -234,10 +233,10 @@ class LatentVariableSkillCompetenceModel(SkillCompetenceModel):
         inputs = np.reshape(num_data_before_cycle, (-1, 1))
         return inputs
 
-    def _run_map_inference(self, betas: List[rv_frozen]) -> List[float]:
+    def _run_map_inference(self, betas: list[rv_frozen]) -> list[float]:
         """Compute the MAP competences given the input beta priors."""
         assert len(betas) == len(self._cycle_observations)
-        map_competences: List[float] = []
+        map_competences: list[float] = []
         for o, rv in zip(self._cycle_observations, betas):
             alpha, _beta = float(rv.args[0]), float(rv.args[1])  # type: ignore[misc]
             prv = utils.beta_bernoulli_posterior(o, alpha=alpha, _beta=_beta)

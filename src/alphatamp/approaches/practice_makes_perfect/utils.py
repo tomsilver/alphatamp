@@ -1,14 +1,14 @@
 """General utility methods."""
 
-from typing import Any, List, Set, Tuple
+from typing import Any
 
 from scipy.stats import beta
 from scipy.stats._distn_infrastructure import rv_frozen
 
 
 def _beta_bernoulli_posterior_alpha_beta(
-    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
-) -> Tuple[float, float]:
+    success_history: list[bool], alpha: float = 1.0, _beta: float = 1.0
+) -> tuple[float, float]:
     """See https://gregorygundersen.com/blog/2020/08/19/bernoulli-beta/"""
     n = len(success_history)
     s = sum(success_history)
@@ -18,7 +18,7 @@ def _beta_bernoulli_posterior_alpha_beta(
 
 
 def beta_bernoulli_posterior(
-    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
+    success_history: list[bool], alpha: float = 1.0, _beta: float = 1.0
 ) -> rv_frozen:
     """Returns the RV."""
     alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(
@@ -28,7 +28,7 @@ def beta_bernoulli_posterior(
 
 
 def beta_bernoulli_posterior_mean(
-    success_history: List[bool], alpha: float = 1.0, _beta: float = 1.0
+    success_history: list[bool], alpha: float = 1.0, _beta: float = 1.0
 ) -> float:
     """Faster computation to avoid instantiating BetaRV when not needed."""
     alpha_n, beta_n = _beta_bernoulli_posterior_alpha_beta(
@@ -60,7 +60,7 @@ def beta_from_mean_and_variance(
     return rv
 
 
-def get_all_subclasses(cls: Any) -> Set[Any]:
+def get_all_subclasses(cls: Any) -> set[Any]:
     """Get all subclasses of the given class."""
     return set(cls.__subclasses__()).union(
         [s for c in cls.__subclasses__() for s in get_all_subclasses(c)]

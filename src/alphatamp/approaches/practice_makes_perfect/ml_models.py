@@ -5,7 +5,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Callable, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, Iterator, Sequence
 
 import numpy as np
 import torch
@@ -58,7 +58,7 @@ class _NormalizingRegressor(Regressor):
     def __init__(self, seed: int, disable_normalization: bool = False) -> None:
         super().__init__(seed)
         # Set in fit().
-        self._x_dims: Tuple[int, ...] = tuple()
+        self._x_dims: tuple[int, ...] = tuple()
         self._y_dim = -1
         self._disable_normalization = disable_normalization
         self._input_shift = np.zeros(1, dtype=np.float32)
@@ -250,7 +250,7 @@ class MLPRegressor(PyTorchRegressor):
     def __init__(
         self,
         seed: int,
-        hid_sizes: List[int],
+        hid_sizes: list[int],
         max_train_iters: MaxTrainIters,
         clip_gradients: bool,
         clip_value: float,
@@ -338,7 +338,7 @@ class ImplicitMLPRegressor(PyTorchRegressor):
     def __init__(
         self,
         seed: int,
-        hid_sizes: List[int],
+        hid_sizes: list[int],
         max_train_iters: MaxTrainIters,
         clip_gradients: bool,
         clip_value: float,
@@ -350,10 +350,10 @@ class ImplicitMLPRegressor(PyTorchRegressor):
         weight_decay: float = 0,
         use_torch_gpu: bool = False,
         train_print_every: int = 1000,
-        derivative_free_num_iters: Optional[int] = None,
-        derivative_free_sigma_init: Optional[float] = None,
-        derivative_free_shrink_scale: Optional[float] = None,
-        grid_num_ticks_per_dim: Optional[int] = None,
+        derivative_free_num_iters: int | None = None,
+        derivative_free_sigma_init: float | None = None,
+        derivative_free_shrink_scale: float | None = None,
+        grid_num_ticks_per_dim: int | None = None,
     ) -> None:
         super().__init__(
             seed,
@@ -417,7 +417,7 @@ class ImplicitMLPRegressor(PyTorchRegressor):
 
     def _create_batch_generator(
         self, X: Array, Y: Array
-    ) -> Iterator[Tuple[Tensor, Tensor]]:
+    ) -> Iterator[tuple[Tensor, Tensor]]:
         num_samples = X.shape[0]
         num_negatives = self._num_negatives_per_input
         # Cast to torch first.
@@ -617,7 +617,7 @@ class MonotonicBetaRegressor(PyTorchRegressor, DistributionRegressor):
         assert 0 < constant_variance < 0.25
         self.variance = constant_variance
 
-    def _transform_theta(self) -> List[Tensor]:
+    def _transform_theta(self) -> list[Tensor]:
         # Map unbounded parameters to constrained parameters with the following
         # guarantees: (1) 0 <= theta0 <= 1; (2) theta0 <= theta1 <= 1; and
         # (3) theta2 >= 0.
@@ -657,7 +657,7 @@ class MonotonicBetaRegressor(PyTorchRegressor, DistributionRegressor):
         rv.rvs(size=x.shape, random_state=rng)
         return np.array(rv, dtype=np.float32)
 
-    def get_transformed_params(self) -> List[float]:
+    def get_transformed_params(self) -> list[float]:
         """For interpretability."""
         return [v.item() for v in self._transform_theta()]
 
@@ -686,7 +686,7 @@ def _get_torch_device(use_torch_gpu: bool) -> torch.device:
     )
 
 
-def _normalize_data(data: Array, scale_clip: float = 1) -> Tuple[Array, Array, Array]:
+def _normalize_data(data: Array, scale_clip: float = 1) -> tuple[Array, Array, Array]:
     shift = np.min(data, axis=0)
     scale = np.max(data - shift, axis=0)
     scale = np.clip(scale, scale_clip, None)
@@ -695,7 +695,7 @@ def _normalize_data(data: Array, scale_clip: float = 1) -> Tuple[Array, Array, A
 
 def _balance_binary_classification_data(
     X: Array, y: Array, rng: np.random.Generator
-) -> Tuple[Array, Array]:
+) -> tuple[Array, Array]:
     pos_idxs_np = np.argwhere(np.array(y) == 1).squeeze()
     neg_idxs_np = np.argwhere(np.array(y) == 0).squeeze()
     pos_idxs = [pos_idxs_np.item()] if not pos_idxs_np.shape else list(pos_idxs_np)
@@ -712,7 +712,7 @@ def _balance_binary_classification_data(
 
 def _single_batch_generator(
     tensor_X: Tensor, tensor_Y: Tensor
-) -> Iterator[Tuple[Tensor, Tensor]]:
+) -> Iterator[tuple[Tensor, Tensor]]:
     """Infinitely generate all of the data in one batch."""
     while True:
         yield (tensor_X, tensor_Y)
@@ -722,7 +722,7 @@ def _train_pytorch_model(
     model: nn.Module,
     loss_fn: Callable[[Tensor, Tensor], Tensor],
     optimizer: optim.Optimizer,
-    batch_generator: Iterator[Tuple[Tensor, Tensor]],
+    batch_generator: Iterator[tuple[Tensor, Tensor]],
     max_train_iters: MaxTrainIters,
     dataset_size: int,
     device: torch.device,

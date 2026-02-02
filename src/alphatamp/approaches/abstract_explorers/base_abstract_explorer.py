@@ -2,7 +2,7 @@
 entire abstract skeletons."""
 
 import abc
-from typing import Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
 from relational_structs.pddl import GroundOperator
@@ -18,6 +18,6 @@ class BaseAbstractExplorer(Generic[_O, _X, _U], abc.ABC):
 
     @abc.abstractmethod
     def generate_abstract_plan(
-        self, obs: _O, goal: Optional[RelationalAbstractGoal] = None
+        self, obs: _O, goal: RelationalAbstractGoal | None = None
     ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
         """Generates an abstract plan given initial observation."""
