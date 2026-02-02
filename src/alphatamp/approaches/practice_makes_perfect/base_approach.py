@@ -223,8 +223,8 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _generate_parameter_scorer_training_data(
         self, features_and_labels: list[tuple[list, list, int]]
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Reformat training data (state vector, parameter vector, one-hot label) 
-           into numpy arrays."""
+        """Reformat training data (state vector, parameter vector, one-hot label) into
+        numpy arrays."""
 
         features_list = []
         labels_list = []
@@ -247,7 +247,9 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         return (features, labels)
 
-    def train_parameter_policy(self, parameter_dataset: defaultdict[GroundOperator, list]):
+    def train_parameter_policy(
+        self, parameter_dataset: defaultdict[GroundOperator, list]
+    ):
         """Train each abstract action's parameter policy given dataset."""
 
         for (
@@ -269,9 +271,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
-        assert (
-            self._most_recent_parameter and self._most_recent_abstract_action
-        )
+        assert self._most_recent_parameter and self._most_recent_abstract_action
         assert self._last_observation is not None
 
         if self._train_or_eval == "eval":
@@ -519,13 +519,19 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             return self._last_action
         # If low level action failed, store the parameter that failed!
-        except (AbstractPlanGenerationError, TrajectorySamplingFailure, ControllerActionsExhaustedError):
+        except (
+            AbstractPlanGenerationError,
+            TrajectorySamplingFailure,
+            ControllerActionsExhaustedError,
+        ):
             # If training, store the previous parameter.
             if self._train_or_eval == "train":
                 self._update_competence_model(False)
                 self._add_most_recent_parameter_to_dataset("failure")
 
-                # Determine new task to execute
+                # Determine new task to execute.
+                # If this raises AbstractPlanGenerationError, let it propagate
+                # to the caller — there is no recovery if planning also fails.
                 self._generate_new_task_goal()
 
                 # Return dummy action
@@ -580,10 +586,11 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         with p.open("rb") as f:
             raw = pickle.load(f)
 
-        dd: defaultdict[str, list] = defaultdict(list)
-        if isinstance(raw, dict):
-            dd.update(raw)
+        if not isinstance(raw, dict):
+            raise TypeError(f"Expected dict in {p}, got {type(raw).__name__}")
 
+        dd: defaultdict[str, list] = defaultdict(list)
+        dd.update(raw)
         return dd
 
     @staticmethod
@@ -596,7 +603,7 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         with p.open("rb") as f:
             raw = pickle.load(f)
 
-        l: list = []
-        if isinstance(raw, list):
-            l = raw
-        return l
+        if not isinstance(raw, list):
+            raise TypeError(f"Expected list in {p}, got {type(raw).__name__}")
+
+        return raw
