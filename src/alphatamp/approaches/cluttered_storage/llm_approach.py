@@ -14,6 +14,7 @@ from typing import (
     Sequence,
     TypeAlias,
     TypeVar,
+    cast,
 )
 
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
@@ -25,6 +26,7 @@ from bilevel_planning.structs import (
     Goal,
     Plan,
     PlanningProblem,
+    RelationalAbstractGoal,
     RelationalAbstractState,
     SesameModels,
 )
@@ -60,7 +62,7 @@ def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
     return []
 
 
-class LLMOracleAbstractPlanGenerator(
+class LLMAbstractPlanGenerator(
     AbstractPlanGenerator[_X, RelationalAbstractState, GroundOperator]
 ):
     """A generator that uses an LLM to generate abstract plans."""
@@ -88,11 +90,16 @@ class LLMOracleAbstractPlanGenerator(
         bpg: BilevelPlanningGraph[_X, _U, RelationalAbstractState, GroundOperator],
     ) -> Iterator[tuple[list[RelationalAbstractState], list[GroundOperator]]]:
         """Generate abstract plans."""
+        # Cast goal to RelationalAbstractGoal for accessing atoms
+        assert isinstance(goal, RelationalAbstractGoal)
+        relational_goal = cast(RelationalAbstractGoal, goal)
 
         if self._plan_fn is None:  # check to see if plan exists
-            self._plan_fn = self._make_plan_fn(s0)
+            self._plan_fn = self._make_plan_fn(s0, relational_goal)
 
-        llm_plan: List[Dict[str, Any]] = self._plan_fn(s0, goal, self._env_models)
+        llm_plan: List[Dict[str, Any]] = self._plan_fn(
+            s0, relational_goal, self._env_models
+        )
         print(llm_plan)
         abstract_actions = self._ground(llm_plan, s0)
 
@@ -107,9 +114,9 @@ class LLMOracleAbstractPlanGenerator(
 
         return iter([(abstract_states, abstract_actions)])
 
-    def _make_plan_fn(self, s0: RelationalAbstractState):
+    def _make_plan_fn(self, s0: RelationalAbstractState, goal: RelationalAbstractGoal):
         """Synthesize generate_oracle_plan once, using s0-based prompt."""
-        prompt = self._build_prompt(s0)
+        prompt = self._build_prompt(s0, goal)
 
         reprompt_checks: Sequence[SyntaxRepromptCheck] = [
             SyntaxRepromptCheck(),
@@ -122,7 +129,7 @@ class LLMOracleAbstractPlanGenerator(
                 "temperature": 0.0,
             },
         )
-        # ALERT: This will need to be changed, since it used to be from toms-utils
+
         plan_fn = synthesize_python_function_with_llm(
             model=self._llm,
             function_name="generate_oracle_plan",
@@ -131,7 +138,9 @@ class LLMOracleAbstractPlanGenerator(
         )
         return plan_fn
 
-    def _build_prompt(self, s0: RelationalAbstractState) -> str:
+    def _build_prompt(
+        self, s0: RelationalAbstractState, goal: RelationalAbstractGoal
+    ) -> str:
         # Include operator signatures with parameter types and order
         # We have to do this so that robot, block, and shelf are all handled correctly
         ops = "\n".join(
@@ -147,6 +156,9 @@ class LLMOracleAbstractPlanGenerator(
         # Extract initial state predicates/atoms
         initial_atoms = "\n".join(f"- {atom}" for atom in sorted(s0.atoms, key=str))
 
+        # Extract goal predicates/atoms
+        goal_atoms = "\n".join(f"- {atom}" for atom in sorted(goal.atoms, key=str))
+
         prompt = f"""
 You are an oracle high-level planner for a Sesame TAMP system.
 -------------------------------------
@@ -158,6 +170,9 @@ Objects:
 
 Initial State (true predicates):
 {initial_atoms}
+
+Goal State (target predicates)
+{goal_atoms}
 -------------------------------------
 
 Task
@@ -174,13 +189,14 @@ from typing import List, Dict, Any
 
 def generate_oracle_plan(abstract_state, goal, env_models) -> List[Dict[str, Any]]:
     \"\"\"
-    Given the initial state above, return a plan that places all the blocks on the shelf,
-    return a plan that places all the blocks on the shelf 
+    Given the initial state above, return a plan that achieves the goal.
+    Hint: Remove all the blocks before placing them back on the shelf.
     Use operator names exactly as in env_models.operators.
-    Ignore the goal completely.
     \"\"\"
-    
+
 """
+        # Note! For earlier iterations of the prompt, telling the LLM
+        # to ignore the goal helped with generation of end-to-end plans
         return prompt.strip()
 
     def _ground(
@@ -196,7 +212,7 @@ def generate_oracle_plan(abstract_state, goal, env_models) -> List[Dict[str, Any
         return actions
 
 
-class GeneralizedLLMOracleApproach(BaseApproach[_O, _X, _U]):
+class BaseLLMApproach(BaseApproach[_O, _X, _U]):
     """Uses an oracle skeleton generator policy for abstract planning."""
 
     def __init__(
@@ -232,14 +248,12 @@ class GeneralizedLLMOracleApproach(BaseApproach[_O, _X, _U]):
 
         # Create the llm
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
-        llm = OpenAIModel("gpt-4.1", cache)  # use a better model
+        self._llm = OpenAIModel("gpt-4.1", cache)  # use a better model
         # Create the abstract plan generator.
-        self._abstract_plan_generator: AbstractPlanGenerator = (
-            LLMOracleAbstractPlanGenerator(
-                self._env_models,
-                seed=self._seed,
-                llm=llm,
-            )
+        self._abstract_plan_generator: AbstractPlanGenerator = LLMAbstractPlanGenerator(
+            self._env_models,
+            seed=self._seed,
+            llm=self._llm,
         )
 
         # Create the abstract successor function (not really used).

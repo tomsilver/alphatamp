@@ -7,12 +7,12 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage.reprompt_approach import (
-    RepromptApproach,
+from alphatamp.approaches.cluttered_storage.llm_approach import (
+    BaseLLMApproach,
 )
 
 
-# @pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
+@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
 def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
@@ -32,7 +32,7 @@ def test_generalized_oracle_approach():
     )
 
     # Create the approach.
-    approach = RepromptApproach(
+    approach = BaseLLMApproach(
         env_models, seed=120, samples_per_step=10, training_planning_timeout=10
     )
 
