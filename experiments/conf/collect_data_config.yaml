@@ -1,0 +1,17 @@
+defaults:
+  - env: dyn_obstruction
+  - _self_
+
+seed: 0
+timeout_sec: 10
+output_dir: datasets
+
+# Parameter scorer configs
+parameter_scorer:
+  hidden_layer_sizes: [10, 10]
+
+# Abstract action scorer configs
+abstract_action_scorer:
+  hidden_dim: 32
+  num_layers: 2
+  num_epochs: 10
