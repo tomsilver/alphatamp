@@ -8,7 +8,6 @@ Use Hydra multirun to sweep over seeds:
     python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=joblib -m
 """
 
-import time
 from pathlib import Path
 
 import hydra
