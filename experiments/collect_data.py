@@ -6,8 +6,6 @@ Use Hydra multirun to sweep over seeds:
     python experiments/collect_data.py seed=0,1,2,3,4 -m
     python experiments/collect_data.py 'seed=range(0,100)' -m
     python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=joblib -m
-
-To run: Run from the alphatamp root directory (alphatamp/).
 """
 
 import time
@@ -43,7 +41,7 @@ def main(cfg: DictConfig):
     """Collect training data for a single seed."""
 
     seed = int(cfg.seed)
-    timeout = float(cfg.timeout_sec)
+    num_steps = int(cfg.num_steps)
 
     # Build env.
     prbench.register_all_environments()
@@ -96,10 +94,9 @@ def main(cfg: DictConfig):
     approach.train()
     approach.reset(obs, {})
 
-    start_time = time.time()
     task_completed = False
 
-    while time.time() - start_time < timeout:
+    for _ in range(num_steps):
         try:
             action = approach.step()
         except ApproachStepError:
@@ -122,12 +119,14 @@ def main(cfg: DictConfig):
     abstract_action_dataset = approach.get_abstract_action_dataset()
 
     print(f"Seed {seed}: completed={task_completed}")
-    print(f"  Parameter entries:       {sum(len(v) for v in parameter_dataset.values())}")
-    print(f"  Abstract plan entries:   {len(abstract_plan_dataset)}")
-    print(f"  Abstract action entries: {sum(len(v) for v in abstract_action_dataset.values())}")
+    print(f"# Parameters: {sum(len(v) for v in parameter_dataset.values())}")
+    print(f"# Abstract plan: {len(abstract_plan_dataset)}")
+    print(
+        f"# Abstract Actions: {sum(len(v) for v in abstract_action_dataset.values())}"
+    )
     print(f"  Saved to: {output_dir}")
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
 
 
 if __name__ == "__main__":

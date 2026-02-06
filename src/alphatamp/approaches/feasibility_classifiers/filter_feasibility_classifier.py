@@ -16,9 +16,9 @@ from alphatamp.approaches.feasibility_classifiers.base_feasibility_classifier im
 class FilterFeasibilityClassifier(BaseFeasibilityClassifier):
     """Hardcoded classifier that filters out specific types of abstract plans."""
 
-    def __init__(self):
-        self._invalid_abstract_states = defaultdict(set)
-        self._invalid_abstract_actions = defaultdict(set)
+    def __init__(self) -> None:
+        self._invalid_abstract_states: defaultdict[int, set] = defaultdict(set)
+        self._invalid_abstract_actions: defaultdict[int, set] = defaultdict(set)
 
     def update_classifier(
         self,
