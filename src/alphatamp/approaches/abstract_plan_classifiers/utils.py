@@ -2,6 +2,7 @@
 
 import logging
 
+from scipy.stats import entropy
 import numpy as np
 import torch
 from relational_structs.pddl import GroundAtom
@@ -270,3 +271,57 @@ def train_q_network(
         logging.info("Training completed!")
 
     return epoch_losses
+
+
+def convert_q_value_to_probability(resample_count_per_action: list[float], num_retries: int) -> float:
+    """Given a predicted number of resamples to execute an abstract plan,
+        return the probability that abstract plan succeeds given k total number of retries."""
+    
+    action_probs = [1/ (resample_count + 1) for resample_count in resample_count_per_action]
+
+    K = num_retries
+    # dp[k] = probability of being successful up to current action 
+    # using exactly k retries so far.
+    dp = np.zeros(K + 1)
+    
+    # Base case: Before action 0, we have used 0 retries with prob 1.0
+    dp[0] = 1.0
+    
+    for p in action_probs:
+        new_dp = torch.zeros(K + 1)
+        # For each possible number of retries already spent (k_spent)
+        for k_spent in range(K + 1):
+            if dp[k_spent] == 0: continue
+            
+            # How many retries can we afford to spend on THIS action?
+            k_rem = K - k_spent
+            
+            # Probability that this action succeeds within k_rem attempts
+            # (Given we have k_rem + 1 total tries available for it)
+            
+            for k_this_action in range(k_rem + 1):
+                # Prob of failing exactly k_this_action times then succeeding
+                # P(F = j) = (1-p)^j * p
+                prob_term = (1 - p)** k_this_action * p
+                
+                new_dp[k_spent + k_this_action] += dp[k_spent] * prob_term
+        dp = new_dp
+
+    # The total success probability is the sum of probabilities of 
+    # finishing the last action within the total budget K.
+    return np.sum(dp)
+
+
+def calculate_bald_objective(ensemble_probabilities: list[float]) -> float:
+    """Given an ensemble of probabilities of success for an abstract plan,
+        return the BALD objective (epistemic uncertainty) for that plan."""
+    
+    avg_prob = np.average(ensemble_probabilities)
+    overall_uncertainty = float(entropy(avg_prob, 1- avg_prob, base=2))
+
+    aleatoric_uncertainty = 0
+    for prob in ensemble_probabilities:
+        aleatoric_uncertainty += float(entropy(prob, 1-prob, base=2))
+    aleatoric_uncertainty /= len(ensemble_probabilities)
+
+    return overall_uncertainty - aleatoric_uncertainty
