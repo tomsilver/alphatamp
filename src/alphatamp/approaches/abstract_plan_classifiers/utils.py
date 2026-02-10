@@ -346,7 +346,7 @@ def convert_q_value_to_probability(
     dp[0] = 1.0
 
     for p in action_probs:
-        new_dp = torch.zeros(K + 1)
+        new_dp = np.zeros(K + 1)
         # For each possible number of retries already spent (k_spent)
         for k_spent in range(K + 1):
             if dp[k_spent] == 0:
