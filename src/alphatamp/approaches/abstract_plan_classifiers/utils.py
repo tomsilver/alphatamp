@@ -378,7 +378,7 @@ def calculate_bald_objective(ensemble_probabilities: list[float]) -> float:
     avg_prob = np.average(ensemble_probabilities)
     overall_uncertainty = float(entropy(avg_prob, 1 - avg_prob, base=2))
 
-    aleatoric_uncertainty = 0
+    aleatoric_uncertainty = 0.0
     for prob in ensemble_probabilities:
         aleatoric_uncertainty += float(entropy(prob, 1 - prob, base=2))
     aleatoric_uncertainty /= len(ensemble_probabilities)
