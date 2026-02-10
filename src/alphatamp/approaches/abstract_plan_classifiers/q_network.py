@@ -97,8 +97,8 @@ def create_abstract_plan_sequence(
 class QNetwork:
     """Q network that outputs a single scalar for an abstract plan.
 
-    Used by AbstractActionScorer to predict the expected number of resamples
-    for the final action in a plan, conditioned on the full history.
+    Used by AbstractActionScorer to predict the expected number of resamples for the
+    final action in a plan, conditioned on the full history.
     """
 
     def __init__(
