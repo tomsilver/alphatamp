@@ -12,6 +12,7 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 )
 from bilevel_planning.structs import (
     ParameterizedController,
+    RelationalAbstractGoal,
 )
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -37,6 +38,11 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
+from alphatamp.approaches.abstract_plan_classifiers.q_network import (
+    PerActionQNetwork,
+    create_abstract_plan_sequence,
+)
+from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
 from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
     AbstractActionScorer,
@@ -70,6 +76,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         eval_planning_timeout: float = 100,
         max_abstract_plans: int = 10,
         max_resamples: int = 100,
+        num_candidate_plans: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -130,6 +137,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Loss metrics
         self._loss_metrics: dict[str, list] = {}
 
+        # Per-Action Resample Q Network
+        self._q_net = None
+        self._num_candidate_plans = num_candidate_plans
+
+        self._completed_task = False
+
     def reset(
         self,
         obs: _O,
@@ -155,6 +168,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._num_resamples = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
+        self._completed_task = False
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -191,6 +205,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
             )
 
+        # Initialize the PerAction Network
+        self._q_net = PerActionQNetwork(
+            self._all_ground_atoms, self._all_ground_operators, hidden_dim=32, num_layers=2
+        )
+
     def _learn_from_transition(
         self,
         obs: _O,
@@ -204,6 +223,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Store last successful parameter
             self._add_most_recent_parameter_to_dataset("success")
             self._add_abstract_plan_to_dataset("success")
+            self._completed_task = True
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -242,7 +262,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         return (features, labels)
 
-    def train_parameter_policy(self, parameter_dataset: defaultdict[str, list]):
+    def train_parameter_policy(self, parameter_dataset: dict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
 
         for (
@@ -292,7 +312,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return (abstract_plan_list, abstract_plan_lengths, resample_count)
 
     def train_abstract_action_scorer(
-        self, abstract_action_dataset: defaultdict[str, list]
+        self, abstract_action_dataset: dict[str, list]
     ):
         """Train each abstract action scorer given dataset."""
         for (
@@ -339,10 +359,66 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return score
         return -1
 
-    def train_q_function(self, abstract_action_dataset: defaultdict[str, list]):
-        """Train the abstract plan q function given the abstract action dataset."""
+    def train_q_function(self):
+        """Train the Per-Action Resample Q Function.
 
-        # First train the abstract action classifiers
+        The network learns to predict, for each action a_i in a plan, the expected
+        number of resamples needed for that action conditioned on the history
+        (s_0, a_1, ..., a_{i-1}).
+
+        Args:
+            q_network: The PerActionQNetwork to train
+            abstract_plans: List of abstract plans the agent has tried already to use for training
+            all_ground_atoms: All possible ground atoms in the environment
+            all_ground_operators: All possible ground operators in the environment
+            trained_abstract_action_scorers:
+                Dictionary mapping abstract actions to trained abstract action scorers
+            batch_size: Batch size for training
+            num_epochs: Number of training epochs
+            verbose: Whether to log training progress
+        Returns:
+            List of average losses per epoch
+        """
+        
+        assert self._q_net
+
+        num_epochs = 20
+        losses = train_q_network(
+            self._q_net,
+            self._abstract_plan_dataset,
+            self._all_ground_atoms,
+            self._all_ground_operators,
+            self._abstract_action_to_action_scorer,
+            batch_size=4,
+            num_epochs=num_epochs,
+            verbose=True,
+        )
+        
+    def _generate_candidate_plans(self):
+        """Use the training explorer to generate candidate plans for next execution using the last observation.
+        This forces the explorer to generate a plan that tries to achieve the goal.
+        However, the agent successfully completed the prior plan, the goal is to reset the environment first"""
+
+        assert self._last_observation
+        candidate_plans: list[Skeleton] = []
+
+        goal = None
+        if self._completed_task:
+            goal = RelationalAbstractGoal(
+                set(), self._env_models.state_abstractor
+            )
+
+
+            # Need to reset the environment
+            for _ in range(self._num_candidate_plans):
+                candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
+
+            # Append 
+
+        for _ in range(self._num_candidate_plans):
+            candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
+
+        return candidate_plans
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
@@ -399,6 +475,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan[1][: self._current_abstract_plan_step + 1]
         )
         self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
+
+
+    def _update_scorers(self):
+        """Retrain the parameter and abstract action scorers given the current stored dataset"""
+
+        # First reformat dataset
+        abstract_action_dataset = {k: list(
+                    self._make_data(abstract_plan, resample_count)
+                    for abstract_plan, resample_count in v.items()
+                )
+                for k, v in self._abstract_action_dataset.items()
+        }
+
+        self.train_abstract_action_scorer(abstract_action_dataset)
+        self.train_parameter_policy(self._parameter_dataset)
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -496,6 +587,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._resample_controller(x, self._last_observation)
 
                 if self._num_resamples == self._max_resamples - 1:
+
+                    # After trying a certain number of resamples, update the scorers
+                    self._update_scorers()
                     # Raise ApproachStepError
                     raise ApproachStepError("Trajectory Error!", e)
 
