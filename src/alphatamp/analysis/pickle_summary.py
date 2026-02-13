@@ -3,8 +3,9 @@
 Usage:
     python src/alphatamp/visualizations/pickle_summary.py datasets/
 """
-import statistics
+
 import pickle
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -14,9 +15,15 @@ def load_pickle(path: Path):
     with path.open("rb") as f:
         return pickle.load(f)
 
+
 def calculate_stats(entries: list[int]) -> tuple:
-    """Given list of numbers, return its mean, median, mode"""
-    return (statistics.mean(entries), statistics.median(entries), statistics.mode(entries))
+    """Given list of numbers, return its mean, median, mode."""
+    return (
+        statistics.mean(entries),
+        statistics.median(entries),
+        statistics.mode(entries),
+    )
+
 
 def summarize_dataset(dataset_dir: Path) -> None:
     seed_dirs = sorted(
@@ -36,7 +43,9 @@ def summarize_dataset(dataset_dir: Path) -> None:
     param_counts_per_action: dict[str, int] = defaultdict(int)
     param_success_per_action: dict[str, int] = defaultdict(int)
     action_counts_per_action: dict[str, int] = defaultdict(int)
-    action_stats_per_action: dict[str, dict[tuple,list]] = defaultdict(lambda: defaultdict(list))
+    action_stats_per_action: dict[str, dict[tuple, list]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     seeds_loaded = 0
 
     for seed_dir in seed_dirs:
@@ -55,7 +64,9 @@ def summarize_dataset(dataset_dir: Path) -> None:
         for action_key, entries in param_data.items():
             total_parameters += len(entries)
             param_counts_per_action[action_key] += len(entries)
-            param_success_per_action[action_key] += sum(1 for _, _, label in entries if label == 1)
+            param_success_per_action[action_key] += sum(
+                1 for _, _, label in entries if label == 1
+            )
 
         # Abstract plan dataset: list[(sequence, sequence_length, label)]
         plan_data = load_pickle(plan_path)
@@ -79,8 +90,6 @@ def summarize_dataset(dataset_dir: Path) -> None:
                     plan_key = tuple(float(x) for x in abstract_plan.flatten())
                     action_stats_per_action[action_key][plan_key].append(resample_count)
 
-
-
     # Print summary.
     print("=" * 60)
     print(f"Dataset Summary: {dataset_dir}")
@@ -102,7 +111,9 @@ def summarize_dataset(dataset_dir: Path) -> None:
         print("  Per action:")
         for action, count in sorted(param_counts_per_action.items()):
             successes = param_success_per_action[action]
-            print(f"    {action}: {count} samples ({successes} success, {count - successes} fail)")
+            print(
+                f"    {action}: {count} samples ({successes} success, {count - successes} fail)"
+            )
     print()
 
     print("--- Abstract Actions ---")
@@ -113,11 +124,11 @@ def summarize_dataset(dataset_dir: Path) -> None:
             print(f"    {action}: {count}")
             for plan in action_stats_per_action[action].keys():
                 resample_counts = action_stats_per_action[action][plan]
-                print(f"      Abstract plan: {plan} - {len(resample_counts)}")  
+                print(f"      Abstract plan: {plan} - {len(resample_counts)}")
                 stats = calculate_stats(resample_counts)
                 print(f"         Stats: {stats}")
-            
-    print()        
+
+    print()
 
 
 if __name__ == "__main__":

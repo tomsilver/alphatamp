@@ -100,6 +100,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._env_models, self._feasibility_classifier_learner, seed
         )
 
+        # Global resample count
+        self._num_resamples = 0
+
         # Parameter policy.
         self._max_resamples = max_resamples
         self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
@@ -149,6 +152,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan = explorer.generate_abstract_plan(obs)
 
         self._timestep = 0
+        self._num_resamples = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
 
@@ -445,7 +449,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # If we have reached the next abstract state, advance the current plan step.
             if s == ns:
                 self._add_most_recent_abstract_action_to_dataset("success")
-                self._add_abstract_plan_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
 
@@ -469,7 +472,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         assert self._current_controller
 
-        for attempt_num in range(self._max_resamples):
+        while self._num_resamples < self._max_resamples:
             # Try to take a low-level action from the controller.
             try:
                 # Take one more low-level action.
@@ -492,9 +495,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 # Resample Controller
                 self._resample_controller(x, self._last_observation)
 
-                if attempt_num == self._max_resamples - 1:
+                if self._num_resamples == self._max_resamples - 1:
                     # Raise ApproachStepError
                     raise ApproachStepError("Trajectory Error!", e)
+
+                self._num_resamples += 1
 
         raise RuntimeError("Should not reach this point")
 
