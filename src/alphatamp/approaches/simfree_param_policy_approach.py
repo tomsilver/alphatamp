@@ -34,7 +34,7 @@ from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
     create_abstract_plan_sequence,
 )
-from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network
+from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network, convert_q_value_to_probability, calculate_bald_objective
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
@@ -140,6 +140,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Per-Action Resample Q Network
         self._q_net: PerActionQNetwork | None = None
+        self._ensemble_nets: list[PerActionQNetwork] = []
 
         self._completed_task = False
 
@@ -212,6 +213,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             hidden_dim=32,
             num_layers=2,
         )
+
+        # Initialize ensemble of q nets
+        for _ in range(10):
+            self._ensemble_nets.append(self._q_net)
 
     def _learn_from_transition(
         self,
@@ -425,6 +430,33 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._last_observation, goal
         )
         return candidate_plans
+    
+    def _score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
+        """Given a list of candidate plans, score each plan based on the BALD objective
+        and return the plan with the highest score."""
+
+        best_bald_score = 0
+        best_candidate_plan = None
+        for candidate_plan in candidate_plans:
+
+            candidate_probabilities = [] 
+            # Use ensemble of Q networks to calculate per action resample counts
+            for q_net in self._ensemble_nets:
+                per_action_resamples = q_net.predict(candidate_plan)
+
+                # Convert per action resample to overall probability
+                probability = convert_q_value_to_probability(per_action_resamples.tolist(), self._max_resamples)
+                candidate_probabilities.append(probability)
+
+            bald_score = calculate_bald_objective(candidate_probabilities)
+            
+            if bald_score > best_bald_score:
+                best_bald_score = bald_score
+                best_candidate_plan = candidate_plan
+        
+        assert best_candidate_plan
+        return best_candidate_plan
+
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
