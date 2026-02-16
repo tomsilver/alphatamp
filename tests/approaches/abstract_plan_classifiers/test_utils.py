@@ -1,4 +1,4 @@
-"""Tests for the approaches/abstract_plan_classifiers/utils.py"""
+"""Tests for the approaches/abstract_plan_classifiers/utils.py."""
 
 from collections import defaultdict
 
@@ -35,8 +35,8 @@ from alphatamp.approaches.simulator_free_base_approach import (
 
 
 def test_train_q_network():
-    """Train the PerActionQNetwork using ground atoms/operators from a real
-    environment and synthetically generated training data."""
+    """Train the PerActionQNetwork using ground atoms/operators from a real environment
+    and synthetically generated training data."""
 
     # Set up the PRBench environment.
     prbench.register_all_environments()

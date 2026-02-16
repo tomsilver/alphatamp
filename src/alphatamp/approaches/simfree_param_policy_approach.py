@@ -30,19 +30,16 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
 )
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
+    PerActionQNetwork,
     create_abstract_plan_sequence,
 )
+from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
-from alphatamp.approaches.abstract_plan_classifiers.q_network import (
-    PerActionQNetwork,
-    create_abstract_plan_sequence,
-)
-from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
 from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
     AbstractActionScorer,
@@ -207,7 +204,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Initialize the PerAction Network
         self._q_net = PerActionQNetwork(
-            self._all_ground_atoms, self._all_ground_operators, hidden_dim=32, num_layers=2
+            self._all_ground_atoms,
+            self._all_ground_operators,
+            hidden_dim=32,
+            num_layers=2,
         )
 
     def _learn_from_transition(
@@ -311,9 +311,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         return (abstract_plan_list, abstract_plan_lengths, resample_count)
 
-    def train_abstract_action_scorer(
-        self, abstract_action_dataset: dict[str, list]
-    ):
+    def train_abstract_action_scorer(self, abstract_action_dataset: dict[str, list]):
         """Train each abstract action scorer given dataset."""
         for (
             abstract_action,
@@ -379,7 +377,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         Returns:
             List of average losses per epoch
         """
-        
+
         assert self._q_net
 
         num_epochs = 20
@@ -393,26 +391,36 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             num_epochs=num_epochs,
             verbose=True,
         )
-        
+
     def _generate_candidate_plans(self):
-        """Use the training explorer to generate candidate plans for next execution using the last observation.
+        """Use the training explorer to generate candidate plans for next execution
+        using the last observation.
+
         This forces the explorer to generate a plan that tries to achieve the goal.
-        However, the agent successfully completed the prior plan, the goal is to reset the environment first"""
+        However, the agent successfully completed the prior plan, the goal is to reset
+        the environment first
+        """
 
         assert self._last_observation
         candidate_plans: list[Skeleton] = []
 
         goal = None
         if self._completed_task:
-            goal = RelationalAbstractGoal(
-                set(), self._env_models.state_abstractor
-            )
+            goal = RelationalAbstractGoal(set(), self._env_models.state_abstractor)
             # Need to reset the environment
             for _ in range(self._num_candidate_plans):
-                candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
+                candidate_plans.append(
+                    self._train_explorer.generate_abstract_plan(
+                        self._last_observation, goal
+                    )
+                )
 
         for _ in range(self._num_candidate_plans):
-            candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
+            candidate_plans.append(
+                self._train_explorer.generate_abstract_plan(
+                    self._last_observation, goal
+                )
+            )
 
         return candidate_plans
 
@@ -472,16 +480,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
         self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
 
-
     def _update_scorers(self):
-        """Retrain the parameter and abstract action scorers given the current stored dataset"""
+        """Retrain the parameter and abstract action scorers given the current stored
+        dataset."""
 
         # First reformat dataset
-        abstract_action_dataset = {k: list(
-                    self._make_data(abstract_plan, resample_count)
-                    for abstract_plan, resample_count in v.items()
-                )
-                for k, v in self._abstract_action_dataset.items()
+        abstract_action_dataset = {
+            k: list(
+                self._make_data(abstract_plan, resample_count)
+                for abstract_plan, resample_count in v.items()
+            )
+            for k, v in self._abstract_action_dataset.items()
         }
 
         self.train_abstract_action_scorer(abstract_action_dataset)
