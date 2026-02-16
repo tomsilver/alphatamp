@@ -135,7 +135,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._loss_metrics: dict[str, list] = {}
 
         # Per-Action Resample Q Network
-        self._q_net = None
+        self._q_net: PerActionQNetwork | None = None
         self._num_candidate_plans = num_candidate_plans
 
         self._completed_task = False
@@ -357,7 +357,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return score
         return -1
 
-    def _train_q_function(self):
+    def _train_q_function(self) -> None:
         """Train the Per-Action Resample Q Function.
 
         The network learns to predict, for each action a_i in a plan, the expected
@@ -366,7 +366,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         Args:
             q_network: The PerActionQNetwork to train
-            abstract_plans: List of abstract plans the agent has tried already to use for training
+            abstract_plans: List of previously executed abstract plans
             all_ground_atoms: All possible ground atoms in the environment
             all_ground_operators: All possible ground operators in the environment
             trained_abstract_action_scorers:
@@ -381,7 +381,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert self._q_net
 
         num_epochs = 20
-        losses = train_q_network(
+        _ = train_q_network(
             self._q_net,
             self._abstract_plan_dataset,
             self._all_ground_atoms,
@@ -392,7 +392,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             verbose=True,
         )
 
-    def _generate_candidate_plans(self):
+    def _generate_candidate_plans(self) -> list[Skeleton]:
         """Use the training explorer to generate candidate plans for next execution
         using the last observation.
 
@@ -480,7 +480,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
         self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
 
-    def _update_scorers(self):
+    def _update_scorers(self) -> None:
         """Retrain the parameter and abstract action scorers given the current stored
         dataset."""
 
@@ -581,7 +581,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 return self._last_action
             # If low level action failed, store the parameter that failed!
-            except (TrajectorySamplingFailure, IndexError) as e:
+            except (TrajectorySamplingFailure, IndexError):
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
                     self._add_most_recent_abstract_action_to_dataset("failure")
@@ -600,7 +600,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._train_q_function()
 
         # Generate candidate plans
-        candidate_plans = self._generate_candidate_plans()
+        _ = self._generate_candidate_plans()
 
         # Raise ApproachStepError
         raise RuntimeError("Should not reach this point")

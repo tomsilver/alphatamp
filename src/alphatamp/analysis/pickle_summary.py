@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 def load_pickle(path: Path):
+    """Load in pickle at specified path."""
     with path.open("rb") as f:
         return pickle.load(f)
 
@@ -26,6 +27,7 @@ def calculate_stats(entries: list[int]) -> tuple:
 
 
 def summarize_dataset(dataset_dir: Path) -> None:
+    """Return summary statistics of dataset at path."""
     seed_dirs = sorted(
         [d for d in dataset_dir.iterdir() if d.is_dir() and d.name.startswith("seed_")],
         key=lambda d: int(d.name.split("_")[1]),
@@ -111,9 +113,9 @@ def summarize_dataset(dataset_dir: Path) -> None:
         print("  Per action:")
         for action, count in sorted(param_counts_per_action.items()):
             successes = param_success_per_action[action]
-            print(
-                f"    {action}: {count} samples ({successes} success, {count - successes} fail)"
-            )
+            message = f"    {action}: {count} samples "
+            message += f"({successes} success, {count - successes} fail)"
+            print(message)
     print()
 
     print("--- Abstract Actions ---")
