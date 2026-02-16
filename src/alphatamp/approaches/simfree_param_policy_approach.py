@@ -359,7 +359,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return score
         return -1
 
-    def train_q_function(self):
+    def _train_q_function(self):
         """Train the Per-Action Resample Q Function.
 
         The network learns to predict, for each action a_i in a plan, the expected
@@ -407,13 +407,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             goal = RelationalAbstractGoal(
                 set(), self._env_models.state_abstractor
             )
-
-
             # Need to reset the environment
             for _ in range(self._num_candidate_plans):
                 candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
-
-            # Append 
 
         for _ in range(self._num_candidate_plans):
             candidate_plans.append(self._train_explorer.generate_abstract_plan(self._last_observation, goal))
@@ -586,15 +582,18 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 # Resample Controller
                 self._resample_controller(x, self._last_observation)
 
-                if self._num_resamples == self._max_resamples - 1:
-
-                    # After trying a certain number of resamples, update the scorers
-                    self._update_scorers()
-                    # Raise ApproachStepError
-                    raise ApproachStepError("Trajectory Error!", e)
-
                 self._num_resamples += 1
 
+        # After trying a certain number of resamples, update the scorers
+        self._update_scorers()
+
+        # Then update the Q-function
+        self._train_q_function()
+
+        # Generate candidate plans
+        candidate_plans = self._generate_candidate_plans()
+
+        # Raise ApproachStepError
         raise RuntimeError("Should not reach this point")
 
     def step(self) -> _U:
