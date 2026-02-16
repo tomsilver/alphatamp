@@ -28,6 +28,7 @@ from torch import FloatTensor, Tensor, nn
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
 )
+from alphatamp.approaches.abstract_explorers.batch_explorer import BatchExplorer
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
@@ -103,6 +104,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._exploit_explorer: ExploitExplorer = ExploitExplorer(
             self._env_models, self._feasibility_classifier_learner, seed
         )
+        self._batch_explorer: BatchExplorer = BatchExplorer(
+            self._env_models, seed, max_abstract_plans=num_candidate_plans
+        )
 
         # Global resample count
         self._num_resamples = 0
@@ -136,7 +140,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Per-Action Resample Q Network
         self._q_net: PerActionQNetwork | None = None
-        self._num_candidate_plans = num_candidate_plans
 
         self._completed_task = False
 
@@ -409,13 +412,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Need to reset the environment
             goal = RelationalAbstractGoal(set(), self._env_models.state_abstractor)
 
-        for _ in range(self._num_candidate_plans):
-            candidate_plans.append(
-                self._train_explorer.generate_abstract_plan(
-                    self._last_observation, goal
-                )
-            )
-
+        candidate_plans = self._batch_explorer.generate_batched_abstract_plan(
+            self._last_observation, goal
+        )
         return candidate_plans
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
