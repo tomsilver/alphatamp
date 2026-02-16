@@ -406,14 +406,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         goal = None
         if self._completed_task:
-            goal = RelationalAbstractGoal(set(), self._env_models.state_abstractor)
             # Need to reset the environment
-            for _ in range(self._num_candidate_plans):
-                candidate_plans.append(
-                    self._train_explorer.generate_abstract_plan(
-                        self._last_observation, goal
-                    )
-                )
+            goal = RelationalAbstractGoal(set(), self._env_models.state_abstractor)
 
         for _ in range(self._num_candidate_plans):
             candidate_plans.append(
