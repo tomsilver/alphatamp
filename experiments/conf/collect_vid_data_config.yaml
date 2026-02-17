@@ -4,7 +4,7 @@ defaults:
 
 seed: 0
 max_resamples: 10
-num_steps: 400
+num_steps: 1200
 output_dir: datasets
 record_video: true
 

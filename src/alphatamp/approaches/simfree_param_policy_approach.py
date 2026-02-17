@@ -663,6 +663,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Score candidate plans and return best plan
         plan_to_execute = self.score_candidate_plans(candidate_plans)
 
+        print("Plan to execute: ")
+        print(plan_to_execute)
+
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
         self._current_abstract_plan_step = 0
