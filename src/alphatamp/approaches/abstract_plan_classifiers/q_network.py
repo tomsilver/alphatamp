@@ -385,6 +385,13 @@ class PerActionQNetwork:
         max_seq_len = padded_features.shape[1]
         mask = torch.zeros(len(features), max_seq_len, 1, device=self.device)
         for i, length in enumerate(lengths):
+            # Convert tensor lengths to Python ints so
+            # they can be used as slice indices
+            if isinstance(length, torch.Tensor):
+                length = int(length.item())
+            else:
+                length = int(length)
+
             mask[i, :length, :] = 1.0
 
         # Compute element-wise loss and apply mask

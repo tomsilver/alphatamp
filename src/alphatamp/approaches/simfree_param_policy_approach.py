@@ -121,7 +121,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_abstract_action_descriptor: str | None = None
 
         # Abstract Plan Dataset
-        self._abstract_plan_dataset: list = []
+        self._abstract_plan_dataset: list[tuple[tuple[tuple, tuple], int]] = []
 
         # Abstract Action inits.
         self._abstract_action_dataset: defaultdict[
@@ -383,10 +383,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         assert self._q_net
 
+        # Reformat abstract plan dataset
+        abstract_plans: list[Skeleton] = []
+        for abstract_plan, _ in self._abstract_plan_dataset:
+            # Convert tuple of tuples into list of tuples
+            abstract_states, abstract_actions = abstract_plan
+            abstract_states_list = list(abstract_states)
+            abstract_actions_list = list(abstract_actions)
+            abstract_plans.append((abstract_states_list, abstract_actions_list))
+
         num_epochs = 20
         _ = train_q_network(
             self._q_net,
-            self._abstract_plan_dataset,
+            abstract_plans,
             self._all_ground_atoms,
             self._all_ground_operators,
             self._abstract_action_to_action_scorer,
@@ -595,8 +604,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Generate candidate plans
         _ = self._generate_candidate_plans()
 
-        # Raise ApproachStepError
-        raise RuntimeError("Should not reach this point")
+        # Raise RuntimeError
+        raise RuntimeError(
+            "Exhausted resample budget in _get_action; no feasible action found."
+        )
 
     def step(self) -> _U:
         """Get the next action to take."""

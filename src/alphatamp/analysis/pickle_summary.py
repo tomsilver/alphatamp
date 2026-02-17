@@ -1,7 +1,7 @@
 """Summarize the collected dataset folder.
 
 Usage:
-    python src/alphatamp/visualizations/pickle_summary.py datasets/
+    python src/alphatamp/analysis/pickle_summary.py datasets/
 """
 
 import pickle

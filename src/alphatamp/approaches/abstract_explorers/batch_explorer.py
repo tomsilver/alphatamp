@@ -1,4 +1,4 @@
-"""An batched abstract plan explorer that returns a specified number of valid plans."""
+"""A batched abstract plan explorer that returns a specified number of valid plans."""
 
 import time
 from typing import TypeVar
@@ -26,7 +26,7 @@ _U = TypeVar("_U")  # action
 
 
 class BatchExplorer(BaseAbstractExplorer[_O, _X, _U]):
-    """An batched abstract plan explorer that returns a specified number of valid
+    """A batched abstract plan explorer that returns a specified number of valid
     plans."""
 
     def __init__(
@@ -56,8 +56,9 @@ class BatchExplorer(BaseAbstractExplorer[_O, _X, _U]):
     def generate_abstract_plan(
         self, obs: _O, goal: RelationalAbstractGoal | None = None
     ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
-        """Unnecessary function."""
-        return ([], [])
+        """Generate a single abstract plan by delegating to the batched interface."""
+        plans = self.generate_batched_abstract_plan(obs, goal)
+        return plans[0]
 
     def generate_batched_abstract_plan(
         self,

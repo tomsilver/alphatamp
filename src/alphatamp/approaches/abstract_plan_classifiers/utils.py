@@ -180,13 +180,13 @@ def compute_per_action_targets(
 
     for i, action in enumerate(actions):
         # Build the history prefix for this action:
-        # - history_states: all states up to (but not including) the state after action i
+        # - history_states: all states up to the state after action i
         # - history_actions: all actions before action i
         #
         # For action a_i (0-indexed), we condition on:
-        #   states: s_0, s_1, ..., s_{i-1} (i states before the current one)
+        #   states: s_0, s_1, ..., s_{i} (i states including current one)
         #   actions: a_0, a_1, ..., a_{i-1} (all previous actions)
-        history_states = list(states[:i]) if i > 0 else []
+        history_states = list(states[: i + 1])
         history_actions = list(actions[:i])
 
         # Get the conditional Q-value (expected resamples) for this action
@@ -333,8 +333,15 @@ def convert_q_value_to_probability(
     """Given a predicted number of resamples to execute an abstract plan, return the
     probability that abstract plan succeeds given k total number of retries."""
 
+    # Ensure resample counts are non-negative to avoid invalid probabilities.
+    non_negative_resample_counts = [
+        max(resample_count, 0.0) for resample_count in resample_count_per_action
+    ]
+
+    # Convert resample counts to per-action success probabilities and clamp to [0, 1].
     action_probs = [
-        1 / (resample_count + 1) for resample_count in resample_count_per_action
+        min(max(1.0 / (resample_count + 1.0), 0.0), 1.0)
+        for resample_count in non_negative_resample_counts
     ]
 
     K = num_retries
@@ -375,12 +382,19 @@ def calculate_bald_objective(ensemble_probabilities: list[float]) -> float:
     """Given an ensemble of probabilities of success for an abstract plan, return the
     BALD objective (epistemic uncertainty) for that plan."""
 
-    avg_prob = np.average(ensemble_probabilities)
-    overall_uncertainty = float(entropy(avg_prob, 1 - avg_prob, base=2))
+    eps = 1e-12
+
+    def _binary_entropy(p: float) -> float:
+        """Compute the binary entropy H(p) in bits, with numerical clipping."""
+        p_clipped = float(np.clip(p, eps, 1.0 - eps))
+        return float(entropy([p_clipped, 1.0 - p_clipped], base=2))
+
+    avg_prob = float(np.average(ensemble_probabilities))
+    overall_uncertainty = _binary_entropy(avg_prob)
 
     aleatoric_uncertainty = 0.0
     for prob in ensemble_probabilities:
-        aleatoric_uncertainty += float(entropy(prob, 1 - prob, base=2))
+        aleatoric_uncertainty += _binary_entropy(prob)
     aleatoric_uncertainty /= len(ensemble_probabilities)
 
     return overall_uncertainty - aleatoric_uncertainty
