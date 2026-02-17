@@ -12,6 +12,7 @@ from pathlib import Path
 
 import hydra
 import prbench
+from gymnasium.wrappers import RecordVideo
 from omegaconf import DictConfig
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
@@ -45,7 +46,12 @@ def main(cfg: DictConfig):
 
     # Build env.
     prbench.register_all_environments()
-    env = prbench.make(cfg.env.id)
+    env = prbench.make(cfg.env.id, render_mode="rgb_array" if cfg.record_video else None)
+
+    if cfg.record_video:
+        video_dir = Path(cfg.output_dir) / f"seed_{seed}" / "videos"
+        env = RecordVideo(env, str(video_dir), name_prefix=f"seed_{seed}")
+
     obs, _ = env.reset(seed=seed)
 
     # Build env models and convert to simulator-free.
