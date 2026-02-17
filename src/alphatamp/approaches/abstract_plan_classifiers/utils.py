@@ -5,10 +5,11 @@ import logging
 import numpy as np
 import torch
 from relational_structs.pddl import GroundAtom
+from scipy.stats import entropy
 from torch import nn
 
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
-    QNetwork,
+    PerActionQNetwork,
     create_abstract_plan_sequence,
 )
 from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
@@ -136,25 +137,74 @@ def abstract_plan_q_value(
 
 
 def estimated_abstract_plan_q_value(
-    abstract_plan: Skeleton, q_network: QNetwork
-) -> float:
-    """Estimate the Q-value for an abstract plan using the trained Q-network.
+    abstract_plan: Skeleton, q_network: PerActionQNetwork
+) -> np.ndarray:
+    """Estimate the per-action Q-values for an abstract plan using the trained
+    Q-network.
 
     Args:
-        abstract_plan: The abstract plan (Skeleton) to estimate Q-value for
-        q_network: The trained Q-network
+        abstract_plan: The abstract plan (Skeleton) to estimate Q-values for
+        q_network: The trained PerActionQNetwork
 
     Returns:
-        The estimated Q-value
+        Array of shape (num_actions,) where each element is the predicted
+        resamples for that action conditioned on prior actions.
     """
     return q_network.predict(abstract_plan)
 
 
+def compute_per_action_targets(
+    abstract_plan: Skeleton,
+    trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
+) -> list[float]:
+    """Compute target resample counts for each action in the plan.
+
+    For each action a_i in the plan, computes the expected number of resamples
+    needed for that action, conditioned on the history (s_0, a_1, ..., a_{i-1}).
+
+    This is the "ground truth" target that the Q-network will learn to predict.
+    Each action's target is computed independently using the corresponding
+    abstract action scorer.
+
+    Args:
+        abstract_plan: The abstract plan (Skeleton) containing states and actions
+        trained_abstract_action_scorers: Dictionary mapping abstract actions
+                                        to trained abstract action scorers
+
+    Returns:
+        List of length n (number of actions) where element i is the predicted
+        resamples for action a_i conditioned on (s_0, a_1, ..., a_{i-1})
+    """
+    states, actions = abstract_plan
+    targets = []
+
+    for i, action in enumerate(actions):
+        # Build the history prefix for this action:
+        # - history_states: all states up to the state after action i
+        # - history_actions: all actions before action i
+        #
+        # For action a_i (0-indexed), we condition on:
+        #   states: s_0, s_1, ..., s_{i} (i states including current one)
+        #   actions: a_0, a_1, ..., a_{i-1} (all previous actions)
+        history_states = list(states[: i + 1])
+        history_actions = list(actions[:i])
+
+        # Get the conditional Q-value (expected resamples) for this action
+        # given the history prefix
+        q_i = conditional_abstract_action_q_value(
+            history_states,
+            history_actions,
+            action,
+            trained_abstract_action_scorers,
+        )
+        targets.append(q_i)
+
+    return targets
+
+
 def train_q_network(
-    q_network: QNetwork,
+    q_network: PerActionQNetwork,
     abstract_plans: list[Skeleton],
-    q_value_cache: dict,
-    gamma: float,
     all_ground_atoms: tuple[GroundAtom, ...],
     all_ground_operators: tuple[GroundOperator, ...],
     trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
@@ -162,13 +212,17 @@ def train_q_network(
     num_epochs: int = 10,
     verbose: bool = True,
 ) -> list[float]:
-    """Train the Q-network to regress onto abstract_plan_q_value.
+    """Train the PerActionQNetwork to predict per-action resample counts.
+
+    The network learns to predict, for each action a_i in a plan, the expected
+    number of resamples needed for that action conditioned on the history
+    (s_0, a_1, ..., a_{i-1}).
 
     Args:
-        q_network: The Q-network to train
+        q_network: The PerActionQNetwork to train
         abstract_plans: List of abstract plans to use for training
-        q_value_cache: Dictionary to cache Q-values for sequences
-        gamma: Discount factor for the update rule
+        all_ground_atoms: All possible ground atoms in the environment
+        all_ground_operators: All possible ground operators in the environment
         trained_abstract_action_scorers:
             Dictionary mapping abstract actions to trained abstract action scorers
         batch_size: Batch size for training
@@ -178,22 +232,22 @@ def train_q_network(
     Returns:
         List of average losses per epoch
     """
-    # Compute target Q-values for all abstract plans
+    # Compute per-action target Q-values for all abstract plans
+    # Each plan produces a list of targets, one per action
     if verbose:
-        logging.info("Computing target Q-values...")
+        logging.info("Computing per-action target Q-values...")
 
-    target_q_values = []
+    per_action_targets = []  # List of lists, one per plan
     valid_plans = []
 
     for abstract_plan in abstract_plans:
         try:
-            target_q = abstract_plan_q_value(
+            # Compute targets for each action in this plan
+            targets = compute_per_action_targets(
                 abstract_plan,
-                q_value_cache,
-                gamma,
                 trained_abstract_action_scorers,
             )
-            target_q_values.append(target_q)
+            per_action_targets.append(targets)
             valid_plans.append(abstract_plan)
         except Exception as e:
             if verbose:
@@ -216,10 +270,9 @@ def train_q_network(
         sequences.append(torch.FloatTensor(sequence))
         sequence_lengths.append(seq_len)
 
-    # Convert targets to tensor
-    targets_tensor = (
-        torch.FloatTensor(np.array(target_q_values)).unsqueeze(1).to(q_network.device)
-    )
+    # Convert per-action targets to tensors
+    # Each element is a tensor of shape (seq_len,) for that plan
+    target_tensors = [torch.FloatTensor(t) for t in per_action_targets]
 
     # Training loop
     if verbose:
@@ -228,7 +281,8 @@ def train_q_network(
         )
 
     epoch_losses = []
-    loss_fn = nn.MSELoss()
+    # Use reduction='none' so we can apply masking for variable-length sequences
+    loss_fn = nn.MSELoss(reduction="none")
 
     # Create indices for shuffling
     num_samples = len(sequences)
@@ -245,12 +299,13 @@ def train_q_network(
         for i in range(0, num_samples, batch_size):
             batch_indices = indices[i : i + batch_size]
 
-            # Get batch sequences and lengths
+            # Get batch sequences, targets, and lengths
             batch_sequences = [sequences[idx] for idx in batch_indices]
             batch_lengths = torch.tensor(
                 [sequence_lengths[idx] for idx in batch_indices], dtype=torch.long
             )
-            batch_targets = targets_tensor[batch_indices]
+            # batch_targets is a list of tensors with varying lengths
+            batch_targets = [target_tensors[idx] for idx in batch_indices]
 
             loss = q_network.train_step(
                 batch_sequences, batch_targets, batch_lengths, loss_fn
@@ -270,3 +325,76 @@ def train_q_network(
         logging.info("Training completed!")
 
     return epoch_losses
+
+
+def convert_q_value_to_probability(
+    resample_count_per_action: list[float], num_retries: int
+) -> float:
+    """Given a predicted number of resamples to execute an abstract plan, return the
+    probability that abstract plan succeeds given k total number of retries."""
+
+    # Ensure resample counts are non-negative to avoid invalid probabilities.
+    non_negative_resample_counts = [
+        max(resample_count, 0.0) for resample_count in resample_count_per_action
+    ]
+
+    # Convert resample counts to per-action success probabilities and clamp to [0, 1].
+    action_probs = [
+        min(max(1.0 / (resample_count + 1.0), 0.0), 1.0)
+        for resample_count in non_negative_resample_counts
+    ]
+
+    K = num_retries
+    # dp[k] = probability of being successful up to current action
+    # using exactly k retries so far.
+    dp = np.zeros(K + 1)
+
+    # Base case: Before action 0, we have used 0 retries with prob 1.0
+    dp[0] = 1.0
+
+    for p in action_probs:
+        new_dp = np.zeros(K + 1)
+        # For each possible number of retries already spent (k_spent)
+        for k_spent in range(K + 1):
+            if dp[k_spent] == 0:
+                continue
+
+            # How many retries can we afford to spend on THIS action?
+            k_rem = K - k_spent
+
+            # Probability that this action succeeds within k_rem attempts
+            # (Given we have k_rem + 1 total tries available for it)
+
+            for k_this_action in range(k_rem + 1):
+                # Prob of failing exactly k_this_action times then succeeding
+                # P(F = j) = (1-p)^j * p
+                prob_term = (1 - p) ** k_this_action * p
+
+                new_dp[k_spent + k_this_action] += dp[k_spent] * prob_term
+        dp = new_dp
+
+    # The total success probability is the sum of probabilities of
+    # finishing the last action within the total budget K.
+    return np.sum(dp)
+
+
+def calculate_bald_objective(ensemble_probabilities: list[float]) -> float:
+    """Given an ensemble of probabilities of success for an abstract plan, return the
+    BALD objective (epistemic uncertainty) for that plan."""
+
+    eps = 1e-12
+
+    def _binary_entropy(p: float) -> float:
+        """Compute the binary entropy H(p) in bits, with numerical clipping."""
+        p_clipped = float(np.clip(p, eps, 1.0 - eps))
+        return float(entropy([p_clipped, 1.0 - p_clipped], base=2))
+
+    avg_prob = float(np.average(ensemble_probabilities))
+    overall_uncertainty = _binary_entropy(avg_prob)
+
+    aleatoric_uncertainty = 0.0
+    for prob in ensemble_probabilities:
+        aleatoric_uncertainty += _binary_entropy(prob)
+    aleatoric_uncertainty /= len(ensemble_probabilities)
+
+    return overall_uncertainty - aleatoric_uncertainty

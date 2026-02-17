@@ -68,14 +68,23 @@ def create_abstract_plan_sequence(
     if seq_len == 0:
         # Empty plan - return a single timestep with initial state
         if len(states) > 0:
-            state_action_embedding = np.concatenate(
-                [
-                    create_abstract_state_embedding(all_ground_atoms, states[0]),
-                    np.zeros(len(all_ground_operators)),
-                ]
+            state_action_embedding = (
+                np.concatenate(
+                    [
+                        create_abstract_state_embedding(all_ground_atoms, states[0]),
+                        np.zeros(len(all_ground_operators)),
+                    ]
+                )
+                .reshape(1, -1)
+                .astype(np.float32)
             )
             return (state_action_embedding, 1)
-        return np.array([[0.0, 0.0]], dtype=np.float32), 1
+        return (
+            np.zeros(
+                (1, len(all_ground_atoms) + len(all_ground_operators)), dtype=np.float32
+            ),
+            1,
+        )
 
     sequence = []
     for i in range(seq_len):
@@ -95,7 +104,11 @@ def create_abstract_plan_sequence(
 
 
 class QNetwork:
-    """Q network that returns how feasible an abstract plan might be."""
+    """Q network that outputs a single scalar for an abstract plan.
+
+    Used by AbstractActionScorer to predict the expected number of resamples for the
+    final action in a plan, conditioned on the full history.
+    """
 
     def __init__(
         self,
@@ -114,7 +127,6 @@ class QNetwork:
             num_layers: Number of LSTM layers
             lr: Learning rate for optimizer
         """
-
         input_dim = len(all_ground_atoms) + len(all_ground_operators)
         self._lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
         self._fc = nn.Linear(hidden_dim, 1)
@@ -138,22 +150,22 @@ class QNetwork:
             lengths: Tensor of actual sequence lengths, shape (batch_size,)
 
         Returns:
-            Output tensor of shape (batch_size, 1)
+            Output tensor of shape (batch_size, 1) - a single scalar per sequence
         """
         # Pack padded sequences
         packed = pack_padded_sequence(
             x, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
 
-        # LSTM forward pass
+        # LSTM forward pass - only need the final hidden state
         _, (h_n, _) = self._lstm(packed)
 
         # Use the last hidden state from the last layer
         # h_n shape: (num_layers, batch_size, hidden_dim)
-        last_hidden = h_n[-1]  # Take the last layer, shape: (batch_size, hidden_dim)
+        last_hidden = h_n[-1]  # (batch_size, hidden_dim)
 
         # Pass through fully connected layer
-        output = self._fc(last_hidden)  # Shape: (batch_size, 1)
+        output = self._fc(last_hidden)  # (batch_size, 1)
 
         return output
 
@@ -164,7 +176,7 @@ class QNetwork:
             abstract_plan: The abstract plan to predict Q-value for
 
         Returns:
-            Predicted Q-value as a float
+            Predicted Q-value as a float (single scalar for the whole plan)
         """
         self._lstm.eval()
         self._fc.eval()
@@ -174,9 +186,7 @@ class QNetwork:
             )
 
             # Convert to tensor and add batch dimension
-            x = (
-                torch.FloatTensor(sequence).unsqueeze(0).to(self.device)
-            )  # (1, seq_len, input_dim)
+            x = torch.FloatTensor(sequence).unsqueeze(0).to(self.device)
             lengths = torch.tensor([seq_len], dtype=torch.long)
 
             prediction = self.forward(x, lengths)
@@ -205,15 +215,11 @@ class QNetwork:
         self._fc.train()
         self._optimizer.zero_grad()
 
-        # Fix: Ensure every feature tensor is at least 2D (seq_len, input_dim)
-        # This handles the edge case where a sequence of length 1 might be passed as 1D
+        # Ensure every feature tensor is at least 2D (seq_len, input_dim)
         features_3d = [f.unsqueeze(0) if f.ndim == 1 else f for f in features]
 
         # Pad sequences to the same length
-        padded_features = pad_sequence(
-            features_3d, batch_first=True
-        )  # (batch_size, max_len, input_dim)
-        padded_features = padded_features.to(self.device)
+        padded_features = pad_sequence(features_3d, batch_first=True).to(self.device)
 
         predictions = self.forward(padded_features, lengths)
         loss = loss_fn(predictions, targets)
@@ -221,3 +227,179 @@ class QNetwork:
         self._optimizer.step()
 
         return loss.item()
+
+
+class PerActionQNetwork:
+    """Q network that outputs a vector of scalars, one per action in the plan.
+
+    Each element i in the output represents the predicted number of resamples
+    for action a_i, conditioned on the prior actions (s_0, a_1, ..., a_{i-1}).
+
+    This is used for training a model that can predict per-action feasibility,
+    which can then be converted to an overall plan success probability.
+    """
+
+    def __init__(
+        self,
+        all_ground_atoms: tuple[GroundAtom, ...],
+        all_ground_operators: tuple[GroundOperator, ...],
+        hidden_dim: int = 64,
+        num_layers: int = 2,
+        lr: float = 0.001,
+    ):
+        """Initialize the per-action Q-network with LSTM.
+
+        Args:
+            all_ground_atoms: Tuple of all possible ground atoms in env
+            all_ground_operators: Tuple of all possible ground operators in env
+            hidden_dim: Dimension of hidden layers
+            num_layers: Number of LSTM layers
+            lr: Learning rate for optimizer
+        """
+        input_dim = len(all_ground_atoms) + len(all_ground_operators)
+        self._lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        self._fc = nn.Linear(hidden_dim, 1)
+        self._optimizer = torch.optim.Adam(
+            list(self._lstm.parameters()) + list(self._fc.parameters()), lr=lr
+        )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._lstm.to(self.device)
+        self._fc.to(self.device)
+        self._input_dim = input_dim
+
+        # Abstract plan embeddings
+        self._all_ground_atoms = all_ground_atoms
+        self._all_ground_operators = all_ground_operators
+
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the network.
+
+        Args:
+            x: Padded input tensor of shape (batch_size, max_seq_len, input_dim)
+            lengths: Tensor of actual sequence lengths, shape (batch_size,)
+
+        Returns:
+            Output tensor of shape (batch_size, max_seq_len, 1)
+            Each position i gives the predicted resamples for action a_i
+            conditioned on the history (s_0, a_1, ..., a_{i-1}).
+        """
+        # Pack padded sequences for efficient LSTM processing
+        packed = pack_padded_sequence(
+            x, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+
+        # LSTM forward pass - get outputs at ALL timesteps, not just final
+        # lstm_out contains the hidden state for each timestep
+        # At timestep i, the hidden state has processed (s_0, a_1, ..., a_i)
+        lstm_out, _ = self._lstm(packed)
+
+        # Unpack to get padded tensor of all hidden states
+        # lstm_out_padded: (batch_size, max_seq_len, hidden_dim)
+        lstm_out_padded, _ = nn.utils.rnn.pad_packed_sequence(
+            lstm_out, batch_first=True
+        )
+
+        # Apply FC layer to EACH timestep's hidden state independently
+        # This gives us a prediction for each action in the sequence
+        # output: (batch_size, max_seq_len, 1)
+        output = self._fc(lstm_out_padded)
+
+        return output
+
+    def predict(self, abstract_plan: Skeleton) -> np.ndarray:
+        """Predict per-action resample counts for an abstract plan.
+
+        Args:
+            abstract_plan: The abstract plan to predict for
+
+        Returns:
+            Array of shape (seq_len,) where each element is the predicted
+            number of resamples for that action conditioned on prior actions.
+            Element i = predicted resamples for action a_i given (s_0, a_1, ..., a_{i-1})
+        """
+        self._lstm.eval()
+        self._fc.eval()
+        with torch.no_grad():
+            sequence, seq_len = create_abstract_plan_sequence(
+                self._all_ground_atoms, self._all_ground_operators, abstract_plan
+            )
+
+            # Convert to tensor and add batch dimension
+            # x: (1, seq_len, input_dim)
+            x = torch.FloatTensor(sequence).unsqueeze(0).to(self.device)
+            lengths = torch.tensor([seq_len], dtype=torch.long)
+
+            # output: (1, seq_len, 1)
+            output = self.forward(x, lengths)
+
+            # Remove batch and final dimensions to get (seq_len,)
+            return output.squeeze(0).squeeze(-1).cpu().numpy()
+
+    def train_step(
+        self,
+        features: list[torch.Tensor],
+        targets: list[torch.Tensor],
+        lengths: torch.Tensor,
+        loss_fn: nn.Module,
+    ) -> float:
+        """Perform a single training step with per-action targets.
+
+        Args:
+            features: List of sequence tensors, each of shape (seq_len, input_dim)
+            targets: List of per-action target tensors, each of shape (seq_len,)
+                     where each element is the target resample count for that action
+            lengths: Tensor of actual sequence lengths, shape (batch_size,)
+            loss_fn: Loss function (should be nn.MSELoss with reduction='none')
+
+        Returns:
+            The loss value
+        """
+        assert loss_fn is not None
+        self._lstm.train()
+        self._fc.train()
+        self._optimizer.zero_grad()
+
+        # Ensure every feature tensor is at least 2D (seq_len, input_dim)
+        # This handles the edge case where a sequence of length 1 might be passed as 1D
+        features_3d = [f.unsqueeze(0) if f.ndim == 1 else f for f in features]
+
+        # Pad sequences to the same length
+        # padded_features: (batch_size, max_seq_len, input_dim)
+        padded_features = pad_sequence(features_3d, batch_first=True).to(self.device)
+
+        # predictions: (batch_size, max_seq_len, 1)
+        predictions = self.forward(padded_features, lengths)
+
+        # Pad target sequences to match predictions shape
+        # Each target is (seq_len,), we need to add a dimension and pad
+        # targets_with_dim: list of (seq_len, 1) tensors
+        targets_with_dim = [t.unsqueeze(-1) for t in targets]
+        # padded_targets: (batch_size, max_seq_len, 1)
+        padded_targets = pad_sequence(targets_with_dim, batch_first=True).to(
+            self.device
+        )
+
+        # Create a mask to ignore padded positions in the loss
+        # We only want to compute loss on valid (non-padded) positions
+        # mask: (batch_size, max_seq_len, 1)
+        max_seq_len = padded_features.shape[1]
+        mask = torch.zeros(len(features), max_seq_len, 1, device=self.device)
+        for i, length in enumerate(lengths):
+            # Convert tensor lengths to Python ints so
+            # they can be used as slice indices
+            if isinstance(length, torch.Tensor):
+                length = int(length.item())
+            else:
+                length = int(length)
+
+            mask[i, :length, :] = 1.0
+
+        # Compute element-wise loss and apply mask
+        # This ensures padded positions don't contribute to the loss
+        elementwise_loss = loss_fn(predictions, padded_targets)
+        masked_loss = (elementwise_loss * mask).sum() / mask.sum()
+
+        masked_loss.backward()
+        self._optimizer.step()
+
+        return masked_loss.item()

@@ -41,6 +41,7 @@ def main(cfg: DictConfig):
 
     seed = int(cfg.seed)
     num_steps = int(cfg.num_steps)
+    max_resamples = int(cfg.max_resamples)
 
     # Build env.
     prbench.register_all_environments()
@@ -86,6 +87,7 @@ def main(cfg: DictConfig):
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        max_resamples=max_resamples,
         seed=seed,
     )
 
