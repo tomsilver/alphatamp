@@ -3,7 +3,7 @@
 import pickle
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import numpy as np
 import torch
@@ -559,6 +559,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Reset controller
         self._current_controller.reset(x, optimal_params)
 
+    def _return_dummy_action(self) -> _U:
+        assert self._env_models.action_space.shape
+        action_shape = self._env_models.action_space.shape
+        stationary_action = np.zeros(action_shape)
+        dummy_action = cast(_U, stationary_action)
+        return dummy_action
+
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None
 
@@ -639,12 +646,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._train_q_function()
 
         # Generate candidate plans
-        _ = self._generate_candidate_plans()
+        candidate_plans = self._generate_candidate_plans()
 
-        # Raise RuntimeError
-        raise RuntimeError(
-            "Exhausted resample budget in _get_action; no feasible action found."
-        )
+        # Score candidate plans and return best plan
+        plan_to_execute = self._score_candidate_plans(candidate_plans)
+
+        # Set new plan as the plan to execute
+        self._current_abstract_plan = plan_to_execute
+
+        # Reset num_resamples
+        self._num_resamples = 0
+
+        # Return dummy action
+        return self._return_dummy_action()
 
     def step(self) -> _U:
         """Get the next action to take."""
