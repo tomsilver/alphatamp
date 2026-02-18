@@ -599,7 +599,7 @@ def test_score_candidate_plans_simfree_feasbility_approach():
     approach.reset(obs, {})
 
     # Generate candidate plans
-    candidate_plans = approach._generate_candidate_plans()
+    candidate_plans = approach.generate_candidate_plans()
 
     assert candidate_plans, "Should generate at least one candidate plan"
     assert all(
@@ -607,7 +607,7 @@ def test_score_candidate_plans_simfree_feasbility_approach():
     ), "Every candidate plan should have at least one action"
 
     # Score candidate plans via the BALD objective
-    best_plan = approach._score_candidate_plans(candidate_plans)
+    best_plan = approach.score_candidate_plans(candidate_plans)
 
     assert best_plan is not None, "Should return a best plan"
     assert best_plan in candidate_plans, "Best plan must be one of the candidates"

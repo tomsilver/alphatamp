@@ -143,7 +143,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._loss_metrics: dict[str, list] = {}
 
         # Per-Action Resample Q Network
-        self._q_net: PerActionQNetwork | None = None
         self._ensemble_nets: list[PerActionQNetwork] = []
 
         self._completed_task = False
@@ -210,18 +209,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
             )
 
-        # Initialize the PerAction Network
-        self._q_net = PerActionQNetwork(
-            self._all_ground_atoms,
-            self._all_ground_operators,
-            hidden_dim=32,
-            num_layers=2,
-        )
-
         # Initialize ensemble of q nets
         self._ensemble_nets = []
         for _ in range(10):
-            self._ensemble_nets.append(self._q_net)
+            ensemble_net = PerActionQNetwork(
+                self._all_ground_atoms,
+                self._all_ground_operators,
+                hidden_dim=32,
+                num_layers=2,
+            )
+            self._ensemble_nets.append(ensemble_net)
 
     def _learn_from_transition(
         self,
@@ -370,7 +367,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return score
         return -1
 
-    def _train_q_function(self) -> None:
+    def _train_q_function(self, q_net: PerActionQNetwork) -> None:
         """Train the Per-Action Resample Q Function.
 
         The network learns to predict, for each action a_i in a plan, the expected
@@ -391,7 +388,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             List of average losses per epoch
         """
 
-        assert self._q_net
+        assert q_net
 
         # Reformat abstract plan dataset
         abstract_plans: list[Skeleton] = []
@@ -404,7 +401,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         num_epochs = 20
         _ = train_q_network(
-            self._q_net,
+            q_net,
             abstract_plans,
             self._all_ground_atoms,
             self._all_ground_operators,
@@ -414,7 +411,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             verbose=True,
         )
 
-    def _generate_candidate_plans(self) -> list[Skeleton]:
+    def train_ensemble_nets(self) -> None:
+        """Trains each of the Per-Action Resample Q Function in the approach's
+        ensemble."""
+
+        for q_net in self._ensemble_nets:
+            self._train_q_function(q_net)
+
+    def generate_candidate_plans(self) -> list[Skeleton]:
         """Use the training explorer to generate candidate plans for next execution
         using the last observation.
 
@@ -423,7 +427,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         the environment first
         """
 
-        assert self._last_observation
+        assert self._last_observation is not None
         candidate_plans: list[Skeleton] = []
 
         goal = None
@@ -436,7 +440,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
         return candidate_plans
 
-    def _score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
+    def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Given a list of candidate plans, score each plan based on the BALD objective
         and return the plan with the highest score."""
 
@@ -646,13 +650,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._update_scorers()
 
         # Then update the Q-function
-        self._train_q_function()
+        self.train_ensemble_nets()
 
         # Generate candidate plans
-        candidate_plans = self._generate_candidate_plans()
+        candidate_plans = self.generate_candidate_plans()
 
         # Score candidate plans and return best plan
-        plan_to_execute = self._score_candidate_plans(candidate_plans)
+        plan_to_execute = self.score_candidate_plans(candidate_plans)
 
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
