@@ -219,6 +219,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
         # Initialize ensemble of q nets
+        self._ensemble_nets = []
         for _ in range(10):
             self._ensemble_nets.append(self._q_net)
 
@@ -439,8 +440,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Given a list of candidate plans, score each plan based on the BALD objective
         and return the plan with the highest score."""
 
-        best_bald_score = 0.0
+        best_bald_score = float("-inf")
         best_candidate_plan = None
+
+        assert candidate_plans, "No Candidate Plans!"
         for candidate_plan in candidate_plans:
 
             candidate_probabilities = []
@@ -653,6 +656,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
+        self._current_abstract_plan_step = 0
+        
+        # Reset the current controller so it will be reinitialized for the new plan
+        self._current_controller = None
 
         # Reset num_resamples
         self._num_resamples = 0
