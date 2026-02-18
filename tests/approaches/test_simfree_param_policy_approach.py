@@ -539,8 +539,8 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
 
 
 def test_score_candidate_plans_simfree_feasbility_approach():
-    """Tests that the approach can generate candidate plans and score them via the
-    BALD objective, returning the plan with the highest epistemic uncertainty."""
+    """Tests that the approach can generate candidate plans and score them via the BALD
+    objective, returning the plan with the highest epistemic uncertainty."""
 
     # Test in a PRBench environment.
     prbench.register_all_environments()

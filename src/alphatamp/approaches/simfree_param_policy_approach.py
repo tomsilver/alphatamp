@@ -657,7 +657,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
         self._current_abstract_plan_step = 0
-        
+
         # Reset the current controller so it will be reinitialized for the new plan
         self._current_controller = None
 
