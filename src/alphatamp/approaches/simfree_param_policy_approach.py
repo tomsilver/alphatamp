@@ -3,7 +3,7 @@
 import pickle
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import numpy as np
 import torch
@@ -34,7 +34,11 @@ from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
     create_abstract_plan_sequence,
 )
-from alphatamp.approaches.abstract_plan_classifiers.utils import train_q_network
+from alphatamp.approaches.abstract_plan_classifiers.utils import (
+    calculate_bald_objective,
+    convert_q_value_to_probability,
+    train_q_network,
+)
 from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
     BaseFeasibilityClassifierLearner,
 )
@@ -69,12 +73,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         parameter_scorer_configs: dict,
         abstract_action_scorer_class: type[AbstractActionScorer],
         abstract_action_scorer_configs: dict,
+        q_network_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
         max_abstract_plans: int = 10,
         max_resamples: int = 100,
         num_candidate_plans: int = 10,
+        num_ensemble_nets: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -139,7 +145,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._loss_metrics: dict[str, list] = {}
 
         # Per-Action Resample Q Network
-        self._q_net: PerActionQNetwork | None = None
+        self._q_network_configs: dict = q_network_configs
+        self._ensemble_nets: list[PerActionQNetwork] = []
+        self._num_ensemble_nets = num_ensemble_nets
 
         self._completed_task = False
 
@@ -205,13 +213,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
             )
 
-        # Initialize the PerAction Network
-        self._q_net = PerActionQNetwork(
-            self._all_ground_atoms,
-            self._all_ground_operators,
-            hidden_dim=32,
-            num_layers=2,
-        )
+        # Initialize ensemble of q nets
+        self._ensemble_nets = []
+        for _ in range(self._num_ensemble_nets):
+            ensemble_net = PerActionQNetwork(
+                self._all_ground_atoms,
+                self._all_ground_operators,
+                **self._q_network_configs,
+            )
+            self._ensemble_nets.append(ensemble_net)
 
     def _learn_from_transition(
         self,
@@ -360,7 +370,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return score
         return -1
 
-    def _train_q_function(self) -> None:
+    def _train_q_function(self, q_net: PerActionQNetwork) -> None:
         """Train the Per-Action Resample Q Function.
 
         The network learns to predict, for each action a_i in a plan, the expected
@@ -381,7 +391,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             List of average losses per epoch
         """
 
-        assert self._q_net
+        assert q_net
 
         # Reformat abstract plan dataset
         abstract_plans: list[Skeleton] = []
@@ -394,7 +404,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         num_epochs = 20
         _ = train_q_network(
-            self._q_net,
+            q_net,
             abstract_plans,
             self._all_ground_atoms,
             self._all_ground_operators,
@@ -404,7 +414,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             verbose=True,
         )
 
-    def _generate_candidate_plans(self) -> list[Skeleton]:
+    def train_ensemble_nets(self) -> None:
+        """Trains each of the Per-Action Resample Q Function in the approach's
+        ensemble."""
+
+        for q_net in self._ensemble_nets:
+            self._train_q_function(q_net)
+
+    def generate_candidate_plans(self) -> list[Skeleton]:
         """Use the training explorer to generate candidate plans for next execution
         using the last observation.
 
@@ -413,7 +430,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         the environment first
         """
 
-        assert self._last_observation
+        assert self._last_observation is not None
         candidate_plans: list[Skeleton] = []
 
         goal = None
@@ -425,6 +442,36 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._last_observation, goal
         )
         return candidate_plans
+
+    def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
+        """Given a list of candidate plans, score each plan based on the BALD objective
+        and return the plan with the highest score."""
+
+        best_bald_score = float("-inf")
+        best_candidate_plan = None
+
+        assert candidate_plans, "No Candidate Plans!"
+        for candidate_plan in candidate_plans:
+
+            candidate_probabilities = []
+            # Use ensemble of Q networks to calculate per action resample counts
+            for q_net in self._ensemble_nets:
+                per_action_resamples = q_net.predict(candidate_plan)
+
+                # Convert per action resample to overall probability
+                probability = convert_q_value_to_probability(
+                    per_action_resamples.tolist(), self._max_resamples
+                )
+                candidate_probabilities.append(probability)
+
+            bald_score = calculate_bald_objective(candidate_probabilities)
+
+            if bald_score > best_bald_score:
+                best_bald_score = bald_score
+                best_candidate_plan = candidate_plan
+
+        assert best_candidate_plan
+        return best_candidate_plan
 
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
@@ -522,6 +569,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Reset controller
         self._current_controller.reset(x, optimal_params)
 
+    def _return_dummy_action(self) -> _U:
+        assert self._env_models.action_space.shape
+        action_shape = self._env_models.action_space.shape
+        stationary_action = np.zeros(
+            action_shape, dtype=self._env_models.action_space.dtype
+        )
+        dummy_action = cast(_U, stationary_action)
+        return dummy_action
+
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None
 
@@ -599,15 +655,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._update_scorers()
 
         # Then update the Q-function
-        self._train_q_function()
+        self.train_ensemble_nets()
 
         # Generate candidate plans
-        _ = self._generate_candidate_plans()
+        candidate_plans = self.generate_candidate_plans()
 
-        # Raise RuntimeError
-        raise RuntimeError(
-            "Exhausted resample budget in _get_action; no feasible action found."
-        )
+        # Score candidate plans and return best plan
+        plan_to_execute = self.score_candidate_plans(candidate_plans)
+
+        # Set new plan as the plan to execute
+        self._current_abstract_plan = plan_to_execute
+        self._current_abstract_plan_step = 0
+
+        # Reset the current controller so it will be reinitialized for the new plan
+        self._current_controller = None
+
+        # Reset num_resamples
+        self._num_resamples = 0
+
+        # Return dummy action
+        return self._return_dummy_action()
 
     def step(self) -> _U:
         """Get the next action to take."""

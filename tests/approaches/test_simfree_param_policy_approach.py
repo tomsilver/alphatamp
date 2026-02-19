@@ -76,6 +76,9 @@ def test_naive_scorer_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -85,6 +88,7 @@ def test_naive_scorer_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -188,6 +192,9 @@ def test_dataset_collection_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -197,6 +204,7 @@ def test_dataset_collection_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -282,6 +290,9 @@ def test_save_datasets_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -291,6 +302,7 @@ def test_save_datasets_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -419,6 +431,9 @@ def test_train_param_scorer_simfree_feasbility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -428,6 +443,7 @@ def test_train_param_scorer_simfree_feasbility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -498,6 +514,9 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
         "num_epochs": 5,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -507,6 +526,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -535,4 +555,86 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
     loss_metrics = approach.get_loss_metrics()
 
     assert loss_metrics is not None, "Should store loss metrics"
+    env.close()
+
+
+def test_score_candidate_plans_simfree_feasbility_approach():
+    """Tests that the approach can generate candidate plans and score them via the BALD
+    objective, returning the plan with the highest epistemic uncertainty."""
+
+    # Test in a PRBench environment.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="bald-scoring")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier (no plans filtered, so many candidates reachable).
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 5,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
+        seed=123,
+    )
+
+    # Reset into eval mode so the exploit explorer is used for planning.
+    obs, _ = env.reset(seed=123)
+    approach.eval()
+    approach.reset(obs, {})
+
+    # Generate candidate plans
+    candidate_plans = approach.generate_candidate_plans()
+
+    assert candidate_plans, "Should generate at least one candidate plan"
+    assert all(
+        len(plan[1]) > 0 for plan in candidate_plans
+    ), "Every candidate plan should have at least one action"
+
+    # Score candidate plans via the BALD objective
+    best_plan = approach.score_candidate_plans(candidate_plans)
+
+    assert best_plan is not None, "Should return a best plan"
+    assert best_plan in candidate_plans, "Best plan must be one of the candidates"
+    assert len(best_plan[1]) > 0, "Best plan should have at least one action"
+
     env.close()

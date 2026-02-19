@@ -77,6 +77,10 @@ def main(cfg: DictConfig):
         "num_layers": int(cfg.abstract_action_scorer.num_layers),
         "num_epochs": int(cfg.abstract_action_scorer.num_epochs),
     }
+    q_network_configs = {
+        "hidden_dim": int(cfg.q_network.hidden_dim),
+        "num_layers": int(cfg.q_network.num_layers),
+    }
 
     # Build approach.
     approach = SimFreeParamPolicyApproach(
@@ -87,6 +91,7 @@ def main(cfg: DictConfig):
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         max_resamples=max_resamples,
         seed=seed,
     )
