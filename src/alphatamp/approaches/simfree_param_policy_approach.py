@@ -73,12 +73,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         parameter_scorer_configs: dict,
         abstract_action_scorer_class: type[AbstractActionScorer],
         abstract_action_scorer_configs: dict,
+        q_network_configs: dict,
         seed: int,
         heuristic_name: str = "hff",
         eval_planning_timeout: float = 100,
         max_abstract_plans: int = 10,
         max_resamples: int = 100,
         num_candidate_plans: int = 10,
+        num_ensemble_nets: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -143,7 +145,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._loss_metrics: dict[str, list] = {}
 
         # Per-Action Resample Q Network
+        self._q_network_configs: dict = q_network_configs
         self._ensemble_nets: list[PerActionQNetwork] = []
+        self._num_ensemble_nets = num_ensemble_nets
 
         self._completed_task = False
 
@@ -211,12 +215,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Initialize ensemble of q nets
         self._ensemble_nets = []
-        for _ in range(10):
+        for _ in range(self._num_ensemble_nets):
             ensemble_net = PerActionQNetwork(
                 self._all_ground_atoms,
                 self._all_ground_operators,
-                hidden_dim=32,
-                num_layers=2,
+                **self._q_network_configs,
             )
             self._ensemble_nets.append(ensemble_net)
 
@@ -569,7 +572,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _return_dummy_action(self) -> _U:
         assert self._env_models.action_space.shape
         action_shape = self._env_models.action_space.shape
-        stationary_action = np.zeros(action_shape)
+        stationary_action = np.zeros(
+            action_shape, dtype=self._env_models.action_space.dtype
+        )
         dummy_action = cast(_U, stationary_action)
         return dummy_action
 

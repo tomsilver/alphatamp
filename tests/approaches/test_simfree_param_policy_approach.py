@@ -76,6 +76,9 @@ def test_naive_scorer_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -85,6 +88,7 @@ def test_naive_scorer_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -188,6 +192,9 @@ def test_dataset_collection_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -197,6 +204,7 @@ def test_dataset_collection_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -282,6 +290,9 @@ def test_save_datasets_simfree_feasibility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -291,6 +302,7 @@ def test_save_datasets_simfree_feasibility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -419,6 +431,9 @@ def test_train_param_scorer_simfree_feasbility_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -428,6 +443,7 @@ def test_train_param_scorer_simfree_feasbility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -498,6 +514,9 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
         "num_epochs": 5,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -507,6 +526,7 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -581,6 +601,9 @@ def test_score_candidate_plans_simfree_feasbility_approach():
         "num_epochs": 5,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -590,6 +613,7 @@ def test_score_candidate_plans_simfree_feasbility_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 

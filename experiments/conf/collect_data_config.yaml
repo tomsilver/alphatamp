@@ -16,3 +16,8 @@ abstract_action_scorer:
   hidden_dim: 32
   num_layers: 2
   num_epochs: 10
+
+# Q network configs
+q_network:
+  hidden_dim: 32
+  num_layers: 2

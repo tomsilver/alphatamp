@@ -67,6 +67,9 @@ def test_baseline_sim_free_param_policy_approach():
         "num_epochs": 10,
     }
 
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
@@ -76,6 +79,7 @@ def test_baseline_sim_free_param_policy_approach():
         parameter_scorer_configs={"configs": parameter_configs},
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
