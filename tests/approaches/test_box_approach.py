@@ -90,6 +90,128 @@ def test_box_approach_basic_flow() -> None:
     env.close()  # type: ignore[no-untyped-call]
 
 
+def test_box_backfills(monkeypatch) -> None:
+    """Ensure missing skeleton gaps are backfilled before D statistics are computed."""
+    prbench.register_all_environments()
+    env = prbench.make("prbench/Obstruction2D-o0-v0")
+    env_models = create_bilevel_planning_models(
+        "obstruction2d", env.observation_space, env.action_space, num_obstructions=0
+    )
+
+    approach = BoxApproach(
+        env_models,
+        seed=123,
+        samples_per_step=1,
+        num_training_skeletons_per_problem=1,
+        training_planning_timeout=2,
+    )
+
+    obs0, _ = env.reset(seed=10)
+    approach.train(obs0)
+    obs1, _ = env.reset(seed=11)
+    approach.train(obs1)
+
+    if len(approach._data) < 2 or len(approach._data[0]) == 0:
+        pytest.skip("Insufficient training skeletons for backfill test.")
+
+    source_idx = 0
+    target_idx = 1
+    skeleton = next(iter(approach._data[source_idx].keys()))
+    approach._data[target_idx].pop(skeleton, None)
+
+    assert skeleton not in approach._data[target_idx]
+
+    call_count = 0
+
+    def _fake_refiner(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        return object()
+
+    monkeypatch.setattr(approach, "_refiner", _fake_refiner)
+
+    approach._build_box_model()
+
+    assert call_count >= 1
+    assert skeleton in approach._data[target_idx]
+    assert approach._data[target_idx][skeleton][0] <= 0.0
+    assert approach._data[target_idx][skeleton][0] > -1.0
+    assert all(
+        len(problem_data) == len(approach._skeletons_vocab)
+        for problem_data in approach._data
+    )
+
+    assert approach._prior_mu is not None
+    skel_idx = approach._skeleton_to_idx[skeleton]
+    assert approach._prior_mu[skel_idx] <= 0.0
+
+    env.close()  # type: ignore[no-untyped-call]
+
+
+def test_score_from_refinement_legacy_linear_binary_mode() -> None:
+    """Legacy linear helper keeps binary behavior in binary mode."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._training_label_mode = "binary"  # pylint: disable=protected-access
+
+    assert approach._score_from_refinement_legacy_linear(True, 10, 3) == 1.0  # pylint: disable=protected-access
+    assert approach._score_from_refinement_legacy_linear(False, 10, 3) == 0.0  # pylint: disable=protected-access
+
+
+def test_score_from_refinement_legacy_linear_effort_mode() -> None:
+    """Legacy linear helper keeps prior effort behavior."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._training_label_mode = "effort"  # pylint: disable=protected-access
+    approach._samples_per_step = 10  # pylint: disable=protected-access
+    approach._failure_penalty_multiplier = 2.0  # pylint: disable=protected-access
+
+    assert approach._score_from_refinement_legacy_linear(True, 0, 3) == 60.0  # pylint: disable=protected-access
+    assert approach._score_from_refinement_legacy_linear(True, 15, 3) == 45.0  # pylint: disable=protected-access
+    assert approach._score_from_refinement_legacy_linear(True, 60, 3) == 0.0  # pylint: disable=protected-access
+    assert approach._score_from_refinement_legacy_linear(True, 80, 3) == 0.0  # pylint: disable=protected-access
+    assert approach._score_from_refinement_legacy_linear(False, 1, 3) == 0.0  # pylint: disable=protected-access
+
+
+def test_score_from_refinement_process_time_non_timeout() -> None:
+    """Process-time scoring should be negative elapsed process time."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._failure_penalty_multiplier = 2.0  # pylint: disable=protected-access
+
+    score = approach._score_from_refinement(0.25, 1.0, False)  # pylint: disable=protected-access
+    assert score == -0.25
+
+
+def test_score_from_refinement_process_time_timeout_penalty() -> None:
+    """Timeout should map to timeout * penalty, then negated."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._failure_penalty_multiplier = 2.5  # pylint: disable=protected-access
+
+    score = approach._score_from_refinement(0.10, 4.0, True)  # pylint: disable=protected-access
+    assert score == -10.0
+
+
+def test_get_score_matrix_copy_requires_built_model() -> None:
+    """Accessor should error when score matrix is unavailable."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._model_built = False  # pylint: disable=protected-access
+    approach._score_matrix = None  # pylint: disable=protected-access
+
+    with pytest.raises(RuntimeError):
+        approach.get_score_matrix_copy()
+
+
+def test_get_score_matrix_copy_is_defensive_copy() -> None:
+    """Accessor should return a copy rather than mutating internal state."""
+    approach = BoxApproach.__new__(BoxApproach)
+    approach._model_built = True  # pylint: disable=protected-access
+    approach._score_matrix = np.array([[1.0, 2.0]], dtype=float)  # pylint: disable=protected-access
+
+    matrix = approach.get_score_matrix_copy()
+    matrix[0, 0] = 999.0
+
+    assert approach._score_matrix is not None  # pylint: disable=protected-access
+    assert approach._score_matrix[0, 0] == 1.0  # pylint: disable=protected-access
+
+
 def _run_single_test(
     approach,
     seed: int,
@@ -109,10 +231,10 @@ def _run_single_test(
         )
 
     obs, _ = env.reset(seed=seed)
-    start = time.time()
+    start = time.perf_counter()
     try:
         plan = approach.run_planning(obs, timeout=timeout)
-        duration = time.time() - start
+        duration = time.perf_counter() - start
 
         if plan is None:
             duration = max(duration, timeout) # no plan found penalty
@@ -129,7 +251,7 @@ def _run_single_test(
         )
         print(f"Exception: {e}")
         print("-" * 40)
-        duration = max(time.time() - start, timeout)  # Penalty for failure
+        duration = max(time.perf_counter() - start, timeout)  # Penalty for failure
 
     env.close()
     return duration
@@ -164,7 +286,7 @@ def _get_complexity_config(complexity: str) -> ComplexityConfig:
         ComplexityConfig(),  # Default config
     )
 
-
+@pytest.mark.slow
 def _run_box_vs_baseline_performance(
     obstruction_level: str = "o2",
 ) -> dict[str, list[float]]:
@@ -334,11 +456,12 @@ def _run_box_vs_baseline_performance(
     env.close()  # type: ignore[no-untyped-call]
     return results
 
-
+@pytest.mark.slow
 def test_box_vs_baseline_performance() -> None:
     """Compare BOX against baselines (Test 3)."""
     _run_box_vs_baseline_performance("o2")
 
+@pytest.mark.slow
 def test_box_o1() -> None:
     """Test BOX approach on obstruction level o1."""
     _run_box_vs_baseline_performance("o1")
