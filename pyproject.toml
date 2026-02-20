@@ -9,15 +9,22 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/tomsilver/bilevel-planning",
-    "prbench_bilevel_planning@git+https://github.com/tomsilver/prbench-bilevel-planning",
-   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prbench",
-   "tomsgeoms2d",
-   "prbench-models",
+   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=bilevel-planning",
+   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench-bilevel-planning",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench",
+   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench-models",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
+   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=relational-structs",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
-    "scikit-learn",
-    "hydra-core>=1.3"
+   "hydra-core>=1.3",
+   "scikit-learn",
+   "torch",
+   "pymunk==7.1.0",
+   "scipy-stubs",
+   "hydra-joblib-launcher",
 ]
 
 [project.optional-dependencies]
@@ -70,7 +77,3 @@ module = [
     "sklearn.*",
 ]
 ignore_missing_imports = true
-
-[tool.uv.sources]
-tomsgeoms2d = { git = "https://github.com/tomsilver/toms-geoms-2d", rev = "main" }
-prbench-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prbench-models", rev = "main" }

@@ -1,4 +1,4 @@
-"""An exploit abstract plan explorer that returns the first plan that is feasible."""
+"""A batched abstract plan explorer that returns a specified number of valid plans."""
 
 import time
 from typing import TypeVar
@@ -8,14 +8,10 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 )
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
 from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
-from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.pddl import GroundOperator
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
-)
-from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_classifier_learner import (  # pylint:disable=line-too-long
-    BaseFeasibilityClassifierLearner,
 )
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
@@ -29,22 +25,20 @@ _X = TypeVar("_X")  # state
 _U = TypeVar("_U")  # action
 
 
-class ExploitExplorer(BaseAbstractExplorer[_O, _X, _U]):
-    """An exploit abstract plan explorer that returns the first plan that is
-    feasible."""
+class BatchExplorer(BaseAbstractExplorer[_O, _X, _U]):
+    """A batched abstract plan explorer that returns a specified number of valid
+    plans."""
 
     def __init__(
         self,
         env_models: SimulatorFreeSesameModels[_O, _X, _U],
-        feasibility_classifier_learner: BaseFeasibilityClassifierLearner,
         seed: int,
         heuristic_name: str = "hff",
         planning_timeout: float = 100,
-        max_abstract_plans: int = 15,
+        max_abstract_plans: int = 10,
     ):
         super().__init__()
         self._env_models = env_models
-        self._feasibility_classifier_learner = feasibility_classifier_learner
 
         self._abstract_plan_generator: (
             RelationalHeuristicSearchAbstractPlanGenerator
@@ -60,15 +54,19 @@ class ExploitExplorer(BaseAbstractExplorer[_O, _X, _U]):
         self._max_abstract_plans = max_abstract_plans
 
     def generate_abstract_plan(
+        self, obs: _O, goal: RelationalAbstractGoal | None = None
+    ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
+        """Generate a single abstract plan by delegating to the batched interface."""
+        plans = self.generate_batched_abstract_plan(obs, goal)
+        return plans[0]
+
+    def generate_batched_abstract_plan(
         self,
         obs: _O,
         goal: RelationalAbstractGoal | None = None,
-    ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
+    ) -> list[tuple[list[RelationalAbstractState], list[GroundOperator]]]:
+        """Returns a list of unique abstract plans."""
         start_time = time.perf_counter()
-
-        abstract_plan_classifier = self._feasibility_classifier_learner.get_classifier()
-
-        # Plan with the feasibility classifier.
 
         # Get the initial abstract state.
         x0 = self._env_models.observation_to_state(obs)
@@ -95,6 +93,7 @@ class ExploitExplorer(BaseAbstractExplorer[_O, _X, _U]):
         )
         num_abstract_plans = 0
 
+        abstract_plans = []
         while (
             num_abstract_plans < self._max_abstract_plans
             and time.perf_counter() - start_time < self._planning_timeout
@@ -102,6 +101,7 @@ class ExploitExplorer(BaseAbstractExplorer[_O, _X, _U]):
             # Get the next abstract plan.
             try:
                 s_plan, a_plan = next(gen)
+                abstract_plans.append((s_plan, a_plan))
                 num_abstract_plans += 1
             except StopIteration:
                 break
@@ -110,10 +110,6 @@ class ExploitExplorer(BaseAbstractExplorer[_O, _X, _U]):
             if remaining_time < 0:
                 break
 
-            # Try to classify whether or not this abstract plan is valid.
-            assert isinstance(x0, ObjectCentricState)
-            if abstract_plan_classifier.validate_plan(x0, s_plan, a_plan):
-                # If abstract plan is valid, return the plan.
-                return (s_plan, a_plan)
-
-        raise AbstractPlanGenerationError("No abstract plan found.")
+        if len(abstract_plans) == 0:
+            raise AbstractPlanGenerationError("No abstract plan found.")
+        return abstract_plans

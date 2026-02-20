@@ -92,7 +92,7 @@ def test_static_classifier_simfree_feasibility_approach():
 
     # Eval.
     # Train on just one problem.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=124)
 
     approach.eval()
     approach.reset(obs, {})
