@@ -152,7 +152,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._completed_task = False
 
-
     def reset(
         self,
         obs: _O,
@@ -614,7 +613,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # We have found a step in the plan where the next state is not yet reached.
 
             # If we haven't reached the next state,
-            # determine if we need a new controller. 
+            # determine if we need a new controller.
             if self._timestep == 0 or self._reset_controller:
                 advanced = True
 
@@ -700,6 +699,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan(self) -> Skeleton | None:
         """Return the current abstract plan."""
         return self._current_abstract_plan
+
+    def get_current_abstract_plan_step(self) -> int:
+        """Return the current step in the abstract plan."""
+        return self._current_abstract_plan_step
+
+    def get_most_recent_parameter(self) -> Any:
+        """Returns most recent parameter from the controller."""
+        return self._most_recent_parameter
+
+    def get_most_recent_abstract_action_str(self) -> str:
+        """Returns name of current abstract action."""
+        assert self._most_recent_abstract_action_descriptor is not None
+        return self._most_recent_abstract_action_descriptor
 
     def get_parameter_dataset(self) -> defaultdict[str, list]:
         """Return the collected parameter dataset."""

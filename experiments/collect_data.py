@@ -41,7 +41,8 @@ from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 
 
 class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
-    """Gymnasium wrapper that overlays the current abstract action and plan on rendered frames."""
+    """Gymnasium wrapper that overlays the current abstract action and plan on rendered
+    frames."""
 
     def __init__(self, env: gym.Env) -> None:  # type: ignore[type-arg]
         super().__init__(env)
@@ -62,7 +63,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
         self._current_param_label = "Params: " + label
 
     def render(self) -> Any:
-        frame = self.env.render()
+        frame: list | None = self.env.render()
         if frame is None:
             return frame
         img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
@@ -73,7 +74,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
             (self._current_plan_label, (200, 200, 200)),
             (self._current_param_label, (100, 220, 255)),
         ]
-        y = 8
+        y = 8.0
         for text, color in lines:
             if not text:
                 continue
@@ -83,7 +84,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
                 fill=(0, 0, 0, 180),
             )
             draw.text((8, y), text, fill=color, font=font)
-            y = bbox[3] + 6
+            y = bbox[3] + 6.0
         return np.array(img)
 
 
@@ -97,7 +98,9 @@ def main(cfg: DictConfig):
 
     # Build env.
     prbench.register_all_environments()
-    env = prbench.make(cfg.env.id, render_mode="rgb_array" if cfg.record_video else None)
+    env = prbench.make(
+        cfg.env.id, render_mode="rgb_array" if cfg.record_video else None
+    )
 
     overlay_wrapper: AbstractOverlayWrapper | None = None
     if cfg.record_video:
@@ -170,9 +173,9 @@ def main(cfg: DictConfig):
 
         if overlay_wrapper is not None:
             overlay_wrapper.set_action_label(
-                approach._most_recent_abstract_action_descriptor or ""
+                approach.get_most_recent_abstract_action_str() or ""
             )
-            params = approach._most_recent_parameter
+            params = approach.get_most_recent_parameter()
             if params is not None:
                 param_arr = np.asarray(params).ravel()
                 overlay_wrapper.set_param_label(
@@ -182,7 +185,7 @@ def main(cfg: DictConfig):
                 overlay_wrapper.set_param_label("")
             plan = approach.get_abstract_plan()
             if plan is not None:
-                plan_step = approach._current_abstract_plan_step
+                plan_step = approach.get_current_abstract_plan_step()
                 parts = [
                     f"[{a.short_str}]" if i == plan_step else a.short_str
                     for i, a in enumerate(plan[1])
