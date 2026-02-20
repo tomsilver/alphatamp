@@ -3,8 +3,8 @@ defaults:
   - _self_
 
 seed: 0
-max_resamples: 10
-num_steps: 1200
+max_resamples: 2
+num_steps: 100
 output_dir: datasets
 record_video: true
 
@@ -17,3 +17,8 @@ abstract_action_scorer:
   hidden_dim: 32
   num_layers: 2
   num_epochs: 10
+
+# Q network configs
+q_network:
+  hidden_dim: 32
+  num_layers: 2

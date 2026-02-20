@@ -655,9 +655,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     self._add_abstract_plan_to_dataset("failure")
 
                 # Resample Controller
+                print(f"  Resample #{self._num_resamples}")
                 self._resample_controller(x, self._last_observation)
 
                 self._num_resamples += 1
+
+        print("Reached max resamples, training...")  # add this
 
         # After trying a certain number of resamples, update the scorers
         self._update_scorers()

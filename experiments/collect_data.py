@@ -47,6 +47,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
         super().__init__(env)
         self._current_action_label: str = ""
         self._current_plan_label: str = ""
+        self._current_param_label: str = ""
 
     def set_action_label(self, label: str) -> None:
         """Update the abstract action label drawn on subsequent video frames."""
@@ -55,6 +56,10 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
     def set_plan_label(self, label: str) -> None:
         """Update the abstract plan label drawn on subsequent video frames."""
         self._current_plan_label = "Plan: " + label
+
+    def set_param_label(self, label: str) -> None:
+        """Update the parameter label drawn on subsequent video frames."""
+        self._current_param_label = "Params: " + label
 
     def render(self) -> Any:
         frame = self.env.render()
@@ -66,6 +71,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
         lines = [
             (self._current_action_label, (255, 255, 0)),
             (self._current_plan_label, (200, 200, 200)),
+            (self._current_param_label, (100, 220, 255)),
         ]
         y = 8
         for text, color in lines:
@@ -156,7 +162,7 @@ def main(cfg: DictConfig):
 
     task_completed = False
 
-    for _ in range(num_steps):
+    for step in range(num_steps):
         try:
             action = approach.step()
         except ApproachStepError:
@@ -166,11 +172,19 @@ def main(cfg: DictConfig):
             overlay_wrapper.set_action_label(
                 approach._most_recent_abstract_action_descriptor or ""
             )
+            params = approach._most_recent_parameter
+            if params is not None:
+                param_arr = np.asarray(params).ravel()
+                overlay_wrapper.set_param_label(
+                    "[" + ", ".join(f"{v:.3f}" for v in param_arr) + "]"
+                )
+            else:
+                overlay_wrapper.set_param_label("")
             plan = approach.get_abstract_plan()
             if plan is not None:
-                step = approach._current_abstract_plan_step
+                plan_step = approach._current_abstract_plan_step
                 parts = [
-                    f"[{a.short_str}]" if i == step else a.short_str
+                    f"[{a.short_str}]" if i == plan_step else a.short_str
                     for i, a in enumerate(plan[1])
                 ]
                 overlay_wrapper.set_plan_label(" \u2192 ".join(parts))
@@ -180,6 +194,7 @@ def main(cfg: DictConfig):
         obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
 
+        print(f"Executing step: {step}")
         if done:
             task_completed = True
             break
