@@ -1,0 +1,9 @@
+_target_: alphatamp.approaches.box_approach.BoxApproach
+max_abstract_plans: 20
+samples_per_step: 10
+max_skill_horizon: 100
+heuristic_name: "hff"
+skeleton_batch_size: 100
+num_training_skeletons_per_problem: 10
+training_planning_timeout: 20.0
+exploration_constant: 1.41421356237

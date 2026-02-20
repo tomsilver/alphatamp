@@ -80,11 +80,11 @@ def test_naive_scorer_simfree_feasibility_approach():
     approach.train()
     approach.reset(obs, {})
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     timeout = 4
     task_completed = False
 
-    while time.time() - start_time < timeout:
+    while time.perf_counter() - start_time < timeout:
         action = approach.step()
 
         obs, reward, done, _, _ = env.step(action)
@@ -104,11 +104,11 @@ def test_naive_scorer_simfree_feasibility_approach():
     approach.eval()
     approach.reset(obs, {})
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     timeout = 4
     task_completed = False
 
-    while time.time() - start_time < timeout:
+    while time.perf_counter() - start_time < timeout:
         action = approach.step()
 
         obs, reward, done, _, _ = env.step(action)
@@ -183,10 +183,10 @@ def test_classifier_scorer_simfree_feasibility_approach():
     approach.train()
     approach.reset(obs, {})
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     timeout = 10
 
-    while time.time() - start_time < timeout:
+    while time.perf_counter() - start_time < timeout:
         try:
             action = approach.step()
         except ApproachStepError:
@@ -213,10 +213,10 @@ def test_classifier_scorer_simfree_feasibility_approach():
 
     print(approach.get_abstract_plan())
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     timeout = 10
 
-    while time.time() - start_time < timeout:
+    while time.perf_counter() - start_time < timeout:
         try:
             action = approach.step()
         except ApproachStepError:

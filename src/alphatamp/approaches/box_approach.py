@@ -53,6 +53,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         num_training_skeletons_per_problem: int = 10,
         training_planning_timeout: float = 5,
         exploration_constant: float = math.sqrt(2),
+        training_label_mode: str = "effort",
+        failure_penalty_multiplier: float = 1.0,
     ):
         super().__init__(env_models, seed)
         self._max_abstract_plans = max_abstract_plans
@@ -62,7 +64,15 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         self._skeleton_batch_size = skeleton_batch_size
         self._num_training_skeletons_per_problem = num_training_skeletons_per_problem
         self._training_planning_timeout = training_planning_timeout
-        self._exploration_constant = exploration_constant # c parameter in UCB
+        self._exploration_constant = exploration_constant  # c parameter in UCB
+        if training_label_mode not in {"binary", "effort"}:
+            raise ValueError(
+                "training_label_mode must be either 'binary' or 'effort'."
+            )
+        if failure_penalty_multiplier < 1.0:
+            raise ValueError("failure_penalty_multiplier must be >= 1.0.")
+        self._training_label_mode = training_label_mode
+        self._failure_penalty_multiplier = failure_penalty_multiplier
 
         # Create the trajectory sampler for refinement
         self._trajectory_sampler = ParameterizedControllerTrajectorySampler(
@@ -112,15 +122,77 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         self._refiner = self._planner._refiner  # pylint: disable=protected-access
 
         # Store training data.
-        # List of dicts, where each dict maps FrozenSkeleton -> success (bool)
-        self._data: list[dict[FrozenSkeleton, bool]] = []
+        # List of dicts, where each dict maps FrozenSkeleton -> (utility score, is_success).
+        # Higher is better for utility score.
+        self._data: list[dict[FrozenSkeleton, tuple[float, bool]]] = []
+        self._training_initial_states: list[_X] = []
         
         # BOX Model parameters (will init once after training)
         self._skeletons_vocab: List[FrozenSkeleton] = []
         self._skeleton_to_idx: Dict[FrozenSkeleton, int] = {}
         self._prior_mu: Optional[np.ndarray] = None
         self._prior_sigma: Optional[np.ndarray] = None
-        self._model_built = False # ensure we don't rebuild multiple times
+        self._score_matrix: Optional[np.ndarray] = None
+        self._model_built = False  # ensure we don't rebuild multiple times
+
+    def _max_effort_for_skeleton(self, num_ops: int) -> float:
+        """Upper-bound effort baseline in unit of sampler calls."""
+        return float(max(1, num_ops * self._samples_per_step))
+
+    def _score_from_refinement_legacy_normalized(
+        self, plan_found: bool, num_sampler_calls: int, num_ops: int
+    ) -> float:
+        """Legacy normalized effort scoring kept for reference."""
+        if self._training_label_mode == "binary":
+            return 1.0 if plan_found else 0.0
+
+        max_effort = self._max_effort_for_skeleton(num_ops)
+        failure_effort = self._failure_penalty_multiplier * max_effort
+        effort = float(num_sampler_calls) if plan_found else failure_effort
+        normalized_effort = min(effort, failure_effort) / max_effort
+        return 1.0 / (1.0 + normalized_effort)
+
+    def _score_from_refinement_legacy_linear(
+        self, plan_found: bool, num_sampler_calls: int, num_ops: int
+    ) -> float:
+        """Legacy linear effort scoring kept for reference."""
+        if self._training_label_mode == "binary":
+            return 1.0 if plan_found else 0.0
+
+        max_effort = self._max_effort_for_skeleton(num_ops)
+        failure_effort = self._failure_penalty_multiplier * max_effort
+        effort = float(num_sampler_calls) if plan_found else failure_effort
+        return max(0.0, failure_effort - effort)
+
+    def _score_from_refinement(
+        self, elapsed_wall_time: float, timeout: float, timed_out: bool
+    ) -> float:
+        """Convert refinement outcome into a utility score (higher is better)."""
+        effective_time = float(elapsed_wall_time)
+        if timed_out:
+            effective_time = float(timeout) * self._failure_penalty_multiplier
+        return -1.0 * effective_time
+
+    def _refine_with_score(
+        self,
+        x0: _X,
+        skel_states: list[RelationalAbstractState],
+        skel_ops: list[GroundOperator],
+        timeout: float,
+        bpg: BilevelPlanningGraph,
+    ) -> tuple[Plan | None, float]:
+        """Run refiner and score with wall-clock elapsed time (higher is better)."""
+        wall_start_time = time.perf_counter()
+        try:
+            plan = self._refiner(x0, skel_states, skel_ops, timeout, bpg)
+        except Exception:
+            plan = None
+
+        elapsed_wall_time = time.perf_counter() - wall_start_time
+        timed_out = plan is None
+
+        score = self._score_from_refinement(elapsed_wall_time, timeout, timed_out)
+        return plan, score
 
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
         """Collect training data by generating skeletons and checking refinability."""
@@ -132,7 +204,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         bpg.add_abstract_state_node(s0)
         bpg.add_state_abstractor_edge(x0, s0)
 
-        problem_data: dict[FrozenSkeleton, bool] = {}
+        problem_data: dict[FrozenSkeleton, float] = {}
 
         # Generate a fixed number of skeletons for this training problem
         gen = self._base_abstract_plan_generator(
@@ -149,18 +221,68 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             # Only generate up to _num_training_skeletons_per_problem skeletons
             if count >= self._num_training_skeletons_per_problem:
                 break
-            
+
             # Attempt refinement
-            plan = self._refiner(
-                x0, skeleton[0], skeleton[1], self._training_planning_timeout, bpg
+            plan, score = self._refine_with_score(
+                x0,
+                skeleton[0],
+                skeleton[1],
+                self._training_planning_timeout,
+                bpg,
             )
-            label = plan is not None
             frozen_skeleton = (tuple(skeleton[0]), tuple(skeleton[1]))
-            # TODO: try other scores (e.g. refinement cost, ngram score, etc)
-            problem_data[frozen_skeleton] = label # store success/failure
+            problem_data[frozen_skeleton] = (score, plan is not None)
             count += 1
 
         self._data.append(problem_data)
+        self._training_initial_states.append(x0)
+        self._score_matrix = None
+        self._model_built = False
+
+    def _backfill_missing_training_labels(self) -> None:
+        """Evaluate missing (problem, skeleton) pairs before building BOX priors."""
+        if not self._data:
+            return
+
+        if len(self._data) != len(self._training_initial_states):
+            raise RuntimeError(
+                "Training data/state mismatch in BoxApproach backfill."
+            )
+
+        all_skeletons: Set[FrozenSkeleton] = set()
+        for problem_data in self._data:
+            all_skeletons.update(problem_data.keys())
+
+        for i, (problem_data, x0) in enumerate(
+            zip(self._data, self._training_initial_states)
+        ):
+            missing_skeletons = all_skeletons - set(problem_data.keys())
+            if not missing_skeletons:
+                continue
+
+            print(
+                "[BoxApproach] Backfilling "
+                f"{len(missing_skeletons)} missing skeleton labels for "
+                f"training problem {i}."
+            )
+
+            s0 = self._env_models.state_abstractor(x0)
+            bpg: BilevelPlanningGraph = BilevelPlanningGraph()
+            bpg.add_state_node(x0)
+            bpg.add_abstract_state_node(s0)
+            bpg.add_state_abstractor_edge(x0, s0)
+
+            for frozen_skeleton in sorted(missing_skeletons, key=str):
+                skel_states = list(frozen_skeleton[0])
+                skel_ops = list(frozen_skeleton[1])
+                plan, score = self._refine_with_score(
+                    x0,
+                    skel_states,
+                    skel_ops,
+                    self._training_planning_timeout,
+                    bpg,
+                )
+                problem_data[frozen_skeleton] = (score, plan is not None)
 
     def _build_box_model(self) -> None:
         """Builds the prior mu and sigma from collected training data."""
@@ -168,19 +290,21 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         if self._model_built:
             return
 
+        self._backfill_missing_training_labels()
+
         # Identify fixed set of skeletons from training
         # Take the union of all skeletons seen during training as analogy to "constraints" from BOX paper
         all_skeletons: Set[FrozenSkeleton] = set()
         for problem_data in self._data:
             all_skeletons.update(problem_data.keys())
 
-        # Debugging: identify if there are any problems where the set of skeletons generated
-        # is different from the overall set
-
         for i, problem_data in enumerate(self._data):
             missing_skeletons = all_skeletons - set(problem_data.keys())
             if len(missing_skeletons) > 0:
-                print(f"[BoxApproach] Warning: Training problem {i} is missing {len(missing_skeletons)} skeletons from the overall vocabulary.")
+                raise RuntimeError(
+                    "Backfilling failed: training problem "
+                    f"{i} is still missing {len(missing_skeletons)} skeletons."
+                )
         
         self._skeletons_vocab = sorted(list(all_skeletons), key=lambda s: str(s))
         self._skeleton_to_idx = {s: i for i, s in enumerate(self._skeletons_vocab)}
@@ -192,19 +316,21 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             # Fallback if no data
             self._prior_mu = np.zeros(M)
             self._prior_sigma = np.eye(M)
+            self._score_matrix = np.zeros((N, M), dtype=float)
             self._model_built = True
             return
 
-        # Construct Score Matrix D (N x M)
-        # NOTE: we currently assume that if a problem was not generated for a problem it stays 0.
+        # Construct score matrix D (N x M) from explicit utility labels.
         D = np.zeros((N, M))
         for i, problem_data in enumerate(self._data):
-            for skel, success in problem_data.items():
+            for skel, (score, _) in problem_data.items():
                 j = self._skeleton_to_idx[skel]
-                D[i, j] = 1.0 if success else 0.0
+                D[i, j] = float(score)
+
+        self._score_matrix = D
 
 
-        # debugging: show the number of unique rows in D 
+        # debugging: show the number of unique rows in D
         unique_rows = np.unique(D, axis=0)
         print(f"[BoxApproach] Built score matrix D with shape {D.shape}, {len(unique_rows)} unique rows from {N} training problems and {M} skeletons.")
         
@@ -216,14 +342,22 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
 
         self._model_built = True
 
+    def get_score_matrix_copy(self) -> np.ndarray:
+        """Return a defensive copy of the BOX score matrix D."""
+        if not self._model_built or self._score_matrix is None:
+            raise RuntimeError(
+                "BOX score matrix is not available. Build the model first."
+            )
+        return np.array(self._score_matrix, copy=True)
+
     def _run_planning(
         self, problem: PlanningProblem[_X, _U], timeout: float
     ) -> Plan[_X, _U]:
-        
-        start_time = time.time()  # Track start time
+
 
         # Ensure model is built
         self._build_box_model()
+        self._model_built = True  # redundant but explicit
         
         assert self._prior_mu is not None
         assert self._prior_sigma is not None
@@ -247,11 +381,15 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         bpg.add_abstract_state_node(s0)
         bpg.add_state_abstractor_edge(x0, s0)
 
+        print('Beginning BOX approach with timeout of {:.2f} seconds.'.format(timeout))
+
+        start_time = time.perf_counter()  # Track start time
+
         # Candidates from fixed set still remain
         if num_candidates > 0:
             for _ in range(num_candidates):
                 # Check global timeout
-                elapsed = time.time() - start_time
+                elapsed = time.perf_counter() - start_time
                 if elapsed >= timeout:
                     break
                 
@@ -316,26 +454,33 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                 skel_ops = list(skeleton[1])
                 
                 # Recalculate remaining time
-                elapsed = time.time() - start_time
+                elapsed = time.perf_counter() - start_time
                 if elapsed >= timeout:
                     break
                 remaining = timeout - elapsed
 
-                plan = self._refiner(
-                    x0, skel_states, skel_ops, remaining, bpg
+                plan, score = self._refine_with_score(
+                    x0,
+                    skel_states,
+                    skel_ops,
+                    remaining,
+                    bpg,
                 )
-                
+
+                elapsed = time.perf_counter() - start_time
+
                 if plan is not None:
+                    print(f"BOX found a plan with score {score:.4f} after {elapsed:.2f} seconds.")
                     return plan
-                
+
                 # Didn't find a plan with this skeleton
-                # Update observations with failure (score 0.0)
+                # Update observations using the same scoring signal as training.
                 observed_indices.append(best_idx)
-                observed_scores.append(0.0)
+                observed_scores.append(score)
 
         # Fallback Loop
         # Handles zero-shot cases or when all candidates exhausted
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         if elapsed < timeout:
             # Recalculate remaining time
             remaining = timeout - elapsed
@@ -343,7 +488,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                 x0, s0, problem.goal, remaining, bpg
             )
             for skeleton in gen:
-                elapsed = time.time() - start_time
+                elapsed = time.perf_counter() - start_time
                 if elapsed >= timeout:
                     break
                 remaining = timeout - elapsed
@@ -354,10 +499,15 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                 
                 tried_skeletons.add(frozen)
                 
-                plan = self._refiner(
-                    x0, skeleton[0], skeleton[1], remaining, bpg
+                plan, _ = self._refine_with_score(
+                    x0,
+                    skeleton[0],
+                    skeleton[1],
+                    remaining,
+                    bpg,
                 )
                 if plan is not None:
+                    print(f"BOX fallback found a plan with skeleton {frozen} after {elapsed:.2f} seconds.")
                     return plan
 
         return None
@@ -368,20 +518,20 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
     ) -> Plan[_X, _U]:
         """Use the base generator but filters out skeletons that
         have consistently failed in training."""
-        
-        start_time = time.time()
+
+        start_time = time.perf_counter()
         problem = self._observation_to_planning_problem(init_obs)
-        
+
         # Identify skeletons that have been tried but never succeeded
         tried_skeletons: Set[FrozenSkeleton] = set()
         successful_skeletons: Set[FrozenSkeleton] = set()
-        
+
         for problem_data in self._data:
-            for skel, success in problem_data.items():
+            for skel, (_, is_success) in problem_data.items():
                 tried_skeletons.add(skel)
-                if success:
+                if is_success:
                     successful_skeletons.add(skel)
-        
+
         # Skeletons that were tried but never succeeded
         always_failed_skeletons = tried_skeletons - successful_skeletons
         
@@ -392,7 +542,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         bpg.add_abstract_state_node(s0)
         bpg.add_state_abstractor_edge(x0, s0)
 
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         if elapsed >= timeout:
             return None
         remaining = timeout - elapsed
@@ -402,7 +552,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         )
         
         for skeleton in gen:
-            elapsed = time.time() - start_time
+            elapsed = time.perf_counter() - start_time
             if elapsed >= timeout:
                 break
             remaining = timeout - elapsed
@@ -412,10 +562,14 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             if frozen in always_failed_skeletons:
                 continue
                 
-            plan = self._refiner(
-                x0, skeleton[0], skeleton[1], remaining, bpg
+            plan, _ = self._refine_with_score(
+                x0,
+                skeleton[0],
+                skeleton[1],
+                remaining,
+                bpg,
             )
-            
+
             if plan is not None:
                 return plan
         
@@ -425,8 +579,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         self, init_obs: _O, timeout: float
     ) -> Plan[_X, _U]:
         """Use previously successful skeletons first, then fall back to the generator."""
-        
-        start_time = time.time()
+
+        start_time = time.perf_counter()
         problem = self._observation_to_planning_problem(init_obs)
         x0 = problem.initial_state
         s0 = self._env_models.state_abstractor(x0)
@@ -438,18 +592,18 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         # Collect successful skeletons from training
         successful_skeletons: List[FrozenSkeleton] = []
         seen_successful: Set[FrozenSkeleton] = set()
-        
+
         for problem_data in self._data:
-            for skel, success in problem_data.items():
-                if success and skel not in seen_successful:
+            for skel, (_, is_success) in problem_data.items():
+                if is_success and skel not in seen_successful:
                     successful_skeletons.append(skel)
                     seen_successful.add(skel)
-        
+
         tried_skeletons: Set[FrozenSkeleton] = set()
 
         # Try successful skeletons first
         for skeleton in successful_skeletons:
-            elapsed = time.time() - start_time
+            elapsed = time.perf_counter() - start_time
             if elapsed >= timeout:
                 break
             remaining = timeout - elapsed
@@ -460,17 +614,21 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             skel_states = list(skeleton[0])
             skel_ops = list(skeleton[1])
             
-            plan = self._refiner(
-                x0, skel_states, skel_ops, remaining, bpg
+            plan, _ = self._refine_with_score(
+                x0,
+                skel_states,
+                skel_ops,
+                remaining,
+                bpg,
             )
-            
+
             if plan is not None:
                 return plan
 
         # 3. Fallback to generator
         print("[SuccessfulFirst] Fallback to generator.")
         
-        elapsed = time.time() - start_time
+        elapsed = time.perf_counter() - start_time
         if elapsed >= timeout:
             return None
         
@@ -483,7 +641,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         
         # TODO: could refactor to avoid code duplication
         for skeleton in gen:
-            elapsed = time.time() - start_time
+            elapsed = time.perf_counter() - start_time
             if elapsed >= timeout:
                 break
             remaining = timeout - elapsed
@@ -495,13 +653,17 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
             
             tried_skeletons.add(frozen)
             
-            plan = self._refiner(
-                x0, skeleton[0], skeleton[1], remaining, bpg
+            plan, _ = self._refine_with_score(
+                x0,
+                skeleton[0],
+                skeleton[1],
+                remaining,
+                bpg,
             )
-            
+
             if plan is not None:
                 return plan
-                
+
         return None
 
     def _score_skeleton(
