@@ -24,6 +24,7 @@ dependencies = [
    "pymunk==7.1.0",
    "scipy-stubs",
    "hydra-joblib-launcher",
+   "hydra-submitit-launcher",
 ]
 
 [project.optional-dependencies]
