@@ -57,6 +57,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         failure_penalty_multiplier: float = 1.0,
     ):
         super().__init__(env_models, seed)
+        self._seed = seed
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
