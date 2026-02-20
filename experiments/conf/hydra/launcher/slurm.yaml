@@ -1,7 +1,7 @@
 _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 
 # Slurm job settings — adjust these to match your cluster.
-partition: null        # e.g. "gpu", "cpu", "short"
+partition: cpu        # e.g. "gpu", "cpu", "short"
 timeout_min: 120       # wall-clock limit per job in minutes
 cpus_per_task: 4
 mem_gb: 16
