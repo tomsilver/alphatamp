@@ -377,7 +377,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
 
         failure_context = self._extract_failure_context(
             initial_plan_generator._last_abstract_actions,  # pylint: disable=protected-access
-            tracking_refiner._failed_concrete_state,
+            tracking_refiner._failed_concrete_state,  # pylint: disable=protected-access
             tracking_refiner._deepest_failed_index,  # pylint: disable=protected-access
             initial_plan_generator._last_abstract_states,  # pylint: disable=protected-access
         )

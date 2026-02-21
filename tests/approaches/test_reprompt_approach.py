@@ -12,7 +12,7 @@ from alphatamp.approaches.cluttered_storage.reprompt_approach import (
 )
 
 
-#@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
+@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
 def test_reprompt_approach():
     """Tests for RepromptApproach()."""
 
