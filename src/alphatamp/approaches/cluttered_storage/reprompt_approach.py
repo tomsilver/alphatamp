@@ -374,7 +374,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         remaining_time = timeout - (time.perf_counter() - start_time)
         if remaining_time <= 0:
             raise TimeoutError("init plan failed")
-        
+
         failure_context = self._extract_failure_context(
             initial_plan_generator._last_abstract_actions,  # pylint: disable=protected-access
             tracking_refiner._failed_concrete_state,  # pylint: disable=protected-access
