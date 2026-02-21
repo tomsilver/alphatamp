@@ -374,7 +374,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         remaining_time = timeout - (time.perf_counter() - start_time)
         if remaining_time <= 0:
             raise TimeoutError("init plan failed")
-
+        
         failure_context = self._extract_failure_context(
             initial_plan_generator._last_abstract_actions,  # pylint: disable=protected-access
             tracking_refiner._failed_concrete_state,  # pylint: disable=protected-access
@@ -454,7 +454,7 @@ class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
         super().__init__(*args, **kwargs)
         # deepest failed index represents the furthest I get in the plan
         self._deepest_failed_index: int = -1
-        self._failed_concrete_state = None
+        self._failed_concrete_state: ObjectCentricState | None = None
 
     def __call__(self, x0, s_plan, a_plan, timeout, bpg) -> Plan | None:
         self._deepest_failed_index = -1  # reset each call
