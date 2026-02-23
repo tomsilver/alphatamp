@@ -6,7 +6,7 @@ seed: 0
 max_resamples: 10
 num_steps: 200
 reset_every: 50
-train_every: 5
+train_every: 10
 
 output_dir: datasets
 record_video: true
@@ -25,5 +25,5 @@ abstract_action_scorer:
 q_network:
   hidden_dim: 32
   num_layers: 2
-  num_ensemble_nets: 1
-  num_epochs: 1
+  num_ensemble_nets: 2
+  num_epochs: 3

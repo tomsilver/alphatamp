@@ -107,7 +107,12 @@ def main(cfg: DictConfig):
         overlay_wrapper = AbstractOverlayWrapper(env)
         env = overlay_wrapper
         video_dir = Path(cfg.output_dir) / f"seed_{seed}" / "videos"
-        env = RecordVideo(env, str(video_dir), name_prefix=f"seed_{seed}")
+        env = RecordVideo(
+            env,
+            str(video_dir),
+            name_prefix=f"seed_{seed}",
+            episode_trigger=lambda _: True,
+        )
 
     obs, _ = env.reset(seed=seed)
 

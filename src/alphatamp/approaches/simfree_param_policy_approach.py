@@ -127,8 +127,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_parameter: Any | None = None
         self._most_recent_abstract_action_descriptor: str | None = None
 
-        # Abstract Plan Dataset
-        self._abstract_plan_dataset: list[tuple[tuple[tuple, tuple], int]] = []
+        # Abstract Plan Dataset — keyed by (abstract_states, abstract_actions) to
+        # prevent duplicate entries from repeated resample failures on the same plan step.
+        # A success label (1) always overrides a prior failure label (0).
+        self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
         self._abstract_action_dataset: defaultdict[
@@ -241,20 +243,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
             )
 
-        # Initialize ensemble of q nets
-        _net_kwargs = {
-            k: self._q_network_configs[k]
-            for k in ("hidden_dim", "num_layers")
-            if k in self._q_network_configs
-        }
-        self._ensemble_nets = []
-        for _ in range(self._num_ensemble_nets):
-            ensemble_net = PerActionQNetwork(
-                self._all_ground_atoms,
-                self._all_ground_operators,
-                **_net_kwargs,
-            )
-            self._ensemble_nets.append(ensemble_net)
+        self._reinitialize_ensemble_nets()
 
     def _learn_from_transition(
         self,
@@ -428,7 +417,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Reformat abstract plan dataset
         abstract_plans: list[Skeleton] = []
-        for abstract_plan, _ in self._abstract_plan_dataset:
+        for abstract_plan, _ in self._abstract_plan_dataset.items():
             # Convert tuple of tuples into list of tuples
             abstract_states, abstract_actions = abstract_plan
             abstract_states_list = list(abstract_states)
@@ -447,10 +436,32 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             verbose=True,
         )
 
+    def _reinitialize_ensemble_nets(self) -> None:
+        """Create fresh PerActionQNetwork instances, discarding any trained weights.
+
+        Called both during reset() and at the start of each train_ensemble_nets()
+        to avoid chasing non-stationary targets produced by the abstract action
+        scorers, which are themselves retrained before every Q-network update.
+        """
+        _net_kwargs = {
+            k: self._q_network_configs[k]
+            for k in ("hidden_dim", "num_layers")
+            if k in self._q_network_configs
+        }
+        self._ensemble_nets = [
+            PerActionQNetwork(
+                self._all_ground_atoms,
+                self._all_ground_operators,
+                **_net_kwargs,
+            )
+            for _ in range(self._num_ensemble_nets)
+        ]
+
     def train_ensemble_nets(self) -> None:
         """Trains each of the Per-Action Resample Q Function in the approach's
         ensemble."""
 
+        self._reinitialize_ensemble_nets()
         for q_net in self._ensemble_nets:
             self._train_q_function(q_net)
 
@@ -561,7 +572,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         abstract_actions = tuple(
             self._current_abstract_plan[1][: self._current_abstract_plan_step + 1]
         )
-        self._abstract_plan_dataset.append(((abstract_states, abstract_actions), label))
+        key = (abstract_states, abstract_actions)
+
+        # Only upgrade from failure (0) to success (1), never downgrade.
+        self._abstract_plan_dataset[key] = max(self._abstract_plan_dataset.get(key, 0), label)
 
     def _update_scorers(self) -> None:
         """Retrain the parameter and abstract action scorers given the current stored
@@ -774,7 +788,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             "parameter_dataset.pkl": dict(self._parameter_dataset),
             "abstract_plan_dataset.pkl": list(
                 self._make_data(abstract_plan, training_label)
-                for abstract_plan, training_label in self._abstract_plan_dataset
+                for abstract_plan, training_label in self._abstract_plan_dataset.items()
             ),
             "abstract_action_dataset.pkl": {
                 k: list(
