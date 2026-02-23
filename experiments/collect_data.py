@@ -96,6 +96,7 @@ def main(cfg: DictConfig):
     seed = int(cfg.seed)
     num_steps = int(cfg.num_steps)
     max_resamples = int(cfg.max_resamples)
+    reset_every = int(cfg.reset_every)
 
     # Build env.
     kinder.register_all_environments()
@@ -157,6 +158,7 @@ def main(cfg: DictConfig):
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
+        train_every=int(cfg.train_every),
         seed=seed,
     )
 
@@ -165,12 +167,23 @@ def main(cfg: DictConfig):
     approach.reset(obs, {})
 
     task_completed = False
+    reset_count = 0
+
+    def _env_reset(episode: int) -> Any:
+        new_obs, _ = env.reset(seed=seed + episode)
+        return new_obs
 
     for step in range(num_steps):
         try:
             action = approach.step()
         except ApproachStepError:
-            break
+            # Stuck in a terminal state — reset the environment but keep
+            # all learned models and datasets so the approach can continue improving.
+            reset_count += 1
+            print(f"Step {step}: ApproachStepError, resetting env (reset #{reset_count})")
+            obs = _env_reset(reset_count)
+            approach.reset_episode(obs)
+            continue
 
         if overlay_wrapper is not None:
             overlay_wrapper.set_action_label(
@@ -201,7 +214,15 @@ def main(cfg: DictConfig):
         print(f"Executing step: {step}")
         if done:
             task_completed = True
-            break
+            reset_count += 1
+            print(f"Step {step}: task completed, resetting env (reset #{reset_count})")
+            obs = _env_reset(reset_count)
+            approach.reset_episode(obs)
+        elif (step + 1) % reset_every == 0:
+            reset_count += 1
+            print(f"Step {step}: periodic reset (reset #{reset_count})")
+            obs = _env_reset(reset_count)
+            approach.reset_episode(obs)
 
     # Save datasets to a per-seed directory.
     output_dir = Path(cfg.output_dir) / f"seed_{seed}"

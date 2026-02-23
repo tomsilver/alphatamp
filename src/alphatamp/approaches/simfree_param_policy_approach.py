@@ -80,6 +80,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         max_abstract_plans: int = 10,
         max_resamples: int = 100,
         num_candidate_plans: int = 10,
+        train_every: int = 1,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -148,8 +149,34 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._q_network_configs: dict = q_network_configs
         self._ensemble_nets: list[PerActionQNetwork] = []
         self._num_ensemble_nets: int = q_network_configs.get("num_ensemble_nets", 5)
+        self._resample_exhaustion_count: int = 0
 
+        self._train_every: int = train_every
         self._completed_task = False
+
+    def reset_episode(self, obs: _O) -> None:
+        """Reset only episode-level state for a new environment episode.
+
+        Unlike reset(), this preserves all learned state: trained Q networks,
+        parameter scorers, action scorers, and all collected datasets. Use this
+        when the environment is reset mid-training to avoid getting stuck in a
+        terminal state.
+        """
+        explorer = (
+            self._train_explorer
+            if self._train_or_eval == "train"
+            else self._exploit_explorer
+        )
+        self._current_abstract_plan_step = 0
+        self._current_controller = None
+        self._last_observation = obs
+        self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+        self._timestep = 0
+        self._num_resamples = 0
+        self._most_recent_parameter = None
+        self._most_recent_abstract_action_descriptor = None
+        self._completed_task = False
+        self._reset_controller = True
 
     def reset(
         self,
@@ -663,10 +690,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._num_resamples += 1
 
         # After trying a certain number of resamples, update the scorers
-        self._update_scorers()
-
-        # Then update the Q-function
-        self.train_ensemble_nets()
+        # and Q-function only every train_every exhaustion events.
+        self._resample_exhaustion_count += 1
+        if self._resample_exhaustion_count % self._train_every == 0:
+            self._update_scorers()
+            self.train_ensemble_nets()
 
         # Generate candidate plans
         candidate_plans = self.generate_candidate_plans()
