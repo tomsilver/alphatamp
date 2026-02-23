@@ -80,7 +80,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         max_abstract_plans: int = 10,
         max_resamples: int = 100,
         num_candidate_plans: int = 10,
-        num_ensemble_nets: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -148,7 +147,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Per-Action Resample Q Network
         self._q_network_configs: dict = q_network_configs
         self._ensemble_nets: list[PerActionQNetwork] = []
-        self._num_ensemble_nets = num_ensemble_nets
+        self._num_ensemble_nets: int = q_network_configs.get("num_ensemble_nets", 5)
 
         self._completed_task = False
 
@@ -216,12 +215,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             )
 
         # Initialize ensemble of q nets
+        _net_kwargs = {
+            k: self._q_network_configs[k]
+            for k in ("hidden_dim", "num_layers")
+            if k in self._q_network_configs
+        }
         self._ensemble_nets = []
         for _ in range(self._num_ensemble_nets):
             ensemble_net = PerActionQNetwork(
                 self._all_ground_atoms,
                 self._all_ground_operators,
-                **self._q_network_configs,
+                **_net_kwargs,
             )
             self._ensemble_nets.append(ensemble_net)
 
@@ -404,7 +408,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             abstract_actions_list = list(abstract_actions)
             abstract_plans.append((abstract_states_list, abstract_actions_list))
 
-        num_epochs = 20
+        num_epochs = self._q_network_configs.get("num_epochs", 20)
         _ = train_q_network(
             q_net,
             abstract_plans,

@@ -6,6 +6,7 @@ Use Hydra multirun to sweep over seeds:
     python experiments/collect_data.py seed=0,1,2,3,4 -m
     python experiments/collect_data.py 'seed=range(0,100)' -m
     python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=joblib -m
+    python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=slurm -m
 """
 
 from pathlib import Path
@@ -141,6 +142,8 @@ def main(cfg: DictConfig):
     q_network_configs = {
         "hidden_dim": int(cfg.q_network.hidden_dim),
         "num_layers": int(cfg.q_network.num_layers),
+        "num_epochs": int(cfg.q_network.num_epochs),
+        "num_ensemble_nets": int(cfg.q_network.num_ensemble_nets),
     }
 
     # Build approach.
