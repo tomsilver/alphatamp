@@ -3,10 +3,10 @@ defaults:
   - _self_
 
 seed: 0
-max_resamples: 10
-num_steps: 400
+max_resamples: 2
+num_steps: 100
 output_dir: datasets
-record_video: false
+record_video: true
 
 # Parameter scorer configs
 parameter_scorer:
