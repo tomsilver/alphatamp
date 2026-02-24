@@ -172,3 +172,6 @@ multirun/
 
 # Datasets
 datasets/
+
+# Debugging folder
+debug/
