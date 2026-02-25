@@ -3,10 +3,10 @@
 import time
 from pathlib import Path
 
-import prbench
+import kinder
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (  # pylint:disable=line-too-long
@@ -37,9 +37,9 @@ from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 def test_naive_scorer_simfree_feasibility_approach():
     """Tests for SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -147,9 +147,9 @@ def test_naive_scorer_simfree_feasibility_approach():
 def test_dataset_collection_simfree_feasibility_approach():
     """Tests for collecting datasets for the SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-datasets")
@@ -245,9 +245,9 @@ def test_dataset_collection_simfree_feasibility_approach():
 def test_save_datasets_simfree_feasibility_approach():
     """Tests for saving datasets for the SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-parameter")
@@ -377,9 +377,9 @@ def test_save_datasets_simfree_feasibility_approach():
 def test_train_param_scorer_simfree_feasbility_approach():
     """Tests for training the parameter scorer for the SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy")
@@ -475,9 +475,9 @@ def test_train_abstract_action_scorer_simfree_feasbility_approach():
     """Tests for training the abstract action scorers for the
     SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="q-function")
@@ -562,9 +562,9 @@ def test_score_candidate_plans_simfree_feasbility_approach():
     """Tests that the approach can generate candidate plans and score them via the BALD
     objective, returning the plan with the highest epistemic uncertainty."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="bald-scoring")

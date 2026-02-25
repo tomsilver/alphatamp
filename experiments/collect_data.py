@@ -11,9 +11,9 @@ Use Hydra multirun to sweep over seeds:
 from pathlib import Path
 
 import hydra
-import prbench
+import kinder
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from omegaconf import DictConfig
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (  # pylint:disable=line-too-long
@@ -44,8 +44,8 @@ def main(cfg: DictConfig):
     max_resamples = int(cfg.max_resamples)
 
     # Build env.
-    prbench.register_all_environments()
-    env = prbench.make(cfg.env.id)
+    kinder.register_all_environments()
+    env = kinder.make(cfg.env.id)
     obs, _ = env.reset(seed=seed)
 
     # Build env models and convert to simulator-free.

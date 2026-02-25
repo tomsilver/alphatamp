@@ -168,3 +168,12 @@ multirun/
 
 # Datasets
 datasets/
+
+# Hydra Experiment Temporary Files
+experiments/outputs
+experiments/temp
+experiments/train_box_50
+outputs/
+
+# Library Files
+lib/
