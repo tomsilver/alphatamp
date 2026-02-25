@@ -35,6 +35,7 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
+<<<<<<< HEAD
 from alphatamp.approaches.cluttered_storage.prompt import (
     HEURISTIC_PROMPT,
     build_heuristic_prompt,  # NEW: builds problem-specific prompt with injected atoms
@@ -42,6 +43,9 @@ from alphatamp.approaches.cluttered_storage.prompt import (
 from bilevel_planning.refiners.backtracking_refiner import (
     BacktrackingRefiner,  # NEW: base class for FailureTrackingBacktrackingRefiner
 )
+=======
+from alphatamp.approaches.cluttered_storage.prompt import HEURISTIC_PROMPT
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -91,6 +95,7 @@ class HeuristicGenerator(
         predicates: set[Predicate],
         operators: set[LiftedOperator],
         seed: int,
+<<<<<<< HEAD
         # NEW: llm and prompt are now Optional — not needed when fn is injected directly
         llm: Any = None,
         prompt: str = "",
@@ -134,6 +139,24 @@ class HeuristicGenerator(
         spec.loader.exec_module(module)  # type: ignore
         return getattr(module, "generate_heuristic")
 
+=======
+        prompt: str,
+    ) -> None:
+        super().__init__(types, predicates, operators, "hff", seed)
+        query = Query(
+            prompt=prompt,
+            imgs=None,
+            hyperparameters={"temperature": 1.0},
+        )
+        self._llm_fn = synthesize_python_function_with_llm(
+            model=llm,
+            function_name="generate_heuristic",
+            query=query,
+            reprompt_checks=[SyntaxRepromptCheck()],
+        )
+        Path("generated_heuristic.py").write_text(self._llm_fn.code_str)
+    
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
     def _relational_heuristic_factory(
         self,
         init_abstract_state: RelationalAbstractState,
@@ -151,6 +174,7 @@ class HeuristicGenerator(
         ground_operators = cached_all_ground_operators(
             self._pddl_domain.operators, init_abstract_state.objects
         )
+<<<<<<< HEAD
         # NEW: three-way branch mirrors __init__
         if self._generate_heuristic_fn is not None:
             # Use pre-built fn passed in from the evaluation pipeline
@@ -163,6 +187,13 @@ class HeuristicGenerator(
             # classes (defined inside generate_heuristic) cannot be pickled.
             module = self._llm_fn._load_module()
             generate_heuristic = getattr(module, self._llm_fn.function_name)
+=======
+        # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
+        # passes results through mp.Manager which requires pickle, but locally-defined
+        # classes (defined inside generate_heuristic) cannot be pickled.
+        module = self._llm_fn._load_module()
+        generate_heuristic = getattr(module, self._llm_fn.function_name)
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         pyperplan_heuristic = create_pyperplan_heuristic_from_fn(
             generate_heuristic, self._pddl_domain, pddl_problem, ground_operators
         )
@@ -179,6 +210,7 @@ class HeuristicGenerator(
             yield s_plan, a_plan
 
 
+<<<<<<< HEAD
 # NEW: copied from reprompt_approach.py so we can track how deep each candidate gets.
 # _deepest_failed_index is the metric: higher = heuristic guided the search further.
 class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
@@ -206,6 +238,8 @@ class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
         return success, plan
 
 
+=======
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
 class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
     """Uses an LLM-generated heuristic for abstract planning."""
 
@@ -247,8 +281,26 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         # create the llm (unchanged)
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
         self._llm = OpenAIModel("gpt-4.1", cache)
+<<<<<<< HEAD
 
         # create the abstract successor function (unchanged)
+=======
+        
+        # heuristic plan generator
+        # paste the prompt text directly here as a string
+        prompt = HEURISTIC_PROMPT
+        self._abstract_plan_generator: AbstractPlanGenerator = (
+            HeuristicGenerator(
+                types=self._env_models.types,
+                predicates=self._env_models.predicates,
+                operators=self._env_models.operators,
+                llm=self._llm,
+                seed=self._seed,
+                prompt=prompt,
+            )
+        )
+        # create the abstract successor function
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
             self._env_models.operators
         )
@@ -437,10 +489,17 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
 
         if plan is None:
             raise TimeoutError("No plan found")
+<<<<<<< HEAD
 
         print("Succeeded with abstract plan:", [
             {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
             for a in getattr(generator, "_last_abstract_plan", [])
+=======
+        last = self._abstract_plan_generator._last_abstract_plan
+        print("Succeeded with abstract plan:", [
+            {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+            for a in last
+>>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         ])
         return plan
 
