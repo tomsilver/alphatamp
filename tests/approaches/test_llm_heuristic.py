@@ -1,4 +1,4 @@
-"""Tests for oracle_skeleton_generator_approach.py."""
+"""Tests for heuristic_approach.py."""
 
 import imageio.v2 as iio
 import prbench
@@ -13,8 +13,8 @@ from alphatamp.approaches.cluttered_storage.heuristic_approach import (
 
 
 #@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
-def test_reprompt_approach():
-    """Tests for RepromptApproach()."""
+def test_heuristic_approach():
+    """Tests for HeuristicLLMApproach()."""
 
     # Test in a PRBench environment
     prbench.register_all_environments()

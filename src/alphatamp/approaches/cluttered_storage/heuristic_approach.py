@@ -33,6 +33,7 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
+from alphatamp.approaches.cluttered_storage.prompt import HEURISTIC_PROMPT
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -50,6 +51,7 @@ from prpl_llm_utils.code import (
 from prpl_llm_utils.models import OpenAIModel, PretrainedLargeModel
 from prpl_llm_utils.structs import Query
 from relational_structs import (LiftedOperator,
+                                GroundOperator,
                                 ObjectCentricState,
                                 PDDLProblem,
                                 Predicate,
@@ -82,11 +84,11 @@ class HeuristicGenerator(
         operators: set[LiftedOperator],
         llm: Any,
         seed: int,
-        prompt_path: Path,
+        prompt: str,
     ) -> None:
         super().__init__(types, predicates, operators, "hff", seed)
         query = Query(
-            prompt=prompt_path.read_text(),
+            prompt=prompt,
             imgs=None,
             hyperparameters={"temperature": 1.0},
         )
@@ -96,6 +98,7 @@ class HeuristicGenerator(
             query=query,
             reprompt_checks=[SyntaxRepromptCheck()],
         )
+        Path("generated_heuristic.py").write_text(self._llm_fn.code_str)
     
     def _relational_heuristic_factory(
         self,
@@ -114,12 +117,27 @@ class HeuristicGenerator(
         ground_operators = cached_all_ground_operators(
             self._pddl_domain.operators, init_abstract_state.objects
         )
+        # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
+        # passes results through mp.Manager which requires pickle, but locally-defined
+        # classes (defined inside generate_heuristic) cannot be pickled.
+        module = self._llm_fn._load_module()
+        generate_heuristic = getattr(module, self._llm_fn.function_name)
         pyperplan_heuristic = create_pyperplan_heuristic_from_fn(
-            self._llm_fn, self._pddl_domain, pddl_problem, ground_operators
+            generate_heuristic, self._pddl_domain, pddl_problem, ground_operators
         )
         return lambda s: pyperplan_heuristic(s.atoms)
-    
-    
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Iterator:
+        for s_plan, a_plan in super().__call__(*args, **kwargs):
+            self._last_abstract_plan = a_plan
+            readable = [
+                {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+                for a in a_plan
+            ]
+            print("Trying abstract plan:", readable)
+            yield s_plan, a_plan
+
+
 class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
     """Uses an LLM-generated heuristic for abstract planning."""
 
@@ -155,8 +173,8 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         self._llm = OpenAIModel("gpt-4.1", cache)
         
         # heuristic plan generator
-        # later on, don't do a path, I just want to inject the prompt better
-        prompt_path = Path(__file__).parent / "prompt.txt"
+        # paste the prompt text directly here as a string
+        prompt = HEURISTIC_PROMPT
         self._abstract_plan_generator: AbstractPlanGenerator = (
             HeuristicGenerator(
                 types=self._env_models.types,
@@ -164,7 +182,7 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
                 operators=self._env_models.operators,
                 llm=self._llm,
                 seed=self._seed,
-                prompt_path=prompt_path,
+                prompt=prompt,
             )
         )
         # create the abstract successor function
@@ -191,5 +209,10 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         plan, _ = self._planner.run(problem, timeout=timeout)
         if plan is None:
             raise TimeoutError("No plan found")
+        last = self._abstract_plan_generator._last_abstract_plan
+        print("Succeeded with abstract plan:", [
+            {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+            for a in last
+        ])
         return plan
 
