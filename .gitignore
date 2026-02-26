@@ -112,6 +112,10 @@ ipython_config.py
 #   https://pdm.fming.dev/#use-with-ide
 .pdm.toml
 
+# overhead
+debug.png
+llm_cache.db
+
 # uv
 uv.lock
 
@@ -169,11 +173,5 @@ multirun/
 # Datasets
 datasets/
 
-# Hydra Experiment Temporary Files
-experiments/outputs
-experiments/temp
-experiments/train_box_50
-outputs/
-
-# Library Files
-lib/
+# Debugging folder
+debug/

@@ -6,7 +6,7 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
-from kinder.envs.kinematic2d.object_types import CRVRobotType, RectangleType
+from prbench.envs.geom2d.object_types import CRVRobotType, RectangleType
 from relational_structs import GroundOperator
 from relational_structs.object_centric_state import ObjectCentricState
 from relational_structs.pddl import (

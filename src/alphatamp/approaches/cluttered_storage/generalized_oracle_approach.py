@@ -21,7 +21,7 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
-from kinder.envs.kinematic2d.utils import is_inside_shelf
+from prbench.envs.geom2d.utils import is_inside_shelf
 from relational_structs import GroundOperator, Object, ObjectCentricState
 
 from alphatamp.approaches.base_approach import BaseApproach
@@ -88,7 +88,7 @@ class OracleAbstractPlanGenerator(
         (robot,) = x0.get_objects(robot_type)
         (shelf,) = x0.get_objects(shelf_type)
 
-        # When kinder checks collisions, it recomputes 2D body of each
+        # When PRBench checks collisions, it recomputes 2D body of each
         # obj. _static_object_body_cache is a dict to speed this up, but
         # is private to the env, so I use a static cache.
         static_cache: dict[Object, Any] = {}

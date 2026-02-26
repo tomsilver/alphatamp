@@ -1,7 +1,7 @@
 """Tests for collaborative_filtering_approach.py."""
 
-import kinder
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+import prbench
+from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.collaborative_filtering_approach import (
     CollaborativeFilteringApproach,
@@ -11,9 +11,9 @@ from alphatamp.approaches.collaborative_filtering_approach import (
 def test_collaborative_filtering_approach():
     """Tests for CollaborativeFilteringApproach()."""
 
-    # Test in a kinder environment where the first skeleton won't work.
-    kinder.register_all_environments()
-    env = kinder.make("kinder/Obstruction2D-o1-v0")
+    # Test in a PRBench environment where the first skeleton won't work.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )

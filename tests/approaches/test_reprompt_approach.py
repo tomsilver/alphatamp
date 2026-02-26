@@ -1,21 +1,24 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
+import imageio.v2 as iio
 import prbench
+import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage.generalized_oracle_approach import (
-    GeneralizedOracleApproach,
+from alphatamp.approaches.cluttered_storage.reprompt_approach import (
+    RepromptApproach,
 )
 
 
-def test_generalized_oracle_approach():
-    """Tests for OracleSkeletonGeneratorApproach()."""
+@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
+def test_reprompt_approach():
+    """Tests for RepromptApproach()."""
 
     # Test in a PRBench environment
     prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
+    env = prbench.make("prbench/ClutteredStorage2D-b3-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -25,21 +28,24 @@ def test_generalized_oracle_approach():
         "clutteredstorage2d",
         env.observation_space,
         env.action_space,
-        num_blocks=7,
+        num_blocks=3,
     )
 
     # Create the approach.
-    approach = GeneralizedOracleApproach(
-        env_models, seed=123, samples_per_step=10, training_planning_timeout=10
+    approach = RepromptApproach(
+        env_models, seed=121, samples_per_step=10, training_planning_timeout=10
     )
 
     # Train the approach
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=121)
+
+    img = env.render()
+    iio.imsave("debug.png", img)
 
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=500)
+    plan = approach.run_planning(obs, timeout=300)
 
     # Execute the plan
     for action in plan.actions:
@@ -49,4 +55,4 @@ def test_generalized_oracle_approach():
     else:
         assert False, "Plan did not succeed"
 
-    env.close()
+    env.close()  # type: ignore[no-untyped-call]
