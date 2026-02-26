@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-import kinder
 import matplotlib.pyplot as plt
 import numpy as np
+import prbench
 import pytest
 import seaborn as sns
 from gymnasium.wrappers import RecordVideo
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.ngram_approach import NGramApproach
 from alphatamp.approaches.pure_planning_approach import PurePlanningApproach
@@ -156,12 +156,12 @@ def _create_env_and_models(
     Returns:
         Tuple of (env, env_models)
     """
-    full_env_name = f"kinder/{environment_name}-{complexity}-v0"
+    full_env_name = f"prbench/{environment_name}-{complexity}-v0"
 
     if render_mode:
-        env = kinder.make(full_env_name, render_mode=render_mode)
+        env = prbench.make(full_env_name, render_mode=render_mode)
     else:
-        env = kinder.make(full_env_name)
+        env = prbench.make(full_env_name)
 
     # Convert environment name to lowercase for model creation
     env_models = create_bilevel_planning_models(
@@ -383,7 +383,7 @@ def test_transfer_matrix(  # pylint: disable=too-many-locals
 
     complexity_levels = ENV_CONFIGS[environment]
 
-    kinder.register_all_environments()
+    prbench.register_all_environments()
 
     # Results storage
     num_levels = len(complexity_levels)

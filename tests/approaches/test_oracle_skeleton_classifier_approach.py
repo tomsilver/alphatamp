@@ -1,9 +1,9 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
-import kinder
+import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.oracle_skeleton_classifier_approach import (
     OracleSkeletonClassifierApproach,
@@ -13,9 +13,9 @@ from alphatamp.approaches.oracle_skeleton_classifier_approach import (
 def test_oracle_skeleton_classifier_approach():
     """Tests for OracleSkeletonClassifierApproach()."""
 
-    # Test in a kinder environment where the first skeleton won't work.
-    kinder.register_all_environments()
-    env = kinder.make("kinder/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
+    # Test in a PRBench environment where the first skeleton won't work.
+    prbench.register_all_environments()
+    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
