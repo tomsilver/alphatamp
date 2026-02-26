@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
    "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=bilevel-planning",
+   "prbench_bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench-bilevel-planning",
+   "prbench@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench",
+   "prbench-models@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prbench-models",
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
    "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
@@ -21,9 +24,7 @@ dependencies = [
    "pymunk==7.1.0",
    "scipy-stubs",
    "hydra-joblib-launcher",
-   "kinder-bilevel-planning",
-   "kinder",
-   "kinder-models",
+   "hydra-submitit-launcher",
 ]
 
 [project.optional-dependencies]
@@ -69,11 +70,6 @@ exclude = ["venv/*", ".venv/*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
-
-[tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
-kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
 
 [[tool.mypy.overrides]]
 module = [

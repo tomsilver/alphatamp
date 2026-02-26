@@ -11,11 +11,11 @@ import os
 import time
 
 import hydra
-import kinder
 import pandas as pd
+import prbench
 from gymnasium import Env
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from omegaconf import DictConfig
+from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 
 @hydra.main(config_path="conf", config_name="config", version_base=None)
@@ -26,8 +26,8 @@ def main(cfg: DictConfig):
     seed = int(cfg.seed)
 
     # Build env
-    kinder.register_all_environments()
-    env: Env = kinder.make(cfg.env.id)
+    prbench.register_all_environments()
+    env: Env = prbench.make(cfg.env.id)
     obs, _ = env.reset(seed=seed)
 
     # Build env models
