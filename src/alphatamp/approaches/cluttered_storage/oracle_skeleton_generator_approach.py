@@ -63,7 +63,7 @@ class OracleAbstractPlanGenerator(
     ) -> Iterator[tuple[list[RelationalAbstractState], list[GroundOperator]]]:
         """Generate abstract plans."""
 
-        # For the prbench/ClutteredStorage2D-b3-v0, we want to return
+        # For the kinder/ClutteredStorage2D-b3-v0, we want to return
         # a  plan that picks and places block0, then picks and places block1,
         # then picks and places block2.
 

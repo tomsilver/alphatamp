@@ -2,8 +2,8 @@
 
 from collections import defaultdict
 
+import kinder
 import numpy as np
-import prbench
 import pytest
 import torch
 from bilevel_planning.utils import (
@@ -12,7 +12,7 @@ from bilevel_planning.utils import (
 )
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from torch import nn
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
@@ -40,9 +40,9 @@ def test_train_q_network():
     """Train the PerActionQNetwork using ground atoms/operators from a real environment
     and synthetically generated training data."""
 
-    # Set up the PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Set up the kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="q-function")

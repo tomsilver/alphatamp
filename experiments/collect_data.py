@@ -9,16 +9,11 @@ Use Hydra multirun to sweep over seeds:
 """
 
 from pathlib import Path
-from typing import Any
 
-import gymnasium as gym
 import hydra
-import numpy as np
-import prbench
-from gymnasium.wrappers import RecordVideo
+import kinder
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from omegaconf import DictConfig
-from PIL import Image, ImageDraw, ImageFont
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (  # pylint:disable=line-too-long
@@ -40,54 +35,6 @@ from alphatamp.approaches.simulator_free_base_approach import sesame_models_to_s
 from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 
 
-class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
-    """Gymnasium wrapper that overlays the current abstract action and plan on rendered
-    frames."""
-
-    def __init__(self, env: gym.Env) -> None:  # type: ignore[type-arg]
-        super().__init__(env)
-        self._current_action_label: str = ""
-        self._current_plan_label: str = ""
-        self._current_param_label: str = ""
-
-    def set_action_label(self, label: str) -> None:
-        """Update the abstract action label drawn on subsequent video frames."""
-        self._current_action_label = "Action: " + label
-
-    def set_plan_label(self, label: str) -> None:
-        """Update the abstract plan label drawn on subsequent video frames."""
-        self._current_plan_label = "Plan: " + label
-
-    def set_param_label(self, label: str) -> None:
-        """Update the parameter label drawn on subsequent video frames."""
-        self._current_param_label = "Params: " + label
-
-    def render(self) -> Any:
-        frame: list | None = self.env.render()
-        if frame is None:
-            return frame
-        img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
-        draw = ImageDraw.Draw(img)
-        font = ImageFont.load_default(size=16)
-        lines = [
-            (self._current_action_label, (255, 255, 0)),
-            (self._current_plan_label, (200, 200, 200)),
-            (self._current_param_label, (100, 220, 255)),
-        ]
-        y = 8.0
-        for text, color in lines:
-            if not text:
-                continue
-            bbox = draw.textbbox((8, y), text, font=font)
-            draw.rectangle(
-                [bbox[0] - 2, bbox[1] - 2, bbox[2] + 2, bbox[3] + 2],
-                fill=(0, 0, 0, 180),
-            )
-            draw.text((8, y), text, fill=color, font=font)
-            y = bbox[3] + 6.0
-        return np.array(img)
-
-
 @hydra.main(config_path="conf", config_name="collect_data_config", version_base=None)
 def main(cfg: DictConfig):
     """Collect training data for a single seed."""
@@ -97,18 +44,8 @@ def main(cfg: DictConfig):
     max_resamples = int(cfg.max_resamples)
 
     # Build env.
-    prbench.register_all_environments()
-    env = prbench.make(
-        cfg.env.id, render_mode="rgb_array" if cfg.record_video else None
-    )
-
-    overlay_wrapper: AbstractOverlayWrapper | None = None
-    if cfg.record_video:
-        overlay_wrapper = AbstractOverlayWrapper(env)
-        env = overlay_wrapper
-        video_dir = Path(cfg.output_dir) / f"seed_{seed}" / "videos"
-        env = RecordVideo(env, str(video_dir), name_prefix=f"seed_{seed}")
-
+    kinder.register_all_environments()
+    env = kinder.make(cfg.env.id)
     obs, _ = env.reset(seed=seed)
 
     # Build env models and convert to simulator-free.
@@ -165,39 +102,15 @@ def main(cfg: DictConfig):
 
     task_completed = False
 
-    for step in range(num_steps):
+    for _ in range(num_steps):
         try:
             action = approach.step()
         except ApproachStepError:
             break
 
-        if overlay_wrapper is not None:
-            overlay_wrapper.set_action_label(
-                approach.get_most_recent_abstract_action_str() or ""
-            )
-            params = approach.get_most_recent_parameter()
-            if params is not None:
-                param_arr = np.asarray(params).ravel()
-                overlay_wrapper.set_param_label(
-                    "[" + ", ".join(f"{v:.3f}" for v in param_arr) + "]"
-                )
-            else:
-                overlay_wrapper.set_param_label("")
-            plan = approach.get_abstract_plan()
-            if plan is not None:
-                plan_step = approach.get_current_abstract_plan_step()
-                parts = [
-                    f"[{a.short_str}]" if i == plan_step else a.short_str
-                    for i, a in enumerate(plan[1])
-                ]
-                overlay_wrapper.set_plan_label(" \u2192 ".join(parts))
-            else:
-                overlay_wrapper.set_plan_label("")
-
         obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
 
-        print(f"Executing step: {step}")
         if done:
             task_completed = True
             break
