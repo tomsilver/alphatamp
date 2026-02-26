@@ -1,7 +1,7 @@
 """Tests for pure_planning_approach.py."""
 
-import prbench
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+import kinder
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.pure_planning_approach import PurePlanningApproach
 
@@ -9,9 +9,9 @@ from alphatamp.approaches.pure_planning_approach import PurePlanningApproach
 def test_pure_planning_approach():
     """Tests for PurePlanningApproach()."""
 
-    # Test in simple PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o0-v0")
+    # Test in simple kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o0-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=0
     )

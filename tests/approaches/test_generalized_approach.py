@@ -1,9 +1,9 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
-import prbench
+import kinder
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.cluttered_storage.generalized_oracle_approach import (
     GeneralizedOracleApproach,
@@ -13,9 +13,9 @@ from alphatamp.approaches.cluttered_storage.generalized_oracle_approach import (
 def test_generalized_oracle_approach():
     """Tests for OracleSkeletonGeneratorApproach()."""
 
-    # Test in a PRBench environment
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
+    # Test in a kinder environment
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredStorage2D-b7-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")

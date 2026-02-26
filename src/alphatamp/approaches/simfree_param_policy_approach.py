@@ -103,7 +103,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan: Skeleton | None = None
         self._current_abstract_plan_step: int = 0
         self._current_controller: ParameterizedController | None = None
-        self._reset_controller = True
         self._last_observation: _O | None = None
 
         # Explorers.
@@ -178,7 +177,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
         self._completed_task = False
-        self._reset_controller = True
 
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
@@ -439,7 +437,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if self._completed_task:
             # Need to reset the environment
             goal = RelationalAbstractGoal(set(), self._env_models.state_abstractor)
-            self._completed_task = False
 
         candidate_plans = self._batch_explorer.generate_batched_abstract_plan(
             self._last_observation, goal
@@ -608,23 +605,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._add_most_recent_abstract_action_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
-                continue
 
             # We have found a step in the plan where the next state is not yet reached.
-
-            # If we haven't reached the next state,
-            # determine if we need a new controller.
-            if self._timestep == 0 or self._reset_controller:
-                advanced = True
-
-            break
+            else:
+                # if it is the first step, we also need to reset a new controller
+                if self._timestep == 0:
+                    advanced = True
+                break
 
         # Get the last observed state.
         x = self._env_models.observation_to_state(self._last_observation)
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
             self._resample_controller(x, self._last_observation)
-            self._reset_controller = False
 
         # We are using the same controller as before.
         else:
@@ -676,7 +669,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Reset the current controller so it will be reinitialized for the new plan
         self._current_controller = None
-        self._reset_controller = True
 
         # Reset num_resamples
         self._num_resamples = 0
@@ -693,19 +685,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan(self) -> Skeleton | None:
         """Return the current abstract plan."""
         return self._current_abstract_plan
-
-    def get_current_abstract_plan_step(self) -> int:
-        """Return the current step in the abstract plan."""
-        return self._current_abstract_plan_step
-
-    def get_most_recent_parameter(self) -> Any:
-        """Returns most recent parameter from the controller."""
-        return self._most_recent_parameter
-
-    def get_most_recent_abstract_action_str(self) -> str:
-        """Returns name of current abstract action."""
-        assert self._most_recent_abstract_action_descriptor is not None
-        return self._most_recent_abstract_action_descriptor
 
     def get_parameter_dataset(self) -> defaultdict[str, list]:
         """Return the collected parameter dataset."""
