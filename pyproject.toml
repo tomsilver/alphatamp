@@ -24,6 +24,7 @@ dependencies = [
    "kinder-bilevel-planning",
    "kinder",
    "kinder-models",
+   "hydra-submitit-launcher",
 ]
 
 [project.optional-dependencies]

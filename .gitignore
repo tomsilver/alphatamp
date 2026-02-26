@@ -112,6 +112,10 @@ ipython_config.py
 #   https://pdm.fming.dev/#use-with-ide
 .pdm.toml
 
+# overhead
+debug.png
+llm_cache.db
+
 # uv
 uv.lock
 
@@ -177,3 +181,5 @@ outputs/
 
 # Library Files
 lib/
+# Debugging folder
+debug/
