@@ -175,3 +175,13 @@ datasets/
 
 # Debugging folder
 debug/
+
+# Archived files
+archive/
+
+# Hydra temporary output files
+experiments/outputs/
+
+# Temporary experiment files
+experiments/temp/
+

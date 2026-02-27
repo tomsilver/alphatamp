@@ -2,7 +2,7 @@
 
 from typing import TypeAlias
 
-import prbench
+import kinder
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
 )
@@ -18,7 +18,7 @@ from bilevel_planning.trajectory_samplers.parameterized_controller_sampler impor
 from bilevel_planning.utils import (
     RelationalControllerGenerator,
 )
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from relational_structs import GroundOperator
 
 from alphatamp.scoring_utils.batch_ranking import BatchRankingAbstractPlanGenerator
@@ -35,9 +35,9 @@ def _score_skeleton(skeleton: Skeleton, _: list[Skeleton]) -> float:
 def test_batch_ranking() -> None:
     """Tests for BatchRankingAbstractPlanGenerator()."""
 
-    # Test in a PRBench environment where the first skeleton won't work.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o1-v0")
+    # Test in a kinder environment where the first skeleton won't work.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
