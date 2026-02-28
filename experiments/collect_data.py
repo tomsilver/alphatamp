@@ -181,11 +181,11 @@ def main(cfg: DictConfig):
     for step in range(num_steps):
         try:
             action = approach.step()
-        except ApproachStepError:
+        except ApproachStepError as e:
             # Stuck in a terminal state — reset the environment but keep
             # all learned models and datasets so the approach can continue improving.
             reset_count += 1
-            print(f"Step {step}: ApproachStepError, resetting env (reset #{reset_count})")
+            print(f"Step {step}: ApproachStepError, due to {e.original_exception} resetting env (reset #{reset_count})")
             obs = _env_reset(reset_count)
             approach.reset_episode(obs)
             continue
@@ -217,13 +217,13 @@ def main(cfg: DictConfig):
         approach.update(obs, float(reward), done, {})
 
         print(f"Executing step: {step}")
-        if done:
-            task_completed = True
-            reset_count += 1
-            print(f"Step {step}: task completed, resetting env (reset #{reset_count})")
-            obs = _env_reset(reset_count)
-            approach.reset_episode(obs)
-        elif (step + 1) % reset_every == 0:
+        # if done:
+        #     task_completed = True
+        #     reset_count += 1
+        #     print(f"Step {step}: task completed, resetting env (reset #{reset_count})")
+        #     obs = _env_reset(reset_count)
+        #     approach.reset_episode(obs)
+        if (step + 1) % reset_every == 0:
             reset_count += 1
             print(f"Step {step}: periodic reset (reset #{reset_count})")
             obs = _env_reset(reset_count)

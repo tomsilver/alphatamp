@@ -648,8 +648,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             x = self._env_models.observation_to_state(self._last_observation)
             s = self._env_models.state_abstractor(x)
 
-            # If we have reached the next abstract state, advance the current plan step.
-            if s == ns:
+            # Get the current abstract action.
+            a = self._current_abstract_plan[1][self._current_abstract_plan_step]
+
+            # If we have reached the next abstract state and we do not have a move action, 
+            # advance the current plan step.
+            if s == ns and a.short_str != "Move(robot)": # this is hacky fix is TODO
                 self._add_most_recent_abstract_action_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
@@ -757,7 +761,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the collected parameter dataset."""
         return self._parameter_dataset
 
-    def get_abstract_plan_dataset(self) -> list:
+    def get_abstract_plan_dataset(self) -> dict[tuple, int]:
         """Return the collected abstract plan dataset."""
         return self._abstract_plan_dataset
 
