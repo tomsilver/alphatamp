@@ -15,7 +15,7 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.practice_makes_perfect.base_approach import (
     PracticeMakesPerfectApproach,
 )
-from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
+from alphatamp.approaches.scorers.parameter_scorers.naive_parameter_scorer import NaiveParameterScorer
 from alphatamp.approaches.simulator_free_base_approach import (
     sesame_models_to_sim_free,
 )

@@ -27,7 +27,7 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (
     AbstractActionScorer,
 )
 from alphatamp.approaches.simulator_free_base_approach import (
