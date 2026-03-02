@@ -24,6 +24,9 @@ dependencies = [
    "scipy-stubs",
    "hydra-joblib-launcher",
    "hydra-submitit-launcher",
+   "kinder-bilevel-planning",
+   "kinder",
+   "kinder-models",
 ]
 
 [project.optional-dependencies]
@@ -69,6 +72,11 @@ exclude = ["venv/*", ".venv/*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+
+[tool.uv.sources]
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
+kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
 
 [[tool.mypy.overrides]]
 module = [
