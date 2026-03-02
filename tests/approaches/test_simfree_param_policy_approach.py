@@ -18,7 +18,7 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
 )
-from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
 from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (

@@ -28,7 +28,7 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
 from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (
@@ -185,9 +185,11 @@ def main(cfg: DictConfig):
             # Stuck in a terminal state — reset the environment but keep
             # all learned models and datasets so the approach can continue improving.
             reset_count += 1
-            print(
-                f"Step {step}: ApproachStepError, due to {e.original_exception} resetting env (reset #{reset_count})"
+            msg = (
+                f"Step {step}: ApproachStepError, due to {e.original_exception}"
+                f" resetting env (reset #{reset_count})"
             )
+            print(msg)
             obs = _env_reset(reset_count)
             approach.reset_episode(obs)
             continue

@@ -45,7 +45,7 @@ from alphatamp.approaches.feasibility_classifier_learners.base_feasibility_class
 from alphatamp.approaches.parameter_policies.base_parameter_policy import (
     ParameterPolicy,
 )
-from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
@@ -128,7 +128,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_abstract_action_descriptor: str | None = None
 
         # Abstract Plan Dataset — keyed by (abstract_states, abstract_actions) to
-        # prevent duplicate entries from repeated resample failures on the same plan step.
+        # prevent duplicate entries from repeated resample failures
+        # on the same plan step.
         # A success label (1) always overrides a prior failure label (0).
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
@@ -652,7 +653,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Get the current abstract action.
             a = self._current_abstract_plan[1][self._current_abstract_plan_step]
 
-            # If we have reached the next abstract state and we do not have a move action,
+            # If we have reached the next abstract state
+            # and we do not have a move action,
             # advance the current plan step.
             if s == ns and a.short_str != "Move(robot)":  # this is hacky fix is TODO
                 self._add_most_recent_abstract_action_to_dataset("success")

@@ -53,14 +53,11 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
 from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (
     ClassifierParameterScorer,
-)
-from alphatamp.approaches.scorers.parameter_scorers.naive_parameter_scorer import (
-    NaiveParameterScorer,
 )
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
@@ -203,7 +200,7 @@ def _state_abstractor(x: ObjectCentricState) -> RelationalAbstractState:
     return RelationalAbstractState(atoms=atoms, objects={ROBOT_OBJ})
 
 
-def _goal_deriver(x: ObjectCentricState) -> RelationalAbstractGoal:
+def _goal_deriver(_: ObjectCentricState) -> RelationalAbstractGoal:
     return RelationalAbstractGoal(
         atoms={AT_GOAL_PRED([ROBOT_OBJ])},
         state_abstractor=_state_abstractor,
@@ -222,7 +219,7 @@ def build_bandit_env_models(env: OneDimBanditEnv) -> SimulatorFreeSesameModels:
         delete_effects=set(),
     )
 
-    ctrl = LiftedParameterizedController(
+    ctrl: LiftedParameterizedController = LiftedParameterizedController(
         variables=[ROBOT_VAR],
         controller_cls=ReachController,
         params_space=Box(0.0, 1.0, shape=(1,), dtype=np.float32),
@@ -248,15 +245,7 @@ def build_bandit_env_models(env: OneDimBanditEnv) -> SimulatorFreeSesameModels:
 # ---------------------------------------------------------------------------
 
 
-_SCORER_CLASSES = {
-    "classifier": ClassifierParameterScorer,
-    "naive": NaiveParameterScorer,
-}
-
-_SCORER_CONFIGS: dict[str, dict] = {
-    "classifier": {"configs": {"hidden_layer_sizes": (16, 16)}},
-    "naive": {"configs": {}},
-}
+_CLASSIFIER_SCORER_CONFIGS: dict = {"configs": {"hidden_layer_sizes": (16, 16)}}
 
 
 def _get_param_scorer_loss_curves(approach: SimFreeParamPolicyApproach) -> list[float]:
@@ -276,7 +265,6 @@ def main(
     log_every: int = 100,
     seed: int = 0,
     fixed_target: float | None = None,
-    scorer: str = "classifier",
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
@@ -284,14 +272,8 @@ def main(
         steps           — list of step indices at each log point
         success_rates   — rolling success rate at each log point
         total_successes — cumulative successes at each log point
-        param_loss      — per-fit sklearn loss values (classifier scorer only)
+        param_loss      — per-fit sklearn loss values
     """
-    if scorer not in _SCORER_CLASSES:
-        raise ValueError(
-            f"Unknown scorer '{scorer}'. Choose from: {list(_SCORER_CLASSES)}"
-        )
-
-    print(f"\n=== Scorer: {scorer} ===")
 
     # Build env
     env = OneDimBanditEnv(fixed_target=fixed_target)
@@ -320,8 +302,8 @@ def main(
         env_models=env_models,
         feasibility_classifier_learner=feasibility_learner,
         train_explorer=train_explorer,
-        parameter_scorer_class=_SCORER_CLASSES[scorer],
-        parameter_scorer_configs=_SCORER_CONFIGS[scorer],
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs=_CLASSIFIER_SCORER_CONFIGS,
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
@@ -343,9 +325,11 @@ def main(
     cumulative_successes: list[int] = []
     param_loss: list[float] = []
 
-    print(
-        f"{'Step':>6}  {'Rolling success':>15}  {'Total successes':>16}  {'Resamples':>10}"
+    header = (
+        f"{'Step':>6}  {'Rolling success':>15}  "
+        f"{'Total successes':>16}  {'Resamples':>10}"
     )
+    print(header)
     print("-" * 55)
 
     for step in range(num_steps):
@@ -396,49 +380,39 @@ def main(
     }
 
 
-def compare_scorers(
-    scorers: list[str],
+def plot_results(
     num_steps: int = 2000,
     seed: int = 0,
     save_path: str | None = None,
     **kwargs: Any,
 ) -> None:
-    """Run main() for each scorer and plot success rate + loss curves."""
-    results: dict[str, dict] = {}
-    for s in scorers:
-        results[s] = main(num_steps=num_steps, seed=seed, scorer=s, **kwargs)
+    """Run main() and plot success rate + loss curves for the classifier scorer."""
+    results = main(num_steps=num_steps, seed=seed, **kwargs)
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     # --- Rolling success rate ---
     ax = axes[0]
-    for s, r in results.items():
-        ax.plot(r["steps"], [v * 100 for v in r["success_rates"]], marker="o", label=s)
+    ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o")
     ax.set_xlabel("Step")
     ax.set_ylabel("Rolling success rate (%)")
-    ax.set_title("Rolling success rate by scorer")
-    ax.legend()
+    ax.set_title("Rolling success rate (ClassifierParameterScorer)")
     ax.grid(True, alpha=0.3)
 
-    # --- Parameter scorer loss (classifier only) ---
+    # --- Parameter scorer loss ---
     ax = axes[1]
-    any_loss = False
-    for s, r in results.items():
-        loss = r["param_loss"]
-        if loss:
-            ax.plot(loss, label=s)
-            any_loss = True
-    if any_loss:
+    loss = results["param_loss"]
+    if loss:
+        ax.plot(loss)
         ax.set_xlabel("Cumulative sklearn fit iteration")
         ax.set_ylabel("Training loss")
         ax.set_title("Parameter scorer training loss")
-        ax.legend()
         ax.grid(True, alpha=0.3)
     else:
         ax.text(
             0.5,
             0.5,
-            "No loss data\n(naive scorer has none)",
+            "No loss data",
             ha="center",
             va="center",
             transform=ax.transAxes,
@@ -458,15 +432,9 @@ if __name__ == "__main__":
         description="1-D bandit test for SimFreeParamPolicyApproach"
     )
     parser.add_argument(
-        "--scorer",
-        choices=list(_SCORER_CLASSES),
-        default="classifier",
-        help="Which parameter scorer to use (default: classifier)",
-    )
-    parser.add_argument(
-        "--compare",
+        "--plot",
         action="store_true",
-        help="Run all scorers and produce comparison plots",
+        help="Run and produce result plots",
     )
     parser.add_argument("--num-steps", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
@@ -474,16 +442,15 @@ if __name__ == "__main__":
         "--save",
         default=None,
         metavar="PATH",
-        help="Save comparison figure to PATH instead of displaying it",
+        help="Save figure to PATH instead of displaying it",
     )
     args = parser.parse_args()
 
-    if args.compare:
-        compare_scorers(
-            list(_SCORER_CLASSES),
+    if args.plot:
+        plot_results(
             num_steps=args.num_steps,
             seed=args.seed,
             save_path=args.save,
         )
     else:
-        main(num_steps=args.num_steps, seed=args.seed, scorer=args.scorer)
+        main(num_steps=args.num_steps, seed=args.seed)
