@@ -255,10 +255,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         info: dict[str, Any],
     ) -> None:
         if done:
-            # Store last successful parameter
+            # Store last successful parameter, action, plan
             self._add_most_recent_parameter_to_dataset("success")
+            self._add_most_recent_abstract_action_to_dataset("success")
             self._add_abstract_plan_to_dataset("success")
             self._completed_task = True
+
+            # Retrain scorers
+            self._update_scorers()
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -657,7 +661,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # and we do not have a move action,
             # advance the current plan step.
             if s == ns and a.short_str != "Move(robot)":  # this is hacky fix is TODO
+                # Both the abstract action choice and parameter for that action
+                # were successful
                 self._add_most_recent_abstract_action_to_dataset("success")
+                self._add_most_recent_parameter_to_dataset("success")
                 self._current_abstract_plan_step += 1
                 advanced = True
                 continue
@@ -691,10 +698,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 # Take one more low-level action.
                 self._last_action = self._current_controller.step()
                 assert self._last_action is not None
-
-                # If low-level action is successful, store it.
-                if self._train_or_eval == "train":
-                    self._add_most_recent_parameter_to_dataset("success")
 
                 return self._last_action
             # If low level action failed, store the parameter that failed!
