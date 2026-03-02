@@ -309,6 +309,7 @@ def main(
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
         train_every=1,
+        param_sample_count=100,
         seed=seed,
     )
 

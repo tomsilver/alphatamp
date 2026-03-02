@@ -81,6 +81,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         max_resamples: int = 100,
         num_candidate_plans: int = 10,
         train_every: int = 1,
+        param_sample_count: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -120,6 +121,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Parameter policy.
         self._max_resamples = max_resamples
+        self._param_sample_count = param_sample_count
         self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
         self._parameter_scorer_class = parameter_scorer_class
         self._parameter_scorer_configs = parameter_scorer_configs
@@ -615,7 +617,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         scoring_function = self._abstract_action_to_scoring_function[a]
 
         # Sample new params from the Parameter Policy
-        parameter_policy = ParameterPolicy(self._current_controller, scoring_function)
+        parameter_policy = ParameterPolicy(
+            self._current_controller,
+            scoring_function,
+            param_sample_count=self._param_sample_count,
+        )
         optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
