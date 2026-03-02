@@ -1,6 +1,4 @@
-"""
-Approach that uses an LLM to generate an policy, given the oracle in the prompt
-"""
+"""Approach that uses an LLM to generate an policy, given the oracle in the prompt."""
 
 import time
 from pathlib import Path

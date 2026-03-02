@@ -1,8 +1,8 @@
 """Tests for ngram_approach.py."""
 
-import prbench
+import kinder
 import pytest
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.ngram_approach import NGramApproach
 
@@ -10,8 +10,8 @@ from alphatamp.approaches.ngram_approach import NGramApproach
 def test_ngram_approach() -> None:
     """Test NGramApproach on Obstruction2D environment."""
 
-    prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o1-v0")
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
@@ -74,8 +74,8 @@ def test_ngram_approach() -> None:
 @pytest.mark.slow
 def test_ngram_approach_no_training() -> None:
     """Test that the approach works even without training data."""
-    prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o0-v0")  # No obstruction (easier)
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o0-v0")  # No obstruction (easier)
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=0
     )
@@ -111,8 +111,8 @@ def test_ngram_generalization() -> None:
 
     Train on seed=123, test on seed=456.
     """
-    prbench.register_all_environments()
-    env = prbench.make("prbench/Obstruction2D-o1-v0")
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )

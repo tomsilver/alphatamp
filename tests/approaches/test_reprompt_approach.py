@@ -1,11 +1,11 @@
 """Tests for oracle_skeleton_generator_approach.py."""
 
 import imageio.v2 as iio
-import prbench
+import kinder
 import pytest
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.cluttered_storage.reprompt_approach import (
     RepromptApproach,
@@ -16,9 +16,9 @@ from alphatamp.approaches.cluttered_storage.reprompt_approach import (
 def test_reprompt_approach():
     """Tests for RepromptApproach()."""
 
-    # Test in a PRBench environment
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredStorage2D-b3-v0", render_mode="rgb_array")
+    # Test in a kinder environment
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredStorage2D-b3-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
