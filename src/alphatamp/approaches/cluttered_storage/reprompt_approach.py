@@ -446,7 +446,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
 
 
 class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
-    """"New backtracking refiner to track failure information."""
+    """ "New backtracking refiner to track failure information."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
