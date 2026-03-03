@@ -13,6 +13,7 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
 from bilevel_planning.structs import (
     ParameterizedController,
     RelationalAbstractGoal,
+    RelationalAbstractState,
 )
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
@@ -638,10 +639,31 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         dummy_action = cast(_U, stationary_action)
         return dummy_action
 
+    def _abstract_action_completed(
+        self, a: GroundOperator, s: RelationalAbstractState, ns: RelationalAbstractState
+    ) -> bool:
+        """Return True if the current abstract action has completed.
+
+        Actions that change the abstract state are complete when the current state
+        matches the planned next state. Actions with no effects (e.g. pure moves) are
+        complete when the controller signals termination.
+        """
+        if a.add_effects or a.delete_effects:
+            return s == ns
+        return (
+            self._current_controller is not None
+            and self._current_controller.terminated()
+        )
+
+    def _record_action_success(self) -> None:
+        """Record that the current abstract action and its parameter succeeded."""
+        self._add_most_recent_abstract_action_to_dataset("success")
+        self._add_most_recent_parameter_to_dataset("success")
+
     def _get_action(self) -> _U:
         assert self._current_abstract_plan is not None
 
-        # Advance until we are at an abstract action that has not yet completed.
+        # Advance past any already-completed abstract actions.
         advanced = False
         while True:
             # If we ran out of actions, raise an error.
@@ -653,32 +675,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     "Abstract planning ran out of actions.", out_of_actions_error
                 )
 
-            # Get the next abstract state.
-            ns = self._current_abstract_plan[0][self._current_abstract_plan_step + 1]
-
             assert self._last_observation is not None
             x = self._env_models.observation_to_state(self._last_observation)
             s = self._env_models.state_abstractor(x)
 
-            # Get the current abstract action.
             a = self._current_abstract_plan[1][self._current_abstract_plan_step]
+            ns = self._current_abstract_plan[0][self._current_abstract_plan_step + 1]
 
-            # If we have reached the next abstract state
-            # and we do not have a move action,
-            # advance the current plan step.
-            if s == ns and a.short_str != "Move(robot)":  # this is hacky fix is TODO
-                # Both the abstract action choice and parameter for that action
-                # were successful
-                self._add_most_recent_abstract_action_to_dataset("success")
-                self._add_most_recent_parameter_to_dataset("success")
+            if self._abstract_action_completed(a, s, ns):
+                self._record_action_success()
                 self._current_abstract_plan_step += 1
                 advanced = True
                 continue
 
-            # We have found a step in the plan where the next state is not yet reached.
-
             # If we haven't reached the next state,
-            # determine if we need a new controller.
+            # determine if we still need a new controller.
             if self._timestep == 0 or self._reset_controller:
                 advanced = True
 
