@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
-from typing import Any, Callable
+from typing import Any
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -251,7 +251,11 @@ _CLASSIFIER_SCORER_CONFIGS: dict = {"configs": {"hidden_layer_sizes": (16, 16)}}
 def _get_param_scorer_loss_curves(approach: SimFreeParamPolicyApproach) -> list[float]:
     """Extract per-fit loss curve from any MLPClassifier-backed parameter scorers."""
     curves: list[float] = []
-    for scorer_fn in approach._abstract_action_to_scoring_function.values():
+    for (
+        scorer_fn
+    ) in (
+        approach._abstract_action_to_scoring_function.values()  # pylint: disable=protected-access
+    ):
         clf = getattr(scorer_fn, "_classifier", None)
         if clf is not None and hasattr(clf, "loss_curve_"):
             curves.extend(clf.loss_curve_)
@@ -342,7 +346,7 @@ def main(
             approach.reset_episode(obs)
             continue
 
-        obs, reward, done, _, info = env.step(action)
+        obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
 
         success = int(done)
