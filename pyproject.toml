@@ -72,9 +72,9 @@ markers = [
 ]
 
 [tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
-kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "1abc6ef3d559be3e5c5b550c8ad6f41ad80d58ee" }
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
+kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
 
 [[tool.mypy.overrides]]
 module = [
