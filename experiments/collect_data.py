@@ -6,6 +6,7 @@ Use Hydra multirun to sweep over seeds:
     python experiments/collect_data.py seed=0,1,2,3,4 -m
     python experiments/collect_data.py 'seed=range(0,100)' -m
     python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=joblib -m
+    python experiments/collect_data.py 'seed=range(0,100)' hydra/launcher=slurm -m
 """
 
 from pathlib import Path
@@ -27,11 +28,11 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.classifier_parameter_scorer import (
-    ClassifierParameterScorer,
-)
-from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
+)
+from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (
+    ClassifierParameterScorer,
 )
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
@@ -95,6 +96,7 @@ def main(cfg: DictConfig):
     seed = int(cfg.seed)
     num_steps = int(cfg.num_steps)
     max_resamples = int(cfg.max_resamples)
+    reset_every = int(cfg.reset_every)
 
     # Build env.
     kinder.register_all_environments()
@@ -105,7 +107,12 @@ def main(cfg: DictConfig):
         overlay_wrapper = AbstractOverlayWrapper(env)
         env = overlay_wrapper
         video_dir = Path(cfg.output_dir) / f"seed_{seed}" / "videos"
-        env = RecordVideo(env, str(video_dir), name_prefix=f"seed_{seed}")
+        env = RecordVideo(
+            env,
+            str(video_dir),
+            name_prefix=f"seed_{seed}",
+            episode_trigger=lambda _: True,
+        )
 
     obs, _ = env.reset(seed=seed)
 
@@ -141,6 +148,8 @@ def main(cfg: DictConfig):
     q_network_configs = {
         "hidden_dim": int(cfg.q_network.hidden_dim),
         "num_layers": int(cfg.q_network.num_layers),
+        "num_epochs": int(cfg.q_network.num_epochs),
+        "num_ensemble_nets": int(cfg.q_network.num_ensemble_nets),
     }
 
     # Build approach.
@@ -154,6 +163,7 @@ def main(cfg: DictConfig):
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
+        train_every=int(cfg.train_every),
         seed=seed,
     )
 
@@ -162,12 +172,27 @@ def main(cfg: DictConfig):
     approach.reset(obs, {})
 
     task_completed = False
+    reset_count = 0
+
+    def _env_reset(episode: int) -> Any:
+        new_obs, _ = env.reset(seed=seed + episode)
+        return new_obs
 
     for step in range(num_steps):
         try:
             action = approach.step()
-        except ApproachStepError:
-            break
+        except ApproachStepError as e:
+            # Stuck in a terminal state — reset the environment but keep
+            # all learned models and datasets so the approach can continue improving.
+            reset_count += 1
+            msg = (
+                f"Step {step}: ApproachStepError, due to {e.original_exception}"
+                f" resetting env (reset #{reset_count})"
+            )
+            print(msg)
+            obs = _env_reset(reset_count)
+            approach.reset_episode(obs)
+            continue
 
         if overlay_wrapper is not None:
             overlay_wrapper.set_action_label(
@@ -196,9 +221,17 @@ def main(cfg: DictConfig):
         approach.update(obs, float(reward), done, {})
 
         print(f"Executing step: {step}")
-        if done:
-            task_completed = True
-            break
+        # if done:
+        #     task_completed = True
+        #     reset_count += 1
+        #     print(f"Step {step}: task completed, resetting env (reset #{reset_count})")
+        #     obs = _env_reset(reset_count)
+        #     approach.reset_episode(obs)
+        if (step + 1) % reset_every == 0:
+            reset_count += 1
+            print(f"Step {step}: periodic reset (reset #{reset_count})")
+            obs = _env_reset(reset_count)
+            approach.reset_episode(obs)
 
     # Save datasets to a per-seed directory.
     output_dir = Path(cfg.output_dir) / f"seed_{seed}"

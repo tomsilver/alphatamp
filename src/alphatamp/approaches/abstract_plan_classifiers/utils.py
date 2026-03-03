@@ -12,7 +12,7 @@ from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
     create_abstract_plan_sequence,
 )
-from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
 from alphatamp.structs import GroundOperator, RelationalAbstractState, Skeleton
