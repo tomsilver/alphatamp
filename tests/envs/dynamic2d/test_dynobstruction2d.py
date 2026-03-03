@@ -12,9 +12,11 @@ from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_cla
 from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier import (
     FilterFeasibilityClassifier,
 )
-from alphatamp.approaches.scorers.naive_parameter_scorer import NaiveParameterScorer
-from alphatamp.approaches.scorers.regressor_abstract_action_scorer import (
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
+)
+from alphatamp.approaches.scorers.parameter_scorers.naive_parameter_scorer import (
+    NaiveParameterScorer,
 )
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
