@@ -528,7 +528,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
         assert (
-            self._most_recent_parameter and self._most_recent_abstract_action_descriptor
+            self._most_recent_parameter is not None
+            and self._most_recent_abstract_action_descriptor is not None
         )
         assert self._last_observation is not None
 

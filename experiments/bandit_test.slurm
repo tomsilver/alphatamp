@@ -10,4 +10,4 @@
 #SBATCH --error=bandit_test_%j.err
 
 cd /home/sl5183/alphatamp
-.venv/bin/python -u experiments/bandit_test.py "$@"
+.venv/bin/python -u experiments/bandit_test.py --plot --save bandit_test_${SLURM_JOB_ID}.png "$@"
