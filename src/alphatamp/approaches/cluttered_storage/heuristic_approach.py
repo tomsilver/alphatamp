@@ -2,6 +2,8 @@
 Approach that uses an LLM to generate an policy, given the oracle in the prompt
 """
 
+import importlib.util
+import time  # NEW: needed for timing evaluation trials
 from pathlib import Path
 from typing import (
     Any,
@@ -33,7 +35,13 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
-from alphatamp.approaches.cluttered_storage.prompt import HEURISTIC_PROMPT
+from alphatamp.approaches.cluttered_storage.prompt import (
+    HEURISTIC_PROMPT,
+    build_heuristic_prompt,  # NEW: builds problem-specific prompt with injected atoms
+)
+from bilevel_planning.refiners.backtracking_refiner import (
+    BacktrackingRefiner,  # NEW: base class for FailureTrackingBacktrackingRefiner
+)
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -82,24 +90,50 @@ class HeuristicGenerator(
         types: set[Type],
         predicates: set[Predicate],
         operators: set[LiftedOperator],
-        llm: Any,
         seed: int,
-        prompt: str,
+        # NEW: llm and prompt are now Optional — not needed when fn is injected directly
+        llm: Any = None,
+        prompt: str = "",
+        use_stored_heuristic: bool = False,
+        stored_heuristic_path: Path = Path("generated_heuristic.py"),
+        # NEW: allows passing a pre-built generate_heuristic callable, skipping LLM call
+        generate_heuristic_fn: Optional[Callable] = None,
     ) -> None:
         super().__init__(types, predicates, operators, "hff", seed)
-        query = Query(
-            prompt=prompt,
-            imgs=None,
-            hyperparameters={"temperature": 1.0},
+        self._use_stored_heuristic = use_stored_heuristic
+        self._stored_heuristic_path = stored_heuristic_path
+        self._generate_heuristic_fn = generate_heuristic_fn  # NEW: store pre-built fn
+
+        # NEW: three-way branch instead of two-way
+        if generate_heuristic_fn is not None:
+            # Pre-built fn injected — no LLM call needed at all
+            self._llm_fn = None
+        elif use_stored_heuristic:
+            print(f"Loading stored heuristic from {stored_heuristic_path}")
+            self._llm_fn = None
+        else:
+            query = Query(
+                prompt=prompt,
+                imgs=None,
+                hyperparameters={"temperature": 1.0},
+            )
+            self._llm_fn = synthesize_python_function_with_llm(
+                model=llm,
+                function_name="generate_heuristic",
+                query=query,
+                reprompt_checks=[SyntaxRepromptCheck()],
+            )
+            Path("src/alphatamp/approaches/cluttered_storage/llm_heuristic.py").write_text(self._llm_fn.code_str)
+
+    def _load_generate_heuristic_fn(self) -> Callable:
+        """Load generate_heuristic from the stored file via importlib."""
+        spec = importlib.util.spec_from_file_location(
+            "generated_heuristic", self._stored_heuristic_path
         )
-        self._llm_fn = synthesize_python_function_with_llm(
-            model=llm,
-            function_name="generate_heuristic",
-            query=query,
-            reprompt_checks=[SyntaxRepromptCheck()],
-        )
-        Path("generated_heuristic.py").write_text(self._llm_fn.code_str)
-    
+        module = importlib.util.module_from_spec(spec)  # type: ignore
+        spec.loader.exec_module(module)  # type: ignore
+        return getattr(module, "generate_heuristic")
+
     def _relational_heuristic_factory(
         self,
         init_abstract_state: RelationalAbstractState,
@@ -117,11 +151,18 @@ class HeuristicGenerator(
         ground_operators = cached_all_ground_operators(
             self._pddl_domain.operators, init_abstract_state.objects
         )
-        # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
-        # passes results through mp.Manager which requires pickle, but locally-defined
-        # classes (defined inside generate_heuristic) cannot be pickled.
-        module = self._llm_fn._load_module()
-        generate_heuristic = getattr(module, self._llm_fn.function_name)
+        # NEW: three-way branch mirrors __init__
+        if self._generate_heuristic_fn is not None:
+            # Use pre-built fn passed in from the evaluation pipeline
+            generate_heuristic = self._generate_heuristic_fn
+        elif self._use_stored_heuristic:
+            generate_heuristic = self._load_generate_heuristic_fn()
+        else:
+            # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
+            # passes results through mp.Manager which requires pickle, but locally-defined
+            # classes (defined inside generate_heuristic) cannot be pickled.
+            module = self._llm_fn._load_module()
+            generate_heuristic = getattr(module, self._llm_fn.function_name)
         pyperplan_heuristic = create_pyperplan_heuristic_from_fn(
             generate_heuristic, self._pddl_domain, pddl_problem, ground_operators
         )
@@ -138,6 +179,33 @@ class HeuristicGenerator(
             yield s_plan, a_plan
 
 
+# NEW: copied from reprompt_approach.py so we can track how deep each candidate gets.
+# _deepest_failed_index is the metric: higher = heuristic guided the search further.
+class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
+    """Backtracking refiner that records the furthest abstract-plan step reached."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._deepest_failed_index: int = -1
+        self._failed_concrete_state: ObjectCentricState | None = None
+
+    def __call__(self, x0, s_plan, a_plan, timeout, bpg) -> Plan | None:
+        self._deepest_failed_index = -1  # reset for each new plan attempt
+        self._failed_concrete_state = None
+        return super().__call__(x0, s_plan, a_plan, timeout, bpg)
+
+    def _refine_from_step(
+        self, index, x, s_plan, a_plan, remaining_time, bpg
+    ) -> tuple[bool, list | None]:
+        success, plan = super()._refine_from_step(
+            index, x, s_plan, a_plan, remaining_time, bpg
+        )
+        if not success and index > self._deepest_failed_index:
+            self._deepest_failed_index = index
+            self._failed_concrete_state = x
+        return success, plan
+
+
 class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
     """Uses an LLM-generated heuristic for abstract planning."""
 
@@ -151,47 +219,75 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         skeleton_batch_size: int = 100,
         num_training_skeletons_per_problem: int = 10,
         training_planning_timeout: float = 5,
+        use_stored_heuristic: bool = False,
+        stored_heuristic_path: Path = Path("generated_heuristic.py"),
+        # NEW: number of candidate heuristics to generate and evaluate
+        num_candidates: int = 3,
+        # NEW: per-candidate evaluation timeout in seconds
+        eval_timeout: float = 40.0,
     ):
         super().__init__(env_models, seed)
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
-        self._skeleton_batch_size = skeleton_batch_size
-        self._num_training_skeletons_per_problem = num_training_skeletons_per_problem
-        self._training_planning_timeout = training_planning_timeout
+        # NEW: store these for use in _run_planning
+        self._use_stored_heuristic = use_stored_heuristic
+        self._stored_heuristic_path = stored_heuristic_path
+        self._num_candidates = num_candidates
+        self._eval_timeout = eval_timeout
 
-        # create the sampler
+        # create the sampler (unchanged)
         self._trajectory_sampler = ParameterizedControllerTrajectorySampler(
             controller_generator=RelationalControllerGenerator(self._env_models.skills),
             transition_function=self._env_models.transition_fn,
             state_abstractor=self._env_models.state_abstractor,
             max_trajectory_steps=self._max_skill_horizon,
         )
-        
-        # create the llm
+
+        # create the llm (unchanged)
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
         self._llm = OpenAIModel("gpt-4.1", cache)
-        
-        # heuristic plan generator
-        # paste the prompt text directly here as a string
-        prompt = HEURISTIC_PROMPT
-        self._abstract_plan_generator: AbstractPlanGenerator = (
-            HeuristicGenerator(
-                types=self._env_models.types,
-                predicates=self._env_models.predicates,
-                operators=self._env_models.operators,
-                llm=self._llm,
-                seed=self._seed,
-                prompt=prompt,
-            )
-        )
-        # create the abstract successor function
+
+        # create the abstract successor function (unchanged)
         self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
             self._env_models.operators
         )
 
-        self._planner = SesamePlanner(
-            self._abstract_plan_generator,
+        # REMOVED: no longer create _abstract_plan_generator or _planner here.
+        # The pipeline in _run_planning creates fresh generators per candidate.
+
+    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
+        pass
+
+    # ── NEW helpers ──────────────────────────────────────────────────────────
+
+    def _make_generator(
+        self,
+        generate_heuristic_fn: Optional[Callable] = None,
+        use_stored: bool = False,
+        stored_path: Optional[Path] = None,
+    ) -> HeuristicGenerator:
+        """
+        Factory for HeuristicGenerator.
+        Called once per candidate during evaluation and once for final planning.
+        """
+        return HeuristicGenerator(
+            types=self._env_models.types,
+            predicates=self._env_models.predicates,
+            operators=self._env_models.operators,
+            seed=self._seed,
+            use_stored_heuristic=use_stored,
+            stored_heuristic_path=stored_path or Path("generated_heuristic.py"),
+            generate_heuristic_fn=generate_heuristic_fn,
+        )
+
+    def _make_planner(self, generator: HeuristicGenerator) -> SesamePlanner:
+        """
+        Factory for SesamePlanner.
+        Called once per candidate during evaluation and once for final planning.
+        """
+        return SesamePlanner(
+            generator,
             self._trajectory_sampler,
             self._max_abstract_plans,
             self._samples_per_step,
@@ -200,19 +296,151 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
             seed=self._seed,
         )
 
-    def _train(self, problem: PlanningProblem[_X, _U]) -> None:
-        pass
+    def _synthesize_heuristic(self, prompt: str, candidate_index: int) -> tuple[Callable, str]:
+        """
+        Make one LLM call and return (generate_heuristic callable, raw code string).
+        The code string is saved to disk so we can inspect each candidate.
+        Temperature=1.0 gives diversity across candidates.
+        """
+        query = Query(
+            prompt=prompt+ f"\n# Candidate {candidate_index}",
+            imgs=None,
+            hyperparameters={"temperature": 1.0},
+        )
+        llm_fn = synthesize_python_function_with_llm(
+            model=self._llm,
+            function_name="generate_heuristic",
+            query=query,
+            reprompt_checks=[SyntaxRepromptCheck()],
+        )
+        module = llm_fn._load_module()
+        return getattr(module, llm_fn.function_name), llm_fn.code_str
+
+    def _evaluate_heuristic(
+        self,
+        problem: PlanningProblem,
+        generate_heuristic_fn: Callable,
+        eval_timeout: float,
+    ) -> tuple[int, bool]:
+        """
+        Run a short Sesame trial with one candidate heuristic.
+        Uses FailureTrackingBacktrackingRefiner to record the furthest step reached.
+        Returns (deepest_failed_index, plan_succeeded).
+          - deepest_failed_index=-1 means the planner never made progress
+          - plan_succeeded=True means this candidate already solved the problem
+        """
+        generator = self._make_generator(generate_heuristic_fn=generate_heuristic_fn)
+        planner = self._make_planner(generator)
+
+        # Swap in the tracking refiner so we get _deepest_failed_index
+        tracking_refiner = FailureTrackingBacktrackingRefiner(
+            self._trajectory_sampler,
+            self._samples_per_step,
+            seed=self._seed,
+        )
+        planner._refiner = tracking_refiner  # pylint: disable=protected-access
+
+        plan, _ = planner.run(problem, timeout=eval_timeout)
+        return (
+            tracking_refiner._deepest_failed_index,  # pylint: disable=protected-access
+            plan is not None,
+        )
 
     def _run_planning(
         self, problem: PlanningProblem[_X, _U], timeout: float
     ) -> Plan[_X, _U]:
-        plan, _ = self._planner.run(problem, timeout=timeout)
+        start_time = time.perf_counter()
+
+        # ── Fast path: oracle / pre-written heuristic, skip LLM pipeline ─────
+        if self._use_stored_heuristic:
+            generator = self._make_generator(
+                use_stored=True, stored_path=self._stored_heuristic_path
+            )
+            planner = self._make_planner(generator)
+            plan, _ = planner.run(problem, timeout=timeout)
+            if plan is None:
+                raise TimeoutError("No plan found")
+            print("Succeeded with abstract plan:", [
+                {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+                for a in getattr(generator, "_last_abstract_plan", [])
+            ])
+            return plan
+
+        # ── Step 1: build a problem-specific prompt ───────────────────────────
+        # Extract s0 (abstract initial state) and goal atoms from the problem.
+        # This is what gets injected into the prompt so the LLM knows the instance.
+        s0 = self._env_models.state_abstractor(problem.initial_state)
+        goal = problem.goal
+        assert isinstance(goal, RelationalAbstractGoal)
+        initial_atoms = "\n".join(f"- {atom}" for atom in sorted(s0.atoms, key=str))
+        goal_atoms = "\n".join(f"- {atom}" for atom in sorted(goal.atoms, key=str))
+        prompt_str = build_heuristic_prompt(initial_atoms, goal_atoms)
+
+        # ── Step 2: generate N candidate heuristics ───────────────────────────
+        print(f"\n=== Generating {self._num_candidates} candidate heuristics ===")
+        candidates: list[tuple[Callable, str]] = []
+        for i in range(self._num_candidates):
+            print(f"  Generating heuristic {i + 1}/{self._num_candidates}...")
+            fn, code_str = self._synthesize_heuristic(prompt_str, candidate_index = i)
+            candidates.append((fn, code_str))
+            # Save each candidate to disk for inspection
+            Path(f"src/alphatamp/approaches/cluttered_storage/llm_heuristic_{i}.py").write_text(code_str)
+
+        # ── Step 3: evaluate each candidate, track best by deepest step ───────
+        print(f"\n=== Evaluating candidates ({self._eval_timeout}s each) ===")
+        best_fn: Callable = candidates[0][0]
+        best_code: str = candidates[0][1]
+        best_score: float = float("-inf")  # higher = better (-inf = not yet scored)
+
+        for i, (fn, code_str) in enumerate(candidates):
+            elapsed = time.perf_counter() - start_time
+            remaining = timeout - elapsed
+            if remaining < self._eval_timeout:
+                # Not enough time left to run a full eval — keep best so far
+                print(f"  Skipping heuristic {i + 1}: only {remaining:.1f}s remaining")
+                break
+
+            print(f"\n  --- Evaluating heuristic {i + 1}/{self._num_candidates} ---")
+            try:
+                deepest, succeeded = self._evaluate_heuristic(
+                    problem, fn, self._eval_timeout
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                print(f"  Heuristic {i + 1} raised exception: {e}")
+                deepest, succeeded = -1, False
+
+            # Score: infinity if it solved the problem, otherwise the deepest step index
+            score: float = float("inf") if succeeded else float(deepest)
+            print(
+                f"  Heuristic {i + 1}: deepest_step={deepest}, "
+                f"succeeded={succeeded}, score={score}"
+            )
+
+            if score > best_score:
+                best_score = score
+                best_fn = fn
+                best_code = code_str
+                Path("llm_heuristic_best.py").write_text(best_code)
+
+            if succeeded:
+                # Already solved — no need to evaluate remaining candidates
+                print(f"  Heuristic {i + 1} solved the problem during eval — using it.")
+                break
+
+        print(f"\n=== Best score: {best_score} — running full planning ===")
+
+        # ── Step 4: full planning with the winning heuristic ─────────────────
+        remaining_time = timeout - (time.perf_counter() - start_time)
+        generator = self._make_generator(generate_heuristic_fn=best_fn)
+        planner = self._make_planner(generator)
+        plan, _ = planner.run(problem, timeout=remaining_time)
+
         if plan is None:
             raise TimeoutError("No plan found")
-        last = self._abstract_plan_generator._last_abstract_plan
+
         print("Succeeded with abstract plan:", [
             {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
-            for a in last
+            for a in getattr(generator, "_last_abstract_plan", [])
         ])
         return plan
 

@@ -944,40 +944,18 @@ Here is a checklist to help you with your code:
 6) Provide a detailed docstring explaining the heuristic calculation.
 For this, divide the docstring into sections "Summary", "Assumptions", "Heuristic Initialization" and "Step-By-Step Thinking for Computing Heuristic".
 
-"HINT: some blocks currently on the shelf may not be goal blocks — they're "clutter" that needs to be cleared before goal blocks can be placed. A two-phase heuristic would encode this by:
-
-Phase 1: Penalize non-goal blocks currently on the shelf (they need to be removed)
-Phase 2: Penalize goal blocks not yet on the shelf (they need to be placed)
-
-A simple implementation:
-
-
-def __call__(self, node) -> float:
-    state = node.state
-    
-    # Parse state...
-    onshelf = set()
-    for fact in state:
-        parts = fact[1:-1].split()
-        if parts[0] == "OnShelf":
-            onshelf.add((parts[1], parts[2]))
-    
-    if self.goal_onshelf <= onshelf:
-        return 0.0
-
-    all_goal_blocks = {block for (block, _) in self.goal_onshelf}
-    
-    # Phase 1: non-goal blocks currently on shelf must be removed
-    # Cost: Pick + PlaceNotOnShelf = 2 per block
-    non_goal_on_shelf = [(b, s) for (b, s) in onshelf if b not in all_goal_blocks]
-    phase1_cost = 2 * len(non_goal_on_shelf)
-    
-    # Phase 2: goal blocks not yet on shelf must be placed
-    # Cost: Pick + PlaceOnShelf = 2 per block
-    goal_not_placed = [(b, s) for (b, s) in self.goal_onshelf if (b, s) not in onshelf]
-    phase2_cost = 2 * len(goal_not_placed)
-    
-    # Weight phase 1 higher so the planner prioritizes clearing first
-    return float(3 * phase1_cost + phase2_cost)
-The 3 * phase1_cost multiplier is the key trick — it makes states with cluttered shelves look much more expensive, so A* will strongly prefer paths that clear non-goal blocks before trying to place goal blocks. The exact multiplier is tunable; higher values = more aggressive "clear first" behavior.!!!!"
+Important: This heuristic needs to consider
 '''
+
+
+def build_heuristic_prompt(initial_atoms: str, goal_atoms: str) -> str:
+    """Build a problem-specific heuristic prompt with the actual instance injected."""
+    return HEURISTIC_PROMPT + f"""
+This is the specific problem instance you must build the heuristic for:
+
+Initial State (true predicates):
+{initial_atoms}
+
+Goal State (target predicates):
+{goal_atoms}
+"""
