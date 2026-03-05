@@ -101,13 +101,22 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
     Action:      [placement_pos, widen_flag]           — shape (2,)
 
     If widen_flag > 0.5 the step widens the success threshold (no placement).
-    Otherwise the agent attempts a placement at placement_pos.
-    Reward 1.0 and done=True when |placement - target| < threshold.
+    Otherwise the agent attempts a placement at placement_pos, perturbed by
+    Gaussian noise with std ``execution_noise_std``.  The noise makes Reach
+    non-trivially hard: even a perfectly learned parameter fails with positive
+    probability, so the advantage of Widen (wider threshold) persists after
+    training.
+
+    Reward 1.0 and done=True when |noisy_placement - target| < threshold.
     """
 
     metadata = {"render_modes": []}
 
-    def __init__(self, fixed_target: float | None = None) -> None:
+    def __init__(
+        self,
+        fixed_target: float | None = None,
+        execution_noise_std: float = 0.0,
+    ) -> None:
         super().__init__()
         self.observation_space = Box(
             low=np.zeros(3, dtype=np.float32),
@@ -118,6 +127,7 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
             high=np.ones(2, dtype=np.float32),
         )
         self._fixed_target = fixed_target
+        self._execution_noise_std = execution_noise_std
         self._target: float = 0.5
         self._is_widened: bool = False
         self._rng = np.random.default_rng(0)
@@ -146,8 +156,9 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
             obs = np.array([self._target, 0.0, 1.0], dtype=np.float32)
             return obs, 0.0, False, False, {"target": self._target}
 
-        # Reach step: attempt placement.
-        placement = float(np.clip(action[0], 0.0, 1.0))
+        # Reach step: attempt placement (with optional execution noise).
+        noise = self._rng.normal(0.0, self._execution_noise_std) if self._execution_noise_std > 0.0 else 0.0
+        placement = float(np.clip(action[0] + noise, 0.0, 1.0))
         threshold = WIDE_SUCCESS_THRESHOLD if self._is_widened else SUCCESS_THRESHOLD
         success = abs(placement - self._target) < threshold
         obs = np.array(
@@ -349,6 +360,7 @@ def main(
     log_every: int = 100,
     seed: int = 0,
     fixed_target: float | None = None,
+    noise_std: float = 0.0,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
@@ -361,7 +373,7 @@ def main(
     """
 
     # Build env
-    env = OneDimBanditEnv(fixed_target=fixed_target)
+    env = OneDimBanditEnv(fixed_target=fixed_target, execution_noise_std=noise_std)
     obs, _ = env.reset(seed=seed)
 
     # Build models
@@ -478,10 +490,11 @@ def plot_results(
     num_steps: int = 2000,
     seed: int = 0,
     save_path: str | None = None,
+    noise_std: float = 0.0,
     **kwargs: Any,
 ) -> None:
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
-    results = main(num_steps=num_steps, seed=seed, **kwargs)
+    results = main(num_steps=num_steps, seed=seed, noise_std=noise_std, **kwargs)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 4))
 
@@ -545,7 +558,15 @@ if __name__ == "__main__":
         help="Run and produce result plots",
     )
     parser.add_argument("--num-steps", type=int, default=2000)
+    parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.0,
+        metavar="STD",
+        help="Gaussian execution noise std added to Reach placements (default: 0.0)",
+    )
     parser.add_argument(
         "--save",
         default=None,
@@ -557,8 +578,10 @@ if __name__ == "__main__":
     if args.plot:
         plot_results(
             num_steps=args.num_steps,
+            max_resamples=args.max_resamples,
             seed=args.seed,
             save_path=args.save,
+            noise_std=args.noise_std,
         )
     else:
-        main(num_steps=args.num_steps, seed=args.seed)
+        main(num_steps=args.num_steps, max_resamples=args.max_resamples, seed=args.seed, noise_std=args.noise_std)

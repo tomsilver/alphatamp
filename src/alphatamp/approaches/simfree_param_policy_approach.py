@@ -175,12 +175,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan_step = 0
         self._current_controller = None
         self._last_observation = obs
-        self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+        self._completed_task = False  # must be set before generate_candidate_plans
+
+        if self._resample_exhaustion_count > 0:
+            # Q-networks have been trained at least once: exploit learned plan scores
+            # to start each episode with the plan expected to need fewest resamples.
+            candidate_plans = self.generate_candidate_plans()
+            self._current_abstract_plan = self._score_candidate_plans_exploit(
+                candidate_plans
+            )
+        else:
+            self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+
         self._timestep = 0
         self._num_resamples = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
-        self._completed_task = False
         self._reset_controller = True
 
     def reset(
@@ -266,6 +276,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             # Retrain scorers
             self._update_scorers()
+
+            # Generate new candidate plan
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -520,6 +532,35 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
             if bald_score > best_bald_score:
                 best_bald_score = bald_score
+                best_candidate_plan = candidate_plan
+
+        assert best_candidate_plan
+        return best_candidate_plan
+
+    def _score_candidate_plans_exploit(self, candidate_plans: list[Skeleton]) -> Skeleton:
+        """Select the plan with the highest average predicted success probability
+        across the Q-network ensemble (exploitation: minimum expected resamples).
+
+        Unlike score_candidate_plans(), which maximises epistemic uncertainty (BALD)
+        for exploration, this method exploits what has been learned to start each
+        episode with the plan that the ensemble collectively believes is easiest.
+        """
+        best_avg_prob = float("-inf")
+        best_candidate_plan = None
+
+        assert candidate_plans, "No Candidate Plans!"
+        for candidate_plan in candidate_plans:
+            probs = []
+            for q_net in self._ensemble_nets:
+                per_action_resamples = q_net.predict(candidate_plan)
+                prob = convert_q_value_to_probability(
+                    per_action_resamples.tolist(), self._max_resamples
+                )
+                probs.append(prob)
+
+            avg_prob = float(np.mean(probs))
+            if avg_prob > best_avg_prob:
+                best_avg_prob = avg_prob
                 best_candidate_plan = candidate_plan
 
         assert best_candidate_plan

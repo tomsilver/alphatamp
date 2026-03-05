@@ -185,3 +185,6 @@ experiments/outputs/
 # Temporary experiment files
 experiments/temp/
 
+# Slurm output files
+experiments/slurm_outputs
+
