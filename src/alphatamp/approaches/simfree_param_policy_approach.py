@@ -151,6 +151,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Loss metrics
         self._loss_metrics: dict[str, list] = {}
+        self._q_loss_metrics: list[float] = []
 
         # Per-Action Resample Q Network
         self._q_network_configs: dict = q_network_configs
@@ -445,7 +446,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             abstract_plans.append((abstract_states_list, abstract_actions_list))
 
         num_epochs = self._q_network_configs.get("num_epochs", 20)
-        _ = train_q_network(
+        losses = train_q_network(
             q_net,
             abstract_plans,
             self._all_ground_atoms,
@@ -455,6 +456,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             num_epochs=num_epochs,
             verbose=True,
         )
+        self._q_loss_metrics.extend(losses)
 
     def _reinitialize_ensemble_nets(self) -> None:
         """Create fresh PerActionQNetwork instances, discarding any trained weights.
@@ -857,6 +859,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     ) -> dict[str, list]:
         """Return the loss metrics for each abstract action."""
         return self._loss_metrics
+
+    def get_q_network_loss_metrics(self) -> list[float]:
+        """Return the per-epoch training losses across all Q-network training runs."""
+        return self._q_loss_metrics
 
     def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
         sequence, sequence_length = create_abstract_plan_sequence(

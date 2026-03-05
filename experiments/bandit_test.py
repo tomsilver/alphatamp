@@ -344,6 +344,11 @@ def _get_param_scorer_loss_curves(approach: SimFreeParamPolicyApproach) -> list[
     return curves
 
 
+def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[float]:
+    """Extract per-epoch Q-network training losses accumulated so far."""
+    return list(approach.get_q_network_loss_metrics())
+
+
 def _plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
     """Return True if the current abstract plan contains a Widen action."""
     plan = approach.get_abstract_plan()
@@ -427,6 +432,7 @@ def main(
     widen_rates: list[float] = []
     cumulative_successes: list[int] = []
     param_loss: list[float] = []
+    q_loss: list[float] = []
 
     header = (
         f"{'Step':>6}  {'Rolling success':>15}  "
@@ -483,6 +489,7 @@ def main(
             widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
+            q_loss = _get_q_network_loss_curves(approach)
 
     print("\nDone.")
     param_ds = approach.get_parameter_dataset()
@@ -496,6 +503,7 @@ def main(
         "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
         "param_loss": param_loss,
+        "q_loss": q_loss,
     }
 
 
@@ -509,7 +517,7 @@ def plot_results(
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
     results = main(num_steps=num_steps, seed=seed, noise_std=noise_std, **kwargs)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
     # --- Rolling success rate ---
     ax = axes[0]
@@ -552,6 +560,26 @@ def plot_results(
             transform=ax.transAxes,
         )
         ax.set_title("Parameter scorer training loss")
+
+    # --- Q-network loss ---
+    ax = axes[3]
+    q_loss = results["q_loss"]
+    if q_loss:
+        ax.plot(q_loss, color="tab:red")
+        ax.set_xlabel("Cumulative training epoch")
+        ax.set_ylabel("MSE loss")
+        ax.set_title("Q-network training loss")
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "No Q-network loss data\n(no resample exhaustions yet)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_title("Q-network training loss")
 
     fig.tight_layout()
     if save_path:
