@@ -7,6 +7,7 @@ from typing import Any, TypeVar, cast
 
 import numpy as np
 import torch
+import logging
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -775,6 +776,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # After trying a certain number of resamples, update the scorers
         # and Q-function only every train_every exhaustion events.
         self._resample_exhaustion_count += 1
+        current_plan_str = (
+            [a.short_str for a in self._current_abstract_plan[1]]
+            if self._current_abstract_plan
+            else []
+        )
+        logging.info(
+            "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
+            self._resample_exhaustion_count,
+            self._timestep,
+            current_plan_str,
+        )
         if self._resample_exhaustion_count % self._train_every == 0:
             self._update_scorers()
             self.train_ensemble_nets()
@@ -784,6 +796,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Score candidate plans and return best plan
         plan_to_execute = self.score_candidate_plans(candidate_plans)
+        logging.info(
+            "[BALD] Selected plan: %s",
+            [a.short_str for a in plan_to_execute[1]],
+        )
 
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute

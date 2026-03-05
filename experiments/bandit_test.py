@@ -414,10 +414,13 @@ def main(
     approach.reset(obs, {})
 
     # Tracking
-    recent: deque[int] = deque(maxlen=log_every)
-    recent_widen: deque[int] = deque(maxlen=log_every)
+    recent: deque[int] = deque(maxlen=log_every)  # per-episode success
+    recent_widen: deque[int] = deque(maxlen=log_every)  # per-episode widen usage
     total_successes = 0
+    total_episodes = 0
     reset_count = 0
+    episode_success = False   # tracks whether current episode succeeded
+    episode_uses_widen = False  # tracks whether current episode used a widen plan
 
     log_steps: list[int] = []
     success_rates: list[float] = []
@@ -436,22 +439,32 @@ def main(
         try:
             action = approach.step()
         except ApproachStepError:
+            recent.append(0)                              # episode failed
+            recent_widen.append(int(episode_uses_widen)) # widen may have run before the error
+            episode_success = False
+            episode_uses_widen = False
+            total_episodes += 1
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
             continue
 
-        # Track whether the current plan includes Widen before taking the step.
-        recent_widen.append(int(_plan_uses_widen(approach)))
+        # Track whether the current plan includes Widen (once per episode is enough).
+        episode_uses_widen = episode_uses_widen or _plan_uses_widen(approach)
 
         obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
 
-        success = int(done)
-        recent.append(success)
-        total_successes += success
+        if done:
+            episode_success = True
 
         if done or (step + 1) % reset_every == 0:
+            recent.append(int(episode_success))
+            recent_widen.append(int(episode_uses_widen))
+            total_successes += int(episode_success)
+            total_episodes += 1
+            episode_success = False
+            episode_uses_widen = False
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
@@ -474,7 +487,7 @@ def main(
     print("\nDone.")
     param_ds = approach.get_parameter_dataset()
     print(f"  Total parameter samples: {sum(len(v) for v in param_ds.values())}")
-    print(f"  Total successes: {total_successes} / {num_steps}")
+    print(f"  Total successes: {total_successes} / {total_episodes} episodes")
     env.close()
 
     return {
@@ -549,6 +562,9 @@ def plot_results(
 
 
 if __name__ == "__main__":
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO)
+
     parser = argparse.ArgumentParser(
         description="1-D bandit test for SimFreeParamPolicyApproach"
     )

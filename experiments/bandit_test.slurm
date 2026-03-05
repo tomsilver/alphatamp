@@ -10,4 +10,4 @@
 #SBATCH --error=experiments/slurm_outputs/bandit_test_%j.err
 
 cd /home/sl5183/alphatamp
-.venv/bin/python -u experiments/bandit_test.py --plot --save experiments/slurm_outputs/bandit_test_${SLURM_JOB_ID}.png --noise-std 0.05 --max-resamples 2 "$@"
+.venv/bin/python -u experiments/bandit_test.py --plot --save experiments/slurm_outputs/bandit_test_${SLURM_JOB_ID}.png --noise-std 0.1 --max-resamples 2 "$@"
