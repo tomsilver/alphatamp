@@ -84,7 +84,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         num_candidate_plans: int = 10,
         train_every: int = 1,
         param_sample_count: int = 10,
-        exploit_resamples: int | None = None,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -124,7 +123,6 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Parameter policy.
         self._max_resamples = max_resamples
-        self._exploit_resamples = exploit_resamples if exploit_resamples is not None else max_resamples
         self._param_sample_count = param_sample_count
         self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
         self._parameter_scorer_class = parameter_scorer_class
@@ -565,14 +563,24 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert candidate_plans, "No Candidate Plans!"
         for candidate_plan in candidate_plans:
             probs = []
+            ensemble_failure_rates = []
             for q_net in self._ensemble_nets:
                 per_action_failure_rates = q_net.predict(candidate_plan)
                 prob = convert_q_value_to_probability(
-                    per_action_failure_rates.tolist(), self._exploit_resamples
+                    per_action_failure_rates.tolist(), self._max_resamples
                 )
                 probs.append(prob)
+                ensemble_failure_rates.append(per_action_failure_rates.tolist())
 
             avg_prob = float(np.mean(probs))
+            plan_str = [a.short_str for a in candidate_plan[1]]
+            mean_failure_rates = np.mean(ensemble_failure_rates, axis=0).tolist()
+            logging.info(
+                "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
+                plan_str,
+                [f"{r:.4f}" for r in mean_failure_rates],
+                avg_prob,
+            )
             if avg_prob > best_avg_prob:
                 best_avg_prob = avg_prob
                 best_candidate_plan = candidate_plan
@@ -668,7 +676,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x0 = self._env_models.observation_to_state(self._last_observation)
         s0 = self._env_models.state_abstractor(x0)
         for op, scorer in self._abstract_action_to_action_scorer.items():
-            counts = list(self._abstract_action_dataset.get(op.short_str, {}).values())
+            action_data = self._abstract_action_dataset.get(op.short_str, {})
+            counts = list(action_data.values())
             total_failures = sum(f for f, _ in counts)
             total_attempts = sum(a for _, a in counts)
             actual_rate = total_failures / total_attempts if total_attempts > 0 else float("nan")
@@ -681,6 +690,24 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 total_failures,
                 total_attempts,
             )
+            # Log per-history-key predictions to diagnose whether the scorer
+            # distinguishes different contexts (e.g. Reach vs Reach-after-Widen).
+            for (key_states, key_actions), (failures, attempts) in action_data.items():
+                if attempts == 0:
+                    continue
+                key_actual = failures / attempts
+                key_predicted = scorer.score((list(key_states), list(key_actions)))
+                action_str = [a.short_str for a in key_actions]
+                logging.info(
+                    "[Scorer-ctx] %s history=%s  predicted=%.4f actual=%.4f"
+                    " (failures=%d attempts=%d)",
+                    op.short_str,
+                    action_str,
+                    key_predicted,
+                    key_actual,
+                    failures,
+                    attempts,
+                )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified

@@ -396,11 +396,11 @@ def main(
     # Explorer
     train_explorer = ExploitExplorer(env_models, feasibility_learner, seed)
 
-    abstract_action_configs = {"hidden_dim": 32, "num_layers": 2, "num_epochs": 20}
+    abstract_action_configs = {"hidden_dim": 32, "num_layers": 2, "num_epochs": 50}
     q_network_configs = {
         "hidden_dim": 32,
         "num_layers": 2,
-        "num_epochs": 20,
+        "num_epochs": 500,
         "num_ensemble_nets": 3,
     }
 
@@ -415,7 +415,6 @@ def main(
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
-        exploit_resamples=3,
         train_every=1,
         param_sample_count=100,
         seed=seed,
