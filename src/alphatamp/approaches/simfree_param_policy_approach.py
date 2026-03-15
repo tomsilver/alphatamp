@@ -398,7 +398,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._loss_metrics[abstract_action_descriptor] = losses
 
     def get_abstract_action_score(self, abstract_action_str: str) -> float:
-        """Evaluate the predicted resample count for the abstract action given current
+        """Evaluate the predicted failure rate for the abstract action given current
         task plan."""
 
         assert self._current_abstract_plan is not None
@@ -417,9 +417,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _train_q_function(self, q_net: PerActionQNetwork) -> None:
         """Train the Per-Action Resample Q Function.
 
-        The network learns to predict, for each action a_i in a plan, the expected
-        number of resamples needed for that action conditioned on the history
-        (s_0, a_1, ..., a_{i-1}).
+        The network learns to predict, for each action a_i in a plan, the failure
+        rate for that action conditioned on the history (s_0, a_1, ..., a_{i-1}).
 
         Args:
             q_network: The PerActionQNetwork to train
@@ -543,7 +542,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def _score_candidate_plans_exploit(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Select the plan with the highest average predicted success probability
-        across the Q-network ensemble (exploitation: minimum expected resamples).
+        across the Q-network ensemble (exploitation: highest expected success probability).
 
         Unlike score_candidate_plans(), which maximises epistemic uncertainty (BALD)
         for exploration, this method exploits what has been learned to start each

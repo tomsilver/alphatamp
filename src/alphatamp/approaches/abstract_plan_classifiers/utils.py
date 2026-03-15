@@ -148,7 +148,7 @@ def estimated_abstract_plan_q_value(
 
     Returns:
         Array of shape (num_actions,) where each element is the predicted
-        resamples for that action conditioned on prior actions.
+        failure rate for that action conditioned on prior actions.
     """
     return q_network.predict(abstract_plan)
 
@@ -157,10 +157,10 @@ def compute_per_action_targets(
     abstract_plan: Skeleton,
     trained_abstract_action_scorers: dict[GroundOperator, AbstractActionScorer],
 ) -> list[float]:
-    """Compute target resample counts for each action in the plan.
+    """Compute target failure rates for each action in the plan.
 
-    For each action a_i in the plan, computes the expected number of resamples
-    needed for that action, conditioned on the history (s_0, a_1, ..., a_{i-1}).
+    For each action a_i in the plan, computes the predicted failure rate for
+    that action, conditioned on the history (s_0, a_1, ..., a_{i-1}).
 
     This is the "ground truth" target that the Q-network will learn to predict.
     Each action's target is computed independently using the corresponding
@@ -173,7 +173,7 @@ def compute_per_action_targets(
 
     Returns:
         List of length n (number of actions) where element i is the predicted
-        resamples for action a_i conditioned on (s_0, a_1, ..., a_{i-1})
+        failure rate for action a_i conditioned on (s_0, a_1, ..., a_{i-1})
     """
     states, actions = abstract_plan
     targets = []
@@ -189,8 +189,7 @@ def compute_per_action_targets(
         history_states = list(states[: i + 1])
         history_actions = list(actions[:i])
 
-        # Get the conditional Q-value (expected resamples) for this action
-        # given the history prefix
+        # Get the conditional failure rate for this action given the history prefix
         q_i = conditional_abstract_action_q_value(
             history_states,
             history_actions,
@@ -212,11 +211,10 @@ def train_q_network(
     num_epochs: int = 10,
     verbose: bool = True,
 ) -> list[float]:
-    """Train the PerActionQNetwork to predict per-action resample counts.
+    """Train the PerActionQNetwork to predict per-action failure rates.
 
-    The network learns to predict, for each action a_i in a plan, the expected
-    number of resamples needed for that action conditioned on the history
-    (s_0, a_1, ..., a_{i-1}).
+    The network learns to predict, for each action a_i in a plan, the failure
+    rate for that action conditioned on the history (s_0, a_1, ..., a_{i-1}).
 
     Args:
         q_network: The PerActionQNetwork to train

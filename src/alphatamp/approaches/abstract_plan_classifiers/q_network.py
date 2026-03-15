@@ -279,7 +279,7 @@ class PerActionQNetwork:
 
         Returns:
             Output tensor of shape (batch_size, max_seq_len, 1)
-            Each position i gives the predicted resamples for action a_i
+            Each position i gives the predicted failure rate for action a_i
             conditioned on the history (s_0, a_1, ..., a_{i-1}).
         """
         # Pack padded sequences for efficient LSTM processing
