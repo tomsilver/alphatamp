@@ -138,9 +138,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
+        # Each entry stores (num_failures, num_attempts) for a given (states, actions) key.
         self._abstract_action_dataset: defaultdict[
-            str, defaultdict[FrozenSkeleton, int]
-        ] = defaultdict(lambda: defaultdict(int))
+            str, defaultdict[FrozenSkeleton, tuple[int, int]]
+        ] = defaultdict(lambda: defaultdict(lambda: (0, 0)))
         self._abstract_action_to_action_scorer: dict[
             GroundOperator, AbstractActionScorer
         ] = {}
@@ -346,26 +347,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         abstract_plan_list = []
         abstract_plan_lengths_list = []
-        resample_count_list = []
+        failure_rate_list = []
 
         # Generate a row in the training dataset.
         for datapoint in features_and_labels:
-            abstract_plan, plan_len, resample_count = datapoint
+            abstract_plan, plan_len, failure_rate = datapoint
 
             # Get the features
             abstract_plan_list.append(torch.FloatTensor(abstract_plan))
             abstract_plan_lengths_list.append(plan_len)
 
             # Get the targets
-            resample_count_list.append(resample_count)
+            failure_rate_list.append(failure_rate)
 
         # Convert targets to tensor
-        resample_count = torch.FloatTensor(np.array(resample_count_list)).unsqueeze(1)
+        failure_rates = torch.FloatTensor(np.array(failure_rate_list)).unsqueeze(1)
 
         # Convert lengths to tensor
         abstract_plan_lengths = torch.tensor(abstract_plan_lengths_list)
 
-        return (abstract_plan_list, abstract_plan_lengths, resample_count)
+        return (abstract_plan_list, abstract_plan_lengths, failure_rates)
 
     def train_abstract_action_scorer(self, abstract_action_dataset: dict[str, list]):
         """Train each abstract action scorer given dataset."""
@@ -382,16 +383,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 ]
 
                 # Generate training data.
-                abstract_plan_list, abstract_plan_lengths, resample_count = (
+                abstract_plan_list, abstract_plan_lengths, failure_rates = (
                     self._generate_abstract_action_scorer_training_data(
                         features_and_labels
                     )
                 )
 
-                loss_fn = nn.MSELoss()
+                loss_fn = nn.BCEWithLogitsLoss()
                 # Train the scoring function for each grounded skill.
                 losses = abstract_action_scorer.train(
-                    abstract_plan_list, resample_count, abstract_plan_lengths, loss_fn
+                    abstract_plan_list, failure_rates, abstract_plan_lengths, loss_fn
                 )
 
                 self._loss_metrics[abstract_action_descriptor] = losses
@@ -521,13 +522,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         for candidate_plan in candidate_plans:
 
             candidate_probabilities = []
-            # Use ensemble of Q networks to calculate per action resample counts
+            # Use ensemble of Q networks to predict per-action failure rates
             for q_net in self._ensemble_nets:
-                per_action_resamples = q_net.predict(candidate_plan)
+                per_action_failure_rates = q_net.predict(candidate_plan)
 
-                # Convert per action resample to overall probability
+                # Convert per-action failure rates to overall plan success probability
                 probability = convert_q_value_to_probability(
-                    per_action_resamples.tolist(), self._max_resamples
+                    per_action_failure_rates.tolist(), self._max_resamples
                 )
                 candidate_probabilities.append(probability)
 
@@ -555,9 +556,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         for candidate_plan in candidate_plans:
             probs = []
             for q_net in self._ensemble_nets:
-                per_action_resamples = q_net.predict(candidate_plan)
+                per_action_failure_rates = q_net.predict(candidate_plan)
                 prob = convert_q_value_to_probability(
-                    per_action_resamples.tolist(), self._max_resamples
+                    per_action_failure_rates.tolist(), self._max_resamples
                 )
                 probs.append(prob)
 
@@ -594,7 +595,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if self._train_or_eval == "eval":
             return
 
-        label = 0 if training_label == "success" else 1
+        is_failure = training_label != "success"
 
         prev_abstract_states = tuple(
             self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
@@ -603,11 +604,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan[1][: self._current_abstract_plan_step]
         )
 
-        # Store the number of times the abstract action
-        # given the previous abstract plan needed to be resampled.
+        key = (prev_abstract_states, prev_abstract_actions)
+        failures, attempts = self._abstract_action_dataset[
+            self._most_recent_abstract_action_descriptor
+        ][key]
         self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
-            (prev_abstract_states, prev_abstract_actions)
-        ] += label
+            key
+        ] = (failures + int(is_failure), attempts + 1)
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -635,11 +638,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Retrain the parameter and abstract action scorers given the current stored
         dataset."""
 
-        # First reformat dataset
+        # First reformat dataset, converting (failures, attempts) → failure rate
         abstract_action_dataset = {
             k: list(
-                self._make_data(abstract_plan, resample_count)
-                for abstract_plan, resample_count in v.items()
+                self._make_data(
+                    abstract_plan,
+                    failures / attempts if attempts > 0 else 0.0,
+                )
+                for abstract_plan, (failures, attempts) in v.items()
             )
             for k, v in self._abstract_action_dataset.items()
         }
@@ -850,7 +856,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def get_abstract_action_dataset(
         self,
-    ) -> defaultdict[str, defaultdict[FrozenSkeleton, int]]:
+    ) -> defaultdict[str, defaultdict[FrozenSkeleton, tuple[int, int]]]:
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
 
@@ -864,7 +870,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the per-epoch training losses across all Q-network training runs."""
         return self._q_loss_metrics
 
-    def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
+    def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: float):
         sequence, sequence_length = create_abstract_plan_sequence(
             self._all_ground_atoms, self._all_ground_operators, abstract_plan
         )
@@ -883,8 +889,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             ),
             "abstract_action_dataset.pkl": {
                 k: list(
-                    self._make_data(abstract_plan, resample_count)
-                    for abstract_plan, resample_count in v.items()
+                    self._make_data(
+                        abstract_plan,
+                        failures / attempts if attempts > 0 else 0.0,
+                    )
+                    for abstract_plan, (failures, attempts) in v.items()
                 )
                 for k, v in self._abstract_action_dataset.items()
             },

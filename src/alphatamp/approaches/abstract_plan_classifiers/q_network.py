@@ -104,10 +104,11 @@ def create_abstract_plan_sequence(
 
 
 class QNetwork:
-    """Q network that outputs a single scalar for an abstract plan.
+    """Q network that outputs a single scalar failure rate in (0, 1) for an abstract plan.
 
-    Used by AbstractActionScorer to predict the expected number of resamples for the
-    final action in a plan, conditioned on the full history.
+    Used by AbstractActionScorer to predict the failure rate for the final action in a
+    plan, conditioned on the full history. The network outputs raw logits; sigmoid is
+    applied at prediction time to obtain a probability.
     """
 
     def __init__(
@@ -170,13 +171,13 @@ class QNetwork:
         return output
 
     def predict(self, abstract_plan: Skeleton) -> float:
-        """Predict Q-value for a single abstract plan.
+        """Predict failure rate for a single abstract plan.
 
         Args:
-            abstract_plan: The abstract plan to predict Q-value for
+            abstract_plan: The abstract plan to predict for
 
         Returns:
-            Predicted Q-value as a float (single scalar for the whole plan)
+            Predicted failure rate as a float in (0, 1)
         """
         self._lstm.eval()
         self._fc.eval()
@@ -190,7 +191,7 @@ class QNetwork:
             lengths = torch.tensor([seq_len], dtype=torch.long)
 
             prediction = self.forward(x, lengths)
-            return prediction.cpu().item()
+            return torch.sigmoid(prediction).cpu().item()
 
     def train_step(
         self,
@@ -230,13 +231,11 @@ class QNetwork:
 
 
 class PerActionQNetwork:
-    """Q network that outputs a vector of scalars, one per action in the plan.
+    """Q network that outputs a vector of failure rates in (0, 1), one per action in the plan.
 
-    Each element i in the output represents the predicted number of resamples
-    for action a_i, conditioned on the prior actions (s_0, a_1, ..., a_{i-1}).
-
-    This is used for training a model that can predict per-action feasibility,
-    which can then be converted to an overall plan success probability.
+    Each element i in the output represents the predicted failure rate for action a_i,
+    conditioned on the prior actions (s_0, a_1, ..., a_{i-1}). The network outputs raw
+    logits; sigmoid is applied at prediction time to obtain probabilities.
     """
 
     def __init__(
@@ -307,15 +306,15 @@ class PerActionQNetwork:
         return output
 
     def predict(self, abstract_plan: Skeleton) -> np.ndarray:
-        """Predict per-action resample counts for an abstract plan.
+        """Predict per-action failure rates for an abstract plan.
 
         Args:
             abstract_plan: The abstract plan to predict for
 
         Returns:
-            Array of shape (seq_len,) where each element is the predicted
-            number of resamples for that action conditioned on prior actions.
-            Element i = predicted resamples for action a_i given (s_0, a_1, ..., a_{i-1})
+            Array of shape (seq_len,) where each element is the predicted failure rate
+            in (0, 1) for that action conditioned on prior actions.
+            Element i = predicted failure rate for action a_i given (s_0, a_1, ..., a_{i-1})
         """
         self._lstm.eval()
         self._fc.eval()
@@ -332,8 +331,8 @@ class PerActionQNetwork:
             # output: (1, seq_len, 1)
             output = self.forward(x, lengths)
 
-            # Remove batch and final dimensions to get (seq_len,)
-            return output.squeeze(0).squeeze(-1).cpu().numpy()
+            # Apply sigmoid to convert logits to failure rates, then flatten to (seq_len,)
+            return torch.sigmoid(output).squeeze(0).squeeze(-1).cpu().numpy()
 
     def train_step(
         self,
@@ -347,9 +346,9 @@ class PerActionQNetwork:
         Args:
             features: List of sequence tensors, each of shape (seq_len, input_dim)
             targets: List of per-action target tensors, each of shape (seq_len,)
-                     where each element is the target resample count for that action
+                     where each element is the target failure rate in [0, 1] for that action
             lengths: Tensor of actual sequence lengths, shape (batch_size,)
-            loss_fn: Loss function (should be nn.MSELoss with reduction='none')
+            loss_fn: Loss function (should be nn.BCEWithLogitsLoss with reduction='none')
 
         Returns:
             The loss value

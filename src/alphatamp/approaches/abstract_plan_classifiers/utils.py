@@ -282,7 +282,7 @@ def train_q_network(
 
     epoch_losses = []
     # Use reduction='none' so we can apply masking for variable-length sequences
-    loss_fn = nn.MSELoss(reduction="none")
+    loss_fn = nn.BCEWithLogitsLoss(reduction="none")
 
     # Create indices for shuffling
     num_samples = len(sequences)
@@ -328,21 +328,18 @@ def train_q_network(
 
 
 def convert_q_value_to_probability(
-    resample_count_per_action: list[float], num_retries: int
+    failure_rate_per_action: list[float], num_retries: int
 ) -> float:
-    """Given a predicted number of resamples to execute an abstract plan, return the
-    probability that abstract plan succeeds given k total number of retries."""
+    """Given predicted per-action failure rates, return the probability that the abstract
+    plan succeeds within num_retries total retries."""
 
-    # Ensure resample counts are non-negative to avoid invalid probabilities.
-    non_negative_resample_counts = [
-        max(resample_count, 0.0) for resample_count in resample_count_per_action
+    # Clamp failure rates to [0, 1].
+    clamped_failure_rates = [
+        min(max(failure_rate, 0.0), 1.0) for failure_rate in failure_rate_per_action
     ]
 
-    # Convert resample counts to per-action success probabilities and clamp to [0, 1].
-    action_probs = [
-        min(max(1.0 / (resample_count + 1.0), 0.0), 1.0)
-        for resample_count in non_negative_resample_counts
-    ]
+    # Per-action success probability = 1 - failure_rate.
+    action_probs = [1.0 - failure_rate for failure_rate in clamped_failure_rates]
 
     K = num_retries
     # dp[k] = probability of being successful up to current action
