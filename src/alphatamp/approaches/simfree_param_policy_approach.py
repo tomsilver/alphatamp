@@ -84,6 +84,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         num_candidate_plans: int = 10,
         train_every: int = 1,
         param_sample_count: int = 10,
+        exploit_resamples: int | None = None,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -123,6 +124,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Parameter policy.
         self._max_resamples = max_resamples
+        self._exploit_resamples = exploit_resamples if exploit_resamples is not None else max_resamples
         self._param_sample_count = param_sample_count
         self._abstract_action_to_scoring_function: dict[GroundOperator, BaseScorer] = {}
         self._parameter_scorer_class = parameter_scorer_class
@@ -566,7 +568,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             for q_net in self._ensemble_nets:
                 per_action_failure_rates = q_net.predict(candidate_plan)
                 prob = convert_q_value_to_probability(
-                    per_action_failure_rates.tolist(), self._max_resamples
+                    per_action_failure_rates.tolist(), self._exploit_resamples
                 )
                 probs.append(prob)
 

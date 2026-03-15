@@ -415,6 +415,7 @@ def main(
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
+        exploit_resamples=3,
         train_every=1,
         param_sample_count=100,
         seed=seed,
