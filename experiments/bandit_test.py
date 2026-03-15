@@ -1,8 +1,10 @@
 """Minimal 1D bandit test for SimFreeParamPolicyApproach.
 
-Two abstract actions: 'Reach' (learn a placement position) and 'Widen'
-(increase the success threshold — no symbolic effects).  The agent must
-choose a placement position close to a random target in [0, 1].
+Two abstract actions: 'Reach' (learn a displacement) and 'Widen'
+(increase the success threshold — no symbolic effects).  The robot starts
+at a random position in [0, 1] each episode and must output a displacement
+such that robot_pos + displacement lands within a threshold of a hidden
+fixed target.
 
 Demonstrates that SimFreeParamPolicyApproach can discover that using the
 Widen action before Reach leads to fewer parameter resamples.  Initially
@@ -28,6 +30,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from typing import Any
+import logging
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -82,8 +85,8 @@ ROBOT_OBJ = Object("robot", ROBOT_TYPE)
 AT_GOAL_PRED = Predicate("AtGoal", [ROBOT_TYPE])
 ROBOT_VAR = Variable("?r", ROBOT_TYPE)
 
-# Feature layout for ObjectCentricState: [target_pos, is_solved, is_widened]
-TYPE_FEATURES = {ROBOT_TYPE: ["target_pos", "is_solved", "is_widened"]}
+# Feature layout for ObjectCentricState: [robot_pos, is_solved, is_widened]
+TYPE_FEATURES = {ROBOT_TYPE: ["robot_pos", "is_solved", "is_widened"]}
 
 SUCCESS_THRESHOLD = 0.05       # |action - target| must be below this normally
 WIDE_SUCCESS_THRESHOLD = 0.15  # threshold after Widen is applied
@@ -95,26 +98,27 @@ WIDE_SUCCESS_THRESHOLD = 0.15  # threshold after Widen is applied
 
 
 class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
-    """A 1-D bandit: the agent must place at the (random) target position.
+    """A 1-D bandit: the robot starts at a random position and must reach a hidden target.
 
-    Observation: [target_pos, is_solved, is_widened]  — shape (3,)
-    Action:      [placement_pos, widen_flag]           — shape (2,)
+    Observation: [robot_pos, is_solved, is_widened]  — shape (3,)
+    Action:      [displacement, widen_flag]           — shape (2,)
 
     If widen_flag > 0.5 the step widens the success threshold (no placement).
-    Otherwise the agent attempts a placement at placement_pos, perturbed by
-    Gaussian noise with std ``execution_noise_std``.  The noise makes Reach
-    non-trivially hard: even a perfectly learned parameter fails with positive
-    probability, so the advantage of Widen (wider threshold) persists after
-    training.
+    Otherwise the agent attempts to reach robot_pos + displacement, perturbed
+    by Gaussian noise with std ``execution_noise_std``.  The hidden target is
+    fixed for the lifetime of the environment instance; the robot's starting
+    position is re-sampled each episode.  The noise makes Reach non-trivially
+    hard: even a perfectly learned parameter fails with positive probability,
+    so the advantage of Widen (wider threshold) persists after training.
 
-    Reward 1.0 and done=True when |noisy_placement - target| < threshold.
+    Reward 1.0 and done=True when |robot_pos + noisy_displacement - target| < threshold.
     """
 
     metadata = {"render_modes": []}
 
     def __init__(
         self,
-        fixed_target: float | None = None,
+        hidden_target: float | None = None,
         execution_noise_std: float = 0.0,
     ) -> None:
         super().__init__()
@@ -123,14 +127,18 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
             high=np.ones(3, dtype=np.float32),
         )
         self.action_space = Box(
-            low=np.zeros(2, dtype=np.float32),
-            high=np.ones(2, dtype=np.float32),
+            low=np.array([-1.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
         )
-        self._fixed_target = fixed_target
         self._execution_noise_std = execution_noise_std
-        self._target: float = 0.5
-        self._is_widened: bool = False
         self._rng = np.random.default_rng(0)
+        # Target is fixed for the lifetime of the env (hidden from the agent).
+        self._target: float = (
+            hidden_target if hidden_target is not None
+            else float(self._rng.uniform(0.0, 1.0))
+        )
+        self._robot_pos: float = 0.5
+        self._is_widened: bool = False
 
     def reset(
         self,
@@ -141,31 +149,28 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-        if self._fixed_target is not None:
-            self._target = self._fixed_target
-        else:
-            self._target = float(self._rng.uniform(0.0, 1.0))
+        self._robot_pos = float(self._rng.uniform(0.0, 1.0))
         self._is_widened = False
-        obs = np.array([self._target, 0.0, 0.0], dtype=np.float32)
-        return obs, {"target": self._target}
+        obs = np.array([self._robot_pos, 0.0, 0.0], dtype=np.float32)
+        return obs, {"robot_pos": self._robot_pos}
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
         if float(action[1]) > 0.5:
             # Widen step: increase success threshold, no placement attempted.
             self._is_widened = True
-            obs = np.array([self._target, 0.0, 1.0], dtype=np.float32)
-            return obs, 0.0, False, False, {"target": self._target}
+            obs = np.array([self._robot_pos, 0.0, 1.0], dtype=np.float32)
+            return obs, 0.0, False, False, {}
 
-        # Reach step: attempt placement (with optional execution noise).
+        # Reach step: attempt placement at robot_pos + displacement (with optional noise).
         noise = self._rng.normal(0.0, self._execution_noise_std) if self._execution_noise_std > 0.0 else 0.0
-        placement = float(np.clip(action[0] + noise, 0.0, 1.0))
+        placement = float(np.clip(self._robot_pos + float(action[0]) + noise, 0.0, 1.0))
         threshold = WIDE_SUCCESS_THRESHOLD if self._is_widened else SUCCESS_THRESHOLD
         success = abs(placement - self._target) < threshold
         obs = np.array(
-            [self._target, 1.0 if success else 0.0, float(self._is_widened)],
+            [self._robot_pos, 1.0 if success else 0.0, float(self._is_widened)],
             dtype=np.float32,
         )
-        return obs, 1.0 if success else 0.0, success, False, {"target": self._target}
+        return obs, 1.0 if success else 0.0, success, False, {}
 
     def render(self) -> None:  # type: ignore[override]
         pass
@@ -191,7 +196,7 @@ class ReachController(GroundParameterizedController):
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
     ) -> np.ndarray:
-        return rng.uniform(0.0, 1.0, size=1).astype(np.float32)
+        return rng.uniform(-1.0, 1.0, size=1).astype(np.float32)
 
     def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
         self._params = params
@@ -287,7 +292,7 @@ def build_bandit_env_models(env: OneDimBanditEnv) -> SimulatorFreeSesameModels:
     reach_ctrl: LiftedParameterizedController = LiftedParameterizedController(
         variables=[ROBOT_VAR],
         controller_cls=ReachController,
-        params_space=Box(0.0, 1.0, shape=(1,), dtype=np.float32),
+        params_space=Box(-1.0, 1.0, shape=(1,), dtype=np.float32),
     )
     reach_skill = LiftedSkill(operator=reach_op, controller=reach_ctrl)
 
@@ -364,7 +369,7 @@ def main(
     reset_every: int = 30,
     log_every: int = 100,
     seed: int = 0,
-    fixed_target: float | None = None,
+    hidden_target: float | None = None,
     noise_std: float = 0.0,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
@@ -378,7 +383,7 @@ def main(
     """
 
     # Build env
-    env = OneDimBanditEnv(fixed_target=fixed_target, execution_noise_std=noise_std)
+    env = OneDimBanditEnv(hidden_target=hidden_target, execution_noise_std=noise_std)
     obs, _ = env.reset(seed=seed)
 
     # Build models
@@ -442,6 +447,11 @@ def main(
     print("-" * 65)
 
     for step in range(num_steps):
+        logging.info(
+            "BANDIT STEP: %d",
+                step,
+        ) 
+        
         try:
             action = approach.step()
         except ApproachStepError:
@@ -512,10 +522,11 @@ def plot_results(
     seed: int = 0,
     save_path: str | None = None,
     noise_std: float = 0.0,
+    hidden_target: float | None = None,
     **kwargs: Any,
 ) -> None:
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
-    results = main(num_steps=num_steps, seed=seed, noise_std=noise_std, **kwargs)
+    results = main(num_steps=num_steps, seed=seed, noise_std=noise_std, hidden_target=hidden_target, **kwargs)
 
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
@@ -609,7 +620,14 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         metavar="STD",
-        help="Gaussian execution noise std added to Reach placements (default: 0.0)",
+        help="Gaussian execution noise std added to Reach displacements (default: 0.0)",
+    )
+    parser.add_argument(
+        "--hidden-target",
+        type=float,
+        default=None,
+        metavar="TARGET",
+        help="Fixed hidden target value in [0, 1] (default: random at env creation)",
     )
     parser.add_argument(
         "--save",
@@ -626,6 +644,7 @@ if __name__ == "__main__":
             seed=args.seed,
             save_path=args.save,
             noise_std=args.noise_std,
+            hidden_target=args.hidden_target,
         )
     else:
-        main(num_steps=args.num_steps, max_resamples=args.max_resamples, seed=args.seed, noise_std=args.noise_std)
+        main(num_steps=args.num_steps, max_resamples=args.max_resamples, seed=args.seed, noise_std=args.noise_std, hidden_target=args.hidden_target)

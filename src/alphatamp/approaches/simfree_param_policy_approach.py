@@ -187,8 +187,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan = self._score_candidate_plans_exploit(
                 candidate_plans
             )
+            logging.info(
+            "[BALD] Generated Exploit plan at Reset Episode: %s",
+                [a.short_str for a in self._current_abstract_plan[1]],
+            ) 
         else:
             self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+
+            logging.info(
+            "[BALD] Generated Initial plan at Reset Episode: %s",
+                [a.short_str for a in self._current_abstract_plan[1]],
+            ) 
 
         self._timestep = 0
         self._num_resamples = 0
@@ -651,6 +660,25 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self.train_abstract_action_scorer(abstract_action_dataset)
         self.train_parameter_policy(self._parameter_dataset)
+
+        # Log predicted vs actual failure rates after training to verify convergence.
+        assert self._last_observation is not None
+        x0 = self._env_models.observation_to_state(self._last_observation)
+        s0 = self._env_models.state_abstractor(x0)
+        for op, scorer in self._abstract_action_to_action_scorer.items():
+            counts = list(self._abstract_action_dataset.get(op.short_str, {}).values())
+            total_failures = sum(f for f, _ in counts)
+            total_attempts = sum(a for _, a in counts)
+            actual_rate = total_failures / total_attempts if total_attempts > 0 else float("nan")
+            predicted = scorer.score(([s0], []))
+            logging.info(
+                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d)",
+                op.short_str,
+                predicted,
+                actual_rate,
+                total_failures,
+                total_attempts,
+            )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
