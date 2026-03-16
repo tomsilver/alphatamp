@@ -9,7 +9,6 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=bilevel-planning",
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
    "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
@@ -22,8 +21,9 @@ dependencies = [
    "scipy-stubs",
    "hydra-joblib-launcher",
    "hydra-submitit-launcher",
+   "kindergarden==0.0.5",
    "kinder-bilevel-planning",
-   "kinder",
+   "bilevel-planning",
    "kinder-models",
 ]
 
@@ -72,9 +72,9 @@ markers = [
 ]
 
 [tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
-kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines", subdirectory = "kinder-bilevel-planning", rev = "4502b782e999e8c3eb327ebb505714ff10152782" }
+bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "bilevel-planning" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines", subdirectory = "kinder-models", rev = "4502b782e999e8c3eb327ebb505714ff10152782" }
 
 [[tool.mypy.overrides]]
 module = [
