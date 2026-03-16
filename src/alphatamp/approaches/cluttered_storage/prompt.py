@@ -949,9 +949,8 @@ Important: This heuristic needs to consider
 
 
 def build_heuristic_prompt(initial_atoms: str, goal_atoms: str) -> str:
-    """Build a problem-specific heuristic prompt with the actual instance injected."""
     return HEURISTIC_PROMPT + f"""
-This is the specific problem instance you must build the heuristic for:
+This is the specific problem instance:
 
 Initial State (true predicates):
 {initial_atoms}

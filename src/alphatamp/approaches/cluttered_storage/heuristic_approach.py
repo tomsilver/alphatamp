@@ -367,6 +367,30 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         )
         module = llm_fn._load_module()
         return getattr(module, llm_fn.function_name), llm_fn.code_str
+    
+    def _synthesize_all_heuristics(self, prompt: str) -> list[tuple[Callable, str]]:
+        """Single LLM call → list of (generate_heuristic fn, code_str) for each candidate."""
+        query = Query(prompt=prompt, imgs=None, hyperparameters={"temperature": 1.0})
+        response = self._llm.run_query(query)
+
+        # Extract all ```python ... ``` blocks from the response
+        blocks, remainder = [], response.text
+        while "```python" in remainder:
+            start = remainder.index("```python") + len("```python")
+            remainder = remainder[start:]
+            end = remainder.index("```") if "```" in remainder else len(remainder)
+            blocks.append(remainder[:end])
+            remainder = remainder[end + 3:]
+
+        results = []
+        for code_str in blocks:
+            try:
+                namespace: dict = {}
+                exec(compile(code_str, "<string>", "exec"), namespace)  # noqa: S102
+                results.append((namespace["generate_heuristic"], code_str))
+            except Exception as e:
+                print(f"  Skipping malformed heuristic block: {e}")
+        return results
 
     def _evaluate_heuristic(
         self,
@@ -428,15 +452,15 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         goal_atoms = "\n".join(f"- {atom}" for atom in sorted(goal.atoms, key=str))
         prompt_str = build_heuristic_prompt(initial_atoms, goal_atoms)
 
-        # ── Step 2: generate N candidate heuristics ───────────────────────────
-        print(f"\n=== Generating {self._num_candidates} candidate heuristics ===")
-        candidates: list[tuple[Callable, str]] = []
-        for i in range(self._num_candidates):
-            print(f"  Generating heuristic {i + 1}/{self._num_candidates}...")
-            fn, code_str = self._synthesize_heuristic(prompt_str, candidate_index = i)
-            candidates.append((fn, code_str))
-            # Save each candidate to disk for inspection
+       # ── Step 2: one LLM call → 3 candidate heuristics ────────────────────
+        print(f"\n=== Generating {self._num_candidates} candidates in one LLM call ===")
+        candidates = self._synthesize_all_heuristics(prompt_str)
+        for i, (_, code_str) in enumerate(candidates):
             Path(f"src/alphatamp/approaches/cluttered_storage/llm_heuristic_{i}.py").write_text(code_str)
+        print(f"  Got {len(candidates)} valid heuristics from LLM response")
+        if not candidates:
+            raise RuntimeError("LLM returned no valid heuristic code blocks")
+
 
         # ── Step 3: evaluate each candidate, track best by deepest step ───────
         print(f"\n=== Evaluating candidates ({self._eval_timeout}s each) ===")
