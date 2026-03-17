@@ -36,10 +36,7 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
-from alphatamp.approaches.cluttered_storage.prompt import (
-    HEURISTIC_PROMPT,
-    build_heuristic_prompt,  # NEW: builds problem-specific prompt with injected atoms
-)
+from alphatamp.approaches.cluttered_storage.prompt import build_heuristic_prompt
 from bilevel_planning.refiners.backtracking_refiner import (
     BacktrackingRefiner,  # NEW: base class for FailureTrackingBacktrackingRefiner
 )
@@ -143,9 +140,6 @@ class HeuristicGenerator(
         predicates: set[Predicate],
         operators: set[LiftedOperator],
         seed: int,
-        # NEW: llm and prompt are now Optional — not needed when fn is injected directly
-        llm: Any = None,
-        prompt: str = "",
         use_stored_heuristic: bool = False,
         stored_heuristic_path: Path = Path("generated_heuristic.py"),
         generate_heuristic_fn: Optional[Callable] = None,
@@ -184,17 +178,10 @@ class HeuristicGenerator(
         ground_operators = cached_all_ground_operators(
             self._pddl_domain.operators, init_abstract_state.objects
         )
-        # NEW: three-way branch mirrors __init__
         if self._generate_heuristic_fn is not None:
             generate_heuristic = self._generate_heuristic_fn
         else:
             generate_heuristic = self._load_generate_heuristic_fn()
-        else:
-            # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
-            # passes results through mp.Manager which requires pickle, but locally-defined
-            # classes (defined inside generate_heuristic) cannot be pickled.
-            module = self._llm_fn._load_module()
-            generate_heuristic = getattr(module, self._llm_fn.function_name)
         pyperplan_heuristic = create_pyperplan_heuristic_from_fn(
             generate_heuristic, self._pddl_domain, pddl_problem, ground_operators
         )
