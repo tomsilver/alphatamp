@@ -11,6 +11,7 @@ from bilevel_planning.structs import (
     Goal,
     Plan,
     PlanningProblem,
+    RefinementMetrics,
     RelationalAbstractState,
     SesameModels,
 )
@@ -198,6 +199,7 @@ class GeneralizedOracleApproach(BaseApproach[_O, _X, _U]):
             self._env_models.state_abstractor,
             seed=self._seed,
         )
+        self.last_metrics: RefinementMetrics | None = None
 
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
         pass
@@ -211,4 +213,5 @@ class GeneralizedOracleApproach(BaseApproach[_O, _X, _U]):
         if plan is None:
             raise TimeoutError("No plan found")
 
+        self.last_metrics = self._planner.last_metrics
         return plan

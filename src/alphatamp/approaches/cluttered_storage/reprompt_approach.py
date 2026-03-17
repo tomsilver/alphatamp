@@ -24,6 +24,7 @@ from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
 from bilevel_planning.structs import (
     Plan,
     PlanningProblem,
+    RefinementMetrics,
     RelationalAbstractGoal,
     RelationalAbstractState,
     SesameModels,
@@ -293,6 +294,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         training_planning_timeout: float = 5,
     ):
         super().__init__(env_models, seed)
+        self.last_metrics: RefinementMetrics | None = None
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
@@ -364,6 +366,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         # bpg contains search tree of states and actions tried. Use it next for next step
         if plan is not None:
             print("Initial plan succeeded.")
+            self.last_metrics = tracking_refiner.metrics
             return plan
 
         print("Initial plan failed")
@@ -402,6 +405,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
 
         if plan is None:
             raise TimeoutError("No plan found")
+        self.last_metrics = replanner.last_metrics
         return plan
 
     @staticmethod

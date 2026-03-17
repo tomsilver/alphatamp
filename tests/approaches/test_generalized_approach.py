@@ -41,6 +41,16 @@ def test_generalized_oracle_approach():
     # Create a plan
     plan = approach.run_planning(obs, timeout=500)
 
+    # Print refinement metrics
+    m = approach.last_metrics
+    if m is not None:
+        print(f"\n=== Refinement Metrics ===")
+        print(f"  Plan length (abstract steps): {m.num_steps}")
+        print(f"  Attempts per step:            {m.attempts_per_step}")
+        print(f"  Avg attempts per step:        {m.avg_attempts_per_step:.2f}")
+        print(f"  Total sampling attempts:      {m.total_attempts}")
+        print(f"  Steps with >5 attempts:       {m.steps_above_threshold(5)}")
+
     # Execute the plan
     for action in plan.actions:
         _, _, done, _, _ = env.step(action)
