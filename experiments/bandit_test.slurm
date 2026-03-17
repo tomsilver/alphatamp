@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=02:30:00
+#SBATCH --time=04:30:00
 #SBATCH --output=experiments/slurm_outputs/bandit_test_%j.out
 #SBATCH --error=experiments/slurm_outputs/bandit_test_%j.err
 

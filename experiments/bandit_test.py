@@ -88,8 +88,8 @@ ROBOT_VAR = Variable("?r", ROBOT_TYPE)
 # Feature layout for ObjectCentricState: [robot_pos, is_solved, is_widened]
 TYPE_FEATURES = {ROBOT_TYPE: ["robot_pos", "is_solved", "is_widened"]}
 
-SUCCESS_THRESHOLD = 0.05       # |action - target| must be below this normally
-WIDE_SUCCESS_THRESHOLD = 0.15  # threshold after Widen is applied
+SUCCESS_THRESHOLD = 0.01       # |action - target| must be below this normally
+WIDE_SUCCESS_THRESHOLD = 0.05  # threshold after Widen is applied
 
 
 # ---------------------------------------------------------------------------
