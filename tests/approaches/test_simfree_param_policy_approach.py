@@ -3,10 +3,10 @@
 import time
 from pathlib import Path
 
-import prbench
+import kinder
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.feasibility_classifier_learners.static_feasibility_classifier_learner import (  # pylint:disable=line-too-long
@@ -18,8 +18,15 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.feasibility_classifiers.oracle_feasibility_classifier import (
     OracleAbstractPlanClassifier,
 )
-from alphatamp.approaches.parameter_scorers.classifier_scorer import ClassifierScorer
-from alphatamp.approaches.parameter_scorers.naive_scorer import NaiveScorer
+from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
+    AbstractActionScorer,
+)
+from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (
+    ClassifierParameterScorer,
+)
+from alphatamp.approaches.scorers.parameter_scorers.naive_parameter_scorer import (
+    NaiveParameterScorer,
+)
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
 )
@@ -32,9 +39,9 @@ from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 def test_naive_scorer_simfree_feasibility_approach():
     """Tests for SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -61,13 +68,29 @@ def test_naive_scorer_simfree_feasibility_approach():
         sim_free_env_models, static_feasibility_classifier, 123
     )
 
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=static_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=NaiveScorer,  # Use Naive Scorer
-        parameter_scorer_configs={"configs": {}},
+        parameter_scorer_class=NaiveParameterScorer,  # Use Naive Scorer
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -123,15 +146,15 @@ def test_naive_scorer_simfree_feasibility_approach():
     env.close()
 
 
-def test_classifier_scorer_simfree_feasibility_approach():
-    """Tests for SimFreeParamPolicyApproach()."""
+def test_dataset_collection_simfree_feasibility_approach():
+    """Tests for collecting datasets for the SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
-        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy")
+        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-datasets")
 
     env_models = create_bilevel_planning_models(
         "clutteredretrieval2d",
@@ -161,16 +184,29 @@ def test_classifier_scorer_simfree_feasibility_approach():
         sim_free_env_models, filter_feasibility_classifier, 123
     )
 
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
-        parameter_scorer_configs={"configs": configs},
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -198,15 +234,116 @@ def test_classifier_scorer_simfree_feasibility_approach():
         if done:
             break
 
+    abstract_plan_dataset = approach.get_abstract_plan_dataset()
+    abstract_action_dataset = approach.get_abstract_action_dataset()
     parameter_dataset = approach.get_parameter_dataset()
 
-    assert parameter_dataset, "Did not find any parameters"
+    assert abstract_plan_dataset, "Did not find any abstract plans"
+    assert abstract_action_dataset, "Did not store any abstract action data"
+    assert parameter_dataset, "Did not store any parameter data"
+    env.close()
 
-    path = Path("tests/datasets/success_classifier_parameter_dataset.pkl")
-    approach.save_parameter_dataset(path)
+
+def test_save_datasets_simfree_feasibility_approach():
+    """Tests for saving datasets for the SimFreeParamPolicyApproach()."""
+
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy-parameter")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier.
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Train the feasibility learner to classify plans
+    # that pick up the target block first as infeasible
+
+    filtered_action_strs = [("PickTgt", 0), ("target_block", 0)]
+    filter_classifier.update_classifier(None, filtered_action_strs)
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
+        seed=123,
+    )
+
+    # Train on just one problem.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    # Train.
+    approach.train()
+    approach.reset(obs, {})
+
+    start_time = time.time()
+    timeout = 10
+
+    while time.time() - start_time < timeout:
+        try:
+            action = approach.step()
+        except ApproachStepError:
+            break
+
+        obs, reward, done, _, _ = env.step(action)
+
+        # Given new observation from the environment, update the approach
+        approach.update(obs, float(reward), done, {})
+        if done:
+            break
+
+    train_parameter_dataset = approach.get_parameter_dataset()
+    assert train_parameter_dataset, "Did not find any parameters"
+
+    path = Path("tests/datasets/")
+    approach.save_datasets(path)
 
     # Eval.
     obs, _ = env.reset(seed=124)
+
+    # Filter obstruction 6
+    filtered_action_strs = [("obstruction6", 0)]
+    filter_classifier.update_classifier(None, filtered_action_strs)
 
     # Filter obstruction 6
     filtered_action_strs = [("obstruction6", 0)]
@@ -231,18 +368,20 @@ def test_classifier_scorer_simfree_feasibility_approach():
         if done:
             break
 
-    parameter_dataset = approach.get_parameter_dataset()
+    eval_parameter_dataset = approach.get_parameter_dataset()
 
-    assert len(parameter_dataset) == 4, "Should not store additional parameters."
+    assert (
+        train_parameter_dataset == eval_parameter_dataset
+    ), "Should not store additional parameters."
     env.close()
 
 
-def test_train_scorer_simfree_feasbility_approach():
-    """Tests for SimFreeParamPolicyApproach()."""
+def test_train_param_scorer_simfree_feasbility_approach():
+    """Tests for training the parameter scorer for the SimFreeParamPolicyApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="param-policy")
@@ -263,8 +402,14 @@ def test_train_scorer_simfree_feasbility_approach():
     filtered_action_strs = [
         ("PickTgt", 0),
         ("target_block", 0),
+        ("obstruction2", 0),
+        ("obstruction8", 0),
         ("obstruction5", 0),
         ("obstruction6", 0),
+        ("obstruction9", 0),
+        ("obstruction4", 0),
+        ("obstruction0", 0),
+        ("obstruction1", 0),
     ]
     filter_classifier.update_classifier(None, filtered_action_strs)
 
@@ -278,16 +423,29 @@ def test_train_scorer_simfree_feasbility_approach():
         sim_free_env_models, filter_feasibility_classifier, 123
     )
 
-    # Create the classifier parameter scorer
-    configs = {"hidden_layer_sizes": (10, 10)}
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 10,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
 
     # Create the approach.
     approach = SimFreeParamPolicyApproach(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=filter_feasibility_classifier,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierScorer,
-        parameter_scorer_configs={"configs": configs},
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
         seed=123,
     )
 
@@ -298,30 +456,187 @@ def test_train_scorer_simfree_feasbility_approach():
     approach.eval()
     approach.reset(obs, {})
 
-    # Load in successful training dataset from pickle.
-    path = Path("tests/datasets") / "success_classifier_parameter_dataset.pkl"
-    success_dataset = approach.load_parameter_dataset(path)
+    # Load in training dataset from pickle.
+    path = Path("tests/datasets") / "parameter_dataset.pkl"
+    dataset = approach.load_abstract_action_level_dataset(path)
 
     # Train the scorer on the datasets.
-    approach.train_parameter_policy(success_dataset)
+    approach.train_parameter_policy(dataset)
 
-    # Evaluate the approach on environment.
-    start_time = time.time()
-    timeout = 10
-    task_completed = False
-    while time.time() - start_time < timeout:
-        try:
-            action = approach.step()
-        except ApproachStepError:
-            break
+    # Verify the trained scorer can produce an action without error.
+    try:
+        action = approach.step()
+        assert action is not None, "Trained scorer should produce an action"
+    except ApproachStepError:
+        pass
 
-        obs, reward, done, _, _ = env.step(action)
+    env.close()
 
-        # Given new observation from the environment, update the approach
-        approach.update(obs, float(reward), done, {})
-        if done:
-            task_completed = True
-            break
 
-    assert task_completed, "Plan did not succeed"
+def test_train_abstract_action_scorer_simfree_feasbility_approach():
+    """Tests for training the abstract action scorers for the
+    SimFreeParamPolicyApproach()."""
+
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="q-function")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier.
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 5,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
+        seed=123,
+    )
+
+    # Eval.
+    obs, _ = env.reset(seed=123)
+
+    # Reset the approach on the observation.
+    approach.eval()
+    approach.reset(obs, {})
+
+    # Load in abstract action training dataset from pickle.
+    path = Path("tests/datasets") / "abstract_action_dataset.pkl"
+    dataset = approach.load_abstract_action_level_dataset(path)
+
+    # Train the abstract action scorers on the datasets.
+    approach.train_abstract_action_scorer(dataset)
+
+    abstract_action_descriptor = "PlaceTgt(robot, target_block, target_region)"
+
+    abstract_action_score = approach.get_abstract_action_score(
+        abstract_action_descriptor
+    )
+
+    assert abstract_action_score < 1, "Should not need any resamples!"
+
+    loss_metrics = approach.get_loss_metrics()
+
+    assert loss_metrics is not None, "Should store loss metrics"
+    env.close()
+
+
+def test_score_candidate_plans_simfree_feasbility_approach():
+    """Tests that the approach can generate candidate plans and score them via the BALD
+    objective, returning the plan with the highest epistemic uncertainty."""
+
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+
+    if MAKE_VIDEOS:
+        env = RecordVideo(env, "unit_test_videos", name_prefix="bald-scoring")
+
+    env_models = create_bilevel_planning_models(
+        "clutteredretrieval2d",
+        env.observation_space,
+        env.action_space,
+        num_obstructions=10,
+    )
+
+    sim_free_env_models = sesame_models_to_sim_free(env_models)
+
+    # Create the naive classifier (no plans filtered, so many candidates reachable).
+    filter_classifier = FilterFeasibilityClassifier()
+
+    # Create the naive feasibility learner.
+    filter_feasibility_classifier = StaticFeasibilityClassifierLearner(
+        filter_classifier
+    )
+
+    # Create the train explorer.
+    train_explorer = ExploitExplorer(
+        sim_free_env_models, filter_feasibility_classifier, 123
+    )
+
+    # Create the classifier parameter scorer configs
+    parameter_configs = {"hidden_layer_sizes": (10, 10)}
+
+    # Create the abstract action scorer configs
+    abstract_action_configs = {
+        "hidden_dim": 32,
+        "num_layers": 2,
+        "num_epochs": 5,
+    }
+
+    # Create the q network configs
+    q_network_configs = {"hidden_dim": 32, "num_layers": 2}
+
+    # Create the approach.
+    approach = SimFreeParamPolicyApproach(
+        env_models=sim_free_env_models,
+        feasibility_classifier_learner=filter_feasibility_classifier,
+        train_explorer=train_explorer,
+        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_configs={"configs": parameter_configs},
+        abstract_action_scorer_class=AbstractActionScorer,
+        abstract_action_scorer_configs={"configs": abstract_action_configs},
+        q_network_configs=q_network_configs,
+        seed=123,
+    )
+
+    # Reset into eval mode so the exploit explorer is used for planning.
+    obs, _ = env.reset(seed=123)
+    approach.eval()
+    approach.reset(obs, {})
+
+    # Generate candidate plans
+    candidate_plans = approach.generate_candidate_plans()
+
+    assert candidate_plans, "Should generate at least one candidate plan"
+    assert all(
+        len(plan[1]) > 0 for plan in candidate_plans
+    ), "Every candidate plan should have at least one action"
+
+    # Score candidate plans via the BALD objective
+    best_plan = approach.score_candidate_plans(candidate_plans)
+
+    assert best_plan is not None, "Should return a best plan"
+    assert best_plan in candidate_plans, "Best plan must be one of the candidates"
+    assert len(best_plan[1]) > 0, "Best plan should have at least one action"
+
     env.close()

@@ -1,0 +1,24 @@
+defaults:
+  - env: dyn_obstruction
+  - _self_
+
+seed: 0
+max_resamples: 2
+num_steps: 100
+output_dir: datasets
+record_video: true
+
+# Parameter scorer configs
+parameter_scorer:
+  hidden_layer_sizes: [10, 10]
+
+# Abstract action scorer configs
+abstract_action_scorer:
+  hidden_dim: 32
+  num_layers: 2
+  num_epochs: 10
+
+# Q network configs
+q_network:
+  hidden_dim: 32
+  num_layers: 2

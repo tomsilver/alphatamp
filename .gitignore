@@ -167,3 +167,21 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Multirun logging
+multirun/
+
+# Datasets
+datasets/
+
+# Debugging folder
+debug/
+
+# Archived files
+archive/
+
+# Hydra temporary output files
+experiments/outputs/
+
+# Temporary experiment files
+experiments/temp/
+

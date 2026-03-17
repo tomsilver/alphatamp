@@ -4,12 +4,12 @@ from typing import Any, TypeVar
 
 import numpy as np
 
-from alphatamp.approaches.parameter_scorers.base_parameter_scorer import ParameterScorer
+from alphatamp.approaches.scorers.base_scorer import BaseScorer
 
 _O = TypeVar("_O")  # observation
 
 
-class NaiveScorer(ParameterScorer):
+class NaiveParameterScorer(BaseScorer):
     """A naive parameter scorer that only returns 1."""
 
     def __init__(self, configs: dict):

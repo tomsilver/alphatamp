@@ -2,11 +2,11 @@
 
 import time
 
+import kinder
 import numpy as np
-import prbench
 from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
-from prbench_bilevel_planning.env_models import create_bilevel_planning_models
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
 from alphatamp.approaches.abstract_explorers.random_explorer import RandomExplorer
@@ -28,9 +28,9 @@ from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 def test_static_classifier_simfree_feasibility_approach():
     """Tests for SimFreeFeasiblityApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o1-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
@@ -92,7 +92,7 @@ def test_static_classifier_simfree_feasibility_approach():
 
     # Eval.
     # Train on just one problem.
-    obs, _ = env.reset(seed=123)
+    obs, _ = env.reset(seed=124)
 
     approach.eval()
     approach.reset(obs, {})
@@ -120,9 +120,9 @@ def test_static_classifier_simfree_feasibility_approach():
 def test_random_explorer_simfree_feasibility_approach():
     """Tests for SimFreeFeasiblityApproach()."""
 
-    # Test in a PRBench environment.
-    prbench.register_all_environments()
-    env = prbench.make("prbench/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
+    # Test in a kinder environment.
+    kinder.register_all_environments()
+    env = kinder.make("kinder/ClutteredRetrieval2D-o10-v0", render_mode="rgb_array")
 
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos", name_prefix="random_explorer")

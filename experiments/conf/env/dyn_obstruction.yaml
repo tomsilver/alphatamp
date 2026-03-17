@@ -1,0 +1,4 @@
+id: "prbench/DynObstruction2D-o1-v0"
+model_name: "dynobstruction2d"
+model_kwargs:
+  num_obstructions: 1
