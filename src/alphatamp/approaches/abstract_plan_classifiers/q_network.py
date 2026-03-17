@@ -104,7 +104,8 @@ def create_abstract_plan_sequence(
 
 
 class QNetwork:
-    """Q network that outputs a single scalar failure rate in (0, 1) for an abstract plan.
+    """Q network that outputs a single scalar failure rate in (0, 1) for an abstract
+    plan.
 
     Used by AbstractActionScorer to predict the failure rate for the final action in a
     plan, conditioned on the full history. The network outputs raw logits; sigmoid is
@@ -231,7 +232,8 @@ class QNetwork:
 
 
 class PerActionQNetwork:
-    """Q network that outputs a vector of failure rates in (0, 1), one per action in the plan.
+    """Q network that outputs a vector of failure rates in (0, 1), one per action in the
+    plan.
 
     Each element i in the output represents the predicted failure rate for action a_i,
     conditioned on the prior actions (s_0, a_1, ..., a_{i-1}). The network outputs raw
@@ -314,7 +316,8 @@ class PerActionQNetwork:
         Returns:
             Array of shape (seq_len,) where each element is the predicted failure rate
             in (0, 1) for that action conditioned on prior actions.
-            Element i = predicted failure rate for action a_i given (s_0, a_1, ..., a_{i-1})
+            Element i = predicted failure rate for action a_i
+                        given (s_0, a_1, ..., a_{i-1})
         """
         self._lstm.eval()
         self._fc.eval()
@@ -331,7 +334,8 @@ class PerActionQNetwork:
             # output: (1, seq_len, 1)
             output = self.forward(x, lengths)
 
-            # Apply sigmoid to convert logits to failure rates, then flatten to (seq_len,)
+            # Apply sigmoid to convert logits to failure rates,
+            # then flatten to (seq_len,)
             return torch.sigmoid(output).squeeze(0).squeeze(-1).cpu().numpy()
 
     def train_step(
@@ -346,7 +350,8 @@ class PerActionQNetwork:
         Args:
             features: List of sequence tensors, each of shape (seq_len, input_dim)
             targets: List of per-action target tensors, each of shape (seq_len,)
-                     where each element is the target failure rate in [0, 1] for that action
+                     where each element is the target failure rate in [0, 1]
+                     for that action
             lengths: Tensor of actual sequence lengths, shape (batch_size,)
             loss_fn: Loss function (should be nn.BCEWithLogitsLoss with reduction='none')
 

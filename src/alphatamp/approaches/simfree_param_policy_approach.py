@@ -1,5 +1,6 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
+import logging
 import pickle
 from collections import defaultdict
 from pathlib import Path
@@ -7,7 +8,6 @@ from typing import Any, TypeVar, cast
 
 import numpy as np
 import torch
-import logging
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -138,7 +138,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
-        # Each entry stores (num_failures, num_attempts) for a given (states, actions) key.
+        # Each entry stores (num_failures, num_attempts)
+        # for a given (states, actions) key.
         self._abstract_action_dataset: defaultdict[
             str, defaultdict[FrozenSkeleton, tuple[int, int]]
         ] = defaultdict(lambda: defaultdict(lambda: (0, 0)))
@@ -188,16 +189,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 candidate_plans
             )
             logging.info(
-            "[BALD] Generated Exploit plan at Reset Episode: %s",
+                "[BALD] Generated Exploit plan at Reset Episode: %s",
                 [a.short_str for a in self._current_abstract_plan[1]],
-            ) 
+            )
         else:
             self._current_abstract_plan = explorer.generate_abstract_plan(obs)
 
             logging.info(
-            "[BALD] Generated Initial plan at Reset Episode: %s",
+                "[BALD] Generated Initial plan at Reset Episode: %s",
                 [a.short_str for a in self._current_abstract_plan[1]],
-            ) 
+            )
 
         self._timestep = 0
         self._num_resamples = 0
@@ -549,13 +550,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert best_candidate_plan
         return best_candidate_plan
 
-    def _score_candidate_plans_exploit(self, candidate_plans: list[Skeleton]) -> Skeleton:
-        """Select the plan with the highest average predicted success probability
-        across the Q-network ensemble (exploitation: highest expected success probability).
+    def _score_candidate_plans_exploit(
+        self, candidate_plans: list[Skeleton]
+    ) -> Skeleton:
+        """Select the plan with the highest average predicted success probability across
+        the Q-network ensemble (exploitation: highest expected success probability).
 
-        Unlike score_candidate_plans(), which maximises epistemic uncertainty (BALD)
-        for exploration, this method exploits what has been learned to start each
-        episode with the plan that the ensemble collectively believes is easiest.
+        Unlike score_candidate_plans(), which maximises epistemic uncertainty (BALD) for
+        exploration, this method exploits what has been learned to start each episode
+        with the plan that the ensemble collectively believes is easiest.
         """
         best_avg_prob = float("-inf")
         best_candidate_plan = None
@@ -676,11 +679,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x0 = self._env_models.observation_to_state(self._last_observation)
         s0 = self._env_models.state_abstractor(x0)
         for op, scorer in self._abstract_action_to_action_scorer.items():
-            action_data = self._abstract_action_dataset.get(op.short_str, {})
+            action_data: defaultdict | dict = self._abstract_action_dataset.get(
+                op.short_str, {}
+            )
             counts = list(action_data.values())
             total_failures = sum(f for f, _ in counts)
             total_attempts = sum(a for _, a in counts)
-            actual_rate = total_failures / total_attempts if total_attempts > 0 else float("nan")
+            actual_rate = (
+                total_failures / total_attempts if total_attempts > 0 else float("nan")
+            )
             predicted = scorer.score(([s0], []))
             logging.info(
                 "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d)",

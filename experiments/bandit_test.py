@@ -28,9 +28,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import logging
 from collections import deque
 from typing import Any
-import logging
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -88,7 +88,7 @@ ROBOT_VAR = Variable("?r", ROBOT_TYPE)
 # Feature layout for ObjectCentricState: [robot_pos, is_solved, is_widened]
 TYPE_FEATURES = {ROBOT_TYPE: ["robot_pos", "is_solved", "is_widened"]}
 
-SUCCESS_THRESHOLD = 0.01       # |action - target| must be below this normally
+SUCCESS_THRESHOLD = 0.01  # |action - target| must be below this normally
 WIDE_SUCCESS_THRESHOLD = 0.05  # threshold after Widen is applied
 
 
@@ -98,7 +98,8 @@ WIDE_SUCCESS_THRESHOLD = 0.05  # threshold after Widen is applied
 
 
 class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
-    """A 1-D bandit: the robot starts at a random position and must reach a hidden target.
+    """A 1-D bandit: the robot starts at a random position
+    and must reach a hidden target.
 
     Observation: [robot_pos, is_solved, is_widened]  — shape (3,)
     Action:      [displacement, widen_flag]           — shape (2,)
@@ -134,7 +135,8 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
         self._rng = np.random.default_rng(0)
         # Target is fixed for the lifetime of the env (hidden from the agent).
         self._target: float = (
-            hidden_target if hidden_target is not None
+            hidden_target
+            if hidden_target is not None
             else float(self._rng.uniform(0.0, 1.0))
         )
         self._robot_pos: float = 0.5
@@ -161,8 +163,13 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
             obs = np.array([self._robot_pos, 0.0, 1.0], dtype=np.float32)
             return obs, 0.0, False, False, {}
 
-        # Reach step: attempt placement at robot_pos + displacement (with optional noise).
-        noise = self._rng.normal(0.0, self._execution_noise_std) if self._execution_noise_std > 0.0 else 0.0
+        # Reach step: attempt placement at robot_pos + displacement
+        # (with optional noise).
+        noise = (
+            self._rng.normal(0.0, self._execution_noise_std)
+            if self._execution_noise_std > 0.0
+            else 0.0
+        )
         placement = float(np.clip(self._robot_pos + float(action[0]) + noise, 0.0, 1.0))
         threshold = WIDE_SUCCESS_THRESHOLD if self._is_widened else SUCCESS_THRESHOLD
         success = abs(placement - self._target) < threshold
@@ -221,9 +228,9 @@ class ReachController(GroundParameterizedController):
 class WideController(GroundParameterizedController):
     """One-shot controller that widens the environment's success threshold.
 
-    Has no preconditions or symbolic effects — the planner cannot reason about
-    its benefit.  The approach must discover empirically that executing Widen
-    before Reach reduces the number of parameter resamples required.
+    Has no preconditions or symbolic effects — the planner cannot reason about its
+    benefit.  The approach must discover empirically that executing Widen before Reach
+    reduces the number of parameter resamples required.
     """
 
     def __init__(self, objects: list[Object]) -> None:
@@ -429,7 +436,7 @@ def main(
     total_successes = 0
     total_episodes = 0
     reset_count = 0
-    episode_success = False   # tracks whether current episode succeeded
+    episode_success = False  # tracks whether current episode succeeded
     episode_uses_widen = False  # tracks whether current episode used a widen plan
 
     log_steps: list[int] = []
@@ -449,14 +456,16 @@ def main(
     for step in range(num_steps):
         logging.info(
             "BANDIT STEP: %d",
-                step,
-        ) 
-        
+            step,
+        )
+
         try:
             action = approach.step()
         except ApproachStepError:
-            recent.append(0)                              # episode failed
-            recent_widen.append(int(episode_uses_widen)) # widen may have run before the error
+            recent.append(0)  # episode failed
+            recent_widen.append(
+                int(episode_uses_widen)
+            )  # widen may have run before the error
             episode_success = False
             episode_uses_widen = False
             total_episodes += 1
@@ -526,7 +535,13 @@ def plot_results(
     **kwargs: Any,
 ) -> None:
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
-    results = main(num_steps=num_steps, seed=seed, noise_std=noise_std, hidden_target=hidden_target, **kwargs)
+    results = main(
+        num_steps=num_steps,
+        seed=seed,
+        noise_std=noise_std,
+        hidden_target=hidden_target,
+        **kwargs,
+    )
 
     fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
@@ -601,8 +616,7 @@ def plot_results(
 
 
 if __name__ == "__main__":
-    import logging as _logging
-    _logging.basicConfig(level=_logging.INFO)
+    logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(
         description="1-D bandit test for SimFreeParamPolicyApproach"
@@ -647,4 +661,10 @@ if __name__ == "__main__":
             hidden_target=args.hidden_target,
         )
     else:
-        main(num_steps=args.num_steps, max_resamples=args.max_resamples, seed=args.seed, noise_std=args.noise_std, hidden_target=args.hidden_target)
+        main(
+            num_steps=args.num_steps,
+            max_resamples=args.max_resamples,
+            seed=args.seed,
+            noise_std=args.noise_std,
+            hidden_target=args.hidden_target,
+        )

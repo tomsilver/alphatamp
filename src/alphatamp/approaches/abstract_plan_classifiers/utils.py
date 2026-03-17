@@ -328,8 +328,8 @@ def train_q_network(
 def convert_q_value_to_probability(
     failure_rate_per_action: list[float], num_retries: int
 ) -> float:
-    """Given predicted per-action failure rates, return the probability that the abstract
-    plan succeeds within num_retries total retries."""
+    """Given predicted per-action failure rates, return the probability that the
+    abstract plan succeeds within num_retries total retries."""
 
     # Clamp failure rates to [0, 1].
     clamped_failure_rates = [
