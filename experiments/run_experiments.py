@@ -76,6 +76,14 @@ def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object
     metrics["success"] = success
     metrics["cost"] = num_actions  # plan len was chosen arbitrarily
     metrics["duration"] = dur
+
+    # Refinement quality metrics (only available for approaches that track them)
+    ref = getattr(approach, "last_metrics", None)
+    if ref is not None:
+        metrics["avg_attempts_per_step"] = ref.avg_attempts_per_step
+        metrics["total_sampling_attempts"] = ref.total_attempts
+        metrics["steps_above_5_attempts"] = ref.steps_above_threshold(5)
+        metrics["attempts_per_step"] = ref.attempts_per_step  # full list as string
     return metrics
 
 

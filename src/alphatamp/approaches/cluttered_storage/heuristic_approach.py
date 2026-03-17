@@ -32,6 +32,7 @@ from bilevel_planning.structs import (
     Goal,
     Plan,
     PlanningProblem,
+    RefinementMetrics,
     RelationalAbstractGoal,
     RelationalAbstractState,
     SesameModels,
@@ -275,6 +276,9 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         # REMOVED: no longer create _abstract_plan_generator or _planner here.
         # The pipeline in _run_planning creates fresh generators per candidate.
 
+        # Refinement metrics from the most recent successful run_planning call.
+        self.last_metrics: RefinementMetrics | None = None
+
     def _train(self, problem: PlanningProblem[_X, _U]) -> None:
         pass
 
@@ -374,6 +378,7 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
             plan, _ = planner.run(problem, timeout=timeout)
             if plan is None:
                 raise TimeoutError("No plan found")
+            self.last_metrics = planner.last_metrics
             print("Succeeded with abstract plan:", [
                 {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
                 for a in getattr(generator, "_last_abstract_plan", [])
@@ -452,6 +457,7 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         if plan is None:
             raise TimeoutError("No plan found")
 
+        self.last_metrics = planner.last_metrics
         print("Succeeded with abstract plan:", [
             {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
             for a in getattr(generator, "_last_abstract_plan", [])
