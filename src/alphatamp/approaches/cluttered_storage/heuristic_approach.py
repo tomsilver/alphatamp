@@ -2,8 +2,9 @@
 Approach that uses an LLM to generate an policy, given the oracle in the prompt
 """
 
+import ast
 import importlib.util
-import time  # NEW: needed for timing evaluation trials
+import time
 from pathlib import Path
 from typing import (
     Any,
@@ -35,7 +36,6 @@ from bilevel_planning.structs import (
     RelationalAbstractState,
     SesameModels,
 )
-<<<<<<< HEAD
 from alphatamp.approaches.cluttered_storage.prompt import (
     HEURISTIC_PROMPT,
     build_heuristic_prompt,  # NEW: builds problem-specific prompt with injected atoms
@@ -43,9 +43,6 @@ from alphatamp.approaches.cluttered_storage.prompt import (
 from bilevel_planning.refiners.backtracking_refiner import (
     BacktrackingRefiner,  # NEW: base class for FailureTrackingBacktrackingRefiner
 )
-=======
-from alphatamp.approaches.cluttered_storage.prompt import HEURISTIC_PROMPT
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
     ParameterizedControllerTrajectorySampler,
 )
@@ -56,12 +53,13 @@ from bilevel_planning.utils import (
     create_pyperplan_heuristic_from_fn
 )
 from prpl_llm_utils.cache import SQLite3PretrainedLargeModelCache
-from prpl_llm_utils.code import (
-    SyntaxRepromptCheck,
-    synthesize_python_function_with_llm,
+from prpl_llm_utils.models import OpenAIModel
+from prpl_llm_utils.reprompting import (
+    RepromptCheck,
+    create_reprompt_from_error_message,
+    query_with_reprompts,
 )
-from prpl_llm_utils.models import OpenAIModel, PretrainedLargeModel
-from prpl_llm_utils.structs import Query
+from prpl_llm_utils.structs import Query, Response
 from relational_structs import (LiftedOperator,
                                 GroundOperator,
                                 ObjectCentricState,
@@ -85,6 +83,56 @@ def noop_successor_fn(_s: _S) -> Iterable[tuple[_A, _S]]:
     return []
 
 
+def _parse_all_python_code_blocks(text: str) -> list[str]:
+    """Extract all ```python ... ``` blocks from text."""
+    blocks = []
+    prefix = "```python"
+    suffix = "```"
+    remaining = text
+    while prefix in remaining:
+        start = remaining.index(prefix) + len(prefix)
+        remaining = remaining[start:]
+        if suffix in remaining:
+            end = remaining.index(suffix)
+            blocks.append(remaining[:end])
+            remaining = remaining[end + len(suffix):]
+        else:
+            blocks.append(remaining)
+            break
+    return blocks
+
+
+class _MultiBlockSyntaxCheck(RepromptCheck):
+    """Validate that the response contains N syntactically valid Python blocks."""
+
+    def __init__(self, expected_count: int) -> None:
+        self._expected_count = expected_count
+
+    def get_reprompt(self, query: Query, response: Response) -> Query | None:
+        blocks = _parse_all_python_code_blocks(response.text)
+        if len(blocks) < self._expected_count:
+            error_msg = (
+                f"Expected {self._expected_count} ```python blocks but found "
+                f"{len(blocks)}. Please provide exactly {self._expected_count} "
+                f"separate ```python code blocks."
+            )
+            return create_reprompt_from_error_message(query, response, error_msg)
+        for i, block in enumerate(blocks):
+            try:
+                ast.parse(block)
+            except SyntaxError as e:
+                error_msg = f"Heuristic {i} has a syntax error: {e}"
+                return create_reprompt_from_error_message(query, response, error_msg)
+        return None
+
+
+def _load_heuristic_fn(code_str: str) -> Callable:
+    """Load a generate_heuristic function from a code string."""
+    namespace: dict[str, Any] = {}
+    exec(compile(code_str, "<generated_heuristic>", "exec"), namespace)  # noqa: S102
+    return namespace["generate_heuristic"]
+
+
 class HeuristicGenerator(
     RelationalHeuristicSearchAbstractPlanGenerator):
     """A generator that uses an LLM to generate heuristic instead of hFF"""
@@ -95,40 +143,20 @@ class HeuristicGenerator(
         predicates: set[Predicate],
         operators: set[LiftedOperator],
         seed: int,
-<<<<<<< HEAD
         # NEW: llm and prompt are now Optional — not needed when fn is injected directly
         llm: Any = None,
         prompt: str = "",
         use_stored_heuristic: bool = False,
         stored_heuristic_path: Path = Path("generated_heuristic.py"),
-        # NEW: allows passing a pre-built generate_heuristic callable, skipping LLM call
         generate_heuristic_fn: Optional[Callable] = None,
     ) -> None:
         super().__init__(types, predicates, operators, "hff", seed)
         self._use_stored_heuristic = use_stored_heuristic
         self._stored_heuristic_path = stored_heuristic_path
-        self._generate_heuristic_fn = generate_heuristic_fn  # NEW: store pre-built fn
+        self._generate_heuristic_fn = generate_heuristic_fn
 
-        # NEW: three-way branch instead of two-way
-        if generate_heuristic_fn is not None:
-            # Pre-built fn injected — no LLM call needed at all
-            self._llm_fn = None
-        elif use_stored_heuristic:
+        if use_stored_heuristic:
             print(f"Loading stored heuristic from {stored_heuristic_path}")
-            self._llm_fn = None
-        else:
-            query = Query(
-                prompt=prompt,
-                imgs=None,
-                hyperparameters={"temperature": 1.0},
-            )
-            self._llm_fn = synthesize_python_function_with_llm(
-                model=llm,
-                function_name="generate_heuristic",
-                query=query,
-                reprompt_checks=[SyntaxRepromptCheck()],
-            )
-            Path("src/alphatamp/approaches/cluttered_storage/llm_heuristic.py").write_text(self._llm_fn.code_str)
 
     def _load_generate_heuristic_fn(self) -> Callable:
         """Load generate_heuristic from the stored file via importlib."""
@@ -139,24 +167,6 @@ class HeuristicGenerator(
         spec.loader.exec_module(module)  # type: ignore
         return getattr(module, "generate_heuristic")
 
-=======
-        prompt: str,
-    ) -> None:
-        super().__init__(types, predicates, operators, "hff", seed)
-        query = Query(
-            prompt=prompt,
-            imgs=None,
-            hyperparameters={"temperature": 1.0},
-        )
-        self._llm_fn = synthesize_python_function_with_llm(
-            model=llm,
-            function_name="generate_heuristic",
-            query=query,
-            reprompt_checks=[SyntaxRepromptCheck()],
-        )
-        Path("generated_heuristic.py").write_text(self._llm_fn.code_str)
-    
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
     def _relational_heuristic_factory(
         self,
         init_abstract_state: RelationalAbstractState,
@@ -174,12 +184,10 @@ class HeuristicGenerator(
         ground_operators = cached_all_ground_operators(
             self._pddl_domain.operators, init_abstract_state.objects
         )
-<<<<<<< HEAD
         # NEW: three-way branch mirrors __init__
         if self._generate_heuristic_fn is not None:
-            # Use pre-built fn passed in from the evaluation pipeline
             generate_heuristic = self._generate_heuristic_fn
-        elif self._use_stored_heuristic:
+        else:
             generate_heuristic = self._load_generate_heuristic_fn()
         else:
             # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
@@ -187,13 +195,6 @@ class HeuristicGenerator(
             # classes (defined inside generate_heuristic) cannot be pickled.
             module = self._llm_fn._load_module()
             generate_heuristic = getattr(module, self._llm_fn.function_name)
-=======
-        # Load the module directly to avoid pickling issues: SynthesizedPythonFunction.run()
-        # passes results through mp.Manager which requires pickle, but locally-defined
-        # classes (defined inside generate_heuristic) cannot be pickled.
-        module = self._llm_fn._load_module()
-        generate_heuristic = getattr(module, self._llm_fn.function_name)
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         pyperplan_heuristic = create_pyperplan_heuristic_from_fn(
             generate_heuristic, self._pddl_domain, pddl_problem, ground_operators
         )
@@ -210,7 +211,6 @@ class HeuristicGenerator(
             yield s_plan, a_plan
 
 
-<<<<<<< HEAD
 # NEW: copied from reprompt_approach.py so we can track how deep each candidate gets.
 # _deepest_failed_index is the metric: higher = heuristic guided the search further.
 class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
@@ -238,8 +238,6 @@ class FailureTrackingBacktrackingRefiner(BacktrackingRefiner):
         return success, plan
 
 
-=======
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
 class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
     """Uses an LLM-generated heuristic for abstract planning."""
 
@@ -281,26 +279,8 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         # create the llm (unchanged)
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
         self._llm = OpenAIModel("gpt-4.1", cache)
-<<<<<<< HEAD
 
         # create the abstract successor function (unchanged)
-=======
-        
-        # heuristic plan generator
-        # paste the prompt text directly here as a string
-        prompt = HEURISTIC_PROMPT
-        self._abstract_plan_generator: AbstractPlanGenerator = (
-            HeuristicGenerator(
-                types=self._env_models.types,
-                predicates=self._env_models.predicates,
-                operators=self._env_models.operators,
-                llm=self._llm,
-                seed=self._seed,
-                prompt=prompt,
-            )
-        )
-        # create the abstract successor function
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
             self._env_models.operators
         )
@@ -348,48 +328,19 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
             seed=self._seed,
         )
 
-    def _synthesize_heuristic(self, prompt: str, candidate_index: int) -> tuple[Callable, str]:
-        """
-        Make one LLM call and return (generate_heuristic callable, raw code string).
-        The code string is saved to disk so we can inspect each candidate.
-        Temperature=1.0 gives diversity across candidates.
-        """
-        query = Query(
-            prompt=prompt+ f"\n# Candidate {candidate_index}",
-            imgs=None,
-            hyperparameters={"temperature": 1.0},
-        )
-        llm_fn = synthesize_python_function_with_llm(
-            model=self._llm,
-            function_name="generate_heuristic",
-            query=query,
-            reprompt_checks=[SyntaxRepromptCheck()],
-        )
-        module = llm_fn._load_module()
-        return getattr(module, llm_fn.function_name), llm_fn.code_str
-    
     def _synthesize_all_heuristics(self, prompt: str) -> list[tuple[Callable, str]]:
         """Single LLM call → list of (generate_heuristic fn, code_str) for each candidate."""
         query = Query(prompt=prompt, imgs=None, hyperparameters={"temperature": 1.0})
-        response = self._llm.run_query(query)
-
-        # Extract all ```python ... ``` blocks from the response
-        blocks, remainder = [], response.text
-        while "```python" in remainder:
-            start = remainder.index("```python") + len("```python")
-            remainder = remainder[start:]
-            end = remainder.index("```") if "```" in remainder else len(remainder)
-            blocks.append(remainder[:end])
-            remainder = remainder[end + 3:]
+        reprompt_checks: list[RepromptCheck] = [_MultiBlockSyntaxCheck(self._num_candidates)]
+        response = query_with_reprompts(self._llm, query, reprompt_checks)
+        blocks = _parse_all_python_code_blocks(response.text)[:self._num_candidates]
 
         results = []
-        for code_str in blocks:
+        for i, code_str in enumerate(blocks):
             try:
-                namespace: dict = {}
-                exec(compile(code_str, "<string>", "exec"), namespace)  # noqa: S102
-                results.append((namespace["generate_heuristic"], code_str))
-            except Exception as e:
-                print(f"  Skipping malformed heuristic block: {e}")
+                results.append((_load_heuristic_fn(code_str), code_str))
+            except Exception as e:  # pylint: disable=broad-except
+                print(f"  Skipping malformed heuristic block {i}: {e}")
         return results
 
     def _evaluate_heuristic(
@@ -513,17 +464,10 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
 
         if plan is None:
             raise TimeoutError("No plan found")
-<<<<<<< HEAD
 
         print("Succeeded with abstract plan:", [
             {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
             for a in getattr(generator, "_last_abstract_plan", [])
-=======
-        last = self._abstract_plan_generator._last_abstract_plan
-        print("Succeeded with abstract plan:", [
-            {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
-            for a in last
->>>>>>> 809581a (wip. Heuristics getting generated but no abstract plan)
         ])
         return plan
 
