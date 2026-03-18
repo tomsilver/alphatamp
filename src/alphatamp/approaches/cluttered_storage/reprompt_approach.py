@@ -364,9 +364,9 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         # 2a. Sample low-level traj for each abstract action
         # 3. if successful, return (plan, bpg), if failed return (none, bpg)
         # bpg contains search tree of states and actions tried. Use it next for next step
+        self.last_metrics = tracking_refiner.metrics
         if plan is not None:
             print("Initial plan succeeded.")
-            self.last_metrics = tracking_refiner.metrics
             return plan
 
         print("Initial plan failed")
@@ -402,10 +402,10 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         )
 
         plan, _ = replanner.run(problem, timeout=remaining_time)
+        self.last_metrics = replanner.last_metrics
 
         if plan is None:
             raise TimeoutError("No plan found")
-        self.last_metrics = replanner.last_metrics
         return plan
 
     @staticmethod

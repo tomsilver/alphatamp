@@ -1,0 +1,3 @@
+,success,failure_reason,duration,cost,avg_attempts_per_step,total_sampling_attempts,steps_above_5_attempts,attempts_per_step,seed,approach_name
+0,True,,59.779330101038795,386,29.375,235,4,"[9, 3, 21, 181, 3, 2, 3, 13]",5,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}
+0,False,TimeoutError: No plan found,150.9103167039575,,1,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}

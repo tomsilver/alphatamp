@@ -1,0 +1,5 @@
+,success,cost,duration,avg_attempts_per_step,total_sampling_attempts,steps_above_5_attempts,attempts_per_step,seed,approach_name
+0,True,271,52.480484929983504,16.375,131,3,"[1, 2, 11, 101, 1, 2, 2, 11]",2,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}
+0,True,285,90.918312815018,18.75,150,3,"[3, 2, 11, 101, 1, 2, 3, 27]",3,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}
+0,True,581,63.53055338800186,2.25,18,1,"[10, 1, 1, 1, 1, 1, 1, 2]",4,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}
+0,True,386,71.0353193320334,29.375,235,4,"[9, 3, 21, 181, 3, 2, 3, 13]",5,{'_target_': 'alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach'}

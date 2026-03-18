@@ -68,14 +68,25 @@ def main(cfg: DictConfig):
 def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object]:
     """Run planning once and compute metrics."""
     start_time = time.perf_counter()
-    plan = approach.run_planning(obs, timeout=timeout)
-    dur = time.perf_counter() - start_time
-
-    success, num_actions = _check_success(env, plan)
     metrics: dict[str, object] = {}
-    metrics["success"] = success
-    metrics["cost"] = num_actions  # plan len was chosen arbitrarily
+    plan = None
+    try:
+        plan = approach.run_planning(obs, timeout=timeout)
+        metrics["success"] = True
+        metrics["failure_reason"] = None
+    except Exception as e:  # pylint: disable=broad-except
+        metrics["success"] = False
+        metrics["failure_reason"] = type(e).__name__ + ": " + str(e)
+
+    dur = time.perf_counter() - start_time
     metrics["duration"] = dur
+
+    if plan is not None:
+        success, num_actions = _check_success(env, plan)
+        metrics["success"] = success
+        metrics["cost"] = num_actions
+    else:
+        metrics["cost"] = None
 
     # Refinement quality metrics (only available for approaches that track them)
     ref = getattr(approach, "last_metrics", None)
@@ -83,7 +94,7 @@ def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object
         metrics["avg_attempts_per_step"] = ref.avg_attempts_per_step
         metrics["total_sampling_attempts"] = ref.total_attempts
         metrics["steps_above_5_attempts"] = ref.steps_above_threshold(5)
-        metrics["attempts_per_step"] = ref.attempts_per_step  # full list as string
+        metrics["attempts_per_step"] = ref.attempts_per_step
     return metrics
 
 

@@ -210,8 +210,8 @@ class GeneralizedOracleApproach(BaseApproach[_O, _X, _U]):
 
         # Run the planner.
         plan, _ = self._planner.run(problem, timeout=timeout)
+        self.last_metrics = self._planner.last_metrics
         if plan is None:
             raise TimeoutError("No plan found")
 
-        self.last_metrics = self._planner.last_metrics
         return plan
