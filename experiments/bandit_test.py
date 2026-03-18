@@ -387,7 +387,8 @@ def main(
         steps           — list of step indices at each log point
         success_rates   — rolling success rate at each log point
         total_successes — cumulative successes at each log point
-        widen_rates     — rolling fraction of episodes where the exploit planner chose a Widen plan
+        widen_rates     — rolling fraction of episodes where
+                          the exploit planner chose a Widen plan
         param_loss      — per-fit sklearn loss values
     """
 
@@ -434,12 +435,16 @@ def main(
 
     # Tracking
     recent: deque[int] = deque(maxlen=log_every)  # per-episode success
-    recent_widen: deque[int] = deque(maxlen=log_every)  # per-episode exploit-widen usage
+    recent_widen: deque[int] = deque(
+        maxlen=log_every
+    )  # per-episode exploit-widen usage
     total_successes = 0
     total_episodes = 0
     reset_count = 0
     episode_success = False  # tracks whether current episode succeeded
-    episode_uses_widen = _exploit_plan_uses_widen(approach)  # set once per episode at reset
+    episode_uses_widen = _exploit_plan_uses_widen(
+        approach
+    )  # set once per episode at reset
 
     log_steps: list[int] = []
     success_rates: list[float] = []
