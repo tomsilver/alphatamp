@@ -1,11 +1,11 @@
 _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 
-# Slurm job settings — adjust these to match your cluster.
-partition: cpu        # e.g. "gpu", "cpu", "short"
-timeout_min: 120       # wall-clock limit per job in minutes
-cpus_per_task: 4
-mem_gb: 16
-gpus_per_node: null    # set to 1 if your jobs need a GPU
+# Slurm job settings for Princeton Della.
+partition: cpu
+timeout_min: 240       # 4 hours; LLM approaches can be slow across many seeds
+cpus_per_task: 1       # planning is single-threaded
+mem_gb: 8
+gpus_per_node: null
 nodes: 1
 tasks_per_node: 1
 
