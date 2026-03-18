@@ -384,12 +384,13 @@ def main(
     """Run the bandit experiment and return collected metrics.
 
     Returns a dict with keys:
-        steps           — list of step indices at each log point
-        success_rates   — rolling success rate at each log point
-        total_successes — cumulative successes at each log point
-        widen_rates     — rolling fraction of episodes where
-                          the exploit planner chose a Widen plan
-        param_loss      — per-fit sklearn loss values
+        steps                — list of step indices at each log point
+        success_rates        — rolling success rate at each log point
+        total_successes      — cumulative successes at each log point
+        widen_rates          — rolling fraction of episodes where
+                               the exploit planner chose a Widen plan
+        param_loss           — per-fit sklearn loss values
+        exhaustion_counts    — cumulative resample exhaustion count at each log point
     """
 
     # Build env
@@ -450,15 +451,16 @@ def main(
     success_rates: list[float] = []
     widen_rates: list[float] = []
     cumulative_successes: list[int] = []
+    exhaustion_counts: list[int] = []
     param_loss: list[float] = []
     q_loss: list[float] = []
 
     header = (
         f"{'Step':>6}  {'Rolling success':>15}  "
-        f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}"
+        f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}  {'Exhaustions':>12}"
     )
     print(header)
-    print("-" * 65)
+    print("-" * 80)
 
     for step in range(num_steps):
         logging.info(
@@ -501,14 +503,16 @@ def main(
             widen_rate = sum(recent_widen) / len(recent_widen) if recent_widen else 0.0
             param_ds = approach.get_parameter_dataset()
             total_data = sum(len(v) for v in param_ds.values())
+            exhaustion_count = approach.get_resample_exhaustion_count()
             print(
                 f"{step+1:>6}  {rolling_rate:>15.2%}  {widen_rate:>10.2%}  "
-                f"{total_successes:>16}  {total_data:>10}"
+                f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
             )
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
             widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
+            exhaustion_counts.append(exhaustion_count)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
             q_loss = _get_q_network_loss_curves(approach)
 
@@ -523,6 +527,7 @@ def main(
         "success_rates": success_rates,
         "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
+        "exhaustion_counts": exhaustion_counts,
         "param_loss": param_loss,
         "q_loss": q_loss,
     }
@@ -545,7 +550,7 @@ def plot_results(
         **kwargs,
     )
 
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
     # --- Rolling success rate ---
     ax = axes[0]
@@ -570,44 +575,57 @@ def plot_results(
     ax.grid(True, alpha=0.3)
 
     # --- Parameter scorer loss ---
-    ax = axes[2]
-    loss = results["param_loss"]
-    if loss:
-        ax.plot(loss)
-        ax.set_xlabel("Cumulative sklearn fit iteration")
-        ax.set_ylabel("Training loss")
-        ax.set_title("Parameter scorer training loss")
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No loss data",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-        )
-        ax.set_title("Parameter scorer training loss")
+    # ax = axes[2]
+    # loss = results["param_loss"]
+    # if loss:
+    #     ax.plot(loss)
+    #     ax.set_xlabel("Cumulative sklearn fit iteration")
+    #     ax.set_ylabel("Training loss")
+    #     ax.set_title("Parameter scorer training loss")
+    #     ax.grid(True, alpha=0.3)
+    # else:
+    #     ax.text(
+    #         0.5,
+    #         0.5,
+    #         "No loss data",
+    #         ha="center",
+    #         va="center",
+    #         transform=ax.transAxes,
+    #     )
+    #     ax.set_title("Parameter scorer training loss")
 
     # --- Q-network loss ---
-    ax = axes[3]
-    q_loss = results["q_loss"]
-    if q_loss:
-        ax.plot(q_loss, color="tab:red")
-        ax.set_xlabel("Cumulative training epoch")
-        ax.set_ylabel("MSE loss")
-        ax.set_title("Q-network training loss")
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No Q-network loss data\n(no resample exhaustions yet)",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-        )
-        ax.set_title("Q-network training loss")
+    # ax = axes[3]
+    # q_loss = results["q_loss"]
+    # if q_loss:
+    #     ax.plot(q_loss, color="tab:red")
+    #     ax.set_xlabel("Cumulative training epoch")
+    #     ax.set_ylabel("MSE loss")
+    #     ax.set_title("Q-network training loss")
+    #     ax.grid(True, alpha=0.3)
+    # else:
+    #     ax.text(
+    #         0.5,
+    #         0.5,
+    #         "No Q-network loss data\n(no resample exhaustions yet)",
+    #         ha="center",
+    #         va="center",
+    #         transform=ax.transAxes,
+    #     )
+    #     ax.set_title("Q-network training loss")
+
+    # --- Resample exhaustion count ---
+    ax = axes[2]
+    ax.plot(
+        results["steps"],
+        results["exhaustion_counts"],
+        marker="^",
+        color="tab:purple",
+    )
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Cumulative exhaustion count")
+    ax.set_title("Resample exhaustions (scorer/net update triggers)")
+    ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     if save_path:
