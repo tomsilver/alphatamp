@@ -37,5 +37,5 @@ class AbstractActionScorer:
     def score(self, previous_abstract_plan: Skeleton) -> float:
         """Score the action given the previous abstract plan."""
 
-        # Score should be a positive number (number of predicted resamples)
-        return max(0, self._regressor.predict(previous_abstract_plan))
+        # Score is a predicted failure rate in [0, 1]
+        return min(max(self._regressor.predict(previous_abstract_plan), 0.0), 1.0)

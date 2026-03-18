@@ -1,5 +1,6 @@
 """A simulator-free approach that learns parameter policies in its free time."""
 
+import logging
 import pickle
 from collections import defaultdict
 from pathlib import Path
@@ -137,9 +138,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
+        # Each entry stores (num_failures, num_attempts)
+        # for a given (states, actions) key.
         self._abstract_action_dataset: defaultdict[
-            str, defaultdict[FrozenSkeleton, int]
-        ] = defaultdict(lambda: defaultdict(int))
+            str, defaultdict[FrozenSkeleton, tuple[int, int]]
+        ] = defaultdict(lambda: defaultdict(lambda: (0, 0)))
         self._abstract_action_to_action_scorer: dict[
             GroundOperator, AbstractActionScorer
         ] = {}
@@ -150,6 +153,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Loss metrics
         self._loss_metrics: dict[str, list] = {}
+        self._q_loss_metrics: list[float] = []
 
         # Per-Action Resample Q Network
         self._q_network_configs: dict = q_network_configs
@@ -159,6 +163,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._train_every: int = train_every
         self._completed_task = False
+        self._plan_from_exploit: bool = False
 
     def reset_episode(self, obs: _O) -> None:
         """Reset only episode-level state for a new environment episode.
@@ -175,12 +180,33 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_abstract_plan_step = 0
         self._current_controller = None
         self._last_observation = obs
-        self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+        self._completed_task = False  # must be set before generate_candidate_plans
+
+        if self._resample_exhaustion_count > 0:
+            # Q-networks have been trained at least once: exploit learned plan scores
+            # to start each episode with the plan expected to need fewest resamples.
+            candidate_plans = self.generate_candidate_plans()
+            self._current_abstract_plan = self._score_candidate_plans_exploit(
+                candidate_plans
+            )
+            self._plan_from_exploit = True
+            logging.info(
+                "[BALD] Generated Exploit plan at Reset Episode: %s",
+                [a.short_str for a in self._current_abstract_plan[1]],
+            )
+        else:
+            self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+            self._plan_from_exploit = False
+
+            logging.info(
+                "[BALD] Generated Initial plan at Reset Episode: %s",
+                [a.short_str for a in self._current_abstract_plan[1]],
+            )
+
         self._timestep = 0
         self._num_resamples = 0
         self._most_recent_parameter = None
         self._most_recent_abstract_action_descriptor = None
-        self._completed_task = False
         self._reset_controller = True
 
     def reset(
@@ -267,6 +293,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Retrain scorers
             self._update_scorers()
 
+            # Generate new candidate plan
+
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
         assert self._last_observation is not None
@@ -332,26 +360,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         abstract_plan_list = []
         abstract_plan_lengths_list = []
-        resample_count_list = []
+        failure_rate_list = []
 
         # Generate a row in the training dataset.
         for datapoint in features_and_labels:
-            abstract_plan, plan_len, resample_count = datapoint
+            abstract_plan, plan_len, failure_rate = datapoint
 
             # Get the features
             abstract_plan_list.append(torch.FloatTensor(abstract_plan))
             abstract_plan_lengths_list.append(plan_len)
 
             # Get the targets
-            resample_count_list.append(resample_count)
+            failure_rate_list.append(failure_rate)
 
         # Convert targets to tensor
-        resample_count = torch.FloatTensor(np.array(resample_count_list)).unsqueeze(1)
+        failure_rates = torch.FloatTensor(np.array(failure_rate_list)).unsqueeze(1)
 
         # Convert lengths to tensor
         abstract_plan_lengths = torch.tensor(abstract_plan_lengths_list)
 
-        return (abstract_plan_list, abstract_plan_lengths, resample_count)
+        return (abstract_plan_list, abstract_plan_lengths, failure_rates)
 
     def train_abstract_action_scorer(self, abstract_action_dataset: dict[str, list]):
         """Train each abstract action scorer given dataset."""
@@ -368,22 +396,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 ]
 
                 # Generate training data.
-                abstract_plan_list, abstract_plan_lengths, resample_count = (
+                abstract_plan_list, abstract_plan_lengths, failure_rates = (
                     self._generate_abstract_action_scorer_training_data(
                         features_and_labels
                     )
                 )
 
-                loss_fn = nn.MSELoss()
+                loss_fn = nn.BCEWithLogitsLoss()
                 # Train the scoring function for each grounded skill.
                 losses = abstract_action_scorer.train(
-                    abstract_plan_list, resample_count, abstract_plan_lengths, loss_fn
+                    abstract_plan_list, failure_rates, abstract_plan_lengths, loss_fn
                 )
 
                 self._loss_metrics[abstract_action_descriptor] = losses
 
     def get_abstract_action_score(self, abstract_action_str: str) -> float:
-        """Evaluate the predicted resample count for the abstract action given current
+        """Evaluate the predicted failure rate for the abstract action given current
         task plan."""
 
         assert self._current_abstract_plan is not None
@@ -402,9 +430,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _train_q_function(self, q_net: PerActionQNetwork) -> None:
         """Train the Per-Action Resample Q Function.
 
-        The network learns to predict, for each action a_i in a plan, the expected
-        number of resamples needed for that action conditioned on the history
-        (s_0, a_1, ..., a_{i-1}).
+        The network learns to predict, for each action a_i in a plan, the failure
+        rate for that action conditioned on the history (s_0, a_1, ..., a_{i-1}).
 
         Args:
             q_network: The PerActionQNetwork to train
@@ -432,7 +459,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             abstract_plans.append((abstract_states_list, abstract_actions_list))
 
         num_epochs = self._q_network_configs.get("num_epochs", 20)
-        _ = train_q_network(
+        losses = train_q_network(
             q_net,
             abstract_plans,
             self._all_ground_atoms,
@@ -442,6 +469,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             num_epochs=num_epochs,
             verbose=True,
         )
+        self._q_loss_metrics.extend(losses)
 
     def _reinitialize_ensemble_nets(self) -> None:
         """Create fresh PerActionQNetwork instances, discarding any trained weights.
@@ -506,13 +534,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         for candidate_plan in candidate_plans:
 
             candidate_probabilities = []
-            # Use ensemble of Q networks to calculate per action resample counts
+            # Use ensemble of Q networks to predict per-action failure rates
             for q_net in self._ensemble_nets:
-                per_action_resamples = q_net.predict(candidate_plan)
+                per_action_failure_rates = q_net.predict(candidate_plan)
 
-                # Convert per action resample to overall probability
+                # Convert per-action failure rates to overall plan success probability
                 probability = convert_q_value_to_probability(
-                    per_action_resamples.tolist(), self._max_resamples
+                    per_action_failure_rates.tolist(), self._max_resamples
                 )
                 candidate_probabilities.append(probability)
 
@@ -525,10 +553,52 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert best_candidate_plan
         return best_candidate_plan
 
+    def _score_candidate_plans_exploit(
+        self, candidate_plans: list[Skeleton]
+    ) -> Skeleton:
+        """Select the plan with the highest average predicted success probability across
+        the Q-network ensemble (exploitation: highest expected success probability).
+
+        Unlike score_candidate_plans(), which maximises epistemic uncertainty (BALD) for
+        exploration, this method exploits what has been learned to start each episode
+        with the plan that the ensemble collectively believes is easiest.
+        """
+        best_avg_prob = float("-inf")
+        best_candidate_plan = None
+
+        assert candidate_plans, "No Candidate Plans!"
+        for candidate_plan in candidate_plans:
+            probs = []
+            ensemble_failure_rates = []
+            for q_net in self._ensemble_nets:
+                per_action_failure_rates = q_net.predict(candidate_plan)
+                prob = convert_q_value_to_probability(
+                    per_action_failure_rates.tolist(), self._max_resamples
+                )
+                probs.append(prob)
+                ensemble_failure_rates.append(per_action_failure_rates.tolist())
+
+            avg_prob = float(np.mean(probs))
+            plan_str = [a.short_str for a in candidate_plan[1]]
+            mean_failure_rates = np.mean(ensemble_failure_rates, axis=0).tolist()
+            logging.info(
+                "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
+                plan_str,
+                [f"{r:.4f}" for r in mean_failure_rates],
+                avg_prob,
+            )
+            if avg_prob > best_avg_prob:
+                best_avg_prob = avg_prob
+                best_candidate_plan = candidate_plan
+
+        assert best_candidate_plan
+        return best_candidate_plan
+
     def _add_most_recent_parameter_to_dataset(self, training_label: str):
         """Label the parameter as successful (1) or failure (0)."""
         assert (
-            self._most_recent_parameter and self._most_recent_abstract_action_descriptor
+            self._most_recent_parameter is not None
+            and self._most_recent_abstract_action_descriptor is not None
         )
         assert self._last_observation is not None
 
@@ -549,7 +619,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         if self._train_or_eval == "eval":
             return
 
-        label = 0 if training_label == "success" else 1
+        is_failure = training_label != "success"
 
         prev_abstract_states = tuple(
             self._current_abstract_plan[0][: self._current_abstract_plan_step + 1]
@@ -558,11 +628,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan[1][: self._current_abstract_plan_step]
         )
 
-        # Store the number of times the abstract action
-        # given the previous abstract plan needed to be resampled.
+        key = (prev_abstract_states, prev_abstract_actions)
+        failures, attempts = self._abstract_action_dataset[
+            self._most_recent_abstract_action_descriptor
+        ][key]
         self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
-            (prev_abstract_states, prev_abstract_actions)
-        ] += label
+            key
+        ] = (failures + int(is_failure), attempts + 1)
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -590,17 +662,62 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Retrain the parameter and abstract action scorers given the current stored
         dataset."""
 
-        # First reformat dataset
+        # First reformat dataset, converting (failures, attempts) → failure rate
         abstract_action_dataset = {
             k: list(
-                self._make_data(abstract_plan, resample_count)
-                for abstract_plan, resample_count in v.items()
+                self._make_data(
+                    abstract_plan,
+                    failures / attempts if attempts > 0 else 0.0,
+                )
+                for abstract_plan, (failures, attempts) in v.items()
             )
             for k, v in self._abstract_action_dataset.items()
         }
 
         self.train_abstract_action_scorer(abstract_action_dataset)
         self.train_parameter_policy(self._parameter_dataset)
+
+        # Log predicted vs actual failure rates after training to verify convergence.
+        assert self._last_observation is not None
+        x0 = self._env_models.observation_to_state(self._last_observation)
+        s0 = self._env_models.state_abstractor(x0)
+        for op, scorer in self._abstract_action_to_action_scorer.items():
+            action_data: defaultdict | dict = self._abstract_action_dataset.get(
+                op.short_str, {}
+            )
+            counts = list(action_data.values())
+            total_failures = sum(f for f, _ in counts)
+            total_attempts = sum(a for _, a in counts)
+            actual_rate = (
+                total_failures / total_attempts if total_attempts > 0 else float("nan")
+            )
+            predicted = scorer.score(([s0], []))
+            logging.info(
+                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d)",
+                op.short_str,
+                predicted,
+                actual_rate,
+                total_failures,
+                total_attempts,
+            )
+            # Log per-history-key predictions to diagnose whether the scorer
+            # distinguishes different contexts (e.g. Reach vs Reach-after-Widen).
+            for (key_states, key_actions), (failures, attempts) in action_data.items():
+                if attempts == 0:
+                    continue
+                key_actual = failures / attempts
+                key_predicted = scorer.score((list(key_states), list(key_actions)))
+                action_str = [a.short_str for a in key_actions]
+                logging.info(
+                    "[Scorer-ctx] %s history=%s  predicted=%.4f actual=%.4f"
+                    " (failures=%d attempts=%d)",
+                    op.short_str,
+                    action_str,
+                    key_predicted,
+                    key_actual,
+                    failures,
+                    attempts,
+                )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -733,6 +850,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # After trying a certain number of resamples, update the scorers
         # and Q-function only every train_every exhaustion events.
         self._resample_exhaustion_count += 1
+        current_plan_str = (
+            [a.short_str for a in self._current_abstract_plan[1]]
+            if self._current_abstract_plan
+            else []
+        )
+        logging.info(
+            "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
+            self._resample_exhaustion_count,
+            self._timestep,
+            current_plan_str,
+        )
         if self._resample_exhaustion_count % self._train_every == 0:
             self._update_scorers()
             self.train_ensemble_nets()
@@ -742,6 +870,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Score candidate plans and return best plan
         plan_to_execute = self.score_candidate_plans(candidate_plans)
+        logging.info(
+            "[BALD] Selected plan: %s",
+            [a.short_str for a in plan_to_execute[1]],
+        )
+        self._plan_from_exploit = False
 
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
@@ -767,6 +900,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the current abstract plan."""
         return self._current_abstract_plan
 
+    def is_plan_from_exploit(self) -> bool:
+        """Return True if the current plan was selected by the exploit planner."""
+        return self._plan_from_exploit
+
     def get_current_abstract_plan_step(self) -> int:
         """Return the current step in the abstract plan."""
         return self._current_abstract_plan_step
@@ -790,7 +927,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def get_abstract_action_dataset(
         self,
-    ) -> defaultdict[str, defaultdict[FrozenSkeleton, int]]:
+    ) -> defaultdict[str, defaultdict[FrozenSkeleton, tuple[int, int]]]:
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
 
@@ -800,7 +937,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Return the loss metrics for each abstract action."""
         return self._loss_metrics
 
-    def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: int):
+    def get_q_network_loss_metrics(self) -> list[float]:
+        """Return the per-epoch training losses across all Q-network training runs."""
+        return self._q_loss_metrics
+
+    def _make_data(self, abstract_plan: Skeleton | FrozenSkeleton, label: float):
         sequence, sequence_length = create_abstract_plan_sequence(
             self._all_ground_atoms, self._all_ground_operators, abstract_plan
         )
@@ -819,8 +960,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             ),
             "abstract_action_dataset.pkl": {
                 k: list(
-                    self._make_data(abstract_plan, resample_count)
-                    for abstract_plan, resample_count in v.items()
+                    self._make_data(
+                        abstract_plan,
+                        failures / attempts if attempts > 0 else 0.0,
+                    )
+                    for abstract_plan, (failures, attempts) in v.items()
                 )
                 for k, v in self._abstract_action_dataset.items()
             },

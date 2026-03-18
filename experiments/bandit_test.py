@@ -1,23 +1,34 @@
 """Minimal 1D bandit test for SimFreeParamPolicyApproach.
 
-One abstract action ('Reach'), one continuous parameter to learn.  The agent
-must choose a placement position close to a random target in [0, 1].
+Two abstract actions: 'Reach' (learn a displacement) and 'Widen'
+(increase the success threshold — no symbolic effects).  The robot starts
+at a random position in [0, 1] each episode and must output a displacement
+such that robot_pos + displacement lands within a threshold of a hidden
+fixed target.
 
-Demonstrates that SimFreeParamPolicyApproach can learn — the ClassifierParameterScorer
-gradually assigns higher probability to parameters near the target, so the
-resample count falls and the success rate rises over time.
+Demonstrates that SimFreeParamPolicyApproach can discover that using the
+Widen action before Reach leads to fewer parameter resamples.  Initially
+the approach uses [Reach] alone (the shortest plan).  After repeated
+resample failures, BALD selects [Widen, Reach] due to high epistemic
+uncertainty, discovers the widened threshold makes Reach easier, and
+gradually shifts toward preferring that plan.
+
+Widen has no add/delete effects in the symbolic model, so the planner
+cannot reason about its benefit — the approach must discover it empirically.
+The heuristic search generator still produces [Widen, Reach] as an
+alternative plan because Widen has empty preconditions (always applicable)
+and self-loops on the same abstract state.
 
 Usage::
 
     python experiments/bandit_test.py
-
-The script prints rolling success rate every ``log_every`` steps so you can see
-the approach learning.
+    python experiments/bandit_test.py --plot
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 from collections import deque
 from typing import Any
 
@@ -74,10 +85,11 @@ ROBOT_OBJ = Object("robot", ROBOT_TYPE)
 AT_GOAL_PRED = Predicate("AtGoal", [ROBOT_TYPE])
 ROBOT_VAR = Variable("?r", ROBOT_TYPE)
 
-# Feature layout for ObjectCentricState: [target_pos, is_solved]
-TYPE_FEATURES = {ROBOT_TYPE: ["target_pos", "is_solved"]}
+# Feature layout for ObjectCentricState: [robot_pos, is_solved, is_widened]
+TYPE_FEATURES = {ROBOT_TYPE: ["robot_pos", "is_solved", "is_widened"]}
 
-SUCCESS_THRESHOLD = 0.05  # |action - target| must be below this to succeed
+SUCCESS_THRESHOLD = 0.01  # |action - target| must be below this normally
+WIDE_SUCCESS_THRESHOLD = 0.05  # threshold after Widen is applied
 
 
 # ---------------------------------------------------------------------------
@@ -86,31 +98,49 @@ SUCCESS_THRESHOLD = 0.05  # |action - target| must be below this to succeed
 
 
 class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
-    """A 1-D bandit: the agent must place at the (random) target position.
+    """A 1-D bandit: the robot starts at a random position
+    and must reach a hidden target.
 
-    Observation: [target_pos, is_solved]  — shape (2,)
-    Action:      [placement_pos]          — shape (1,)
+    Observation: [robot_pos, is_solved, is_widened]  — shape (3,)
+    Action:      [displacement, widen_flag]           — shape (2,)
 
-    Reward 1.0 and done=True when |placement - target| < SUCCESS_THRESHOLD.
-    Otherwise reward 0.0 and done=False (the episode continues until the
-    approach resets it externally).
+    If widen_flag > 0.5 the step widens the success threshold (no placement).
+    Otherwise the agent attempts to reach robot_pos + displacement, perturbed
+    by Gaussian noise with std ``execution_noise_std``.  The hidden target is
+    fixed for the lifetime of the environment instance; the robot's starting
+    position is re-sampled each episode.  The noise makes Reach non-trivially
+    hard: even a perfectly learned parameter fails with positive probability,
+    so the advantage of Widen (wider threshold) persists after training.
+
+    Reward 1.0 and done=True when |robot_pos + noisy_displacement - target| < threshold.
     """
 
     metadata = {"render_modes": []}
 
-    def __init__(self, fixed_target: float | None = None) -> None:
+    def __init__(
+        self,
+        hidden_target: float | None = None,
+        execution_noise_std: float = 0.0,
+    ) -> None:
         super().__init__()
         self.observation_space = Box(
-            low=np.array([0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0], dtype=np.float32),
+            low=np.zeros(3, dtype=np.float32),
+            high=np.ones(3, dtype=np.float32),
         )
         self.action_space = Box(
-            low=np.array([0.0], dtype=np.float32),
-            high=np.array([1.0], dtype=np.float32),
+            low=np.array([-1.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
         )
-        self._fixed_target = fixed_target
-        self._target: float = 0.5
+        self._execution_noise_std = execution_noise_std
         self._rng = np.random.default_rng(0)
+        # Target is fixed for the lifetime of the env (hidden from the agent).
+        self._target: float = (
+            hidden_target
+            if hidden_target is not None
+            else float(self._rng.uniform(0.0, 1.0))
+        )
+        self._robot_pos: float = 0.5
+        self._is_widened: bool = False
 
     def reset(
         self,
@@ -121,19 +151,33 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-        if self._fixed_target is not None:
-            self._target = self._fixed_target
-        else:
-            self._target = float(self._rng.uniform(0.0, 1.0))
-        obs = np.array([self._target, 0.0], dtype=np.float32)
-        return obs, {"target": self._target}
+        self._robot_pos = float(self._rng.uniform(0.0, 1.0))
+        self._is_widened = False
+        obs = np.array([self._robot_pos, 0.0, 0.0], dtype=np.float32)
+        return obs, {"robot_pos": self._robot_pos}
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict]:
-        placement = float(np.clip(action[0], 0.0, 1.0))
-        success = abs(placement - self._target) < SUCCESS_THRESHOLD
-        obs = np.array([self._target, 1.0 if success else 0.0], dtype=np.float32)
-        reward = 1.0 if success else 0.0
-        return obs, reward, success, False, {"target": self._target}
+        if float(action[1]) > 0.5:
+            # Widen step: increase success threshold, no placement attempted.
+            self._is_widened = True
+            obs = np.array([self._robot_pos, 0.0, 1.0], dtype=np.float32)
+            return obs, 0.0, False, False, {}
+
+        # Reach step: attempt placement at robot_pos + displacement
+        # (with optional noise).
+        noise = (
+            self._rng.normal(0.0, self._execution_noise_std)
+            if self._execution_noise_std > 0.0
+            else 0.0
+        )
+        placement = float(np.clip(self._robot_pos + float(action[0]) + noise, 0.0, 1.0))
+        threshold = WIDE_SUCCESS_THRESHOLD if self._is_widened else SUCCESS_THRESHOLD
+        success = abs(placement - self._target) < threshold
+        obs = np.array(
+            [self._robot_pos, 1.0 if success else 0.0, float(self._is_widened)],
+            dtype=np.float32,
+        )
+        return obs, 1.0 if success else 0.0, success, False, {}
 
     def render(self) -> None:  # type: ignore[override]
         pass
@@ -143,7 +187,7 @@ class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
 
 
 # ---------------------------------------------------------------------------
-# Controller: one-shot placement
+# Controllers
 # ---------------------------------------------------------------------------
 
 
@@ -159,7 +203,7 @@ class ReachController(GroundParameterizedController):
     def sample_parameters(
         self, x: ObjectCentricState, rng: np.random.Generator
     ) -> np.ndarray:
-        return rng.uniform(0.0, 1.0, size=1).astype(np.float32)
+        return rng.uniform(-1.0, 1.0, size=1).astype(np.float32)
 
     def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
         self._params = params
@@ -177,7 +221,41 @@ class ReachController(GroundParameterizedController):
         if self._prev_failed:
             raise TrajectorySamplingFailure("Previous placement missed target.")
         assert self._params is not None
-        return self._params.copy()
+        # Action is [placement_pos, widen_flag=0]
+        return np.array([self._params[0], 0.0], dtype=np.float32)
+
+
+class WideController(GroundParameterizedController):
+    """One-shot controller that widens the environment's success threshold.
+
+    Has no preconditions or symbolic effects — the planner cannot reason about its
+    benefit.  The approach must discover empirically that executing Widen before Reach
+    reduces the number of parameter resamples required.
+    """
+
+    def __init__(self, objects: list[Object]) -> None:
+        super().__init__(objects)
+        self._done: bool = False
+
+    def sample_parameters(
+        self, x: ObjectCentricState, rng: np.random.Generator
+    ) -> np.ndarray:
+        # No meaningful parameters; return a dummy value.
+        return np.zeros(1, dtype=np.float32)
+
+    def reset(self, x: ObjectCentricState, params: np.ndarray) -> None:
+        self._done = False
+
+    def observe(self, x: ObjectCentricState) -> None:
+        pass  # Widen always succeeds; nothing to track.
+
+    def terminated(self) -> bool:
+        return self._done
+
+    def step(self) -> np.ndarray:
+        # Signal to the environment to widen the threshold.
+        self._done = True
+        return np.array([0.0, 1.0], dtype=np.float32)  # widen_flag = 1
 
 
 # ---------------------------------------------------------------------------
@@ -210,33 +288,49 @@ def _goal_deriver(_: ObjectCentricState) -> RelationalAbstractGoal:
 def build_bandit_env_models(env: OneDimBanditEnv) -> SimulatorFreeSesameModels:
     """Build minimal SimulatorFreeSesameModels for the bandit environment."""
 
-    # PDDL operator: Reach(?r) — pre={}, add={AtGoal(?r)}, del={}
-    op = LiftedOperator(
+    # Reach(?r) — pre={}, add={AtGoal(?r)}, del={}
+    reach_op = LiftedOperator(
         name="Reach",
         parameters=[ROBOT_VAR],
         preconditions=set(),
         add_effects={LiftedAtom(AT_GOAL_PRED, [ROBOT_VAR])},
         delete_effects=set(),
     )
-
-    ctrl: LiftedParameterizedController = LiftedParameterizedController(
+    reach_ctrl: LiftedParameterizedController = LiftedParameterizedController(
         variables=[ROBOT_VAR],
         controller_cls=ReachController,
+        params_space=Box(-1.0, 1.0, shape=(1,), dtype=np.float32),
+    )
+    reach_skill = LiftedSkill(operator=reach_op, controller=reach_ctrl)
+
+    # Widen(?r) — pre={}, add={}, del={} (no symbolic effects)
+    # The planner generates [Reach] and [Widen, Reach] as alternative plans
+    # because Widen has empty preconditions and self-loops on the same abstract
+    # state.  The approach must discover via BALD that Widen reduces resamples.
+    widen_op = LiftedOperator(
+        name="Widen",
+        parameters=[ROBOT_VAR],
+        preconditions=set(),
+        add_effects=set(),
+        delete_effects=set(),
+    )
+    widen_ctrl: LiftedParameterizedController = LiftedParameterizedController(
+        variables=[ROBOT_VAR],
+        controller_cls=WideController,
         params_space=Box(0.0, 1.0, shape=(1,), dtype=np.float32),
     )
-
-    skill = LiftedSkill(operator=op, controller=ctrl)
+    widen_skill = LiftedSkill(operator=widen_op, controller=widen_ctrl)
 
     return SimulatorFreeSesameModels(
         observation_space=env.observation_space,
-        state_space=env.observation_space,  # state == obs here
+        state_space=env.observation_space,
         action_space=env.action_space,
         types={ROBOT_TYPE},
         predicates={AT_GOAL_PRED},
         observation_to_state=_obs_to_state,
         state_abstractor=_state_abstractor,
         goal_deriver=_goal_deriver,
-        skills={skill},
+        skills={reach_skill, widen_skill},
     )
 
 
@@ -262,13 +356,30 @@ def _get_param_scorer_loss_curves(approach: SimFreeParamPolicyApproach) -> list[
     return curves
 
 
+def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[float]:
+    """Extract per-epoch Q-network training losses accumulated so far."""
+    return list(approach.get_q_network_loss_metrics())
+
+
+def _exploit_plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
+    """Return True if the exploit planner chose a plan containing a Widen action."""
+    if not approach.is_plan_from_exploit():
+        return False
+    plan = approach.get_abstract_plan()
+    if plan is None:
+        return False
+    _, actions = plan
+    return any("Widen" in a.short_str for a in actions)
+
+
 def main(
     num_steps: int = 2000,
     max_resamples: int = 20,
     reset_every: int = 30,
     log_every: int = 100,
     seed: int = 0,
-    fixed_target: float | None = None,
+    hidden_target: float | None = None,
+    noise_std: float = 0.0,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
@@ -276,11 +387,13 @@ def main(
         steps           — list of step indices at each log point
         success_rates   — rolling success rate at each log point
         total_successes — cumulative successes at each log point
+        widen_rates     — rolling fraction of episodes where
+                          the exploit planner chose a Widen plan
         param_loss      — per-fit sklearn loss values
     """
 
     # Build env
-    env = OneDimBanditEnv(fixed_target=fixed_target)
+    env = OneDimBanditEnv(hidden_target=hidden_target, execution_noise_std=noise_std)
     obs, _ = env.reset(seed=seed)
 
     # Build models
@@ -293,11 +406,11 @@ def main(
     # Explorer
     train_explorer = ExploitExplorer(env_models, feasibility_learner, seed)
 
-    abstract_action_configs = {"hidden_dim": 32, "num_layers": 2, "num_epochs": 20}
+    abstract_action_configs = {"hidden_dim": 32, "num_layers": 2, "num_epochs": 50}
     q_network_configs = {
         "hidden_dim": 32,
         "num_layers": 2,
-        "num_epochs": 20,
+        "num_epochs": 500,
         "num_ensemble_nets": 3,
     }
 
@@ -321,67 +434,97 @@ def main(
     approach.reset(obs, {})
 
     # Tracking
-    recent: deque[int] = deque(maxlen=log_every)
+    recent: deque[int] = deque(maxlen=log_every)  # per-episode success
+    recent_widen: deque[int] = deque(
+        maxlen=log_every
+    )  # per-episode exploit-widen usage
     total_successes = 0
+    total_episodes = 0
     reset_count = 0
+    episode_success = False  # tracks whether current episode succeeded
+    episode_uses_widen = _exploit_plan_uses_widen(
+        approach
+    )  # set once per episode at reset
 
     log_steps: list[int] = []
     success_rates: list[float] = []
+    widen_rates: list[float] = []
     cumulative_successes: list[int] = []
     param_loss: list[float] = []
+    q_loss: list[float] = []
 
     header = (
         f"{'Step':>6}  {'Rolling success':>15}  "
-        f"{'Total successes':>16}  {'Resamples':>10}"
+        f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}"
     )
     print(header)
-    print("-" * 55)
+    print("-" * 65)
 
     for step in range(num_steps):
+        logging.info(
+            "BANDIT STEP: %d",
+            step,
+        )
+
         try:
             action = approach.step()
         except ApproachStepError:
+            recent.append(0)  # episode failed
+            recent_widen.append(int(episode_uses_widen))
+            episode_success = False
+            total_episodes += 1
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
+            episode_uses_widen = _exploit_plan_uses_widen(approach)
             continue
 
         obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
 
-        success = int(done)
-        recent.append(success)
-        total_successes += success
+        if done:
+            episode_success = True
 
         if done or (step + 1) % reset_every == 0:
+            recent.append(int(episode_success))
+            recent_widen.append(int(episode_uses_widen))
+            total_successes += int(episode_success)
+            total_episodes += 1
+            episode_success = False
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
+            episode_uses_widen = _exploit_plan_uses_widen(approach)
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
+            widen_rate = sum(recent_widen) / len(recent_widen) if recent_widen else 0.0
             param_ds = approach.get_parameter_dataset()
             total_data = sum(len(v) for v in param_ds.values())
             print(
-                f"{step+1:>6}  {rolling_rate:>15.2%}  {total_successes:>16}  "
-                f"{total_data:>10}"
+                f"{step+1:>6}  {rolling_rate:>15.2%}  {widen_rate:>10.2%}  "
+                f"{total_successes:>16}  {total_data:>10}"
             )
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
+            widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
+            q_loss = _get_q_network_loss_curves(approach)
 
     print("\nDone.")
     param_ds = approach.get_parameter_dataset()
     print(f"  Total parameter samples: {sum(len(v) for v in param_ds.values())}")
-    print(f"  Total successes: {total_successes} / {num_steps}")
+    print(f"  Total successes: {total_successes} / {total_episodes} episodes")
     env.close()
 
     return {
         "steps": log_steps,
         "success_rates": success_rates,
+        "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
         "param_loss": param_loss,
+        "q_loss": q_loss,
     }
 
 
@@ -389,23 +532,45 @@ def plot_results(
     num_steps: int = 2000,
     seed: int = 0,
     save_path: str | None = None,
+    noise_std: float = 0.0,
+    hidden_target: float | None = None,
     **kwargs: Any,
 ) -> None:
-    """Run main() and plot success rate + loss curves for the classifier scorer."""
-    results = main(num_steps=num_steps, seed=seed, **kwargs)
+    """Run main() and plot success rate, Widen plan fraction, and loss curves."""
+    results = main(
+        num_steps=num_steps,
+        seed=seed,
+        noise_std=noise_std,
+        hidden_target=hidden_target,
+        **kwargs,
+    )
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
     # --- Rolling success rate ---
     ax = axes[0]
     ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o")
     ax.set_xlabel("Step")
     ax.set_ylabel("Rolling success rate (%)")
-    ax.set_title("Rolling success rate (ClassifierParameterScorer)")
+    ax.set_title("Rolling success rate")
+    ax.grid(True, alpha=0.3)
+
+    # --- Widen plan fraction ---
+    ax = axes[1]
+    ax.plot(
+        results["steps"],
+        [v * 100 for v in results["widen_rates"]],
+        marker="s",
+        color="tab:orange",
+    )
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Steps with Widen plan (%)")
+    ax.set_title("Fraction of episodes where exploit planner chose [Widen, …] plan")
+    ax.set_ylim(0, 105)
     ax.grid(True, alpha=0.3)
 
     # --- Parameter scorer loss ---
-    ax = axes[1]
+    ax = axes[2]
     loss = results["param_loss"]
     if loss:
         ax.plot(loss)
@@ -424,6 +589,26 @@ def plot_results(
         )
         ax.set_title("Parameter scorer training loss")
 
+    # --- Q-network loss ---
+    ax = axes[3]
+    q_loss = results["q_loss"]
+    if q_loss:
+        ax.plot(q_loss, color="tab:red")
+        ax.set_xlabel("Cumulative training epoch")
+        ax.set_ylabel("MSE loss")
+        ax.set_title("Q-network training loss")
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            "No Q-network loss data\n(no resample exhaustions yet)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        ax.set_title("Q-network training loss")
+
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150)
@@ -433,6 +618,8 @@ def plot_results(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     parser = argparse.ArgumentParser(
         description="1-D bandit test for SimFreeParamPolicyApproach"
     )
@@ -442,7 +629,22 @@ if __name__ == "__main__":
         help="Run and produce result plots",
     )
     parser.add_argument("--num-steps", type=int, default=2000)
+    parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.0,
+        metavar="STD",
+        help="Gaussian execution noise std added to Reach displacements (default: 0.0)",
+    )
+    parser.add_argument(
+        "--hidden-target",
+        type=float,
+        default=None,
+        metavar="TARGET",
+        help="Fixed hidden target value in [0, 1] (default: random at env creation)",
+    )
     parser.add_argument(
         "--save",
         default=None,
@@ -454,8 +656,17 @@ if __name__ == "__main__":
     if args.plot:
         plot_results(
             num_steps=args.num_steps,
+            max_resamples=args.max_resamples,
             seed=args.seed,
             save_path=args.save,
+            noise_std=args.noise_std,
+            hidden_target=args.hidden_target,
         )
     else:
-        main(num_steps=args.num_steps, seed=args.seed)
+        main(
+            num_steps=args.num_steps,
+            max_resamples=args.max_resamples,
+            seed=args.seed,
+            noise_std=args.noise_std,
+            hidden_target=args.hidden_target,
+        )
