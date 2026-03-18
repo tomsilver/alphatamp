@@ -163,6 +163,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         self._train_every: int = train_every
         self._completed_task = False
+        self._plan_from_exploit: bool = False
 
     def reset_episode(self, obs: _O) -> None:
         """Reset only episode-level state for a new environment episode.
@@ -188,12 +189,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._current_abstract_plan = self._score_candidate_plans_exploit(
                 candidate_plans
             )
+            self._plan_from_exploit = True
             logging.info(
                 "[BALD] Generated Exploit plan at Reset Episode: %s",
                 [a.short_str for a in self._current_abstract_plan[1]],
             )
         else:
             self._current_abstract_plan = explorer.generate_abstract_plan(obs)
+            self._plan_from_exploit = False
 
             logging.info(
                 "[BALD] Generated Initial plan at Reset Episode: %s",
@@ -871,6 +874,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             "[BALD] Selected plan: %s",
             [a.short_str for a in plan_to_execute[1]],
         )
+        self._plan_from_exploit = False
 
         # Set new plan as the plan to execute
         self._current_abstract_plan = plan_to_execute
@@ -895,6 +899,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def get_abstract_plan(self) -> Skeleton | None:
         """Return the current abstract plan."""
         return self._current_abstract_plan
+
+    def is_plan_from_exploit(self) -> bool:
+        """Return True if the current plan was selected by the exploit planner."""
+        return self._plan_from_exploit
 
     def get_current_abstract_plan_step(self) -> int:
         """Return the current step in the abstract plan."""

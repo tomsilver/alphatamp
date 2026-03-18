@@ -361,8 +361,10 @@ def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[flo
     return list(approach.get_q_network_loss_metrics())
 
 
-def _plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
-    """Return True if the current abstract plan contains a Widen action."""
+def _exploit_plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
+    """Return True if the exploit planner chose a plan containing a Widen action."""
+    if not approach.is_plan_from_exploit():
+        return False
     plan = approach.get_abstract_plan()
     if plan is None:
         return False
@@ -385,7 +387,7 @@ def main(
         steps           — list of step indices at each log point
         success_rates   — rolling success rate at each log point
         total_successes — cumulative successes at each log point
-        widen_rates     — rolling fraction of steps with a Widen plan at each log point
+        widen_rates     — rolling fraction of episodes where the exploit planner chose a Widen plan
         param_loss      — per-fit sklearn loss values
     """
 
@@ -432,12 +434,12 @@ def main(
 
     # Tracking
     recent: deque[int] = deque(maxlen=log_every)  # per-episode success
-    recent_widen: deque[int] = deque(maxlen=log_every)  # per-episode widen usage
+    recent_widen: deque[int] = deque(maxlen=log_every)  # per-episode exploit-widen usage
     total_successes = 0
     total_episodes = 0
     reset_count = 0
     episode_success = False  # tracks whether current episode succeeded
-    episode_uses_widen = False  # tracks whether current episode used a widen plan
+    episode_uses_widen = _exploit_plan_uses_widen(approach)  # set once per episode at reset
 
     log_steps: list[int] = []
     success_rates: list[float] = []
@@ -463,19 +465,14 @@ def main(
             action = approach.step()
         except ApproachStepError:
             recent.append(0)  # episode failed
-            recent_widen.append(
-                int(episode_uses_widen)
-            )  # widen may have run before the error
+            recent_widen.append(int(episode_uses_widen))
             episode_success = False
-            episode_uses_widen = False
             total_episodes += 1
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
+            episode_uses_widen = _exploit_plan_uses_widen(approach)
             continue
-
-        # Track whether the current plan includes Widen (once per episode is enough).
-        episode_uses_widen = episode_uses_widen or _plan_uses_widen(approach)
 
         obs, reward, done, _, _ = env.step(action)
         approach.update(obs, float(reward), done, {})
@@ -489,10 +486,10 @@ def main(
             total_successes += int(episode_success)
             total_episodes += 1
             episode_success = False
-            episode_uses_widen = False
             reset_count += 1
             obs, _ = env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
+            episode_uses_widen = _exploit_plan_uses_widen(approach)
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
@@ -563,7 +560,7 @@ def plot_results(
     )
     ax.set_xlabel("Step")
     ax.set_ylabel("Steps with Widen plan (%)")
-    ax.set_title("Fraction of steps using [Widen, …, Reach] plan")
+    ax.set_title("Fraction of episodes where exploit planner chose [Widen, …] plan")
     ax.set_ylim(0, 105)
     ax.grid(True, alpha=0.3)
 
