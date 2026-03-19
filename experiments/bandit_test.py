@@ -380,6 +380,8 @@ def main(
     seed: int = 0,
     hidden_target: float | None = None,
     noise_std: float = 0.0,
+    use_abstract_plan_scorer: bool = True,
+    use_parameter_scorer: bool = True,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
@@ -429,6 +431,8 @@ def main(
         train_every=1,
         param_sample_count=100,
         seed=seed,
+        use_abstract_plan_scorer=use_abstract_plan_scorer,
+        use_parameter_scorer=use_parameter_scorer,
     )
 
     approach.train()
@@ -539,6 +543,8 @@ def plot_results(
     save_path: str | None = None,
     noise_std: float = 0.0,
     hidden_target: float | None = None,
+    use_abstract_plan_scorer: bool = True,
+    use_parameter_scorer: bool = True,
     **kwargs: Any,
 ) -> None:
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
@@ -547,6 +553,8 @@ def plot_results(
         seed=seed,
         noise_std=noise_std,
         hidden_target=hidden_target,
+        use_abstract_plan_scorer=use_abstract_plan_scorer,
+        use_parameter_scorer=use_parameter_scorer,
         **kwargs,
     )
 
@@ -669,7 +677,20 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Save figure to PATH instead of displaying it",
     )
+    parser.add_argument(
+        "--no-abstract-plan-scorer",
+        action="store_true",
+        help="Ablation: always use the first candidate plan, skip BALD scoring",
+    )
+    parser.add_argument(
+        "--no-parameter-scorer",
+        action="store_true",
+        help="Ablation: always use the first parameter sample, skip scorer",
+    )
     args = parser.parse_args()
+
+    use_abstract_plan_scorer = not args.no_abstract_plan_scorer
+    use_parameter_scorer = not args.no_parameter_scorer
 
     if args.plot:
         plot_results(
@@ -679,6 +700,8 @@ if __name__ == "__main__":
             save_path=args.save,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
+            use_abstract_plan_scorer=use_abstract_plan_scorer,
+            use_parameter_scorer=use_parameter_scorer,
         )
     else:
         main(
@@ -687,4 +710,6 @@ if __name__ == "__main__":
             seed=args.seed,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
+            use_abstract_plan_scorer=use_abstract_plan_scorer,
+            use_parameter_scorer=use_parameter_scorer,
         )
