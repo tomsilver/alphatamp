@@ -5,10 +5,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=04:30:00
+#SBATCH --time=08:30:00
 #SBATCH --array=0-3
-#SBATCH --output=experiments/slurm_outputs/bandit_ablation_%A_%a.out
-#SBATCH --error=experiments/slurm_outputs/bandit_ablation_%A_%a.err
+#SBATCH --output=experiments/slurm_outputs/bandit_ablation_20_%A_%a.out
+#SBATCH --error=experiments/slurm_outputs/bandit_ablation_20_%A_%a.err
 
 # Ablation conditions (SLURM_ARRAY_TASK_ID → flags):
 #   0 — full model          (both scorers on)
@@ -27,7 +27,7 @@ esac
 
 .venv/bin/python -u experiments/bandit_test.py \
     --plot \
-    --save experiments/slurm_outputs/bandit_ablation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.png \
+    --save experiments/slurm_outputs/bandit_ablation_20_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.png \
     --noise-std 0.05 \
     --max-resamples 2 \
     $ABLATION_FLAGS \

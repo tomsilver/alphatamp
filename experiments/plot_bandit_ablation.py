@@ -29,7 +29,8 @@ _TASK_LABELS = {
 }
 
 # Regex to extract task ID from filename like bandit_ablation_5772715_2.out
-_TASK_ID_RE = re.compile(r"bandit_ablation_\d+_(\d+)\.out$")
+# or bandit_ablation_20_5822174_3.out (extra number segment before job ID)
+_TASK_ID_RE = re.compile(r"bandit_ablation_(?:\d+_)+(\d+)\.out$")
 
 # Regex for data rows: "  100  25.00%  0.00%  1  105  24"
 _ROW_RE = re.compile(

@@ -373,7 +373,7 @@ def _exploit_plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
 
 
 def main(
-    num_steps: int = 2000,
+    num_steps: int = 4000,
     max_resamples: int = 20,
     reset_every: int = 30,
     log_every: int = 100,
@@ -439,10 +439,10 @@ def main(
     approach.reset(obs, {})
 
     # Tracking
-    recent: deque[int] = deque(maxlen=log_every)  # per-episode success
+    recent: deque[int] = deque(maxlen=20)  # per-episode success (rolling window)
     recent_widen: deque[int] = deque(
-        maxlen=log_every
-    )  # per-episode exploit-widen usage
+        maxlen=20
+    )  # per-episode exploit-widen usage (rolling window)
     total_successes = 0
     total_episodes = 0
     reset_count = 0
@@ -538,7 +538,7 @@ def main(
 
 
 def plot_results(
-    num_steps: int = 2000,
+    num_steps: int = 4000,
     seed: int = 0,
     save_path: str | None = None,
     noise_std: float = 0.0,
@@ -654,7 +654,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=2000)
+    parser.add_argument("--num-steps", type=int, default=4000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
