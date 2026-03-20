@@ -40,7 +40,7 @@ _ROW_RE = re.compile(
 def parse_out_file(path: Path) -> dict:
     """Parse a bandit_ablation .out file and return metrics."""
     steps: list[int] = []
-    total_successes: list[int] = []
+    success_rates: list[float] = []
     widen_rates: list[float] = []
 
     with open(path) as f:
@@ -48,12 +48,12 @@ def parse_out_file(path: Path) -> dict:
             m = _ROW_RE.match(line)
             if m:
                 steps.append(int(m.group(1)))
+                success_rates.append(float(m.group(2)) / 100.0)
                 widen_rates.append(float(m.group(3)) / 100.0)
-                total_successes.append(int(m.group(4)))
 
     return {
         "steps": steps,
-        "total_successes": total_successes,
+        "success_rates": success_rates,
         "widen_rates": widen_rates,
     }
 
@@ -66,19 +66,19 @@ def get_task_id(path: Path) -> str | None:
 def aggregate_runs(runs: list[dict]) -> dict:
     """Average metrics across seeds, truncating to the shortest run.
 
-    Returns means and stderrs for total_successes and widen_rates.
+    Returns means and stderrs for success_rates and widen_rates.
     """
     min_len = min(len(r["steps"]) for r in runs)
     steps = runs[0]["steps"][:min_len]
 
-    successes = np.array([r["total_successes"][:min_len] for r in runs], dtype=float)
+    rates = np.array([r["success_rates"][:min_len] for r in runs], dtype=float)
     widens = np.array([r["widen_rates"][:min_len] for r in runs], dtype=float)
 
     n = len(runs)
     return {
         "steps": steps,
-        "successes_mean": successes.mean(axis=0),
-        "successes_stderr": successes.std(axis=0, ddof=1) / np.sqrt(n),
+        "rates_mean": rates.mean(axis=0) * 100,
+        "rates_stderr": rates.std(axis=0, ddof=1) / np.sqrt(n) * 100,
         "widens_mean": widens.mean(axis=0) * 100,
         "widens_stderr": widens.std(axis=0, ddof=1) / np.sqrt(n) * 100,
         "n": n,
@@ -134,11 +134,11 @@ def main() -> None:
         full_label = f"{label} (n={n})"
 
         ax = axes[0]
-        line, = ax.plot(steps, agg["successes_mean"], marker="o", label=full_label)
+        line, = ax.plot(steps, agg["rates_mean"], marker="o", label=full_label)
         ax.fill_between(
             steps,
-            agg["successes_mean"] - agg["successes_stderr"],
-            agg["successes_mean"] + agg["successes_stderr"],
+            agg["rates_mean"] - agg["rates_stderr"],
+            agg["rates_mean"] + agg["rates_stderr"],
             alpha=0.2,
             color=line.get_color(),
         )
@@ -153,11 +153,12 @@ def main() -> None:
             color=line.get_color(),
         )
 
-    # --- Total successes ---
+    # --- Rolling success rate ---
     ax = axes[0]
     ax.set_xlabel("Step")
-    ax.set_ylabel("Total successes")
-    ax.set_title("Cumulative successes (mean ± stderr)")
+    ax.set_ylabel("Rolling success rate (%)")
+    ax.set_title("Rolling success rate (mean ± stderr)")
+    ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)
 
