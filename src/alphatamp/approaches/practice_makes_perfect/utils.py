@@ -56,7 +56,7 @@ def beta_from_mean_and_variance(
     assert alpha > 0
     assert _beta > 0
     rv = beta(alpha, _beta)
-    assert abs(rv.mean() - mean) < 1e-6
+    assert abs(float(rv.mean()) - mean) < 1e-6
     return rv
 
 

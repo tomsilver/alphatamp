@@ -4,7 +4,7 @@ import math
 from typing import Any, TypeVar
 
 from bilevel_planning.structs import ParameterizedController
-from matplotlib.pylab import Generator
+from numpy.random import Generator
 
 from alphatamp.approaches.scorers.base_scorer import BaseScorer
 
