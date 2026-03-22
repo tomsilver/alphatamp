@@ -370,7 +370,7 @@ def convert_q_value_to_probability(
 
     # The total success probability is the sum of probabilities of
     # finishing the last action within the total budget K.
-    return np.sum(dp)
+    return float(np.sum(dp))
 
 
 def calculate_bald_objective(ensemble_probabilities: list[float]) -> float:

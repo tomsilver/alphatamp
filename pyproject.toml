@@ -9,7 +9,6 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "bilevel_planning@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=bilevel-planning",
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
    "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
@@ -23,8 +22,9 @@ dependencies = [
    "hydra-joblib-launcher",
    "hydra-submitit-launcher",
    "kinder-bilevel-planning",
-   "kinder",
+   "bilevel-planning",
    "kinder-models",
+   "kindergarden[kinematic2d]==0.0.8",
 ]
 
 [project.optional-dependencies]
@@ -72,9 +72,9 @@ markers = [
 ]
 
 [tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-bilevel-planning", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
-kinder = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono", subdirectory = "kinder-models", rev = "9a4362e9e3100d8bb347d7b2ea8fb0ea46c0b92c" }
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning" }
+bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git", subdirectory = "bilevel-planning" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-models" }
 
 [[tool.mypy.overrides]]
 module = [
