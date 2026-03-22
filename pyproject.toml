@@ -21,10 +21,10 @@ dependencies = [
    "scipy-stubs",
    "hydra-joblib-launcher",
    "hydra-submitit-launcher",
-   "kindergarden==0.0.5",
    "kinder-bilevel-planning",
    "bilevel-planning",
    "kinder-models",
+   "kindergarden[kinematic2d]==0.0.8",
 ]
 
 [project.optional-dependencies]
