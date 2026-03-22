@@ -32,9 +32,9 @@ _TASK_LABELS = {
 # or bandit_ablation_20_5822174_3.out (extra number segment before job ID)
 _TASK_ID_RE = re.compile(r"bandit_ablation_(?:\d+_)+(\d+)\.out$")
 
-# Regex for data rows: "  100  25.00%  0.00%  1  105  24"
+# Regex for data rows: "  100  25.00%  20.00%  15.00%  42  100  5"
 _ROW_RE = re.compile(
-    r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+(\d+)\s+\d+\s+(\d+)"
+    r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%"
 )
 
 
@@ -49,8 +49,8 @@ def parse_out_file(path: Path) -> dict:
             m = _ROW_RE.match(line)
             if m:
                 steps.append(int(m.group(1)))
-                success_rates.append(float(m.group(2)) / 100.0)
-                widen_rates.append(float(m.group(3)) / 100.0)
+                success_rates.append(float(m.group(3)) / 100.0)
+                widen_rates.append(float(m.group(4)) / 100.0)
 
     return {
         "steps": steps,
@@ -154,11 +154,11 @@ def main() -> None:
             color=line.get_color(),
         )
 
-    # --- Rolling success rate ---
+    # --- Average overall success rate ---
     ax = axes[0]
     ax.set_xlabel("Step")
-    ax.set_ylabel("Rolling success rate (%)")
-    ax.set_title("Rolling success rate (mean ± stderr)")
+    ax.set_ylabel("Average overall success rate (%)")
+    ax.set_title("Average overall success rate (mean ± stderr)")
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)

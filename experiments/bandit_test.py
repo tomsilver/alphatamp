@@ -388,6 +388,7 @@ def main(
     Returns a dict with keys:
         steps                — list of step indices at each log point
         success_rates        — rolling success rate at each log point
+        overall_success_rates — total_successes / total_episodes at each log point
         total_successes      — cumulative successes at each log point
         widen_rates          — rolling fraction of episodes where
                                the exploit planner chose a Widen plan
@@ -453,6 +454,8 @@ def main(
 
     log_steps: list[int] = []
     success_rates: list[float] = []
+    overall_success_rates: list[float] = []
+    episode_counts: list[int] = []
     widen_rates: list[float] = []
     cumulative_successes: list[int] = []
     exhaustion_counts: list[int] = []
@@ -460,11 +463,11 @@ def main(
     q_loss: list[float] = []
 
     header = (
-        f"{'Step':>6}  {'Rolling success':>15}  "
+        f"{'Step':>6}  {'Rolling success':>15}  {'Overall success':>15}  "
         f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}  {'Exhaustions':>12}"
     )
     print(header)
-    print("-" * 80)
+    print("-" * 98)
 
     for step in range(num_steps):
         logging.info(
@@ -504,16 +507,19 @@ def main(
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
+            overall_rate = total_successes / total_episodes if total_episodes else 0.0
             widen_rate = sum(recent_widen) / len(recent_widen) if recent_widen else 0.0
             param_ds = approach.get_parameter_dataset()
             total_data = sum(len(v) for v in param_ds.values())
             exhaustion_count = approach.get_resample_exhaustion_count()
             print(
-                f"{step+1:>6}  {rolling_rate:>15.2%}  {widen_rate:>10.2%}  "
+                f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  {widen_rate:>10.2%}  "
                 f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
             )
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
+            overall_success_rates.append(overall_rate)
+            episode_counts.append(total_episodes)
             widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
             exhaustion_counts.append(exhaustion_count)
@@ -529,6 +535,8 @@ def main(
     return {
         "steps": log_steps,
         "success_rates": success_rates,
+        "overall_success_rates": overall_success_rates,
+        "episode_counts": episode_counts,
         "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
         "exhaustion_counts": exhaustion_counts,
@@ -560,12 +568,13 @@ def plot_results(
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    # --- Rolling success rate ---
+    # --- Overall success rate ---
     ax = axes[0]
-    ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o")
+    # ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o", label="Rolling (last 20)")
+    ax.plot(results["steps"], [v * 100 for v in results["overall_success_rates"]], marker="s", linestyle="--", label="Overall")
     ax.set_xlabel("Step")
-    ax.set_ylabel("Rolling success rate (%)")
-    ax.set_title("Rolling success rate")
+    ax.set_ylabel("Success rate (%)")
+    ax.set_title("Overall success rate (successes / episodes)")
     ax.grid(True, alpha=0.3)
 
     # --- Widen plan fraction ---
@@ -622,17 +631,17 @@ def plot_results(
     #     )
     #     ax.set_title("Q-network training loss")
 
-    # --- Resample exhaustion count ---
+    # --- Episodes over steps ---
     ax = axes[2]
     ax.plot(
         results["steps"],
-        results["exhaustion_counts"],
+        results["episode_counts"],
         marker="^",
-        color="tab:purple",
+        color="tab:green",
     )
     ax.set_xlabel("Step")
-    ax.set_ylabel("Cumulative exhaustion count")
-    ax.set_title("Resample exhaustions (scorer/net update triggers)")
+    ax.set_ylabel("Cumulative episodes")
+    ax.set_title("Episodes completed over steps")
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
