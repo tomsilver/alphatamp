@@ -464,7 +464,8 @@ def main(
 
     header = (
         f"{'Step':>6}  {'Rolling success':>15}  {'Overall success':>15}  "
-        f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}  {'Exhaustions':>12}"
+        f"{'Widen rate':>10}  {'Total successes':>16}  "
+        f"{'Resamples':>10}  {'Exhaustions':>12}"
     )
     print(header)
     print("-" * 98)
@@ -513,7 +514,8 @@ def main(
             total_data = sum(len(v) for v in param_ds.values())
             exhaustion_count = approach.get_resample_exhaustion_count()
             print(
-                f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  {widen_rate:>10.2%}  "
+                f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  "
+                f"{widen_rate:>10.2%}  "
                 f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
             )
             log_steps.append(step + 1)
@@ -570,8 +572,15 @@ def plot_results(
 
     # --- Overall success rate ---
     ax = axes[0]
-    # ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o", label="Rolling (last 20)")
-    ax.plot(results["steps"], [v * 100 for v in results["overall_success_rates"]], marker="s", linestyle="--", label="Overall")
+    # ax.plot(results["steps"], [v * 100 for v in results["success_rates"]],
+    # marker="o", label="Rolling (last 20)")
+    ax.plot(
+        results["steps"],
+        [v * 100 for v in results["overall_success_rates"]],
+        marker="s",
+        linestyle="--",
+        label="Overall",
+    )
     ax.set_xlabel("Step")
     ax.set_ylabel("Success rate (%)")
     ax.set_title("Overall success rate (successes / episodes)")
@@ -698,9 +707,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    use_abstract_plan_scorer = not args.no_abstract_plan_scorer
-    use_parameter_scorer = not args.no_parameter_scorer
-
     if args.plot:
         plot_results(
             num_steps=args.num_steps,
@@ -709,8 +715,8 @@ if __name__ == "__main__":
             save_path=args.save,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
-            use_abstract_plan_scorer=use_abstract_plan_scorer,
-            use_parameter_scorer=use_parameter_scorer,
+            use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
+            use_parameter_scorer=not args.no_parameter_scorer,
         )
     else:
         main(
@@ -719,6 +725,6 @@ if __name__ == "__main__":
             seed=args.seed,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
-            use_abstract_plan_scorer=use_abstract_plan_scorer,
-            use_parameter_scorer=use_parameter_scorer,
+            use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
+            use_parameter_scorer=not args.no_parameter_scorer,
         )

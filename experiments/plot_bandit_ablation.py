@@ -5,8 +5,11 @@ condition), averages across seeds, and plots with stderr error bars.
 
 Usage::
 
-    python experiments/plot_bandit_ablation.py experiments/slurm_outputs/bandit_ablation_*.out
-    python experiments/plot_bandit_ablation.py experiments/slurm_outputs/bandit_ablation_*.out --save experiments/analysis/ablation.png
+    python experiments/plot_bandit_ablation.py
+        experiments/slurm_outputs/bandit_ablation_*.out
+    python experiments/plot_bandit_ablation.py
+        experiments/slurm_outputs/bandit_ablation_*.out
+        --save experiments/analysis/ablation.png
 """
 
 from __future__ import annotations
@@ -33,9 +36,7 @@ _TASK_LABELS = {
 _TASK_ID_RE = re.compile(r"bandit_ablation_(?:\d+_)+(\d+)\.out$")
 
 # Regex for data rows: "  100  25.00%  20.00%  15.00%  42  100  5"
-_ROW_RE = re.compile(
-    r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%"
-)
+_ROW_RE = re.compile(r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%")
 
 # Regex for total episodes: "  Total successes: 1249 / 1343 episodes"
 _EPISODES_RE = re.compile(r"Total successes:\s+\d+\s*/\s*(\d+)\s+episodes")
@@ -48,7 +49,7 @@ def parse_out_file(path: Path) -> dict:
     widen_rates: list[float] = []
     total_episodes: int | None = None
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             m = _ROW_RE.match(line)
             if m:
@@ -69,6 +70,7 @@ def parse_out_file(path: Path) -> dict:
 
 
 def get_task_id(path: Path) -> str | None:
+    """Uses REGEX to determine the approach type."""
     m = _TASK_ID_RE.search(path.name)
     return m.group(1) if m else None
 
@@ -84,7 +86,9 @@ def aggregate_runs(runs: list[dict]) -> dict:
     rates = np.array([r["success_rates"][:min_len] for r in runs], dtype=float)
     widens = np.array([r["widen_rates"][:min_len] for r in runs], dtype=float)
 
-    episode_counts = [r["total_episodes"] for r in runs if r["total_episodes"] is not None]
+    episode_counts = [
+        r["total_episodes"] for r in runs if r["total_episodes"] is not None
+    ]
     ep = np.array(episode_counts, dtype=float)
 
     n = len(runs)
@@ -102,6 +106,7 @@ def aggregate_runs(runs: list[dict]) -> dict:
 
 
 def main() -> None:
+    """Main plotting script."""
     parser = argparse.ArgumentParser(description="Plot bandit ablation results")
     parser.add_argument(
         "out_files",
@@ -127,7 +132,10 @@ def main() -> None:
     for path in paths:
         task_id = get_task_id(path)
         if task_id is None:
-            print(f"Warning: cannot determine task ID from {path.name}, skipping", file=sys.stderr)
+            print(
+                f"Warning: cannot determine task ID from {path.name}, skipping",
+                file=sys.stderr,
+            )
             continue
         data = parse_out_file(path)
         if not data["steps"]:
@@ -155,7 +163,7 @@ def main() -> None:
         n = agg["n"]
         full_label = f"{label} (n={n})"
 
-        line, = ax1.plot(steps, agg["rates_mean"], marker="o", label=full_label)
+        (line,) = ax1.plot(steps, agg["rates_mean"], marker="o", label=full_label)
         ax1.fill_between(
             steps,
             agg["rates_mean"] - agg["rates_stderr"],
@@ -165,7 +173,7 @@ def main() -> None:
         )
 
         ax = axes2[0]
-        line, = ax.plot(steps, agg["widens_mean"], marker="s", label=full_label)
+        (line,) = ax.plot(steps, agg["widens_mean"], marker="s", label=full_label)
         ax.fill_between(
             steps,
             agg["widens_mean"] - agg["widens_stderr"],
@@ -192,7 +200,10 @@ def main() -> None:
     ax = axes2[0]
     ax.set_xlabel("Step")
     ax.set_ylabel("Episodes with Widen plan (%)")
-    ax.set_title("Fraction of episodes where exploit planner chose [Widen, …] plan\n(mean ± stderr)")
+    ax.set_title(
+        "Fraction of episodes where exploit planner "
+        "chose [Widen, …] plan\n(mean ± stderr)"
+    )
     ax.set_ylim(0, 105)
     ax.legend()
     ax.grid(True, alpha=0.3)

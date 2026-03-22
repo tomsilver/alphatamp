@@ -911,7 +911,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return self._last_action
 
     def get_resample_exhaustion_count(self) -> int:
-        """Return cumulative number of resample exhaustion events (triggers scorer/net updates)."""
+        """Return cumulative number of resample exhaustion events (triggers scorer/net
+        updates)."""
         return self._resample_exhaustion_count
 
     def get_abstract_plan(self) -> Skeleton | None:
