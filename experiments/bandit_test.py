@@ -373,23 +373,27 @@ def _exploit_plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
 
 
 def main(
-    num_steps: int = 2000,
+    num_steps: int = 4000,
     max_resamples: int = 20,
     reset_every: int = 30,
     log_every: int = 100,
     seed: int = 0,
     hidden_target: float | None = None,
     noise_std: float = 0.0,
+    use_abstract_plan_scorer: bool = True,
+    use_parameter_scorer: bool = True,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
     Returns a dict with keys:
-        steps           — list of step indices at each log point
-        success_rates   — rolling success rate at each log point
-        total_successes — cumulative successes at each log point
-        widen_rates     — rolling fraction of episodes where
-                          the exploit planner chose a Widen plan
-        param_loss      — per-fit sklearn loss values
+        steps                — list of step indices at each log point
+        success_rates        — rolling success rate at each log point
+        overall_success_rates — total_successes / total_episodes at each log point
+        total_successes      — cumulative successes at each log point
+        widen_rates          — rolling fraction of episodes where
+                               the exploit planner chose a Widen plan
+        param_loss           — per-fit sklearn loss values
+        exhaustion_counts    — cumulative resample exhaustion count at each log point
     """
 
     # Build env
@@ -428,16 +432,18 @@ def main(
         train_every=1,
         param_sample_count=100,
         seed=seed,
+        use_abstract_plan_scorer=use_abstract_plan_scorer,
+        use_parameter_scorer=use_parameter_scorer,
     )
 
     approach.train()
     approach.reset(obs, {})
 
     # Tracking
-    recent: deque[int] = deque(maxlen=log_every)  # per-episode success
+    recent: deque[int] = deque(maxlen=20)  # per-episode success (rolling window)
     recent_widen: deque[int] = deque(
-        maxlen=log_every
-    )  # per-episode exploit-widen usage
+        maxlen=20
+    )  # per-episode exploit-widen usage (rolling window)
     total_successes = 0
     total_episodes = 0
     reset_count = 0
@@ -448,17 +454,21 @@ def main(
 
     log_steps: list[int] = []
     success_rates: list[float] = []
+    overall_success_rates: list[float] = []
+    episode_counts: list[int] = []
     widen_rates: list[float] = []
     cumulative_successes: list[int] = []
+    exhaustion_counts: list[int] = []
     param_loss: list[float] = []
     q_loss: list[float] = []
 
     header = (
-        f"{'Step':>6}  {'Rolling success':>15}  "
-        f"{'Widen rate':>10}  {'Total successes':>16}  {'Resamples':>10}"
+        f"{'Step':>6}  {'Rolling success':>15}  {'Overall success':>15}  "
+        f"{'Widen rate':>10}  {'Total successes':>16}  "
+        f"{'Resamples':>10}  {'Exhaustions':>12}"
     )
     print(header)
-    print("-" * 65)
+    print("-" * 98)
 
     for step in range(num_steps):
         logging.info(
@@ -498,17 +508,23 @@ def main(
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
+            overall_rate = total_successes / total_episodes if total_episodes else 0.0
             widen_rate = sum(recent_widen) / len(recent_widen) if recent_widen else 0.0
             param_ds = approach.get_parameter_dataset()
             total_data = sum(len(v) for v in param_ds.values())
+            exhaustion_count = approach.get_resample_exhaustion_count()
             print(
-                f"{step+1:>6}  {rolling_rate:>15.2%}  {widen_rate:>10.2%}  "
-                f"{total_successes:>16}  {total_data:>10}"
+                f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  "
+                f"{widen_rate:>10.2%}  "
+                f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
             )
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
+            overall_success_rates.append(overall_rate)
+            episode_counts.append(total_episodes)
             widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
+            exhaustion_counts.append(exhaustion_count)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
             q_loss = _get_q_network_loss_curves(approach)
 
@@ -521,19 +537,24 @@ def main(
     return {
         "steps": log_steps,
         "success_rates": success_rates,
+        "overall_success_rates": overall_success_rates,
+        "episode_counts": episode_counts,
         "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
+        "exhaustion_counts": exhaustion_counts,
         "param_loss": param_loss,
         "q_loss": q_loss,
     }
 
 
 def plot_results(
-    num_steps: int = 2000,
+    num_steps: int = 4000,
     seed: int = 0,
     save_path: str | None = None,
     noise_std: float = 0.0,
     hidden_target: float | None = None,
+    use_abstract_plan_scorer: bool = True,
+    use_parameter_scorer: bool = True,
     **kwargs: Any,
 ) -> None:
     """Run main() and plot success rate, Widen plan fraction, and loss curves."""
@@ -542,17 +563,27 @@ def plot_results(
         seed=seed,
         noise_std=noise_std,
         hidden_target=hidden_target,
+        use_abstract_plan_scorer=use_abstract_plan_scorer,
+        use_parameter_scorer=use_parameter_scorer,
         **kwargs,
     )
 
-    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-    # --- Rolling success rate ---
+    # --- Overall success rate ---
     ax = axes[0]
-    ax.plot(results["steps"], [v * 100 for v in results["success_rates"]], marker="o")
+    # ax.plot(results["steps"], [v * 100 for v in results["success_rates"]],
+    # marker="o", label="Rolling (last 20)")
+    ax.plot(
+        results["steps"],
+        [v * 100 for v in results["overall_success_rates"]],
+        marker="s",
+        linestyle="--",
+        label="Overall",
+    )
     ax.set_xlabel("Step")
-    ax.set_ylabel("Rolling success rate (%)")
-    ax.set_title("Rolling success rate")
+    ax.set_ylabel("Success rate (%)")
+    ax.set_title("Overall success rate (successes / episodes)")
     ax.grid(True, alpha=0.3)
 
     # --- Widen plan fraction ---
@@ -570,44 +601,57 @@ def plot_results(
     ax.grid(True, alpha=0.3)
 
     # --- Parameter scorer loss ---
-    ax = axes[2]
-    loss = results["param_loss"]
-    if loss:
-        ax.plot(loss)
-        ax.set_xlabel("Cumulative sklearn fit iteration")
-        ax.set_ylabel("Training loss")
-        ax.set_title("Parameter scorer training loss")
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No loss data",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-        )
-        ax.set_title("Parameter scorer training loss")
+    # ax = axes[2]
+    # loss = results["param_loss"]
+    # if loss:
+    #     ax.plot(loss)
+    #     ax.set_xlabel("Cumulative sklearn fit iteration")
+    #     ax.set_ylabel("Training loss")
+    #     ax.set_title("Parameter scorer training loss")
+    #     ax.grid(True, alpha=0.3)
+    # else:
+    #     ax.text(
+    #         0.5,
+    #         0.5,
+    #         "No loss data",
+    #         ha="center",
+    #         va="center",
+    #         transform=ax.transAxes,
+    #     )
+    #     ax.set_title("Parameter scorer training loss")
 
     # --- Q-network loss ---
-    ax = axes[3]
-    q_loss = results["q_loss"]
-    if q_loss:
-        ax.plot(q_loss, color="tab:red")
-        ax.set_xlabel("Cumulative training epoch")
-        ax.set_ylabel("MSE loss")
-        ax.set_title("Q-network training loss")
-        ax.grid(True, alpha=0.3)
-    else:
-        ax.text(
-            0.5,
-            0.5,
-            "No Q-network loss data\n(no resample exhaustions yet)",
-            ha="center",
-            va="center",
-            transform=ax.transAxes,
-        )
-        ax.set_title("Q-network training loss")
+    # ax = axes[3]
+    # q_loss = results["q_loss"]
+    # if q_loss:
+    #     ax.plot(q_loss, color="tab:red")
+    #     ax.set_xlabel("Cumulative training epoch")
+    #     ax.set_ylabel("MSE loss")
+    #     ax.set_title("Q-network training loss")
+    #     ax.grid(True, alpha=0.3)
+    # else:
+    #     ax.text(
+    #         0.5,
+    #         0.5,
+    #         "No Q-network loss data\n(no resample exhaustions yet)",
+    #         ha="center",
+    #         va="center",
+    #         transform=ax.transAxes,
+    #     )
+    #     ax.set_title("Q-network training loss")
+
+    # --- Episodes over steps ---
+    ax = axes[2]
+    ax.plot(
+        results["steps"],
+        results["episode_counts"],
+        marker="^",
+        color="tab:green",
+    )
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Cumulative episodes")
+    ax.set_title("Episodes completed over steps")
+    ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
     if save_path:
@@ -628,7 +672,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=2000)
+    parser.add_argument("--num-steps", type=int, default=4000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -651,6 +695,16 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Save figure to PATH instead of displaying it",
     )
+    parser.add_argument(
+        "--no-abstract-plan-scorer",
+        action="store_true",
+        help="Ablation: always use the first candidate plan, skip BALD scoring",
+    )
+    parser.add_argument(
+        "--no-parameter-scorer",
+        action="store_true",
+        help="Ablation: always use the first parameter sample, skip scorer",
+    )
     args = parser.parse_args()
 
     if args.plot:
@@ -661,6 +715,8 @@ if __name__ == "__main__":
             save_path=args.save,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
+            use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
+            use_parameter_scorer=not args.no_parameter_scorer,
         )
     else:
         main(
@@ -669,4 +725,6 @@ if __name__ == "__main__":
             seed=args.seed,
             noise_std=args.noise_std,
             hidden_target=args.hidden_target,
+            use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
+            use_parameter_scorer=not args.no_parameter_scorer,
         )

@@ -84,6 +84,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         num_candidate_plans: int = 10,
         train_every: int = 1,
         param_sample_count: int = 10,
+        use_abstract_plan_scorer: bool = True,
+        use_parameter_scorer: bool = True,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -164,6 +166,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._train_every: int = train_every
         self._completed_task = False
         self._plan_from_exploit: bool = False
+        self._use_abstract_plan_scorer = use_abstract_plan_scorer
+        self._use_parameter_scorer = use_parameter_scorer
 
     def reset_episode(self, obs: _O) -> None:
         """Reset only episode-level state for a new environment episode.
@@ -186,9 +190,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             # Q-networks have been trained at least once: exploit learned plan scores
             # to start each episode with the plan expected to need fewest resamples.
             candidate_plans = self.generate_candidate_plans()
-            self._current_abstract_plan = self._score_candidate_plans_exploit(
-                candidate_plans
-            )
+            if self._use_abstract_plan_scorer:
+                self._current_abstract_plan = self._score_candidate_plans_exploit(
+                    candidate_plans
+                )
+            else:
+                self._current_abstract_plan = explorer.generate_abstract_plan(obs)
             self._plan_from_exploit = True
             logging.info(
                 "[BALD] Generated Exploit plan at Reset Episode: %s",
@@ -735,12 +742,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         scoring_function = self._abstract_action_to_scoring_function[a]
 
         # Sample new params from the Parameter Policy
-        parameter_policy = ParameterPolicy(
-            self._current_controller,
-            scoring_function,
-            param_sample_count=self._param_sample_count,
-        )
-        optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
+        if self._use_parameter_scorer:
+            parameter_policy = ParameterPolicy(
+                self._current_controller,
+                scoring_function,
+                param_sample_count=self._param_sample_count,
+            )
+            optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
+        else:
+            optimal_params = self._current_controller.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
 
@@ -869,7 +879,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         candidate_plans = self.generate_candidate_plans()
 
         # Score candidate plans and return best plan
-        plan_to_execute = self.score_candidate_plans(candidate_plans)
+        plan_to_execute = (
+            self.score_candidate_plans(candidate_plans)
+            if self._use_abstract_plan_scorer
+            else candidate_plans[0]
+        )
         logging.info(
             "[BALD] Selected plan: %s",
             [a.short_str for a in plan_to_execute[1]],
@@ -895,6 +909,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_action = self._get_action()
         self._timestep += 1
         return self._last_action
+
+    def get_resample_exhaustion_count(self) -> int:
+        """Return cumulative number of resample exhaustion events (triggers scorer/net
+        updates)."""
+        return self._resample_exhaustion_count
 
     def get_abstract_plan(self) -> Skeleton | None:
         """Return the current abstract plan."""
