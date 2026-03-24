@@ -305,15 +305,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=4000)
+    parser.add_argument("--num-steps", type=int, default=10000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument(
         "--reset-every",
         type=int,
-        default=30,
-        help="Force-reset episode after this many steps (default: 30)",
+        default=100,
+        help="Force-reset episode after this many steps (default: 100)",
     )
-    parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--num-obstructions",
