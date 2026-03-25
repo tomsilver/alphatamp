@@ -1,15 +1,15 @@
-"""ClutteredRetrieval2D test for SimFreeParamPolicyApproach.
+"""Kinder environment test for SimFreeParamPolicyApproach.
 
-Runs the approach on the kinder ClutteredRetrieval2D environment and logs
+Runs the approach on a configurable kinder environment and logs
 the same metrics as bandit_test.py: rolling success rate, overall success
 rate, total successes, parameter resamples, and resample exhaustions.
 
 Usage::
 
-    python experiments/cluttered_retrieval_test.py
-    python experiments/cluttered_retrieval_test.py --num-obstructions 5 --num-steps 4000
-    python experiments/cluttered_retrieval_test.py --plot
-        --save experiments/slurm_outputs/cr_test.png
+    python experiments/kinder_env_test.py
+    python experiments/kinder_env_test.py --env obstruction2d --complexity 5 --num-steps 4000
+    python experiments/kinder_env_test.py --plot
+        --save experiments/slurm_outputs/kinder_env_test.png
 """
 
 from __future__ import annotations
@@ -47,7 +47,31 @@ from alphatamp.approaches.utils.approach_step_error import ApproachStepError
 # Helpers
 # ---------------------------------------------------------------------------
 
-_CLASSIFIER_SCORER_CONFIGS: dict = {"configs": {"hidden_layer_sizes": (16, 16)}}
+# Registry of supported kinder environments.
+# Each entry maps a short name → (env_id_template, model_name, complexity_kwarg).
+# The env_id_template uses {n} as a placeholder for the complexity integer.
+_ENV_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "clutteredretrieval2d": (
+        "kinder/ClutteredRetrieval2D-o{n}-v0",
+        "clutteredretrieval2d",
+        "num_obstructions",
+    ),
+    "obstruction2d": (
+        "kinder/Obstruction2D-o{n}-v0",
+        "obstruction2d",
+        "num_obstructions",
+    ),
+    "dynobstruction2d": (
+        "kinder/DynObstruction2D-o{n}-v0",
+        "dynobstruction2d",
+        "num_obstructions",
+    ),
+    "clutteredstorage2d": (
+        "kinder/ClutteredStorage2D-b{n}-v0",
+        "clutteredstorage2d",
+        "num_boxes",
+    ),
+}
 
 
 def _get_param_scorer_loss_curves(approach: SimFreeParamPolicyApproach) -> list[float]:
@@ -80,11 +104,16 @@ def main(
     reset_every: int = 30,
     log_every: int = 100,
     seed: int = 0,
-    num_obstructions: int = 1,
+    env: str = "clutteredretrieval2d",
+    complexity: int = 1,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
 ) -> dict:
-    """Run the ClutteredRetrieval2D experiment and return collected metrics.
+    """Run an experiment on a kinder environment and return collected metrics.
+
+    Args:
+        env: Short environment name from _ENV_REGISTRY (e.g. "clutteredretrieval2d").
+        complexity: The complexity integer passed to the env (e.g. num_obstructions).
 
     Returns a dict with keys:
         steps                 — list of step indices at each log point
@@ -97,18 +126,21 @@ def main(
         q_loss                — per-epoch Q-network loss values
     """
 
+    env_id_template, model_name, complexity_kwarg = _ENV_REGISTRY[env]
+    print(f"env={env}  complexity={complexity}  ({complexity_kwarg}={complexity})")
+
     # Build env
     kinder.register_all_environments()
-    env_id = f"kinder/ClutteredRetrieval2D-o{num_obstructions}-v0"
-    env = kinder.make(env_id, render_mode="rgb_array")
-    obs, _ = env.reset(seed=seed)
+    env_id = env_id_template.format(n=complexity)
+    gym_env = kinder.make(env_id, render_mode="rgb_array")
+    obs, _ = gym_env.reset(seed=seed)
 
     # Build models
     env_models = create_bilevel_planning_models(
-        "clutteredretrieval2d",
-        env.observation_space,
-        env.action_space,
-        num_obstructions=num_obstructions,
+        model_name,
+        gym_env.observation_space,
+        gym_env.action_space,
+        **{complexity_kwarg: complexity},
     )
     sim_free_env_models = sesame_models_to_sim_free(env_models)
 
@@ -119,6 +151,7 @@ def main(
     # Explorer
     train_explorer = ExploitExplorer(sim_free_env_models, feasibility_learner, seed)
 
+    parameter_scorer_configs: dict = {"configs": {"hidden_layer_sizes": (32, 32)}}
     abstract_action_configs = {"hidden_dim": 32, "num_layers": 2, "num_epochs": 50}
     q_network_configs = {
         "hidden_dim": 32,
@@ -133,7 +166,7 @@ def main(
         feasibility_classifier_learner=feasibility_learner,
         train_explorer=train_explorer,
         parameter_scorer_class=ClassifierParameterScorer,
-        parameter_scorer_configs=_CLASSIFIER_SCORER_CONFIGS,
+        parameter_scorer_configs=parameter_scorer_configs,
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
@@ -181,11 +214,11 @@ def main(
             episode_success = False
             total_episodes += 1
             reset_count += 1
-            obs, _ = env.reset(seed=seed + reset_count)
+            obs, _ = gym_env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
             continue
 
-        obs, reward, done, _, _ = env.step(action)
+        obs, reward, done, _, _ = gym_env.step(action)
         approach.update(obs, float(reward), done, {})
 
         if done:
@@ -197,7 +230,7 @@ def main(
             total_episodes += 1
             episode_success = False
             reset_count += 1
-            obs, _ = env.reset(seed=seed + reset_count)
+            obs, _ = gym_env.reset(seed=seed + reset_count)
             approach.reset_episode(obs)
 
         if (step + 1) % log_every == 0:
@@ -223,7 +256,7 @@ def main(
     param_ds = approach.get_parameter_dataset()
     print(f"  Total parameter samples: {sum(len(v) for v in param_ds.values())}")
     print(f"  Total successes: {total_successes} / {total_episodes} episodes")
-    env.close()
+    gym_env.close()
 
     return {
         "steps": log_steps,
@@ -240,7 +273,8 @@ def main(
 def plot_results(
     num_steps: int = 4000,
     seed: int = 0,
-    num_obstructions: int = 1,
+    env: str = "clutteredretrieval2d",
+    complexity: int = 1,
     save_path: str | None = None,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
@@ -250,7 +284,8 @@ def plot_results(
     results = main(
         num_steps=num_steps,
         seed=seed,
-        num_obstructions=num_obstructions,
+        env=env,
+        complexity=complexity,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
         use_parameter_scorer=use_parameter_scorer,
         **kwargs,
@@ -298,29 +333,35 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(
-        description="ClutteredRetrieval2D test for SimFreeParamPolicyApproach"
+        description="Kinder environment test for SimFreeParamPolicyApproach"
     )
     parser.add_argument(
         "--plot",
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=10000)
+    parser.add_argument("--num-steps", type=int, default=30000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument(
         "--reset-every",
         type=int,
-        default=100,
-        help="Force-reset episode after this many steps (default: 100)",
+        default=300,
+        help="Force-reset episode after this many steps (default: 300)",
     )
     parser.add_argument("--log-every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
-        "--num-obstructions",
+        "--env",
+        default="clutteredretrieval2d",
+        choices=list(_ENV_REGISTRY),
+        help="Short environment name (default: clutteredretrieval2d)",
+    )
+    parser.add_argument(
+        "--complexity",
         type=int,
         default=1,
         metavar="N",
-        help="Number of obstructions in the environment (default: 1)",
+        help="Complexity integer for the environment, e.g. num_obstructions (default: 1)",
     )
     parser.add_argument(
         "--save",
@@ -347,7 +388,8 @@ if __name__ == "__main__":
             reset_every=args.reset_every,
             log_every=args.log_every,
             seed=args.seed,
-            num_obstructions=args.num_obstructions,
+            env=args.env,
+            complexity=args.complexity,
             save_path=args.save,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
@@ -359,7 +401,8 @@ if __name__ == "__main__":
             reset_every=args.reset_every,
             log_every=args.log_every,
             seed=args.seed,
-            num_obstructions=args.num_obstructions,
+            env=args.env,
+            complexity=args.complexity,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
         )

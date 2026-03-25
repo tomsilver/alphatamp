@@ -132,6 +132,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
         self._most_recent_parameter: Any | None = None
         self._most_recent_abstract_action_descriptor: str | None = None
+        self._parameter_selection_obs: _O | None = None
 
         # Abstract Plan Dataset — keyed by (abstract_states, abstract_actions) to
         # prevent duplicate entries from repeated resample failures
@@ -606,8 +607,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert (
             self._most_recent_parameter is not None
             and self._most_recent_abstract_action_descriptor is not None
+            and self._parameter_selection_obs is not None
         )
-        assert self._last_observation is not None
 
         if self._train_or_eval == "eval":
             return
@@ -615,7 +616,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 1 if training_label == "success" else 0
 
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
-            (self._last_observation, self._most_recent_parameter, label)
+            (self._parameter_selection_obs, self._most_recent_parameter, label)
         )
 
     def _add_most_recent_abstract_action_to_dataset(self, training_label: str):
@@ -753,6 +754,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             optimal_params = self._current_controller.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
+        self._parameter_selection_obs = obs
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
