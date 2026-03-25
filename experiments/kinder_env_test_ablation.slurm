@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cr_ablation
+#SBATCH --job-name=kinder_env_test_ablation
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,8 +7,8 @@
 #SBATCH --mem=8G
 #SBATCH --time=08:30:00
 #SBATCH --array=0-3
-#SBATCH --output=experiments/slurm_outputs/cr_ablation_%A_%a.out
-#SBATCH --error=experiments/slurm_outputs/cr_ablation_%A_%a.err
+#SBATCH --output=experiments/slurm_outputs/kinder_env_test_ablation_%A_%a.out
+#SBATCH --error=experiments/slurm_outputs/kinder_env_test_ablation_%A_%a.err
 
 # Ablation conditions (SLURM_ARRAY_TASK_ID → flags):
 #   0 — full model          (both scorers on)
@@ -25,9 +25,9 @@ case $SLURM_ARRAY_TASK_ID in
     3) ABLATION_FLAGS="--no-abstract-plan-scorer --no-parameter-scorer" ;;
 esac
 
-.venv/bin/python -u experiments/cluttered_retrieval_test.py \
+.venv/bin/python -u experiments/kinder_env_test.py \
     --plot \
-    --save experiments/slurm_outputs/cr_ablation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.png \
+    --save experiments/slurm_outputs/kinder_env_test_ablation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.png \
     --max-resamples 20 \
     $ABLATION_FLAGS \
     "$@"
