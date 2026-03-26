@@ -877,21 +877,30 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # After trying a certain number of resamples, update the scorers
         # and Q-function only every train_every exhaustion events.
-        self._resample_exhaustion_count += 1
+        # Only count exhaustions and retrain during training; eval exhaustions
+        # must not modify learned models or the exhaustion counter.
         current_plan_str = (
             [a.short_str for a in self._current_abstract_plan[1]]
             if self._current_abstract_plan
             else []
         )
-        logging.info(
-            "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
-            self._resample_exhaustion_count,
-            self._timestep,
-            current_plan_str,
-        )
-        if self._resample_exhaustion_count % self._train_every == 0:
-            self._update_scorers()
-            self.train_ensemble_nets()
+        if self._train_or_eval == "train":
+            self._resample_exhaustion_count += 1
+            logging.info(
+                "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
+                self._resample_exhaustion_count,
+                self._timestep,
+                current_plan_str,
+            )
+            if self._resample_exhaustion_count % self._train_every == 0:
+                self._update_scorers()
+                self.train_ensemble_nets()
+        else:
+            logging.info(
+                "[BALD] Eval exhaustion (timestep %d), failed plan: %s",
+                self._timestep,
+                current_plan_str,
+            )
 
         # Generate candidate plans
         candidate_plans = self.generate_candidate_plans()

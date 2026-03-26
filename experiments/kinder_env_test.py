@@ -4,6 +4,11 @@ Runs the approach on a configurable kinder environment and logs
 the same metrics as bandit_test.py: rolling success rate, overall success
 rate, total successes, parameter resamples, and resample exhaustions.
 
+Training cycles through a fixed pool of ``num_train_seeds`` seeds so each
+configuration is seen multiple times.  At every log checkpoint a separate
+eval loop runs ``num_eval_episodes`` episodes on held-out seeds
+(``seed + num_train_seeds`` onward) to measure generalisation.
+
 Usage::
 
     python experiments/kinder_env_test.py
@@ -93,6 +98,57 @@ def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[flo
     return list(approach.get_q_network_loss_metrics())
 
 
+def _run_eval_loop(
+    approach: SimFreeParamPolicyApproach,
+    gym_env,
+    seed: int,
+    num_train_seeds: int,
+    num_eval_episodes: int,
+    reset_every: int,
+) -> tuple[float, int, int]:
+    """Run held-out eval episodes and return (success_rate, successes, episodes).
+
+    Switches the approach to eval mode, runs ``num_eval_episodes`` episodes on
+    seeds ``[seed + num_train_seeds, seed + num_train_seeds + num_eval_episodes)``,
+    then switches back to train mode.  No learning occurs during eval; the
+    approach uses its current exploit policy for plan selection.
+    """
+    if num_eval_episodes == 0:
+        return 0.0, 0, 0
+
+    approach.eval()
+    eval_successes = 0
+    last_obs = None
+
+    for i in range(num_eval_episodes):
+        eval_seed = seed + num_train_seeds + i
+        last_obs, _ = gym_env.reset(seed=eval_seed)
+        approach.reset_episode(last_obs)
+
+        episode_success = False
+        for _ in range(reset_every):
+            try:
+                action = approach.step()
+            except ApproachStepError:
+                break
+            last_obs, reward, done, _, _ = gym_env.step(action)
+            approach.update(last_obs, float(reward), done, {})
+            if done:
+                episode_success = True
+                break
+
+        eval_successes += int(episode_success)
+
+    # Clear lingering episode state so the subsequent train reset_episode
+    # does not record a spurious failure (the failure guard checks
+    # _most_recent_parameter, which reset_episode sets to None).
+    if last_obs is not None:
+        approach.reset_episode(last_obs)
+
+    approach.train()
+    return eval_successes / num_eval_episodes, eval_successes, num_eval_episodes
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -108,26 +164,37 @@ def main(
     complexity: int = 1,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
+    num_train_seeds: int = 5,
+    num_eval_episodes: int = 10,
 ) -> dict:
     """Run an experiment on a kinder environment and return collected metrics.
 
     Args:
         env: Short environment name from _ENV_REGISTRY (e.g. "clutteredretrieval2d").
         complexity: The complexity integer passed to the env (e.g. num_obstructions).
+        num_train_seeds: Number of distinct seeds to cycle through during training.
+            Training seeds are ``seed, seed+1, ..., seed+num_train_seeds-1``.
+        num_eval_episodes: Number of held-out eval episodes to run at each log
+            checkpoint.  Eval seeds start at ``seed + num_train_seeds``.
 
     Returns a dict with keys:
-        steps                 — list of step indices at each log point
-        success_rates         — rolling success rate at each log point
-        overall_success_rates — total_successes / total_episodes at each log point
-        total_successes       — cumulative successes at each log point
-        episode_counts        — cumulative episode count at each log point
-        exhaustion_counts     — cumulative resample exhaustion count at each log point
-        param_loss            — per-fit sklearn loss values
-        q_loss                — per-epoch Q-network loss values
+        steps                      — list of step indices at each log point
+        success_rates              — train rolling success rate at each log point
+        overall_success_rates      — train total_successes / total_episodes
+        total_successes            — train cumulative successes
+        episode_counts             — train cumulative episode count
+        exhaustion_counts          — cumulative resample exhaustion count
+        eval_success_rates         — eval success rate at each log point
+        eval_cumulative_successes  — eval cumulative successes across checkpoints
+        param_loss                 — per-fit sklearn loss values
+        q_loss                     — per-epoch Q-network loss values
     """
 
     env_id_template, model_name, complexity_kwarg = _ENV_REGISTRY[env]
-    print(f"env={env}  complexity={complexity}  ({complexity_kwarg}={complexity})")
+    print(
+        f"env={env}  complexity={complexity}  ({complexity_kwarg}={complexity})  "
+        f"num_train_seeds={num_train_seeds}  num_eval_episodes={num_eval_episodes}"
+    )
 
     # Build env
     kinder.register_all_environments()
@@ -194,12 +261,16 @@ def main(
     episode_counts: list[int] = []
     cumulative_successes: list[int] = []
     exhaustion_counts: list[int] = []
+    eval_success_rates: list[float] = []
+    eval_cumulative_successes: list[int] = []
+    total_eval_successes = 0
     param_loss: list[float] = []
     q_loss: list[float] = []
 
     header = (
-        f"{'Step':>6}  {'Rolling success':>15}  {'Overall success':>15}  "
-        f"{'Total successes':>16}  {'Resamples':>10}  {'Exhaustions':>12}"
+        f"{'Step':>6}  "
+        f"{'[Train]':>7}  {'Roll%':>7}  {'Overall%':>8}  {'Succ':>6}  {'Exhaus':>6}  "
+        f"{'[Eval]':>6}  {'Rate%':>7}  {'Succ/N':>6}"
     )
     print(header)
     print("-" * 82)
@@ -214,7 +285,7 @@ def main(
             episode_success = False
             total_episodes += 1
             reset_count += 1
-            obs, _ = gym_env.reset(seed=seed + reset_count)
+            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
             approach.reset_episode(obs)
             continue
 
@@ -230,32 +301,52 @@ def main(
             total_episodes += 1
             episode_success = False
             reset_count += 1
-            obs, _ = gym_env.reset(seed=seed + reset_count)
+            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
             approach.reset_episode(obs)
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
             overall_rate = total_successes / total_episodes if total_episodes else 0.0
-            param_ds = approach.get_parameter_dataset()
-            total_data = sum(len(v) for v in param_ds.values())
             exhaustion_count = approach.get_resample_exhaustion_count()
-            print(
-                f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  "
-                f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
+
+            # --- Eval loop on held-out seeds ---
+            eval_rate, eval_succ, _ = _run_eval_loop(
+                approach, gym_env, seed, num_train_seeds, num_eval_episodes, reset_every
             )
+            total_eval_successes += eval_succ
+
+            print(
+                f"{step+1:>6}  "
+                f"{'':>7}  {rolling_rate:>7.2%}  {overall_rate:>8.2%}  "
+                f"{total_successes:>6}  {exhaustion_count:>6}  "
+                f"{'':>6}  {eval_rate:>7.2%}  {eval_succ:>3}/{num_eval_episodes:<3}"
+            )
+
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
             overall_success_rates.append(overall_rate)
             episode_counts.append(total_episodes)
             cumulative_successes.append(total_successes)
             exhaustion_counts.append(exhaustion_count)
+            eval_success_rates.append(eval_rate)
+            eval_cumulative_successes.append(total_eval_successes)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
             q_loss = _get_q_network_loss_curves(approach)
+
+            # Restore training state — start a fresh episode on the next train seed.
+            reset_count += 1
+            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
+            approach.reset_episode(obs)
+            episode_success = False
 
     print("\nDone.")
     param_ds = approach.get_parameter_dataset()
     print(f"  Total parameter samples: {sum(len(v) for v in param_ds.values())}")
-    print(f"  Total successes: {total_successes} / {total_episodes} episodes")
+    print(f"  Train successes: {total_successes} / {total_episodes} episodes")
+    print(
+        f"  Eval  successes: {total_eval_successes} / "
+        f"{len(log_steps) * num_eval_episodes} episodes"
+    )
     gym_env.close()
 
     return {
@@ -265,6 +356,8 @@ def main(
         "episode_counts": episode_counts,
         "total_successes": cumulative_successes,
         "exhaustion_counts": exhaustion_counts,
+        "eval_success_rates": eval_success_rates,
+        "eval_cumulative_successes": eval_cumulative_successes,
         "param_loss": param_loss,
         "q_loss": q_loss,
     }
@@ -293,19 +386,27 @@ def plot_results(
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-    # --- Overall success rate ---
+    # --- Overall success rate: train vs eval ---
     ax = axes[0]
     ax.plot(
         results["steps"],
         [v * 100 for v in results["overall_success_rates"]],
         marker="s",
         linestyle="--",
-        label="Overall",
+        label="Train (overall)",
+    )
+    ax.plot(
+        results["steps"],
+        [v * 100 for v in results["eval_success_rates"]],
+        marker="o",
+        linestyle="-",
+        label="Eval (held-out)",
     )
     ax.set_xlabel("Step")
     ax.set_ylabel("Success rate (%)")
-    ax.set_title("Overall success rate (successes / episodes)")
+    ax.set_title("Success rate: train vs eval")
     ax.set_ylim(0, 105)
+    ax.legend()
     ax.grid(True, alpha=0.3)
 
     # --- Episodes over steps ---
@@ -317,8 +418,8 @@ def plot_results(
         color="tab:green",
     )
     ax.set_xlabel("Step")
-    ax.set_ylabel("Cumulative episodes")
-    ax.set_title("Episodes completed over steps")
+    ax.set_ylabel("Cumulative train episodes")
+    ax.set_title("Train episodes completed over steps")
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -379,6 +480,20 @@ if __name__ == "__main__":
         action="store_true",
         help="Ablation: always use the first parameter sample, skip scorer",
     )
+    parser.add_argument(
+        "--num-train-seeds",
+        type=int,
+        default=5,
+        metavar="K",
+        help="Number of seeds to cycle through during training (default: 5)",
+    )
+    parser.add_argument(
+        "--num-eval-episodes",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Held-out eval episodes to run at each log checkpoint (default: 10)",
+    )
     args = parser.parse_args()
 
     if args.plot:
@@ -393,6 +508,8 @@ if __name__ == "__main__":
             save_path=args.save,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
+            num_train_seeds=args.num_train_seeds,
+            num_eval_episodes=args.num_eval_episodes,
         )
     else:
         main(
@@ -405,4 +522,6 @@ if __name__ == "__main__":
             complexity=args.complexity,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
+            num_train_seeds=args.num_train_seeds,
+            num_eval_episodes=args.num_eval_episodes,
         )
