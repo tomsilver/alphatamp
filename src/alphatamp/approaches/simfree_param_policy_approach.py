@@ -182,6 +182,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             if self._train_or_eval == "train"
             else self._exploit_explorer
         )
+
+        # Record the in-progress parameter/action as a failure if the episode ended
+        # without task completion (timeout or ApproachStepError). Without this, episodes
+        # that time out contribute no learning signal.
+        if (
+            self._train_or_eval == "train"
+            and not self._completed_task
+            and self._most_recent_parameter is not None
+            and self._most_recent_abstract_action_descriptor is not None
+            and self._parameter_selection_obs is not None
+        ):
+            self._add_most_recent_abstract_action_to_dataset("failure")
+            self._add_most_recent_parameter_to_dataset("failure")
+            self._add_abstract_plan_to_dataset("failure")
+
         self._current_abstract_plan_step = 0
         self._current_controller = None
         self._last_observation = obs
@@ -298,10 +313,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._add_abstract_plan_to_dataset("success")
             self._completed_task = True
 
-            # Retrain scorers
+            # Retrain scorers and Q-networks
             self._update_scorers()
-
-            # Generate new candidate plan
+            self.train_ensemble_nets()
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -715,11 +729,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     continue
                 key_actual = failures / attempts
                 key_predicted = scorer.score((list(key_states), list(key_actions)))
+                state_str = [str(s) for s in key_states]
                 action_str = [a.short_str for a in key_actions]
                 logging.info(
-                    "[Scorer-ctx] %s history=%s  predicted=%.4f actual=%.4f"
+                    "[Scorer-ctx] %s states=%s actions=%s  predicted=%.4f actual=%.4f"
                     " (failures=%d attempts=%d)",
                     op.short_str,
+                    state_str,
                     action_str,
                     key_predicted,
                     key_actual,
