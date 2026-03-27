@@ -5,6 +5,7 @@ from typing import Any, TypeVar
 import numpy as np
 from sklearn.exceptions import NotFittedError
 from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.utils.validation import check_is_fitted
 
@@ -25,11 +26,16 @@ class ClassifierParameterScorer(BaseScorer):
             if not saved_classifier
             else saved_classifier
         )
+        self._scaler = StandardScaler()
+        self._scaler_fitted = False
 
     def train(self, features: np.ndarray, labels: np.ndarray):
         """Given training data, update parameter scorer."""
+        self._scaler.fit(features)
+        scaled = self._scaler.transform(features)
+        self._scaler_fitted = True
         sample_weights = compute_sample_weight("balanced", labels)
-        self._classifier.fit(features, labels, sample_weight=sample_weights)
+        self._classifier.fit(scaled, labels, sample_weight=sample_weights)
 
     def score(self, obs: _O, parameter: Any) -> float:
         """Score the parameter given the low-level observation."""
@@ -39,6 +45,8 @@ class ClassifierParameterScorer(BaseScorer):
             parameter_arr = np.array(parameter)
             feature_arr = np.append(state_arr, parameter_arr)
             features = feature_arr.reshape(1, -1)
+            if self._scaler_fitted:
+                features = self._scaler.transform(features)
             return self._classifier.predict_proba(features)[:, 1][0]
         except NotFittedError:
             return 1.0

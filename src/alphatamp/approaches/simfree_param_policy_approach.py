@@ -24,6 +24,7 @@ from bilevel_planning.utils import (
     cached_all_ground_operators,
     get_all_ground_atoms_for_predicate,
 )
+from relational_structs import ObjectCentricState
 from relational_structs.pddl import GroundAtom
 from torch import FloatTensor, Tensor, nn
 
@@ -328,6 +329,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
+    def _obs_to_feature_vec(self, obs: _O) -> np.ndarray:
+        """Convert an observation to a flat float numpy vector.
+
+        ObjectCentricState observations are vectorized via obs.vec(); plain
+        numpy arrays are returned as-is.
+        """
+        if isinstance(obs, ObjectCentricState):
+            objects = sorted(obs, key=str)
+            return obs.vec(objects).astype(np.float64)
+        return np.asarray(obs, dtype=np.float64)
+
     def _generate_parameter_scorer_training_data(
         self, features_and_labels: list
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -339,7 +351,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Generate a row in the training dataset.
         for datapoint in features_and_labels:
             state, parameter, label = datapoint
-            state_arr = np.array(state)
+            state_arr = self._obs_to_feature_vec(state)
             parameter_arr = np.array(parameter)
 
             # The features are the state observation and the parameter.
@@ -374,6 +386,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 # Train the scoring function for each grounded skill.
                 scoring_function.train(features, labels)
+
+                # Log loss info if the scorer exposes sklearn MLPClassifier internals.
+                clf = getattr(scoring_function, "_classifier", None)
+                if clf is not None and hasattr(clf, "loss_curve_"):
+                    n_pos = int(labels.sum())
+                    n_neg = len(labels) - n_pos
+                    logging.info(
+                        "[ParamPolicy] %s n=%d (pos=%d neg=%d) iters=%d loss: %.4f → %.4f",
+                        abstract_action_descriptor,
+                        len(labels),
+                        n_pos,
+                        n_neg,
+                        clf.n_iter_,
+                        clf.loss_curve_[0],
+                        clf.loss_,
+                    )
 
     def _generate_abstract_action_scorer_training_data(
         self, features_and_labels: list
@@ -765,7 +793,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 scoring_function,
                 param_sample_count=self._param_sample_count,
             )
-            optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
+            obs_vec = self._obs_to_feature_vec(obs)
+            optimal_params = parameter_policy.sample_parameters(x, obs_vec, self._rng)
         else:
             optimal_params = self._current_controller.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
