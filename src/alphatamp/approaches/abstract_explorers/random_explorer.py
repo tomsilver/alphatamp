@@ -1,14 +1,13 @@
-"""An random abstract plan explorer that returns a fixed length plan with random
+"""An random abstract plan explorer that returns a random length plan with random
 actions."""
 
 from typing import TypeVar
 
 import numpy as np
-from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
-from bilevel_planning.utils import (
-    cached_all_ground_operators,
+from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
+    RelationalAbstractSuccessorGenerator,
 )
-from relational_structs.pddl import GroundOperator
+from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
@@ -16,6 +15,7 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )
+from relational_structs.pddl import GroundOperator
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -23,8 +23,8 @@ _U = TypeVar("_U")  # action
 
 
 class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
-    """An random abstract plan explorer that returns a fixed length plan with random
-    actions."""
+    """An random abstract plan explorer that returns a random length plan with random
+    actions whose preconditions are satisfied at each step."""
 
     def __init__(
         self,
@@ -40,19 +40,16 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
         self._planning_timeout = planning_timeout
         self._max_plan_length = max_plan_length
         self._rng = np.random.default_rng(seed=seed)
+        self._successor_fn = RelationalAbstractSuccessorGenerator(
+            env_models.operators
+        )
 
     def generate_abstract_plan(
         self, obs: _O, goal: RelationalAbstractGoal | None = None
     ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
-        # Randomly create abstract plan.
-
         # Get the initial abstract state.
         x0 = self._env_models.observation_to_state(obs)
         s0 = self._env_models.state_abstractor(x0)
-
-        # Get set of lifted operators and ground them
-        operators = self._env_models.operators
-        grounded_operators = cached_all_ground_operators(operators, s0.objects)
 
         # Create random abstract plan with random length
         s_plan = [s0]
@@ -60,18 +57,13 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
 
         plan_length = self._rng.integers(1, self._max_plan_length)
         for _ in range(plan_length):
+            # Only consider operators whose preconditions hold in the current state.
+            feasible = list(self._successor_fn(s_plan[-1]))
+            if not feasible:
+                break
 
-            next_random_abstract_action: GroundOperator = self._rng.choice(
-                np.array(list(grounded_operators), dtype=object)
-            )
-
-            next_atoms = (
-                s_plan[-1].atoms - next_random_abstract_action.delete_effects
-            ) | next_random_abstract_action.add_effects
-
-            next_random_abstract_state = RelationalAbstractState(next_atoms, s0.objects)
-
-            s_plan.append(next_random_abstract_state)
-            a_plan.append(next_random_abstract_action)
+            action, next_state = feasible[self._rng.integers(len(feasible))]
+            s_plan.append(next_state)
+            a_plan.append(action)
 
         return (s_plan, a_plan)

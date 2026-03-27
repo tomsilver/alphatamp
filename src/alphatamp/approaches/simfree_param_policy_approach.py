@@ -33,6 +33,7 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
 )
 from alphatamp.approaches.abstract_explorers.batch_explorer import BatchExplorer
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
+from alphatamp.approaches.abstract_explorers.random_explorer import RandomExplorer
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
     create_abstract_plan_sequence,
@@ -113,12 +114,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation: _O | None = None
 
         # Explorers.
+        self._num_candidate_plans = num_candidate_plans
         self._train_explorer = train_explorer
         self._exploit_explorer: ExploitExplorer = ExploitExplorer(
             self._env_models, self._feasibility_classifier_learner, seed
         )
         self._batch_explorer: BatchExplorer = BatchExplorer(
-            self._env_models, seed, max_abstract_plans=num_candidate_plans
+            self._env_models, seed, max_abstract_plans=self._num_candidate_plans
+        )
+
+        self._random_explorer: RandomExplorer = RandomExplorer(
+            self._env_models, seed
         )
 
         # Global resample count
@@ -555,7 +561,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         using the last observation.
 
         This forces the explorer to generate a plan that tries to achieve the goal.
-        However, the agent successfully completed the prior plan, the goal is to reset
+        However, if the agent successfully completed the prior plan, the goal is to reset
         the environment first
         """
 
@@ -572,6 +578,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._last_observation, goal
         )
         return candidate_plans
+    
+    def generate_random_candidate_plans(self) -> list[Skeleton]:
+        """Use the random abstract plan generator to generate 
+           a batch of abstract plans for BALD scoring.
+           
+           This will force the BALD Scorers to explore diverse 
+           plans that may not solve the task, but could yield
+           interesting data to train on.
+        """
+
+        assert self._last_observation is not None
+        candidate_plans: list[Skeleton] = []
+
+        for _ in range(self._num_candidate_plans):
+            candidate_plans.append(self._random_explorer.generate_abstract_plan(
+                self._last_observation
+                ))
+    
+        return candidate_plans
+
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Given a list of candidate plans, score each plan based on the BALD objective
@@ -931,8 +957,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 current_plan_str,
             )
 
-        # Generate candidate plans
-        candidate_plans = self.generate_candidate_plans()
+        # Generate random candidate plans for exploration
+        # These plans do not need to lead to task success
+        # but should instead explore the abstract action space
+        candidate_plans = self.generate_random_candidate_plans()
 
         # Score candidate plans and return best plan
         plan_to_execute = (
