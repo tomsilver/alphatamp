@@ -1,78 +1,76 @@
 
 from pyperplan.heuristics.heuristic_base import Heuristic
-from fnmatch import fnmatch
 
 def generate_heuristic(task):
     class ClutteredStorage2DHeuristic(Heuristic):
         """
         Summary:
-            This heuristic uses a "max-goal-distance" strategy: it returns the
-            maximum number of actions needed to move any single block from its current state to the goal,
-            plus the number of other unsatisfied goals (to prioritize making progress on the most difficult block).
-            This prioritizes the "critical path".
+            Provides a sequence-aware greedy heuristic: It simulates a minimal action sequence to bring all blocks
+            to their goal shelf, accounting for the need to clear the hand if carrying wrong blocks and
+            always choosing the "easiest" next block.
 
         Assumptions:
-            - Each block must be picked and placed unless already on shelf or held.
-            - Robot must be hand-empty to pick a new block, possibly requiring to place an unneeded held block.
-            - Only one block may be held at a time.
+            - One robot and all blocks can be picked from either on-shelf/not-on-shelf.
+            - The robot can only hold one block at a time.
+            - At each step, the planner will always choose to put down a wrong block if necessary to pick a needed one.
 
         Heuristic Initialization:
-            - Extracts all block/shelf pairs for the OnShelf goals.
+            - Extracts the set of necessary (OnShelf block shelf) goals, and list of blocks involved.
 
         Step-By-Step Thinking for Computing Heuristic:
-            1. For each block that is required on the shelf:
-                a. If already on the shelf, cost is 0.
-                b. If currently held, cost is 1.
-                c. Otherwise, cost is 2 (pick+place).
-            2. If the robot is holding an irrelevant block, the first pick will cost an extra action (for placing it).
-            3. Take the max per-block cost (critical path), then add the number of other goals not yet satisfied to encourage overall progress.
+            1. List all the blocks that must be on-shelf according to goal and are not there yet.
+            2. Determine if robot is holding any block; if so, check if it is one of the needed blocks.
+               - If not a goal block, must drop it first (counts as an extra move).
+            3. For every needed block, except possibly the one currently held, each requires:
+               a. If hand empty: Pick (1), Place (1) = 2 actions.
+               b. If holding the needed block: Only Place (1).
+               c. If hand occupied by wrong block: Place wrong (1), Pick goal (1), Place goal (1) = 3 actions.
+            4. Greedily assumes the planner will always pick to minimize extra "drop" actions.
+
         """
         def __init__(self, task):
-            self.onshelf_goals = []
-            for goal in task.goals:
-                parts = goal[1:-1].split()
-                if parts[0] == "OnShelf":
-                    self.onshelf_goals.append((parts[1], parts[2]))
+            self.goals = task.goals
+            # Find all goal blocks
+            self.needed_blocks = set()
+            for g in self.goals:
+                parts = g[1:-1].split()
+                if len(parts) == 3 and parts[0] == "OnShelf":
+                    self.needed_blocks.add(parts[1])
 
-        def __call__(self, node) -> float:
+        def __call__(self, node):
             state = node.state
-            facts = set(state)
-
-            holding_block = None
-            robot = None
-            for fact in state:
-                parts = fact[1:-1].split()
-                if parts[0] == "Holding":
-                    holding_block = parts[2]
-                    robot = parts[1]
-                    break
-            if robot is None:
-                for fact in state:
-                    parts = fact[1:-1].split()
-                    if parts[0] == "HandEmpty":
-                        robot = parts[1]
-                        break
-
-            per_block_costs = []
-            unsatisfied = 0
-            for block, shelf in self.onshelf_goals:
-                if f"(OnShelf {block} {shelf})" in facts:
-                    per_block_costs.append(0)
-                    continue
-                unsatisfied += 1
-                if holding_block == block:
-                    per_block_costs.append(1)  # Only Place needed
+            on_shelf_now = set()
+            not_on_shelf_now = set()
+            held_block = None
+            hand_empty = False
+            for f in state:
+                parts = f[1:-1].split()
+                if len(parts) == 3 and parts[0] == "OnShelf":
+                    on_shelf_now.add(parts[1])
+                elif len(parts) == 3 and parts[0] == "NotOnShelf":
+                    not_on_shelf_now.add(parts[1])
+                elif len(parts) == 3 and parts[0] == "Holding":
+                    held_block = parts[2]
+                elif parts[0] == "HandEmpty":
+                    hand_empty = True
+            # Determine missing blocks
+            left = [b for b in self.needed_blocks if b not in on_shelf_now]
+            if not left:
+                return 0
+            actions = 0
+            # Is robot already holding one of these?
+            if held_block is not None:
+                if held_block in left:
+                    # Place directly, then do the rest
+                    actions += 1
+                    left.remove(held_block)
+                    hand_empty = True
                 else:
-                    per_block_costs.append(2)  # Pick + Place
+                    # Must drop wrong block
+                    actions += 1
+                    hand_empty = True
+            # Now for each remaining left block: Pick+Place if hand is empty, or if we greedily put down last placed block.
+            actions += 2 * len(left)
+            return actions
 
-            # If holding a block that is not among the currently needed blocks, extra Place needed
-            needed_blocks = set(block for block, shelf in self.onshelf_goals if f"(OnShelf {block} {shelf})" not in facts)
-            penalty = 0
-            if holding_block is not None and holding_block not in needed_blocks:
-                penalty = 1
-            if per_block_costs:
-                heuristic = max(per_block_costs) + unsatisfied - 1 + penalty
-            else:
-                heuristic = 0
-            return float(heuristic)
     return ClutteredStorage2DHeuristic(task)

@@ -1,71 +1,42 @@
 
 from pyperplan.heuristics.heuristic_base import Heuristic
-from fnmatch import fnmatch
 
 def generate_heuristic(task):
     class ClutteredStorage2DHeuristic(Heuristic):
         """
         Summary:
-            Heuristic returns the number of blocks not on the shelf and not being held, plus an adjustment for whether the
-            robot is ready to pick immediately. This is a "count unsatisfied goals" plus a "step for hand" style heuristic.
+            Computes a relaxed plan-length estimate for placing all required blocks on the shelf,
+            ignoring delete effects and hand constraints, by simply counting the number of blocks not yet on the shelf.
 
         Assumptions:
-            - Each block goal requires two steps (pick+place), unless the robot is currently holding a required block.
-            - If the robot is holding a wrong block, this adds a "correction cost".
-            - Only the "HandEmpty" or "Holding" is possible, i.e., only one block held at once.
+            - The robot can in theory pick and place simultaneously in the relaxed plan.
+            - Ignores effects of hand occupancy; relaxes the problem substantially.
+            - Only actions that satisfy goals matter, and actions are independent per block.
 
         Heuristic Initialization:
-            - Caches the set of block/shelf goal pairs for OnShelf.
-            - No static facts are relevant.
+            - Builds the list of (OnShelf block shelf) facts present in goals.
+            - No static facts are used.
 
         Step-By-Step Thinking for Computing Heuristic:
-            1. For each goal block:
-               a. If OnShelf in state: 0 cost
-               b. Else, if robot is holding that block: 1 (just place)
-               c. Else: 2 (pick+place)
-            2. If the robot is holding any block that is not needed, add penalty (must place before picking).
-            3. Otherwise, sum the required actions.
+            1. Count the number of goal facts (OnShelf block shelf) not true in the current state.
+            2. For each such missing goal, one 'place' action suffices in the relaxed plan,
+               since we ignore hand and precondition constraints.
+            3. Thus the heuristic is simply the number of unsatisfied (OnShelf ... ...) goal facts.
+
         """
         def __init__(self, task):
-            self.onshelf_goals = set()
-            for goal in task.goals:
-                parts = goal[1:-1].split()
-                if parts[0] == "OnShelf":
-                    self.onshelf_goals.add((parts[1], parts[2]))
-
-        def __call__(self, node) -> float:
+            self.on_shelf_goals = set()
+            for g in task.goals:
+                parts = g[1:-1].split()
+                if len(parts) == 3 and parts[0] == "OnShelf":
+                    self.on_shelf_goals.add((parts[1], parts[2]))
+        def __call__(self, node):
             state = node.state
-            facts = set(state)
-            holding = None
-            robot = None
-            for fact in state:
-                parts = fact[1:-1].split()
-                if parts[0] == "Holding":
-                    holding = parts[2]
-                    robot = parts[1]
-                    break
-            if robot is None:
-                for fact in state:
-                    parts = fact[1:-1].split()
-                    if parts[0] == "HandEmpty":
-                        robot = parts[1]
-                        break
-            cost = 0
-            for block, shelf in self.onshelf_goals:
-                if f"(OnShelf {block} {shelf})" in facts:
-                    continue
-                if holding == block:
-                    cost += 1  # Just need Place
-                else:
-                    cost += 2  # Need Pick + Place
-
-            # Correction: if robot is holding an "irrelevant" block, add forced placement
-            if holding is not None:
-                holding_relevant = any(
-                    (holding, shelf) in self.onshelf_goals and f"(OnShelf {holding} {shelf})" not in facts
-                    for shelf in [shelf for (_, shelf) in self.onshelf_goals]
-                )
-                if not holding_relevant:
-                    cost += 1
-            return float(cost)
+            on_shelf_now = set()
+            for f in state:
+                parts = f[1:-1].split()
+                if len(parts) == 3 and parts[0] == "OnShelf":
+                    on_shelf_now.add((parts[1], parts[2]))
+            unsatisfied = self.on_shelf_goals - on_shelf_now
+            return 0 if not unsatisfied else len(unsatisfied)
     return ClutteredStorage2DHeuristic(task)

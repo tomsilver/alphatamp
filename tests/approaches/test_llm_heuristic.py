@@ -33,7 +33,7 @@ def test_heuristic_approach():
 
     # Create the approach.
     approach = HeuristicLLMApproach(
-        env_models, seed=120, samples_per_step=10, training_planning_timeout=10, use_stored_heuristic=True
+        env_models, seed=120, samples_per_step=10, training_planning_timeout=10, use_stored_heuristic=False
     )
 
     # Train the approach
@@ -45,7 +45,7 @@ def test_heuristic_approach():
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=250)
+    plan = approach.run_planning(obs, timeout=500)
 
     # Print refinement metrics
     m = approach.last_metrics

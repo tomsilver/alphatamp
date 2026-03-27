@@ -151,6 +151,8 @@ class HeuristicGenerator(
         self._stored_heuristic_path = stored_heuristic_path
         self._generate_heuristic_fn = generate_heuristic_fn
 
+        self._last_abstract_states: list = []
+
         if use_stored_heuristic:
             print(f"Loading stored heuristic from {stored_heuristic_path}")
 
@@ -192,6 +194,7 @@ class HeuristicGenerator(
     def __call__(self, *args: Any, **kwargs: Any) -> Iterator:
         for s_plan, a_plan in super().__call__(*args, **kwargs):
             self._last_abstract_plan = a_plan
+            self._last_abstract_states = s_plan
             readable = [
                 {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
                 for a in a_plan
@@ -245,7 +248,7 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         # NEW: number of candidate heuristics to generate and evaluate
         num_candidates: int = 3,
         # NEW: per-candidate evaluation timeout in seconds
-        eval_timeout: float = 40.0,
+        eval_timeout: float = 20.0,
     ):
         super().__init__(env_models, seed)
         self._max_abstract_plans = max_abstract_plans
@@ -322,7 +325,14 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
 
     def _synthesize_all_heuristics(self, prompt: str) -> list[tuple[Callable, str]]:
         """Single LLM call → list of (generate_heuristic fn, code_str) for each candidate."""
-        query = Query(prompt=prompt, imgs=None, hyperparameters={"temperature": 1.0})
+        multi_prompt = (
+            prompt
+            + f"\n\nProvide exactly {self._num_candidates} diverse heuristic implementations, "
+            f"each in its own separate ```python code block. "
+            f"Each block must be self-contained and define a `def generate_heuristic(task):` "
+            f"function that returns a heuristic instance."
+        )
+        query = Query(prompt=multi_prompt, imgs=None, hyperparameters={"temperature": 1.0})
         reprompt_checks: list[RepromptCheck] = [_MultiBlockSyntaxCheck(self._num_candidates)]
         response = query_with_reprompts(self._llm, query, reprompt_checks)
         blocks = _parse_all_python_code_blocks(response.text)[:self._num_candidates]
@@ -363,6 +373,114 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
         return (
             tracking_refiner._deepest_failed_index,  # pylint: disable=protected-access
             plan is not None,
+        )
+
+    def _select_best_heuristic(
+        self,
+        problem: PlanningProblem,
+        candidates: list[tuple[Callable, str]],
+        start_time: float,
+        timeout: float,
+    ) -> tuple[Callable, str, float]:
+        """Evaluate candidates and return (best_fn, best_code, best_score)."""
+        best_fn: Callable = candidates[0][0]
+        best_code: str = candidates[0][1]
+        best_score: float = float("-inf")
+
+        for i, (fn, code_str) in enumerate(candidates):
+            elapsed = time.perf_counter() - start_time
+            remaining = timeout - elapsed
+            if remaining < self._eval_timeout:
+                print(f"  Skipping heuristic {i + 1}: only {remaining:.1f}s remaining")
+                break
+
+            print(f"\n  --- Evaluating heuristic {i + 1}/{len(candidates)} ---")
+            try:
+                deepest, succeeded = self._evaluate_heuristic(problem, fn, self._eval_timeout)
+            except Exception as e:  # pylint: disable=broad-except
+                print(f"  Heuristic {i + 1} raised exception: {e}")
+                deepest, succeeded = -1, False
+
+            score: float = float("inf") if succeeded else float(deepest)
+            print(
+                f"  Heuristic {i + 1}: deepest_step={deepest}, "
+                f"succeeded={succeeded}, score={score}"
+            )
+
+            if score > best_score:
+                best_score = score
+                best_fn = fn
+                best_code = code_str
+                Path("llm_heuristic_best.py").write_text(best_code)
+
+            if succeeded:
+                print(f"  Heuristic {i + 1} solved the problem during eval — using it.")
+                break
+
+        return best_fn, best_code, best_score
+
+    @staticmethod
+    def _extract_failure_context(
+        abstract_actions: list,
+        failed_state: Any,
+        failed_index: int,
+        abstract_states: list,
+    ) -> Dict[str, Any]:
+        """Extract failure context from the attempted plan and concrete state."""
+        failed_plan = [
+            {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+            for a in abstract_actions
+        ]
+        coordinates: Dict[str, tuple] = {}
+        for obj in failed_state.data:
+            if "x1" in failed_state.type_features.get(obj.type, []):
+                x = float(failed_state.get(obj, "x1"))
+                y = float(failed_state.get(obj, "y1"))
+            else:
+                x = float(failed_state.get(obj, "x"))
+                y = float(failed_state.get(obj, "y"))
+            coordinates[obj.name] = (x, y)
+        failed_action_info = {
+            "index": failed_index,
+            "action": str(abstract_actions[failed_index]),
+            "predicates": sorted(str(a) for a in abstract_states[failed_index].atoms),
+        }
+        return {
+            "failed_plan": failed_plan,
+            "failed_action": failed_action_info,
+            "coordinates": coordinates,
+        }
+
+    @staticmethod
+    def _build_failure_section(failure_context: Dict[str, Any]) -> str:
+        """Build a failure context string to append to the heuristic prompt."""
+        failed_plan_str = "\n".join(
+            f"- {step['operator_name']}({', '.join(step['arguments'])})"
+            for step in failure_context["failed_plan"]
+        )
+        coords_str = "\n".join(
+            f"- {name}: ({x:.3f}, {y:.3f})"
+            for name, (x, y) in sorted(failure_context["coordinates"].items())
+        )
+        failed_action = failure_context["failed_action"]
+        idx = failed_action["index"]
+        action = failed_action["action"]
+        predicates = "\n".join(f"- {p}" for p in failed_action["predicates"])
+        return (
+            "\n\nPrevious Attempt (FAILED)\n"
+            "-------------------------\n"
+            "The heuristics generated previously failed to guide the planner to a "
+            "solution during low-level trajectory sampling. Use this failure "
+            "information to generate BETTER heuristics that guide the planner past "
+            "this failure point.\n"
+            f"Attempted abstract plan:\n{failed_plan_str}\n\n"
+            f"The plan failed at step {idx} ({action})\n"
+            "The abstract state before this action had these predicates:\n"
+            f"{predicates}\n"
+            f"Object positions at the point of failure:\n{coords_str}\n"
+            "Generate heuristics that better prioritize the actions needed to succeed "
+            "at this step and beyond.\n"
+            "-------------------------"
         )
 
     def _run_planning(
@@ -408,57 +526,63 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
 
         # ── Step 3: evaluate each candidate, track best by deepest step ───────
         print(f"\n=== Evaluating candidates ({self._eval_timeout}s each) ===")
-        best_fn: Callable = candidates[0][0]
-        best_code: str = candidates[0][1]
-        best_score: float = float("-inf")  # higher = better (-inf = not yet scored)
-
-        for i, (fn, code_str) in enumerate(candidates):
-            elapsed = time.perf_counter() - start_time
-            remaining = timeout - elapsed
-            if remaining < self._eval_timeout:
-                # Not enough time left to run a full eval — keep best so far
-                print(f"  Skipping heuristic {i + 1}: only {remaining:.1f}s remaining")
-                break
-
-            print(f"\n  --- Evaluating heuristic {i + 1}/{self._num_candidates} ---")
-            try:
-                deepest, succeeded = self._evaluate_heuristic(
-                    problem, fn, self._eval_timeout
-                )
-            except Exception as e:  # pylint: disable=broad-except
-                print(f"  Heuristic {i + 1} raised exception: {e}")
-                deepest, succeeded = -1, False
-
-            # Score: infinity if it solved the problem, otherwise the deepest step index
-            score: float = float("inf") if succeeded else float(deepest)
-            print(
-                f"  Heuristic {i + 1}: deepest_step={deepest}, "
-                f"succeeded={succeeded}, score={score}"
-            )
-
-            if score > best_score:
-                best_score = score
-                best_fn = fn
-                best_code = code_str
-                Path("llm_heuristic_best.py").write_text(best_code)
-
-            if succeeded:
-                # Already solved — no need to evaluate remaining candidates
-                print(f"  Heuristic {i + 1} solved the problem during eval — using it.")
-                break
-
+        best_fn, best_code, best_score = self._select_best_heuristic(
+            problem, candidates, start_time, timeout
+        )
         print(f"\n=== Best score: {best_score} — running full planning ===")
 
         # ── Step 4: full planning with the winning heuristic ─────────────────
         remaining_time = timeout - (time.perf_counter() - start_time)
         generator = self._make_generator(generate_heuristic_fn=best_fn)
         planner = self._make_planner(generator)
+        tracking_refiner = FailureTrackingBacktrackingRefiner(
+            self._trajectory_sampler, self._samples_per_step, seed=self._seed
+        )
+        planner._refiner = tracking_refiner  # pylint: disable=protected-access
+        plan, _ = planner.run(problem, timeout=min(remaining_time, 50)) # mention this in my thesis, why I made this decision. It was bc i didn't actually get to the retry
+        self.last_metrics = planner.last_metrics
+
+        if plan is not None:
+            print("Succeeded with abstract plan:", [
+                {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
+                for a in getattr(generator, "_last_abstract_plan", [])
+            ])
+            return plan
+
+        # ── Step 5: retry with failure-informed heuristics ───────────────────
+        print("\n=== Full planning failed — retrying with failure context ===")
+        remaining_time = timeout - (time.perf_counter() - start_time)
+        if remaining_time <= 0:
+            raise TimeoutError("No plan found — no time remaining for retry")
+
+        abstract_actions = getattr(generator, "_last_abstract_plan", [])
+        abstract_states = getattr(generator, "_last_abstract_states", [])
+        failed_state = tracking_refiner._failed_concrete_state  # pylint: disable=protected-access
+        failed_index = tracking_refiner._deepest_failed_index  # pylint: disable=protected-access
+
+        if (failed_state is not None and abstract_actions
+                and abstract_states and 0 <= failed_index < len(abstract_actions)):
+            failure_context = self._extract_failure_context(
+                abstract_actions, failed_state, failed_index, abstract_states
+            )
+            retry_prompt = prompt_str + self._build_failure_section(failure_context)
+        else:
+            retry_prompt = prompt_str
+
+        print("\n=== Generating 1 retry heuristic with failure context ===")
+        retry_candidates = self._synthesize_all_heuristics(retry_prompt)
+        if not retry_candidates:
+            raise RuntimeError("LLM returned no valid heuristic code blocks on retry")
+
+        retry_fn = retry_candidates[0][0]
+        remaining_time = timeout - (time.perf_counter() - start_time)
+        generator = self._make_generator(generate_heuristic_fn=retry_fn)
+        planner = self._make_planner(generator)
         plan, _ = planner.run(problem, timeout=remaining_time)
+        self.last_metrics = planner.last_metrics
 
         if plan is None:
             raise TimeoutError("No plan found")
-
-        self.last_metrics = planner.last_metrics
         print("Succeeded with abstract plan:", [
             {"operator_name": a.name, "arguments": [o.name for o in a.parameters]}
             for a in getattr(generator, "_last_abstract_plan", [])
