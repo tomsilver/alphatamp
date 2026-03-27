@@ -1,0 +1,6 @@
+,success,failure_reason,duration,cost,seed,approach_name
+0,False,TimeoutError: No plan found,108.12263407499995,,1,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,False,TimeoutError: No plan found,26.990086133999284,,2,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,False,TimeoutError: No plan found,98.70766279398231,,3,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,False,TimeoutError: No plan found,35.42209702898981,,4,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,False,TimeoutError: No plan found,23.473163041984662,,5,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}

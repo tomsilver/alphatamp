@@ -1,0 +1,6 @@
+,success,failure_reason,duration,cost,avg_attempts_per_step,total_sampling_attempts,steps_above_5_attempts,attempts_per_step,seed,approach_name
+0,True,,18.27301843999885,461,1,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,True,,17.784145226003602,271,2,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,True,,32.925215839990415,285,3,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,True,,16.904933505982626,581,4,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}
+0,True,,36.86895245302003,386,5,{'_target_': 'alphatamp.approaches.cluttered_storage.llm_approach.BaseLLMApproach'}

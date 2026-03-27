@@ -1,85 +1,80 @@
 
-from pyperplan.heuristics.heuristic_base import Heuristic
-from fnmatch import fnmatch
-
 def generate_heuristic(task):
     class ClutteredStorage2DHeuristic(Heuristic):
         """
         Summary:
-            Estimates the total number of pick and place actions required to bring all required blocks onto the shelf,
-            ignoring the order and robot hand content. This corresponds to a h_add/FF-style relaxed plan ignoring delete effects.
+            Domain-dependent heuristic for the 'clutteredstorage2d' domain.
+            This heuristic estimates the number of actions required for the robot
+            to place all blocks onto the shelf as defined in the goal, given the current state.
+            The robot can only hold one block at a time, and moving blocks is strictly sequential.
 
         Assumptions:
-            - Each Pick or Place action costs 1 step.
-            - Only one robot ("HandEmpty" or "Holding" holds at most one block at a time).
-            - No mutual exclusion or stacking, i.e., any block not on shelf can be picked whenever the robot is hand-empty.
+            - There is exactly one robot and one shelf (according to provided examples).
+            - Each block must be OnShelf in the goal.
+            - The robot can hold at most one block at a time (domain invariant).
+            - Each Pick/Place action involves at most one block.
 
         Heuristic Initialization:
-            - Extracts all (OnShelf block shelf) goals.
-            - Caches block and shelf identifiers used in goals.
+            - The constructor parses the goal to extract all (block, shelf) pairs that must be true in the goal state ("OnShelf block shelf").
+            - No use is made of static facts since the domain does not provide any static predicates.
 
         Step-By-Step Thinking for Computing Heuristic:
-            1. For each block that is required to be OnShelf but is not yet OnShelf,
-               estimate the minimal actions needed:
-                a. If the block is already held: only Place is needed.
-                b. If the robot is already holding a different block: must first Place that block (not counted per block).
-                c. If the robot is hand-empty: Pick is available.
-            2. For each such block, sum up: Pick + Place = 2 (unless block is held).
-            3. If the robot is already holding a block not needed for the goal (i.e., not one that should be OnShelf),
-               add a bonus action since the robot must place it first.
-            4. Return the total minimal action estimate.
+            1. For every required ("OnShelf block shelf") goal fact, check if it is already true in the state. 
+               If so, no further action is needed for that block.
+            2. For each goal "OnShelf block shelf" that is not yet true:
+                - The corresponding block is either:
+                    (a) NotOnShelf (i.e., needs to be picked and placed), or
+                    (b) Already being held by the robot (i.e., can be placed without pick).
+            3. The robot can only hold one block at a time; actions for blocks must occur one after the other.
+                - For each unsatisfied block:
+                    - If it is currently being held: only a Place action is required for that block.
+                    - Otherwise: both a Pick and Place action are required (2 actions per block).
+            4. However, if the robot is holding a block that is NOT among the goal blocks, no shortcut is possible; all remaining require both Pick and Place actions.
+            5. The heuristic is 0 if and only if all goal OnShelf predicates are satisfied in the state.
+
+            This greedy (inadmissible) heuristic closely estimates actions-to-goal, providing much more guidance than a blind or h_max heuristic, for example.
         """
 
         def __init__(self, task):
-            # List of (block, shelf) for each OnShelf goal
-            self.onshelf_goals = []
-            for goal in task.goals:
-                parts = goal[1:-1].split()
+            # Extract the set of (block, shelf) pairs required by the goal.
+            self.goal_pairs = set()
+            for fact in task.goals:
+                parts = fact[1:-1].split()
                 if parts[0] == "OnShelf":
-                    self.onshelf_goals.append((parts[1], parts[2]))
+                    self.goal_pairs.add((parts[1], parts[2]))
 
         def __call__(self, node) -> float:
             state = node.state
-            # Facts as set for quick lookup
-            facts = set(state)
 
-            # Find which blocks already satisfy their goal (OnShelf), and which do not
-            # Also, for blocks not on shelf, check if held by the robot
-            blocks_needed = []
-            holding_block = None
-            robot = None
-            # Find which block, if any, is currently held
+            # Identify all required OnShelf predicates not currently true.
+            missing = set()
+            for block, shelf in self.goal_pairs:
+                if f"(OnShelf {block} {shelf})" not in state:
+                    missing.add((block, shelf))
+
+            if not missing:
+                return 0.0
+
+            # Identify if the robot is holding a block, and which one (only one can be held).
+            held_block = None
             for fact in state:
-                parts = fact[1:-1].split()
-                if parts[0] == "Holding":
-                    holding_block = parts[2]
-                    robot = parts[1]
-                    break
-            # If robot variable is not found, scan for HandEmpty to extract robot name
-            if robot is None:
-                for fact in state:
+                if fact.startswith("(Holding "):
                     parts = fact[1:-1].split()
-                    if parts[0] == "HandEmpty":
-                        robot = parts[1]
+                    if len(parts) == 3:
+                        _, _, block = parts
+                        held_block = block
                         break
 
-            actions = 0
-            blocks_remaining = []
-            for block, shelf in self.onshelf_goals:
-                if f"(OnShelf {block} {shelf})" in facts:
-                    continue  # Already on shelf
-                if holding_block == block:
-                    # Only need Place to finish
-                    actions += 1
-                else:
-                    # Need to Pick and Place
-                    blocks_remaining.append(block)
-                    actions += 2
+            total = 0
 
-            # If the robot is holding a block that is not needed in the goal (i.e., not among blocks_remaining)
-            # we need an extra Place action before we can work on any desired block
-            if holding_block is not None and holding_block not in blocks_remaining:
-                actions += 1
+            # If the robot is already holding a block that is among the missing blocks,
+            # it can immediately place it (only 1 action needed), so do not count Pick for it.
+            if held_block is not None and any(held_block == block for (block, shelf) in missing):
+                total += 1
+                missing = {(block, shelf) for (block, shelf) in missing if block != held_block}
 
-            return float(actions)
+            # For every other missing block: need Pick + Place
+            total += 2 * len(missing)
+            return float(total)
+
     return ClutteredStorage2DHeuristic(task)

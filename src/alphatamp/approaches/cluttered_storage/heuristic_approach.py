@@ -50,6 +50,7 @@ from bilevel_planning.utils import (
     cached_all_ground_operators,
     create_pyperplan_heuristic_from_fn
 )
+from pyperplan.heuristics.heuristic_base import Heuristic as PyperplanHeuristic
 from prpl_llm_utils.cache import SQLite3PretrainedLargeModelCache
 from prpl_llm_utils.models import OpenAIModel
 from prpl_llm_utils.reprompting import (
@@ -126,7 +127,7 @@ class _MultiBlockSyntaxCheck(RepromptCheck):
 
 def _load_heuristic_fn(code_str: str) -> Callable:
     """Load a generate_heuristic function from a code string."""
-    namespace: dict[str, Any] = {}
+    namespace: dict[str, Any] = {"Heuristic": PyperplanHeuristic}
     exec(compile(code_str, "<generated_heuristic>", "exec"), namespace)  # noqa: S102
     return namespace["generate_heuristic"]
 
