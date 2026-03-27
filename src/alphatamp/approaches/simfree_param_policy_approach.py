@@ -200,6 +200,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             and self._most_recent_abstract_action_descriptor is not None
             and self._parameter_selection_obs is not None
         ):
+            logging.info(
+                "[Failure] action=%s  reason=episode_timeout  param=%s",
+                self._most_recent_abstract_action_descriptor,
+                self._most_recent_parameter,
+            )
             self._add_most_recent_abstract_action_to_dataset("failure")
             self._add_most_recent_parameter_to_dataset("failure")
             self._add_abstract_plan_to_dataset("failure")
@@ -918,9 +923,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 return self._last_action
             # If low level action failed, store the parameter that failed!
-            except (TrajectorySamplingFailure, IndexError):
+            except (TrajectorySamplingFailure, IndexError) as e:
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
+                    logging.info(
+                        "[Failure] action=%s  reason=%s: %s  param=%s",
+                        self._most_recent_abstract_action_descriptor,
+                        type(e).__name__,
+                        e,
+                        self._most_recent_parameter,
+                    )
                     self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
