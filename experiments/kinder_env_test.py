@@ -4,10 +4,10 @@ Runs the approach on a configurable kinder environment and logs
 the same metrics as bandit_test.py: rolling success rate, overall success
 rate, total successes, parameter resamples, and resample exhaustions.
 
-Training cycles through a fixed pool of ``num_train_seeds`` seeds so each
-configuration is seen multiple times.  At every log checkpoint a separate
-eval loop runs ``num_eval_episodes`` episodes on held-out seeds
-(``seed + num_train_seeds`` onward) to measure generalisation.
+Training uses a fresh seed on every episode reset so the agent never
+revisits the same environment configuration.  At every log checkpoint a
+separate eval loop runs ``num_eval_seeds`` episodes on a fixed set of
+held-out seeds to measure generalisation consistently across checkpoints.
 
 Usage::
 
@@ -101,27 +101,24 @@ def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[flo
 def _run_eval_loop(
     approach: SimFreeParamPolicyApproach,
     gym_env,
-    seed: int,
-    num_train_seeds: int,
-    num_eval_episodes: int,
+    eval_seeds: list[int],
     reset_every: int,
 ) -> tuple[float, int, int]:
     """Run held-out eval episodes and return (success_rate, successes, episodes).
 
-    Switches the approach to eval mode, runs ``num_eval_episodes`` episodes on
-    seeds ``[seed + num_train_seeds, seed + num_train_seeds + num_eval_episodes)``,
-    then switches back to train mode.  No learning occurs during eval; the
-    approach uses its current exploit policy for plan selection.
+    Switches the approach to eval mode, runs one episode per seed in
+    ``eval_seeds``, then switches back to train mode.  The same fixed seed
+    set is used at every checkpoint so results are directly comparable.
+    No learning occurs during eval.
     """
-    if num_eval_episodes == 0:
+    if not eval_seeds:
         return 0.0, 0, 0
 
     approach.eval()
     eval_successes = 0
     last_obs = None
 
-    for i in range(num_eval_episodes):
-        eval_seed = seed + num_train_seeds + i
+    for eval_seed in eval_seeds:
         last_obs, _ = gym_env.reset(seed=eval_seed)
         approach.reset_episode(last_obs)
 
@@ -146,7 +143,8 @@ def _run_eval_loop(
         approach.reset_episode(last_obs)
 
     approach.train()
-    return eval_successes / num_eval_episodes, eval_successes, num_eval_episodes
+    num_eval = len(eval_seeds)
+    return eval_successes / num_eval, eval_successes, num_eval
 
 
 # ---------------------------------------------------------------------------
@@ -164,18 +162,15 @@ def main(
     complexity: int = 1,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
-    num_train_seeds: int = 5,
-    num_eval_episodes: int = 10,
+    num_eval_seeds: int = 10,
 ) -> dict:
     """Run an experiment on a kinder environment and return collected metrics.
 
     Args:
         env: Short environment name from _ENV_REGISTRY (e.g. "clutteredretrieval2d").
         complexity: The complexity integer passed to the env (e.g. num_obstructions).
-        num_train_seeds: Number of distinct seeds to cycle through during training.
-            Training seeds are ``seed, seed+1, ..., seed+num_train_seeds-1``.
-        num_eval_episodes: Number of held-out eval episodes to run at each log
-            checkpoint.  Eval seeds start at ``seed + num_train_seeds``.
+        num_eval_seeds: Number of fixed held-out eval seeds.  The same seeds
+            are evaluated at every log checkpoint for consistent comparison.
 
     Returns a dict with keys:
         steps                      — list of step indices at each log point
@@ -193,7 +188,7 @@ def main(
     env_id_template, model_name, complexity_kwarg = _ENV_REGISTRY[env]
     print(
         f"env={env}  complexity={complexity}  ({complexity_kwarg}={complexity})  "
-        f"num_train_seeds={num_train_seeds}  num_eval_episodes={num_eval_episodes}"
+        f"num_eval_seeds={num_eval_seeds}"
     )
 
     # Build env
@@ -248,11 +243,16 @@ def main(
     approach.train()
     approach.reset(obs, {})
 
+    # Reserve a fixed set of eval seeds that won't overlap with training.
+    # Training seeds start at ``seed`` and increment; eval seeds live in a
+    # separate high range so there is never a collision.
+    eval_seeds = [seed + 1_000_000 + i for i in range(num_eval_seeds)]
+
     # Tracking
-    recent: deque[int] = deque(maxlen=20)
+    recent: deque[int] = deque(maxlen=5)
     total_successes = 0
     total_episodes = 0
-    reset_count = 0
+    train_seed_counter = 0  # monotonically increasing — fresh seed each reset
     episode_success = False
 
     log_steps: list[int] = []
@@ -284,8 +284,8 @@ def main(
             recent.append(0)
             episode_success = False
             total_episodes += 1
-            reset_count += 1
-            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
+            train_seed_counter += 1
+            obs, _ = gym_env.reset(seed=seed + train_seed_counter)
             approach.reset_episode(obs)
             continue
 
@@ -300,8 +300,8 @@ def main(
             total_successes += int(episode_success)
             total_episodes += 1
             episode_success = False
-            reset_count += 1
-            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
+            train_seed_counter += 1
+            obs, _ = gym_env.reset(seed=seed + train_seed_counter)
             approach.reset_episode(obs)
 
         if (step + 1) % log_every == 0:
@@ -309,9 +309,9 @@ def main(
             overall_rate = total_successes / total_episodes if total_episodes else 0.0
             exhaustion_count = approach.get_resample_exhaustion_count()
 
-            # --- Eval loop on held-out seeds ---
+            # --- Eval loop on fixed held-out seeds ---
             eval_rate, eval_succ, _ = _run_eval_loop(
-                approach, gym_env, seed, num_train_seeds, num_eval_episodes, reset_every
+                approach, gym_env, eval_seeds, reset_every
             )
             total_eval_successes += eval_succ
 
@@ -319,7 +319,7 @@ def main(
                 f"{step+1:>6}  "
                 f"{'':>7}  {rolling_rate:>7.2%}  {overall_rate:>8.2%}  "
                 f"{total_successes:>6}  {exhaustion_count:>6}  "
-                f"{'':>6}  {eval_rate:>7.2%}  {eval_succ:>3}/{num_eval_episodes:<3}"
+                f"{'':>6}  {eval_rate:>7.2%}  {eval_succ:>3}/{num_eval_seeds:<3}"
             )
 
             log_steps.append(step + 1)
@@ -334,8 +334,8 @@ def main(
             q_loss = _get_q_network_loss_curves(approach)
 
             # Restore training state — start a fresh episode on the next train seed.
-            reset_count += 1
-            obs, _ = gym_env.reset(seed=seed + (reset_count % num_train_seeds))
+            train_seed_counter += 1
+            obs, _ = gym_env.reset(seed=seed + train_seed_counter)
             approach.reset_episode(obs)
             episode_success = False
 
@@ -345,7 +345,7 @@ def main(
     print(f"  Train successes: {total_successes} / {total_episodes} episodes")
     print(
         f"  Eval  successes: {total_eval_successes} / "
-        f"{len(log_steps) * num_eval_episodes} episodes"
+        f"{len(log_steps) * num_eval_seeds} episodes"
     )
     gym_env.close()
 
@@ -441,7 +441,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=30000)
+    parser.add_argument("--num-steps", type=int, default=50000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument(
         "--reset-every",
@@ -481,18 +481,11 @@ if __name__ == "__main__":
         help="Ablation: always use the first parameter sample, skip scorer",
     )
     parser.add_argument(
-        "--num-train-seeds",
-        type=int,
-        default=5,
-        metavar="K",
-        help="Number of seeds to cycle through during training (default: 5)",
-    )
-    parser.add_argument(
-        "--num-eval-episodes",
+        "--num-eval-seeds",
         type=int,
         default=10,
         metavar="N",
-        help="Held-out eval episodes to run at each log checkpoint (default: 10)",
+        help="Number of fixed held-out eval seeds (default: 10)",
     )
     args = parser.parse_args()
 
@@ -508,8 +501,7 @@ if __name__ == "__main__":
             save_path=args.save,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
-            num_train_seeds=args.num_train_seeds,
-            num_eval_episodes=args.num_eval_episodes,
+            num_eval_seeds=args.num_eval_seeds,
         )
     else:
         main(
@@ -522,6 +514,5 @@ if __name__ == "__main__":
             complexity=args.complexity,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
-            num_train_seeds=args.num_train_seeds,
-            num_eval_episodes=args.num_eval_episodes,
+            num_eval_seeds=args.num_eval_seeds,
         )

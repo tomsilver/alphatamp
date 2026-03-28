@@ -2,7 +2,7 @@
 
 import logging
 import pickle
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -88,6 +88,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         param_sample_count: int = 10,
         use_abstract_plan_scorer: bool = True,
         use_parameter_scorer: bool = True,
+        abstract_action_window: int = 50,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -148,11 +149,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
-        # Each entry stores (num_failures, num_attempts)
+        # Each entry stores a sliding window of recent outcomes (True=failure)
         # for a given (states, actions) key.
+        self._abstract_action_window = abstract_action_window
         self._abstract_action_dataset: defaultdict[
-            str, defaultdict[FrozenSkeleton, tuple[int, int]]
-        ] = defaultdict(lambda: defaultdict(lambda: (0, 0)))
+            str, defaultdict[FrozenSkeleton, deque[bool]]
+        ] = defaultdict(
+            lambda: defaultdict(
+                lambda: deque(maxlen=self._abstract_action_window)
+            )
+        )
         self._abstract_action_to_action_scorer: dict[
             GroundOperator, AbstractActionScorer
         ] = {}
@@ -660,14 +666,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 ensemble_failure_rates.append(per_action_failure_rates.tolist())
 
             avg_prob = float(np.mean(probs))
-            plan_str = [a.short_str for a in candidate_plan[1]]
-            mean_failure_rates = np.mean(ensemble_failure_rates, axis=0).tolist()
-            logging.info(
-                "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
-                plan_str,
-                [f"{r:.4f}" for r in mean_failure_rates],
-                avg_prob,
-            )
+            # logging.info(
+            #     "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
+            #     [a.short_str for a in candidate_plan[1]],
+            #     [f"{r:.4f}" for r in
+            #      np.mean(ensemble_failure_rates, axis=0).tolist()],
+            #     avg_prob,
+            # )
             if avg_prob > best_avg_prob:
                 best_avg_prob = avg_prob
                 best_candidate_plan = candidate_plan
@@ -710,12 +715,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
         key = (prev_abstract_states, prev_abstract_actions)
-        failures, attempts = self._abstract_action_dataset[
+        self._abstract_action_dataset[
             self._most_recent_abstract_action_descriptor
-        ][key]
-        self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
-            key
-        ] = (failures + int(is_failure), attempts + 1)
+        ][key].append(is_failure)
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -743,14 +745,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Retrain the parameter and abstract action scorers given the current stored
         dataset."""
 
-        # First reformat dataset, converting (failures, attempts) → failure rate
+        # First reformat dataset, converting sliding window → failure rate
         abstract_action_dataset = {
             k: list(
                 self._make_data(
                     abstract_plan,
-                    failures / attempts if attempts > 0 else 0.0,
+                    sum(outcomes) / len(outcomes) if outcomes else 0.0,
                 )
-                for abstract_plan, (failures, attempts) in v.items()
+                for abstract_plan, outcomes in v.items()
             )
             for k, v in self._abstract_action_dataset.items()
         }
@@ -766,41 +768,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             action_data: defaultdict | dict = self._abstract_action_dataset.get(
                 op.short_str, {}
             )
-            counts = list(action_data.values())
-            total_failures = sum(f for f, _ in counts)
-            total_attempts = sum(a for _, a in counts)
+            all_outcomes = [o for window in action_data.values() for o in window]
+            total_failures = sum(all_outcomes)
+            total_attempts = len(all_outcomes)
             actual_rate = (
                 total_failures / total_attempts if total_attempts > 0 else float("nan")
             )
             predicted = scorer.score(([s0], []))
             logging.info(
-                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d)",
+                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d window=%d)",
                 op.short_str,
                 predicted,
                 actual_rate,
                 total_failures,
                 total_attempts,
+                self._abstract_action_window,
             )
-            # Log per-history-key predictions to diagnose whether the scorer
-            # distinguishes different contexts (e.g. Reach vs Reach-after-Widen).
-            for (key_states, key_actions), (failures, attempts) in action_data.items():
-                if attempts == 0:
-                    continue
-                key_actual = failures / attempts
-                key_predicted = scorer.score((list(key_states), list(key_actions)))
-                state_str = [str(s) for s in key_states]
-                action_str = [a.short_str for a in key_actions]
-                logging.info(
-                    "[Scorer-ctx] %s states=%s actions=%s  predicted=%.4f actual=%.4f"
-                    " (failures=%d attempts=%d)",
-                    op.short_str,
-                    state_str,
-                    action_str,
-                    key_predicted,
-                    key_actual,
-                    failures,
-                    attempts,
-                )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -924,15 +907,25 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 return self._last_action
             # If low level action failed, store the parameter that failed!
             except (TrajectorySamplingFailure, IndexError) as e:
+                logging.info(
+                    "[Failure] action=%s  reason=%s: %s  "
+                    "step=%d  current_state=%s  expected_next=%s  "
+                    "has_effects=%s  controller_terminated=%s  "
+                    "resample=%d/%d",
+                    a.short_str,
+                    type(e).__name__,
+                    e,
+                    self._current_abstract_plan_step,
+                    s,
+                    ns,
+                    bool(a.add_effects or a.delete_effects),
+                    (self._current_controller is not None
+                     and self._current_controller.terminated()),
+                    self._num_resamples,
+                    self._max_resamples,
+                )
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
-                    logging.info(
-                        "[Failure] action=%s  reason=%s: %s  param=%s",
-                        self._most_recent_abstract_action_descriptor,
-                        type(e).__name__,
-                        e,
-                        self._most_recent_parameter,
-                    )
                     self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
@@ -1042,7 +1035,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def get_abstract_action_dataset(
         self,
-    ) -> defaultdict[str, defaultdict[FrozenSkeleton, tuple[int, int]]]:
+    ) -> defaultdict[str, defaultdict[FrozenSkeleton, deque[bool]]]:
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
 
@@ -1077,9 +1070,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 k: list(
                     self._make_data(
                         abstract_plan,
-                        failures / attempts if attempts > 0 else 0.0,
+                        sum(outcomes) / len(outcomes) if outcomes else 0.0,
                     )
-                    for abstract_plan, (failures, attempts) in v.items()
+                    for abstract_plan, outcomes in v.items()
                 )
                 for k, v in self._abstract_action_dataset.items()
             },
