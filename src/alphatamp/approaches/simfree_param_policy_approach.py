@@ -89,6 +89,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         use_abstract_plan_scorer: bool = True,
         use_parameter_scorer: bool = True,
         abstract_action_window: int = 50,
+        min_param_successes: int = 10,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -182,6 +183,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._plan_from_exploit: bool = False
         self._use_abstract_plan_scorer = use_abstract_plan_scorer
         self._use_parameter_scorer = use_parameter_scorer
+        self._min_param_successes = min_param_successes
 
     def reset_episode(self, obs: _O) -> None:
         """Reset only episode-level state for a new environment episode.
@@ -400,6 +402,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 features, labels = self._generate_parameter_scorer_training_data(
                     features_and_labels
                 )
+
+                # Skip training until we have enough positive examples to
+                # avoid learning a "nothing works" model from early failures.
+                n_pos = int(labels.sum())
+                if n_pos < self._min_param_successes:
+                    logging.info(
+                        "[ParamPolicy] %s skipped: only %d/%d successes (need %d)",
+                        abstract_action_descriptor,
+                        n_pos,
+                        len(labels),
+                        self._min_param_successes,
+                    )
+                    continue
 
                 # Train the scoring function for each grounded skill.
                 scoring_function.train(features, labels)
