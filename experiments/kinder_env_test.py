@@ -163,6 +163,7 @@ def main(
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
     num_eval_seeds: int = 10,
+    param_temperature: float = 1.0,
 ) -> dict:
     """Run an experiment on a kinder environment and return collected metrics.
 
@@ -238,6 +239,7 @@ def main(
         seed=seed,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
         use_parameter_scorer=use_parameter_scorer,
+        param_temperature=param_temperature,
     )
 
     approach.train()
@@ -487,6 +489,13 @@ if __name__ == "__main__":
         metavar="N",
         help="Number of fixed held-out eval seeds (default: 10)",
     )
+    parser.add_argument(
+        "--param-temperature",
+        type=float,
+        default=1.0,
+        metavar="T",
+        help="Boltzmann temperature for parameter policy sampling (default: 1.0)",
+    )
     args = parser.parse_args()
 
     if args.plot:
@@ -502,6 +511,7 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
+            param_temperature=args.param_temperature,
         )
     else:
         main(
@@ -515,4 +525,5 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
+            param_temperature=args.param_temperature,
         )
