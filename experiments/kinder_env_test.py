@@ -12,7 +12,8 @@ held-out seeds to measure generalisation consistently across checkpoints.
 Usage::
 
     python experiments/kinder_env_test.py
-    python experiments/kinder_env_test.py --env obstruction2d --complexity 5 --num-steps 4000
+    python experiments/kinder_env_test.py --env obstruction2d
+        --complexity 5 --num-steps 4000
     python experiments/kinder_env_test.py --plot
         --save experiments/slurm_outputs/kinder_env_test.png
 """
@@ -464,7 +465,7 @@ if __name__ == "__main__":
         type=int,
         default=1,
         metavar="N",
-        help="Complexity integer for the environment, e.g. num_obstructions (default: 1)",
+        help="Complexity integer for env, e.g. num_obstructions (default: 1)",
     )
     parser.add_argument(
         "--save",

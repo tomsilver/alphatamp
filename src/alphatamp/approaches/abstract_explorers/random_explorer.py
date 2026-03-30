@@ -8,6 +8,7 @@ from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator i
     RelationalAbstractSuccessorGenerator,
 )
 from bilevel_planning.structs import RelationalAbstractGoal, RelationalAbstractState
+from relational_structs.pddl import GroundOperator
 
 from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
     BaseAbstractExplorer,
@@ -15,7 +16,6 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
 from alphatamp.approaches.simulator_free_base_approach import (
     SimulatorFreeSesameModels,
 )
-from relational_structs.pddl import GroundOperator
 
 _O = TypeVar("_O")  # observation
 _X = TypeVar("_X")  # state
@@ -40,9 +40,7 @@ class RandomExplorer(BaseAbstractExplorer[_O, _X, _U]):
         self._planning_timeout = planning_timeout
         self._max_plan_length = max_plan_length
         self._rng = np.random.default_rng(seed=seed)
-        self._successor_fn = RelationalAbstractSuccessorGenerator(
-            env_models.operators
-        )
+        self._successor_fn = RelationalAbstractSuccessorGenerator(env_models.operators)
 
     def generate_abstract_plan(
         self, obs: _O, goal: RelationalAbstractGoal | None = None

@@ -7,7 +7,8 @@ Usage::
 
     python experiments/visualize_env.py
     python experiments/visualize_env.py --env obstruction2d --complexity 3 --seed 42
-    python experiments/visualize_env.py --env clutteredstorage2d --complexity 2 --seed 7 --save out.png
+    python experiments/visualize_env.py --env clutteredstorage2d
+        --complexity 2 --seed 7 --save out.png
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import argparse
 
 import kinder
 import matplotlib.pyplot as plt
+import numpy as np
 
 # Registry of supported kinder environments.
 # Each entry maps a short name → (env_id_template, model_name, complexity_kwarg).
@@ -44,6 +46,7 @@ _ENV_REGISTRY: dict[str, tuple[str, str, str]] = {
 
 
 def main() -> None:
+    """Prints initial image of the specified environment."""
     parser = argparse.ArgumentParser(
         description="Visualize a kinder environment at a given seed."
     )
@@ -81,7 +84,8 @@ def main() -> None:
     env = kinder.make(env_id, render_mode="rgb_array")
 
     env.reset(seed=args.seed)
-    frame = env.render()
+    frame: np.ndarray = env.render()  # type: ignore[assignment]
+    assert frame is not None
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
     ax.imshow(frame)

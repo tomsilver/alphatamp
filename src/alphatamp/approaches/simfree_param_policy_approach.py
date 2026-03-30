@@ -125,9 +125,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._env_models, seed, max_abstract_plans=self._num_candidate_plans
         )
 
-        self._random_explorer: RandomExplorer = RandomExplorer(
-            self._env_models, seed
-        )
+        self._random_explorer: RandomExplorer = RandomExplorer(self._env_models, seed)
 
         # Global resample count
         self._num_resamples = 0
@@ -156,9 +154,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_action_dataset: defaultdict[
             str, defaultdict[FrozenSkeleton, deque[bool]]
         ] = defaultdict(
-            lambda: defaultdict(
-                lambda: deque(maxlen=self._abstract_action_window)
-            )
+            lambda: defaultdict(lambda: deque(maxlen=self._abstract_action_window))
         )
         self._abstract_action_to_action_scorer: dict[
             GroundOperator, AbstractActionScorer
@@ -354,8 +350,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
     def _obs_to_feature_vec(self, obs: _O) -> np.ndarray:
         """Convert an observation to a flat float numpy vector.
 
-        ObjectCentricState observations are vectorized via obs.vec(); plain
-        numpy arrays are returned as-is.
+        ObjectCentricState observations are vectorized via obs.vec(); plain numpy arrays
+        are returned as-is.
         """
         if isinstance(obs, ObjectCentricState):
             objects = sorted(obs, key=str)
@@ -415,7 +411,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     n_pos = int(labels.sum())
                     n_neg = len(labels) - n_pos
                     logging.info(
-                        "[ParamPolicy] %s n=%d (pos=%d neg=%d) iters=%d loss: %.4f → %.4f",
+                        "[ParamPolicy] %s n=%d (pos=%d neg=%d) iters=%d loss: %.4f → %.4f",  # pylint:disable=line-too-long
                         abstract_action_descriptor,
                         len(labels),
                         n_pos,
@@ -577,8 +573,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         using the last observation.
 
         This forces the explorer to generate a plan that tries to achieve the goal.
-        However, if the agent successfully completed the prior plan, the goal is to reset
-        the environment first
+        However, if the agent successfully completed the prior plan, the goal is to
+        reset the environment first
         """
 
         assert self._last_observation is not None
@@ -594,36 +590,34 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._last_observation, goal
         )
         return candidate_plans
-    
-    def generate_random_candidate_plans(self) -> list[Skeleton]:
-        """Use the random abstract plan generator to generate
-           a batch of abstract plans for BALD scoring.
 
-           This will force the BALD Scorers to explore diverse
-           plans that may not solve the task, but could yield
-           interesting data to train on.
+    def generate_random_candidate_plans(self) -> list[Skeleton]:
+        """Use the random abstract plan generator to generate a batch of abstract plans
+        for BALD scoring.
+
+        This will force the BALD Scorers to explore diverse plans that may not solve the
+        task, but could yield interesting data to train on.
         """
 
         assert self._last_observation is not None
         candidate_plans: list[Skeleton] = []
 
         for _ in range(self._num_candidate_plans):
-            candidate_plans.append(self._random_explorer.generate_abstract_plan(
-                self._last_observation
-                ))
+            candidate_plans.append(
+                self._random_explorer.generate_abstract_plan(self._last_observation)
+            )
 
         return candidate_plans
 
     def generate_exploration_candidate_plans(self) -> list[Skeleton]:
         """Generate a mixed pool of goal-directed and random candidate plans.
 
-        Always includes heuristic (goal-directed) plans so BALD has sensible
-        options, plus random plans for diversity.
+        Always includes heuristic (goal-directed) plans so BALD has sensible options,
+        plus random plans for diversity.
         """
         heuristic_plans = self.generate_candidate_plans()
         random_plans = self.generate_random_candidate_plans()
         return heuristic_plans + random_plans
-
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Given a list of candidate plans, score each plan based on the BALD objective
@@ -730,9 +724,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
         key = (prev_abstract_states, prev_abstract_actions)
-        self._abstract_action_dataset[
-            self._most_recent_abstract_action_descriptor
-        ][key].append(is_failure)
+        self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
+            key
+        ].append(is_failure)
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -791,7 +785,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             )
             predicted = scorer.score(([s0], []))
             logging.info(
-                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d window=%d)",
+                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d window=%d)",  # pylint:disable=line-too-long
                 op.short_str,
                 predicted,
                 actual_rate,
@@ -935,8 +929,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     s,
                     ns,
                     bool(a.add_effects or a.delete_effects),
-                    (self._current_controller is not None
-                     and self._current_controller.terminated()),
+                    (
+                        self._current_controller is not None
+                        and self._current_controller.terminated()
+                    ),
                     self._num_resamples,
                     self._max_resamples,
                 )

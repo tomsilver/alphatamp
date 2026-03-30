@@ -1,8 +1,8 @@
 """A base class for a parameter policy wrapper over a ParameterizedController."""
 
-import numpy as np
 from typing import Any, TypeVar
 
+import numpy as np
 from bilevel_planning.structs import ParameterizedController
 from numpy.random import Generator
 
@@ -15,10 +15,10 @@ _X = TypeVar("_X")  # state
 class ParameterPolicy:
     """A base class for a parameter policy wrapper over a ParameterizedController.
 
-    Uses Boltzmann (softmax) sampling over candidate parameters weighted by
-    scorer outputs, controlled by a temperature parameter.  High temperature
-    → nearly uniform (preserves diversity); low temperature → approaches
-    argmax (exploits scorer confidence).
+    Uses Boltzmann (softmax) sampling over candidate parameters weighted by scorer
+    outputs, controlled by a temperature parameter.  High temperature → nearly uniform
+    (preserves diversity); low temperature → approaches argmax (exploits scorer
+    confidence).
     """
 
     def __init__(

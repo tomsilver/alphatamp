@@ -48,9 +48,7 @@ _ROW_RE = re.compile(
 )
 
 # Regex for final summary: "Eval  successes: 120 / 400 episodes"
-_EVAL_SUMMARY_RE = re.compile(
-    r"Eval\s+successes:\s+(\d+)\s*/\s*(\d+)\s+episodes"
-)
+_EVAL_SUMMARY_RE = re.compile(r"Eval\s+successes:\s+(\d+)\s*/\s*(\d+)\s+episodes")
 
 
 def parse_out_file(path: Path) -> dict:
