@@ -1,0 +1,55 @@
+defaults:
+  - _self_
+
+bootstrap:
+  enabled: true
+  env_id: kinder/Obstruction2D-o2-v0
+  model_name: obstruction2d
+  num_obstructions: 2
+
+data:
+  train_path: artifacts/encoder_o2/encoder_train_dataset.pkl
+  val_path: artifacts/encoder_o2/encoder_validation_dataset.pkl
+  test_path: artifacts/encoder_o2/encoder_test_dataset.pkl
+
+model:
+  # hidden_dims: [128, 32, 8, 32, 128]
+  # hidden_dims: [128, 64]
+  hidden_dims: [128, 32, 16, 32, 128]
+  dropout: 0.1
+  use_layer_norm: true
+
+train:
+  seed: 0
+  device: auto
+  num_epochs: 500
+  batch_size: 128
+  lr: 0.0002
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  reveal_probability: 0.5
+
+val:
+  reveal_probability: 0.5
+  mask_seed: 12345
+  num_masks: 10
+
+metrics:
+  top_k_values: [1, 3, 5]
+
+rollout:
+  seed: 2026
+  static_first_index: null
+
+test:
+  reveal_probability: 0.5
+  mask_seed: 22345
+  num_masks: 10
+  rollout_seed: 3036
+
+checkpoint:
+  output_dir: artifacts/encoder_o2
+  best_filename: encoder_o2_best.pt
+  last_filename: encoder_o2_last.pt
+
+log_every_steps: 20

@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - encoder_dataset_difficulty: o4
+  - encoder_dataset_split: train
+
+encoder:
+  max_abstract_plans: 20
+  samples_per_step: 5
+  max_skill_horizon: 100
+  num_training_skeletons_per_problem: 50
+  training_planning_timeout: 20.0
+  vocabulary_size: 32
+
+run:
+  split_name: train
+  seed_start: 0
+  seed_stop: 500
+  # "all":          build vocab then dataset (original behaviour)
+  # "vocab":         only build and save the vocabulary, then exit
+  # "dataset":       skip vocab build, load vocab from run.vocab_file instead
+  # "all_filtered":  build vocab, run filter-seed dataset, derive filtered vocab;
+  #                  does NOT build the train/val dataset (run mode=dataset next)
+  mode: dataset
+  # Number of worker processes for dataset building.
+  # 1 = fully sequential (no subprocess overhead, original behaviour).
+  num_workers: 4
+  # Path to a pre-built vocab pickle. Required when mode="dataset".
+  vocab_file: artifacts/encoder_o4/encoder_vocab_filtered_all_filtered.pkl
+
+vocab:
+  seed_start: 0
+  seed_stop: 500
+  # Filter seeds: a small separate seed range used ONLY in mode=all_filtered
+  # to evaluate the full vocabulary before committing to a top-k selection.
+  # These seeds should not overlap with train/val/test ranges.
+  filter_seed_start: 500
+  filter_seed_stop: 525
+  # Lower bound (exclusive) on success_rate: a skeleton is kept iff its
+  # success_rate on the filter seeds is strictly greater than this value.
+  # 0.0 removes only always-failing sequences (succeeded 0 times).
+  # Raise to e.g. 0.05 or 0.1 for stricter quality gating.
+  filter_success_rate_threshold: 0.0
+
+output_dir: artifacts/encoder_o4

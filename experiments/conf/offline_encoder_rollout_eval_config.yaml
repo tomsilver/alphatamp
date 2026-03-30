@@ -1,0 +1,48 @@
+# Offline evaluation of baseline fixed-order vs encoder-guided rollout
+# using precomputed dataset matrices (no simulator calls).
+
+bootstrap:
+  enabled: true
+  env_id: kinder/Obstruction2D-o2-v0
+  model_name: obstruction2d
+  num_obstructions: 2
+
+data:
+  train_path: artifacts/encoder_o2/encoder_train_dataset.pkl
+  test_path: artifacts/encoder_o2/encoder_test_dataset.pkl
+
+checkpoint:
+  path: artifacts/encoder_o2/encoder_o2_best.pt
+
+output:
+  dir: artifacts/encoder_offline_o2
+
+train:
+  device: auto
+
+generator_baseline:
+  enabled: true
+  heuristic_name: hff
+  seed: 0
+  # If null, infer from payload config.training_planning_timeout.
+  timeout_seconds: null
+  # 0 means no explicit cap (generator timeout still applies).
+  max_generated_skeletons_per_row: 0
+
+box_offline:
+  enabled: true
+  seed: 0
+  exploration_constant: 1.4142135623730951
+  failure_penalty_multiplier: 1.0
+
+budget:
+  seconds: 20.0
+  sweep_min_seconds: 1.0
+  sweep_max_seconds: 40.0
+  sweep_num_points: 40
+
+plot:
+  dpi: 160
+
+runtime:
+  epsilon: 1.0e-9

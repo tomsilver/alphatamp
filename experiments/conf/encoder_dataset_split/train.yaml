@@ -1,0 +1,7 @@
+# @package _global_
+
+run:
+  split_name: train
+  seed_start: 0
+  seed_stop: 500
+  num_workers: 4

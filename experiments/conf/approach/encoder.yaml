@@ -1,0 +1,11 @@
+_target_: src.alphatamp.approaches.encoder_approach.EncoderApproach
+
+max_abstract_plans: 20
+samples_per_step: 10
+max_skill_horizon: 100
+heuristic_name: hff
+num_training_skeletons_per_problem: 20
+training_planning_timeout: 10.0
+vocabulary_size: 25
+prune_cycles: true
+env_id: kinder/Obstruction2D-o2-v0

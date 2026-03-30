@@ -185,12 +185,11 @@ outputs/
 
 # Temporary experiment files
 experiments/temp/
+artifacts/
+tests/datasets/
 
-<<<<<<< HEAD
 # Slurm output files
 experiments/slurm_outputs
 
-=======
 # Library files from imports
 lib/
->>>>>>> 63a9e13 (updated repos to use kindergarden from pypi, separate kinder-baselines instead of using subdirectories of prpl-mono)

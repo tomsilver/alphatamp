@@ -9,6 +9,7 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "dill",
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
    "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
    "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
@@ -64,7 +65,11 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*"]
+exclude = [
+    "venv/*",
+    ".venv/*",
+]
+mypy_path = "src"
 
 [tool.pytest.ini_options]
 markers = [
@@ -78,7 +83,12 @@ kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learnin
 
 [[tool.mypy.overrides]]
 module = [
+    "dill",
+    "tqdm",
     "matplotlib.*",
     "sklearn.*",
+    "tqdm.*",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+

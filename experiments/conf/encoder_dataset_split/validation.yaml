@@ -1,0 +1,7 @@
+# @package _global_
+
+run:
+  split_name: validation
+  seed_start: 1000
+  seed_stop: 1100
+  num_workers: 1

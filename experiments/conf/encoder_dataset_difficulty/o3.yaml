@@ -1,0 +1,16 @@
+# @package _global_
+
+env:
+  id: kinder/Obstruction2D-o3-v0
+  model_name: obstruction2d
+  model_kwargs:
+    num_obstructions: 3
+
+encoder:
+  training_planning_timeout: 15.0
+  vocabulary_size: 27
+
+run:
+  vocab_file: artifacts/encoder_o3/encoder_vocab_filtered_all_filtered.pkl
+
+output_dir: artifacts/encoder_o3

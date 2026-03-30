@@ -15,6 +15,7 @@ Skeleton: TypeAlias = tuple[list[RelationalAbstractState], list[GroundOperator]]
 FrozenSkeleton: TypeAlias = tuple[
     tuple[RelationalAbstractState, ...], tuple[GroundOperator, ...]
 ]
+FrozenGroundOpSequence: TypeAlias = tuple[GroundOperator, ...]
 
 
 MaxTrainIters = Union[int, Callable[[int], int]]
