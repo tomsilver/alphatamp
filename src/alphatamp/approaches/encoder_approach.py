@@ -280,7 +280,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         Semantics:
         - If applicability[i, j] == 0, refinement is skipped and
-          success[i, j] = 0, refinement_time[i, j] = timeout.
+                    success[i, j] = 0, refinement_time[i, j] = 0.
         - If applicable, refinement_time stores measured wall-clock duration,
           capped at timeout.
         """
@@ -306,11 +306,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         applicability = np.zeros((num_seeds, num_vocab), dtype=np.float32)
         success_matrix = np.zeros((num_seeds, num_vocab), dtype=np.float32)
-        refinement_time = np.full(
-            (num_seeds, num_vocab),
-            self._training_planning_timeout,
-            dtype=np.float32,
-        )
+        refinement_time = np.zeros((num_seeds, num_vocab), dtype=np.float32)
         steps_completed_fraction = np.zeros((num_seeds, num_vocab), dtype=np.float32)
 
         initial_low_level_states = []
@@ -360,7 +356,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
                     # incompatible with initial state, skip refinement entirely.
                     # applicability, success_matrix, and steps_completed_fraction
-                    # stay 0.0, while refinement_time remains at timeout.
+                    # stay 0.0, and refinement_time stays 0.0.
                     if abstract_state_sequence is None:
                         continue
 

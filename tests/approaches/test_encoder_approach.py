@@ -173,7 +173,7 @@ def test_encoder_approach_reconstructs_abstract_state_sequence() -> None:
 
 
 def test_encoder_approach_build_dataset_semantics() -> None:
-    """Inapplicable entries should skip refinement and get timeout runtime."""
+    """Inapplicable entries should skip refinement and get zero runtime."""
     kinder.register_all_environments()
     env = kinder.make("kinder/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
@@ -210,8 +210,17 @@ def test_encoder_approach_build_dataset_semantics() -> None:
 
     cast(Any, approach).reconstruct_abstract_state_sequence = _fake_reconstruct
 
-    def _always_succeeds_refiner(*args: Any, **kwargs: Any) -> object:
-        del args, kwargs
+    def _always_succeeds_refiner(
+        _x0: Any,
+        abstract_state_sequence: list[RelationalAbstractState],
+        _op_sequence: list[GroundOperator],
+        _timeout: float,
+        bpg: BilevelPlanningGraph,
+    ) -> object:
+        # Mirror real refiner behavior: successful refinement reaches all abstract
+        # states along the skeleton, so steps_completed_fraction becomes 1.0.
+        for abstract_state in abstract_state_sequence[1:]:
+            bpg.add_abstract_state_node(abstract_state)
         return object()
 
     approach._refiner = cast(
@@ -239,10 +248,8 @@ def test_encoder_approach_build_dataset_semantics() -> None:
     assert applicability[0, 1] == 0.0
     assert success[0, 1] == 0.0
     assert steps[0, 1] == 0.0
-    # Inapplicable entries are skipped entirely and retain timeout runtime.
-    assert refinement_time[0, 1] == pytest.approx(
-        approach._training_planning_timeout
-    )  # pylint: disable=protected-access
+    # Inapplicable entries are skipped entirely; no refinement time is charged.
+    assert refinement_time[0, 1] == 0.0
 
     env.close()  # type: ignore[no-untyped-call]
 
@@ -585,8 +592,8 @@ def test_build_dataset_steps_completed_fraction_invariants() -> None:
 def test_build_dataset_matrix_consistency_invariants() -> None:
     """Dataset matrices should satisfy core consistency constraints.
 
-    This test checks matrix shapes, dtypes, applicability/success consistency,
-    runtime semantics for inapplicable entries, and per-column skeleton lengths.
+    This test checks matrix shapes, dtypes, applicability/success consistency, runtime
+    semantics for inapplicable entries, and per-column skeleton lengths.
     """
     kinder.register_all_environments()
     env = kinder.make("kinder/Obstruction2D-o1-v0")
@@ -638,9 +645,8 @@ def test_build_dataset_matrix_consistency_invariants() -> None:
     inapplicable = applicability == 0.0
     assert np.all(steps[inapplicable] == 0.0)
 
-    # Inapplicable runtimes remain at timeout by construction.
-    timeout = approach._training_planning_timeout  # pylint: disable=protected-access
-    assert np.all(refinement_time[inapplicable] == pytest.approx(timeout))
+    # Inapplicable entries are skipped and therefore take zero refinement time.
+    assert np.all(refinement_time[inapplicable] == 0.0)
 
     # Skeleton lengths align with vocab contents.
     expected_lengths = np.array([len(seq) for seq in op_sequence_vocab], dtype=np.int16)

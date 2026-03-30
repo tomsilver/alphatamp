@@ -24,7 +24,9 @@ def test_merge_partial_datasets_preserves_all_encoder_matrices() -> None:
         "op_sequence_vocab": vocab,
         "applicability": np.array([[1, 0, 1], [1, 1, 0]], dtype=np.float32),
         "success": np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32),
-        "refinement_time": np.array([[0.3, 5.0, 0.9], [0.6, 1.2, 5.0]], dtype=np.float32),
+        "refinement_time": np.array(
+            [[0.3, 5.0, 0.9], [0.6, 1.2, 5.0]], dtype=np.float32
+        ),
         "steps_completed_fraction": np.array(
             [[1.0, 0.0, 0.5], [0.0, 1.0, 0.0]], dtype=np.float32
         ),
