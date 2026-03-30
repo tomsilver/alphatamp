@@ -121,6 +121,8 @@ def test_all_filtered_stage_b_filter_dataset_shape() -> None:
     applicability = cast(np.ndarray[Any, Any], filter_dataset["applicability"])
     success = cast(np.ndarray[Any, Any], filter_dataset["success"])
     refinement_time = cast(np.ndarray[Any, Any], filter_dataset["refinement_time"])
+    steps = cast(np.ndarray[Any, Any], filter_dataset["steps_completed_fraction"])
+    skeleton_lengths = cast(np.ndarray[Any, Any], filter_dataset["skeleton_lengths"])
     seed_ids = cast(list[int], filter_dataset["seed_ids"])
     op_sequence_vocab = cast(
         list[FrozenGroundOpSequence], filter_dataset["op_sequence_vocab"]
@@ -132,8 +134,12 @@ def test_all_filtered_stage_b_filter_dataset_shape() -> None:
     assert applicability.shape == (n_filter, n_vocab)
     assert success.shape == (n_filter, n_vocab)
     assert refinement_time.shape == (n_filter, n_vocab)
+    assert steps.shape == (n_filter, n_vocab)
+    assert skeleton_lengths.shape == (n_vocab,)
     assert applicability.dtype == np.float32
     assert success.dtype == np.float32
+    assert steps.dtype == np.float32
+    assert skeleton_lengths.dtype == np.int16
     assert seed_ids == _FILTER_SEEDS
     assert op_sequence_vocab == full_vocab
 
@@ -199,6 +205,10 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
     filtered_app = cast(np.ndarray[Any, Any], filtered_dataset["applicability"])
     filtered_success = cast(np.ndarray[Any, Any], filtered_dataset["success"])
     filtered_time = cast(np.ndarray[Any, Any], filtered_dataset["refinement_time"])
+    filtered_steps = cast(
+        np.ndarray[Any, Any], filtered_dataset["steps_completed_fraction"]
+    )
+    filtered_lengths = cast(np.ndarray[Any, Any], filtered_dataset["skeleton_lengths"])
     filtered_vocab_cast = cast(
         list[FrozenGroundOpSequence], filtered_dataset["op_sequence_vocab"]
     )
@@ -207,6 +217,8 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
     assert filtered_app.shape == (len(_FILTER_SEEDS), n_filtered)
     assert filtered_success.shape == (len(_FILTER_SEEDS), n_filtered)
     assert filtered_time.shape == (len(_FILTER_SEEDS), n_filtered)
+    assert filtered_steps.shape == (len(_FILTER_SEEDS), n_filtered)
+    assert filtered_lengths.shape == (n_filtered,)
 
     # --- filtered dataset columns must equal the sliced original columns ---
     np.testing.assert_array_equal(
@@ -216,6 +228,14 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
     np.testing.assert_array_equal(
         filtered_success,
         success[:, keep_indices],
+    )
+    np.testing.assert_array_equal(
+        filtered_steps,
+        np.asarray(filter_dataset["steps_completed_fraction"])[:, keep_indices],
+    )
+    np.testing.assert_array_equal(
+        filtered_lengths,
+        np.asarray(filter_dataset["skeleton_lengths"])[keep_indices],
     )
 
     # --- vocab alignment: filtered_dataset vocab must match filtered_vocab ---

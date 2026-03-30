@@ -146,6 +146,7 @@ def _merge_partial_datasets(
     applicability_parts: list[np.ndarray] = []
     success_parts: list[np.ndarray] = []
     time_parts: list[np.ndarray] = []
+    steps_parts: list[np.ndarray] = []
 
     for p in partials:
         merged_seed_ids.extend(p["seed_ids"])
@@ -155,6 +156,7 @@ def _merge_partial_datasets(
         applicability_parts.append(p["applicability"])
         success_parts.append(p["success"])
         time_parts.append(p["refinement_time"])
+        steps_parts.append(p["steps_completed_fraction"])
 
     return {
         "seed_ids": merged_seed_ids,
@@ -162,6 +164,8 @@ def _merge_partial_datasets(
         "applicability": np.concatenate(applicability_parts, axis=0),
         "success": np.concatenate(success_parts, axis=0),
         "refinement_time": np.concatenate(time_parts, axis=0),
+        "steps_completed_fraction": np.concatenate(steps_parts, axis=0),
+        "skeleton_lengths": partials[0]["skeleton_lengths"],
         "initial_low_level_states": merged_low,
         "initial_abstract_states": merged_abs,
         "problem_goals": merged_goals,

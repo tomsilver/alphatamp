@@ -222,21 +222,27 @@ def test_encoder_approach_build_dataset_semantics() -> None:
     applicability = cast(Any, dataset["applicability"])
     success = cast(Any, dataset["success"])
     refinement_time = cast(Any, dataset["refinement_time"])
+    steps = cast(Any, dataset["steps_completed_fraction"])
 
     assert applicability.shape == (1, 2)
     assert success.shape == (1, 2)
     assert refinement_time.shape == (1, 2)
+    assert steps.shape == (1, 2)
 
     assert applicability[0, 0] == 1.0
     assert success[0, 0] == 1.0
     assert (
         0.0 <= refinement_time[0, 0] <= approach._training_planning_timeout
     )  # pylint: disable=protected-access
+    assert steps[0, 0] == 1.0
 
     assert applicability[0, 1] == 0.0
     assert success[0, 1] == 0.0
-    # Inapplicable entries are skipped entirely; no time is spent on them.
-    assert refinement_time[0, 1] == 0.0  # pylint: disable=protected-access
+    assert steps[0, 1] == 0.0
+    # Inapplicable entries are skipped entirely and retain timeout runtime.
+    assert refinement_time[0, 1] == pytest.approx(
+        approach._training_planning_timeout
+    )  # pylint: disable=protected-access
 
     env.close()  # type: ignore[no-untyped-call]
 
@@ -320,6 +326,8 @@ def _make_filter_dataset(
         "applicability": app,
         "success": suc,
         "refinement_time": np.ones_like(app),
+        "steps_completed_fraction": 0.5 * np.ones_like(app),
+        "skeleton_lengths": np.arange(1, n_vocab + 1, dtype=np.int16),
     }
 
 
@@ -416,6 +424,8 @@ def test_apply_vocab_filter_slices_matrices_correctly() -> None:
     assert filtered["applicability"].shape == (2, 2)
     assert filtered["success"].shape == (2, 2)
     assert filtered["refinement_time"].shape == (2, 2)
+    assert filtered["steps_completed_fraction"].shape == (2, 2)
+    assert filtered["skeleton_lengths"].shape == (2,)
 
     # Column order must follow keep_indices.
     np.testing.assert_array_equal(
@@ -423,6 +433,14 @@ def test_apply_vocab_filter_slices_matrices_correctly() -> None:
     )
     np.testing.assert_array_equal(
         filtered["success"], dataset["success"][:, keep_indices]
+    )
+    np.testing.assert_array_equal(
+        filtered["steps_completed_fraction"],
+        dataset["steps_completed_fraction"][:, keep_indices],
+    )
+    np.testing.assert_array_equal(
+        filtered["skeleton_lengths"],
+        dataset["skeleton_lengths"][keep_indices],
     )
     assert filtered["op_sequence_vocab"] == [
         dataset["op_sequence_vocab"][i] for i in keep_indices
@@ -560,5 +578,72 @@ def test_build_dataset_steps_completed_fraction_invariants() -> None:
     assert steps[2, 0] == pytest.approx(
         0.0
     ), f"seed 2: expected 0.0 (full fail), got {steps[2, 0]}"
+
+    env.close()  # type: ignore[no-untyped-call]
+
+
+def test_build_dataset_matrix_consistency_invariants() -> None:
+    """Dataset matrices should satisfy core consistency constraints.
+
+    This test checks matrix shapes, dtypes, applicability/success consistency,
+    runtime semantics for inapplicable entries, and per-column skeleton lengths.
+    """
+    kinder.register_all_environments()
+    env = kinder.make("kinder/Obstruction2D-o1-v0")
+    env_models = create_bilevel_planning_models(
+        "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
+    )
+
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
+        env_models,
+        seed=123,
+        num_training_skeletons_per_problem=5,
+        training_planning_timeout=5.0,
+        vocabulary_size=3,
+        env_id="kinder/Obstruction2D-o1-v0",
+    )
+
+    vocab = approach.build_vocab(seed_ids=[101, 102, 103], k=3)
+    assert len(vocab) > 0
+
+    dataset = approach.build_dataset(seed_ids=[101, 102], show_progress=False)
+    applicability = cast(np.ndarray[Any, Any], dataset["applicability"])
+    success = cast(np.ndarray[Any, Any], dataset["success"])
+    refinement_time = cast(np.ndarray[Any, Any], dataset["refinement_time"])
+    steps = cast(np.ndarray[Any, Any], dataset["steps_completed_fraction"])
+    skeleton_lengths = cast(np.ndarray[Any, Any], dataset["skeleton_lengths"])
+    op_sequence_vocab = cast(list[FrozenGroundOpSequence], dataset["op_sequence_vocab"])
+
+    n_seeds = 2
+    n_vocab = len(op_sequence_vocab)
+
+    assert applicability.shape == (n_seeds, n_vocab)
+    assert success.shape == (n_seeds, n_vocab)
+    assert refinement_time.shape == (n_seeds, n_vocab)
+    assert steps.shape == (n_seeds, n_vocab)
+    assert skeleton_lengths.shape == (n_vocab,)
+
+    assert applicability.dtype == np.float32
+    assert success.dtype == np.float32
+    assert refinement_time.dtype == np.float32
+    assert steps.dtype == np.float32
+    assert skeleton_lengths.dtype == np.int16
+
+    # Success can only happen when applicable.
+    assert np.all(success <= applicability)
+
+    # Steps are bounded and must be zero when inapplicable.
+    assert np.all(steps >= 0.0)
+    assert np.all(steps <= 1.0)
+    inapplicable = applicability == 0.0
+    assert np.all(steps[inapplicable] == 0.0)
+
+    # Inapplicable runtimes remain at timeout by construction.
+    timeout = approach._training_planning_timeout  # pylint: disable=protected-access
+    assert np.all(refinement_time[inapplicable] == pytest.approx(timeout))
+
+    # Skeleton lengths align with vocab contents.
+    expected_lengths = np.array([len(seq) for seq in op_sequence_vocab], dtype=np.int16)
+    np.testing.assert_array_equal(skeleton_lengths, expected_lengths)
 
     env.close()  # type: ignore[no-untyped-call]

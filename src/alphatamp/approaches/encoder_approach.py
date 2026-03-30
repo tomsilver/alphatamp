@@ -306,7 +306,11 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         applicability = np.zeros((num_seeds, num_vocab), dtype=np.float32)
         success_matrix = np.zeros((num_seeds, num_vocab), dtype=np.float32)
-        refinement_time = np.zeros((num_seeds, num_vocab), dtype=np.float32)
+        refinement_time = np.full(
+            (num_seeds, num_vocab),
+            self._training_planning_timeout,
+            dtype=np.float32,
+        )
         steps_completed_fraction = np.zeros((num_seeds, num_vocab), dtype=np.float32)
 
         initial_low_level_states = []
@@ -355,8 +359,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                     )
 
                     # incompatible with initial state, skip refinement entirely.
-                    # applicability, success_matrix, steps_completed_fraction,
-                    # and refinement_time all stay 0.0.
+                    # applicability, success_matrix, and steps_completed_fraction
+                    # stay 0.0, while refinement_time remains at timeout.
                     if abstract_state_sequence is None:
                         continue
 
@@ -612,8 +616,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         This is a pure offline operation - no simulation is performed. The
         returned dict has the same structure as ``build_dataset()`` output but
-        with ``op_sequence_vocab``, ``applicability``, ``success``, and
-        ``refinement_time`` restricted to the kept columns in the given order.
+        with vocabulary-aligned matrix fields restricted to the kept columns in
+        the given order.
 
         Args:
             dataset: original wide dataset dict (output of ``build_dataset()``).
@@ -633,6 +637,10 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
         applicability = np.asarray(dataset["applicability"], dtype=np.float32)
         success = np.asarray(dataset["success"], dtype=np.float32)
         refinement_time = np.asarray(dataset["refinement_time"], dtype=np.float32)
+        steps_completed_fraction = np.asarray(
+            dataset["steps_completed_fraction"], dtype=np.float32
+        )
+        skeleton_lengths = np.asarray(dataset["skeleton_lengths"], dtype=np.int16)
 
         idx = list(keep_indices)
         filtered: dict[str, Any] = {
@@ -641,6 +649,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             "applicability": applicability[:, idx],
             "success": success[:, idx],
             "refinement_time": refinement_time[:, idx],
+            "steps_completed_fraction": steps_completed_fraction[:, idx],
+            "skeleton_lengths": skeleton_lengths[idx],
         }
         # Propagate optional per-seed fields unchanged.
         for key in (

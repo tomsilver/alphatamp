@@ -17,6 +17,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 for difficulty in o2 o3 o4; do
+  vocab_path="artifacts/encoder_${difficulty}/encoder_vocab_filtered_all_filtered.pkl"
+  if [[ ! -f "$vocab_path" ]]; then
+    echo "Missing filtered vocab artifact: $vocab_path" >&2
+    echo "Run: bash experiments/launch_encoder_all_filtered_matrix.sh" >&2
+    exit 2
+  fi
+done
+
+for difficulty in o2 o3 o4; do
   for split in train validation test; do
     case "$split" in
       train)
