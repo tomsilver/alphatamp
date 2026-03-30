@@ -12,8 +12,9 @@ All tests are marked ``slow`` and are therefore skipped by default; run with::
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import dill
 import kinder
 import numpy as np
 import pytest
@@ -31,17 +32,17 @@ _MODEL_NAME = "obstruction2d"
 _NUM_OBSTRUCTIONS = 1
 
 # Tiny parameters tuned for speed (< 60 s total for both tests).
-_APPROACH_KWARGS: dict[str, Any] = dict(
-    env_id=_ENV_ID,
-    model_name=_MODEL_NAME,
-    num_obstructions=_NUM_OBSTRUCTIONS,
-    max_abstract_plans=5,
-    samples_per_step=2,
-    max_skill_horizon=50,
-    num_training_skeletons_per_problem=5,
-    training_planning_timeout=3.0,
-    vocabulary_size=5,
-)
+_APPROACH_KWARGS: dict[str, Any] = {
+    "env_id": _ENV_ID,
+    "model_name": _MODEL_NAME,
+    "num_obstructions": _NUM_OBSTRUCTIONS,
+    "max_abstract_plans": 5,
+    "samples_per_step": 2,
+    "max_skill_horizon": 50,
+    "num_training_skeletons_per_problem": 5,
+    "training_planning_timeout": 3.0,
+    "vocabulary_size": 5,
+}
 
 _VOCAB_SEEDS = list(range(0, 4))  # 4 seeds for vocab collection
 _FILTER_SEEDS = list(range(4, 7))  # 3 seeds for filter stage (separate range)
@@ -117,17 +118,24 @@ def test_all_filtered_stage_b_filter_dataset_shape() -> None:
 
     # Stage B
     filter_dataset = approach.build_dataset(_FILTER_SEEDS, show_progress=False)
+    applicability = cast(np.ndarray[Any, Any], filter_dataset["applicability"])
+    success = cast(np.ndarray[Any, Any], filter_dataset["success"])
+    refinement_time = cast(np.ndarray[Any, Any], filter_dataset["refinement_time"])
+    seed_ids = cast(list[int], filter_dataset["seed_ids"])
+    op_sequence_vocab = cast(
+        list[FrozenGroundOpSequence], filter_dataset["op_sequence_vocab"]
+    )
 
     n_filter = len(_FILTER_SEEDS)
     n_vocab = len(full_vocab)
 
-    assert filter_dataset["applicability"].shape == (n_filter, n_vocab)
-    assert filter_dataset["success"].shape == (n_filter, n_vocab)
-    assert filter_dataset["refinement_time"].shape == (n_filter, n_vocab)
-    assert filter_dataset["applicability"].dtype == np.float32
-    assert filter_dataset["success"].dtype == np.float32
-    assert list(filter_dataset["seed_ids"]) == _FILTER_SEEDS
-    assert filter_dataset["op_sequence_vocab"] == full_vocab
+    assert applicability.shape == (n_filter, n_vocab)
+    assert success.shape == (n_filter, n_vocab)
+    assert refinement_time.shape == (n_filter, n_vocab)
+    assert applicability.dtype == np.float32
+    assert success.dtype == np.float32
+    assert seed_ids == _FILTER_SEEDS
+    assert op_sequence_vocab == full_vocab
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +159,9 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
 
     # ---- Stage B ----
     filter_dataset = approach.build_dataset(_FILTER_SEEDS, show_progress=False)
-    assert filter_dataset["applicability"].shape == (len(_FILTER_SEEDS), n_full)
+    applicability = cast(np.ndarray[Any, Any], filter_dataset["applicability"])
+    success = cast(np.ndarray[Any, Any], filter_dataset["success"])
+    assert applicability.shape == (len(_FILTER_SEEDS), n_full)
 
     # ---- Stage C ----
     threshold = 0.0
@@ -177,8 +187,8 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
     assert all(0 <= i < n_full for i in keep_indices)
 
     # success_rate must be > threshold (> 0.0 means at least one success)
-    app = np.asarray(filter_dataset["applicability"])
-    suc = np.asarray(filter_dataset["success"])
+    app = np.asarray(applicability)
+    suc = np.asarray(success)
     for col_idx in keep_indices:
         applicable_count = int(app[:, col_idx].sum())
         success_count = int(suc[:, col_idx].sum())
@@ -186,25 +196,33 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
         assert success_count > 0, f"kept col {col_idx} had zero successes"
 
     # --- filtered dataset shapes ---
-    assert filtered_dataset["applicability"].shape == (len(_FILTER_SEEDS), n_filtered)
-    assert filtered_dataset["success"].shape == (len(_FILTER_SEEDS), n_filtered)
-    assert filtered_dataset["refinement_time"].shape == (len(_FILTER_SEEDS), n_filtered)
+    filtered_app = cast(np.ndarray[Any, Any], filtered_dataset["applicability"])
+    filtered_success = cast(np.ndarray[Any, Any], filtered_dataset["success"])
+    filtered_time = cast(np.ndarray[Any, Any], filtered_dataset["refinement_time"])
+    filtered_vocab_cast = cast(
+        list[FrozenGroundOpSequence], filtered_dataset["op_sequence_vocab"]
+    )
+    filtered_seed_ids = cast(list[int], filtered_dataset["seed_ids"])
+
+    assert filtered_app.shape == (len(_FILTER_SEEDS), n_filtered)
+    assert filtered_success.shape == (len(_FILTER_SEEDS), n_filtered)
+    assert filtered_time.shape == (len(_FILTER_SEEDS), n_filtered)
 
     # --- filtered dataset columns must equal the sliced original columns ---
     np.testing.assert_array_equal(
-        filtered_dataset["applicability"],
-        filter_dataset["applicability"][:, keep_indices],
+        filtered_app,
+        applicability[:, keep_indices],
     )
     np.testing.assert_array_equal(
-        filtered_dataset["success"],
-        filter_dataset["success"][:, keep_indices],
+        filtered_success,
+        success[:, keep_indices],
     )
 
     # --- vocab alignment: filtered_dataset vocab must match filtered_vocab ---
-    assert filtered_dataset["op_sequence_vocab"] == filtered_vocab
+    assert filtered_vocab_cast == filtered_vocab
 
     # --- seed_ids preserved ---
-    assert filtered_dataset["seed_ids"] == _FILTER_SEEDS
+    assert filtered_seed_ids == _FILTER_SEEDS
 
     # --- success_rate ordering: must be non-increasing ---
     if n_filtered > 1:
@@ -218,7 +236,6 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
         ), f"keep_indices not sorted by success_rate descending: {rates}"
 
     # --- optionally snapshot outputs to tmp_path (exercises _save_pickle path) ---
-    import dill
 
     out_filter = tmp_path / "encoder_filter_dataset.pkl"
     out_filtered_vocab = tmp_path / "encoder_vocab_filtered_train.pkl"

@@ -91,7 +91,8 @@ def _check_split_payload(path: Path) -> None:
         )
     if refinement_time.shape != expected_shape:
         raise ValueError(
-            f"{path.name}: refinement_time shape {refinement_time.shape} != {expected_shape}"
+            f"{path.name}: refinement_time shape {refinement_time.shape} "
+            f"!= {expected_shape}"
         )
 
     if not _is_binary_matrix(applicability):
@@ -147,7 +148,8 @@ def _check_vocab_payload(path: Path) -> None:
         raise TypeError(f"{path.name}: vocabulary must be a list")
     if len(vocabulary) > vocab_size:
         raise ValueError(
-            f"{path.name}: vocabulary length {len(vocabulary)} exceeds configured size {vocab_size}"
+            f"{path.name}: vocabulary length {len(vocabulary)} exceeds "
+            f"configured size {vocab_size}"
         )
 
     print(
@@ -180,6 +182,7 @@ def _bootstrap_env_model_modules(config: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    """Validate expected encoder dataset artifacts under an artifacts directory."""
     parser = argparse.ArgumentParser(
         description="Validate encoder dataset pickle artifacts"
     )

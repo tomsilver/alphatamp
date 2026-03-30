@@ -8,10 +8,9 @@ import os
 import sys
 import time
 from typing import Any, TypeVar
-import numpy as np
-from tqdm.auto import tqdm
 
 import kinder
+import numpy as np
 from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
     AbstractPlanGenerator,
 )
@@ -33,6 +32,7 @@ from bilevel_planning.utils import (
     RelationalAbstractSuccessorGenerator,
     RelationalControllerGenerator,
 )
+from tqdm.auto import tqdm
 
 from alphatamp.approaches.base_approach import BaseApproach
 from alphatamp.structs import FrozenGroundOpSequence, Skeleton
@@ -193,7 +193,9 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                 x0 = problem.initial_state
                 s0 = self._env_models.state_abstractor(x0)
 
-                bpg: BilevelPlanningGraph = BilevelPlanningGraph()  # type: ignore[var-annotated]
+                bpg: BilevelPlanningGraph = (  # type: ignore[var-annotated]
+                    BilevelPlanningGraph()
+                )
                 bpg.add_state_node(x0)
                 bpg.add_abstract_state_node(s0)
                 bpg.add_state_abstractor_edge(x0, s0)
@@ -286,7 +288,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             raise ValueError("env_id must be set to build a dataset.")
         if not self._op_sequence_vocab:
             raise ValueError(
-                "Vocabulary is empty. Call build_vocab() or build_full_vocab()+_refresh_vocabulary() first."
+                "Vocabulary is empty. Call build_vocab() or "
+                "build_full_vocab()+_refresh_vocabulary() first."
             )
         if log_every_seeds < 1:
             raise ValueError("log_every_seeds must be >= 1")
@@ -359,7 +362,9 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
                     applicability[seed_idx, op_sequence_idx] = 1.0
 
-                    bpg: BilevelPlanningGraph = BilevelPlanningGraph()  # type: ignore[var-annotated]
+                    bpg: BilevelPlanningGraph = (  # type: ignore[var-annotated]
+                        BilevelPlanningGraph()
+                    )
                     bpg.add_state_node(x0)
                     bpg.add_abstract_state_node(s0)
                     bpg.add_state_abstractor_edge(x0, s0)
@@ -396,7 +401,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                     n_steps = len(abstract_state_sequence) - 1  # exclude initial s0
                     if n_steps > 0:
                         steps_done = sum(
-                            1 for s in abstract_state_sequence[1:]
+                            1
+                            for s in abstract_state_sequence[1:]
                             if s in abstract_state_set
                         )
                         steps_completed_fraction[seed_idx, op_sequence_idx] = (
@@ -411,7 +417,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                     success=seed_success,
                 )
 
-                # Batch-friendly periodic logs (single-line snapshots) when bars are disabled.
+                # Batch-friendly periodic logs when bars are disabled.
                 if (not show_progress) and (
                     (seed_idx + 1) % log_every_seeds == 0 or (seed_idx + 1) == num_seeds
                 ):
@@ -424,7 +430,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                         f"{done}/{num_seeds} seeds "
                         f"({100.0 * done / max(1, num_seeds):.1f}%) | "
                         f"elapsed={elapsed/60.0:.1f}m | eta={remaining/60.0:.1f}m | "
-                        f"last_seed={seed_id} applicable={seed_applicable} success={seed_success}"
+                        "last_seed="
+                        f"{seed_id} applicable={seed_applicable} success={seed_success}"
                     )
         finally:
             env.close()  # type: ignore[no-untyped-call]
@@ -540,11 +547,12 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             - ``keep_indices``: column indices into the original vocab that were
               kept, in the same (success_rate descending) order.
             - ``stats``: dict with keys ``original_size``, ``filtered_size``,
-                            ``removed_count``, ``threshold``, ``never_applicable_count``,
-                            and ``success_rates`` (list of per-column rates; ``None`` where
+                            ``removed_count``, ``threshold``,
+                            ``never_applicable_count``, and ``success_rates``
+                            (list of per-column rates; ``None`` where
                             applicable_count == 0).
         """
-        if not (0.0 <= threshold <= 1.0):
+        if threshold < 0.0 or threshold > 1.0:
             raise ValueError(f"threshold must be in [0, 1], got {threshold}")
 
         vocab: list[FrozenGroundOpSequence] = list(dataset["op_sequence_vocab"])
@@ -552,7 +560,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
         success = np.asarray(dataset["success"], dtype=np.float32)
 
         applicable_counts = applicability.sum(axis=0)  # shape (M,)
-        success_counts = success.sum(axis=0)           # shape (M,)
+        success_counts = success.sum(axis=0)  # shape (M,)
 
         # Per-column success rate; NaN where never applicable.
         success_rates = np.where(
@@ -579,7 +587,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         filtered_vocab = [vocab[i] for i in candidate_indices]
 
-        # Build a human-readable per-column success_rate list (None for never-applicable).
+        # Build a human-readable per-column success_rate list.
+        # Never-applicable columns are represented as None.
         readable_rates: list[float | None] = [
             float(success_rates[i]) if np.isfinite(success_rates[i]) else None
             for i in range(len(vocab))
@@ -601,7 +610,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
     ) -> dict[str, Any]:
         """Derive a filtered dataset by dropping unwanted vocabulary columns.
 
-        This is a pure offline operation — no simulation is performed.  The
+        This is a pure offline operation - no simulation is performed. The
         returned dict has the same structure as ``build_dataset()`` output but
         with ``op_sequence_vocab``, ``applicability``, ``success``, and
         ``refinement_time`` restricted to the kept columns in the given order.
@@ -634,7 +643,11 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             "refinement_time": refinement_time[:, idx],
         }
         # Propagate optional per-seed fields unchanged.
-        for key in ("initial_low_level_states", "initial_abstract_states", "problem_goals"):
+        for key in (
+            "initial_low_level_states",
+            "initial_abstract_states",
+            "problem_goals",
+        ):
             if key in dataset:
                 filtered[key] = list(dataset[key])
         return filtered
@@ -642,9 +655,9 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
     def set_vocab(self, vocab: list[FrozenGroundOpSequence]) -> None:
         """Inject a pre-built vocabulary without re-running collection.
 
-        Useful when the vocabulary was computed by another process or a
-        preceding step and should be shared across multiple workers without
-        each worker rebuilding it from scratch.
+        Useful when the vocabulary was computed by another process or a preceding step
+        and should be shared across multiple workers without each worker rebuilding it
+        from scratch.
         """
         self._op_sequence_vocab = list(vocab)
         self._op_sequence_to_idx = {

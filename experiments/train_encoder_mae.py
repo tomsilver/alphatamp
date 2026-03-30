@@ -58,7 +58,7 @@ class EncoderMAE(nn.Module):
         super().__init__()
         if not hidden_dims:
             raise ValueError("model.hidden_dims must be non-empty")
-        if not (0.0 <= dropout < 1.0):
+        if dropout < 0.0 or dropout >= 1.0:
             raise ValueError("model.dropout must be in [0, 1)")
 
         dims = [input_dim, *hidden_dims, output_dim]
@@ -74,6 +74,7 @@ class EncoderMAE(nn.Module):
         self._network = nn.Sequential(*layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Return per-column logits for masked reconstruction."""
         return self._network(inputs)
 
 
@@ -146,7 +147,8 @@ def _extract_split_tensors(payload: dict[str, Any], split_name: str) -> SplitTen
         )
     if applicability.shape[1] != len(vocab):
         raise ValueError(
-            f"{split_name}: column count {applicability.shape[1]} != vocab size {len(vocab)}"
+            f"{split_name}: column count {applicability.shape[1]} "
+            f"!= vocab size {len(vocab)}"
         )
 
     if not _is_binary_matrix(applicability):
@@ -180,7 +182,8 @@ def _assert_same_vocab(
 ) -> None:
     if len(train_vocab) != len(other_vocab):
         raise ValueError(
-            f"Vocab mismatch for {name}: len(train)={len(train_vocab)} len({name})={len(other_vocab)}"
+            f"Vocab mismatch for {name}: len(train)={len(train_vocab)} "
+            f"len({name})={len(other_vocab)}"
         )
     for index, (train_entry, other_entry) in enumerate(zip(train_vocab, other_vocab)):
         if train_entry != other_entry:
@@ -200,7 +203,7 @@ def _sample_reveal_mask(
     reveal_probability: float,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    if not (0.0 <= reveal_probability <= 1.0):
+    if reveal_probability < 0.0 or reveal_probability > 1.0:
         raise ValueError("reveal_probability must be in [0, 1]")
 
     # Sample on CPU for generator compatibility, then map back to input device.
@@ -516,7 +519,8 @@ def _sequential_rollout_metric(
     Procedure per row:
     1) Reveal one initial applicable skeleton outcome.
        - random: random applicable skeleton.
-       - static-first: fixed global skeleton if applicable, else random applicable fallback.
+             - static-first: fixed global skeleton if applicable, else random
+                 applicable fallback.
     2) Predict remaining untried applicable columns using the steps head.
     3) Try highest predicted feasible/untried applicable skeleton.
     4) Repeat until success or exhaustion.
@@ -626,6 +630,7 @@ def _sequential_rollout_metric(
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    """Train the MAE model and optionally evaluate on test artifacts."""
     torch.manual_seed(int(cfg.train.seed))
     np.random.seed(int(cfg.train.seed))
 
@@ -869,6 +874,12 @@ def main(cfg: DictConfig) -> None:
                 ]
             )
         )
+        rollout_random_tries = float(
+            rollout_metrics_random["rollout_mean_tries_to_success_on_solvable"]
+        )
+        rollout_static_tries = float(
+            rollout_metrics_static_first["rollout_mean_tries_to_success_on_solvable"]
+        )
 
         topk_summary = " ".join(
             [f"top{top_k}={float(val_topk[top_k]):.4f}" for top_k in top_k_values]
@@ -885,9 +896,9 @@ def main(cfg: DictConfig) -> None:
             f"val_acc={val_acc:.4f} val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
             f"{topk_summary} "
             "rollout_tries_random="
-            f"{float(rollout_metrics_random['rollout_mean_tries_to_success_on_solvable']):.4f} "
+            f"{rollout_random_tries:.4f} "
             "rollout_tries_static_first="
-            f"{float(rollout_metrics_static_first['rollout_mean_tries_to_success_on_solvable']):.4f} "
+            f"{rollout_static_tries:.4f} "
             f"epoch_time={_format_duration(epoch_elapsed)} "
             f"elapsed={_format_duration(total_elapsed)} "
             f"eta={_format_duration(eta_seconds)}"
@@ -1023,6 +1034,13 @@ def main(cfg: DictConfig) -> None:
             "rollout_static_first": test_rollout_static_first,
         }
 
+        test_rollout_random_tries = summary["test"]["rollout_random"][
+            "rollout_mean_tries_to_success_on_solvable"
+        ]
+        test_rollout_static_tries = summary["test"]["rollout_static_first"][
+            "rollout_mean_tries_to_success_on_solvable"
+        ]
+
         print(
             "test "
             f"loss={summary['test']['loss']:.6f} "
@@ -1030,9 +1048,9 @@ def main(cfg: DictConfig) -> None:
             f"auroc={summary['test']['auroc']:.4f} "
             f"ap={summary['test']['average_precision']:.4f} "
             "rollout_tries_random="
-            f"{summary['test']['rollout_random']['rollout_mean_tries_to_success_on_solvable']:.4f} "
+            f"{test_rollout_random_tries:.4f} "
             "rollout_tries_static_first="
-            f"{summary['test']['rollout_static_first']['rollout_mean_tries_to_success_on_solvable']:.4f}"
+            f"{test_rollout_static_tries:.4f}"
         )
 
     summary_path = output_dir / "encoder_mae_summary.json"

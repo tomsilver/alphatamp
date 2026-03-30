@@ -42,6 +42,7 @@ DATASET_KEYS = {
 
 
 def check(condition: bool, msg: str) -> None:
+    """Print a PASS/FAIL check line and raise on failure."""
     status = "PASS" if condition else "FAIL"
     print(f"  [{status}] {msg}")
     if not condition:
@@ -64,6 +65,7 @@ def _bootstrap_env_modules(config: dict) -> None:
 
 
 def main() -> None:
+    """Load and validate a train split dataset pickle against its vocabulary config."""
     # Step 1: load vocab pkl to obtain config (plain Python objects; safe before
     # bootstrapping env-model modules).
     print(f"Loading config from vocab file {VOCAB_FILE} ...")
@@ -122,7 +124,8 @@ def main() -> None:
     if vocab_size != "?":
         check(
             vocab_size == config.get("vocabulary_size", vocab_size),
-            f"vocab size matches config ({vocab_size} == {config.get('vocabulary_size')})",
+            "vocab size matches config "
+            f"({vocab_size} == {config.get('vocabulary_size')})",
         )
 
     # ---- 5. numpy arrays ----

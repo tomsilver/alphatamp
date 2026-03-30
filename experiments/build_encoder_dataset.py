@@ -315,7 +315,8 @@ def main(cfg: DictConfig) -> None:
 
     if mode not in {"all", "vocab", "dataset", "all_filtered"}:
         raise ValueError(
-            f"run.mode must be 'all', 'vocab', 'dataset', or 'all_filtered'; got {mode!r}"
+            "run.mode must be 'all', 'vocab', 'dataset', or 'all_filtered'; "
+            f"got {mode!r}"
         )
     if num_workers < 1:
         raise ValueError("run.num_workers must be >= 1")
@@ -334,7 +335,7 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 "vocab.filter_seed_stop must be greater than vocab.filter_seed_start"
             )
-        if not (0.0 <= filter_threshold <= 1.0):
+        if filter_threshold < 0.0 or filter_threshold > 1.0:
             raise ValueError(
                 f"vocab.filter_success_rate_threshold must be in [0, 1], "
                 f"got {filter_threshold}"
@@ -342,18 +343,18 @@ def main(cfg: DictConfig) -> None:
 
     output_dir = Path(str(cfg.output_dir))
 
-    approach_kwargs: dict[str, Any] = dict(
-        env_id=env_id,
-        model_name=model_name,
-        num_obstructions=num_obstructions,
-        max_abstract_plans=max_abstract_plans,
-        samples_per_step=samples_per_step,
-        max_skill_horizon=max_skill_horizon,
-        num_training_skeletons_per_problem=num_training_skeletons_per_problem,
-        training_planning_timeout=training_planning_timeout,
-        vocabulary_size=vocabulary_size,
-    )
-    config_dict: dict[str, Any] = {k: v for k, v in approach_kwargs.items()}
+    approach_kwargs: dict[str, Any] = {
+        "env_id": env_id,
+        "model_name": model_name,
+        "num_obstructions": num_obstructions,
+        "max_abstract_plans": max_abstract_plans,
+        "samples_per_step": samples_per_step,
+        "max_skill_horizon": max_skill_horizon,
+        "num_training_skeletons_per_problem": num_training_skeletons_per_problem,
+        "training_planning_timeout": training_planning_timeout,
+        "vocabulary_size": vocabulary_size,
+    }
+    config_dict: dict[str, Any] = dict(approach_kwargs)
 
     # ------------------------------------------------------------------
     # Step 1: obtain vocabulary
@@ -447,7 +448,8 @@ def main(cfg: DictConfig) -> None:
             },
         )
         print(
-            f"[all_filtered] Saved filter-seed reference dataset to: {filter_dataset_path}"
+            "[all_filtered] Saved filter-seed reference dataset to: "
+            f"{filter_dataset_path}"
         )
 
         # ---- Stage C: offline column-filtering (no simulator) ----

@@ -1,11 +1,18 @@
 """Tests for EncoderApproach phase-1 vocabulary behavior."""
 
+# pylint: disable=protected-access
+
+from typing import Any, cast
+
 import kinder
+import numpy as np
 import pytest
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
+from bilevel_planning.structs import GroundOperator, RelationalAbstractState
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.encoder_approach import EncoderApproach
+from alphatamp.structs import FrozenGroundOpSequence
 
 
 def test_encoder_approach_builds_vocabulary() -> None:
@@ -16,7 +23,7 @@ def test_encoder_approach_builds_vocabulary() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -45,7 +52,7 @@ def test_encoder_approach_rebuilds_counts_from_seed_list() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -76,7 +83,7 @@ def test_encoder_approach_planning_uses_vocabulary() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=3,
@@ -88,14 +95,20 @@ def test_encoder_approach_planning_uses_vocabulary() -> None:
     obs, _ = env.reset(seed=101)
     approach.build_vocab(seed_ids=[101, 102, 103], k=2)
 
-    tried: list[tuple[tuple, tuple]] = []
+    tried: list[FrozenGroundOpSequence] = []
 
-    def _fake_refiner(x0, skel_states, skel_ops, timeout, bpg):
+    def _fake_refiner(
+        x0: Any,
+        skel_states: list[RelationalAbstractState],
+        skel_ops: list[GroundOperator],
+        timeout: float,
+        bpg: BilevelPlanningGraph,
+    ) -> None:
         del x0, timeout, bpg
-        tried.append((tuple(skel_states), tuple(skel_ops)))
-        return None
+        del skel_states
+        tried.append(tuple(skel_ops))
 
-    approach._refiner = _fake_refiner  # pylint: disable=protected-access
+    approach._refiner = cast(Any, _fake_refiner)  # pylint: disable=protected-access
 
     with pytest.raises(TimeoutError):
         approach.run_planning(obs, timeout=1)
@@ -115,7 +128,7 @@ def test_encoder_approach_reconstructs_abstract_state_sequence() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -131,7 +144,7 @@ def test_encoder_approach_reconstructs_abstract_state_sequence() -> None:
     x0 = problem.initial_state
     s0 = env_models.state_abstractor(x0)
 
-    bpg = BilevelPlanningGraph()
+    bpg: BilevelPlanningGraph = BilevelPlanningGraph()
     bpg.add_state_node(x0)
     bpg.add_abstract_state_node(s0)
     bpg.add_state_abstractor_edge(x0, s0)
@@ -167,7 +180,7 @@ def test_encoder_approach_build_dataset_semantics() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -187,20 +200,28 @@ def test_encoder_approach_build_dataset_semantics() -> None:
 
     original_reconstruct = approach.reconstruct_abstract_state_sequence
 
-    def _fake_reconstruct(initial_abstract_state, op_sequence):
+    def _fake_reconstruct(
+        initial_abstract_state: RelationalAbstractState,
+        op_sequence: FrozenGroundOpSequence,
+    ) -> list[RelationalAbstractState] | None:
         if op_sequence == invalid_sequence:
             return None
         return original_reconstruct(initial_abstract_state, op_sequence)
 
-    approach.reconstruct_abstract_state_sequence = _fake_reconstruct  # type: ignore[method-assign]
-    approach._refiner = (
-        lambda *args, **kwargs: object()
-    )  # pylint: disable=protected-access,unnecessary-lambda-assignment
+    cast(Any, approach).reconstruct_abstract_state_sequence = _fake_reconstruct
+
+    def _always_succeeds_refiner(*args: Any, **kwargs: Any) -> object:
+        del args, kwargs
+        return object()
+
+    approach._refiner = cast(
+        Any, _always_succeeds_refiner
+    )  # pylint: disable=protected-access
 
     dataset = approach.build_dataset(seed_ids=[101])
-    applicability = dataset["applicability"]
-    success = dataset["success"]
-    refinement_time = dataset["refinement_time"]
+    applicability = cast(Any, dataset["applicability"])
+    success = cast(Any, dataset["success"])
+    refinement_time = cast(Any, dataset["refinement_time"])
 
     assert applicability.shape == (1, 2)
     assert success.shape == (1, 2)
@@ -228,7 +249,7 @@ def test_encoder_approach_cycle_pruning_defaults_on() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -258,7 +279,7 @@ def test_encoder_approach_build_vocab_accepts_prune_cycles_override() -> None:
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -287,8 +308,6 @@ def _make_filter_dataset(
     vocab: list | None = None,
 ) -> dict:
     """Build a minimal dataset dict for filtering tests."""
-    import numpy as np
-
     app = np.array(applicability, dtype=np.float32)
     suc = np.array(success, dtype=np.float32)
     n_seeds, n_vocab = app.shape
@@ -317,7 +336,7 @@ def test_filter_vocab_removes_never_applicable() -> None:
     filtered_vocab, keep_indices, stats = EncoderApproach.filter_vocab_by_success_rate(
         dataset, threshold=0.0
     )
-    # Col 1 (never applicable) and Col 0 (always fails) are both removed at threshold=0.0.
+    # Col 1 (never applicable) and Col 0 (always fails) are removed.
     assert 1 not in keep_indices
     assert stats["original_size"] == 3
     assert stats["filtered_size"] == 1
@@ -369,8 +388,6 @@ def test_filter_vocab_ranked_by_success_rate_descending() -> None:
     _, keep_indices, _ = EncoderApproach.filter_vocab_by_success_rate(
         dataset, threshold=0.0
     )
-    import numpy as np
-
     app = dataset["applicability"]
     suc = dataset["success"]
     rates = (suc.sum(axis=0) / app.sum(axis=0)).tolist()
@@ -389,8 +406,6 @@ def test_filter_vocab_invalid_threshold_raises() -> None:
 
 def test_apply_vocab_filter_slices_matrices_correctly() -> None:
     """apply_vocab_filter_to_dataset should return correctly sliced matrices."""
-    import numpy as np
-
     dataset = _make_filter_dataset(
         applicability=[[1, 0, 1], [0, 1, 1]],
         success=[[1, 0, 0], [0, 1, 1]],
@@ -448,15 +463,13 @@ def test_build_dataset_steps_completed_fraction_invariants() -> None:
     exercise full success (fraction=1.0), partial failure (fraction=0.5), and complete
     failure (fraction=0.0) without running any real simulation.
     """
-    import numpy as np
-
     kinder.register_all_environments()
     env = kinder.make("kinder/Obstruction2D-o1-v0")
     env_models = create_bilevel_planning_models(
         "obstruction2d", env.observation_space, env.action_space, num_obstructions=1
     )
 
-    approach = EncoderApproach(
+    approach: EncoderApproach[Any, Any, Any] = EncoderApproach(
         env_models,
         seed=123,
         num_training_skeletons_per_problem=5,
@@ -470,42 +483,55 @@ def test_build_dataset_steps_completed_fraction_invariants() -> None:
 
     # Sentinel strings used as fake abstract states — they are hashable and
     # distinct from any real AbstractState object.
-    FAKE_S1 = "__fake_s1__"
-    FAKE_S2 = "__fake_s2__"
+    fake_s0 = cast(RelationalAbstractState, "__fake_s0__")
+    fake_s1 = cast(RelationalAbstractState, "__fake_s1__")
+    fake_s2 = cast(RelationalAbstractState, "__fake_s2__")
 
     # Always return an applicable 2-step abstract state sequence.
     # abstract_state_sequence[0] is the initial state (not counted); we use a
     # dummy string there too — the only states that matter for step-counting are
     # abstract_state_sequence[1:] = [FAKE_S1, FAKE_S2].
-    approach.reconstruct_abstract_state_sequence = (  # type: ignore[method-assign]
-        lambda _s0, _ops: ["__fake_s0__", FAKE_S1, FAKE_S2]
+    def _fake_reconstruct_always_applicable(
+        _s0: RelationalAbstractState,
+        _ops: FrozenGroundOpSequence,
+    ) -> list[RelationalAbstractState] | None:
+        return [fake_s0, fake_s1, fake_s2]
+
+    cast(Any, approach).reconstruct_abstract_state_sequence = (
+        _fake_reconstruct_always_applicable
     )
 
     call_index = [0]
 
-    def fake_refiner(_x0, _abstract_state_seq, _op_seq, _timeout, bpg):
+    def fake_refiner(
+        _x0: Any,
+        _abstract_state_seq: list[RelationalAbstractState],
+        _op_seq: list[GroundOperator],
+        _timeout: float,
+        bpg: BilevelPlanningGraph,
+    ) -> object | None:
         idx = call_index[0]
         call_index[0] += 1
         if idx % 3 == 0:
             # Full success: reach both steps.
-            bpg.add_abstract_state_node(FAKE_S1)
-            bpg.add_abstract_state_node(FAKE_S2)
+            bpg.add_abstract_state_node(fake_s1)
+            bpg.add_abstract_state_node(fake_s2)
             return object()  # non-None → success
         if idx % 3 == 1:
             # Partial failure: only the first step reached (fraction = 0.5).
-            bpg.add_abstract_state_node(FAKE_S1)
+            bpg.add_abstract_state_node(fake_s1)
             return None
         # Complete failure: no steps reached (fraction = 0.0).
         return None
 
-    approach._refiner = fake_refiner  # pylint: disable=protected-access
+    approach._refiner = cast(Any, fake_refiner)  # pylint: disable=protected-access
 
     # 3 seeds × 1 vocab entry = exactly 3 refiner calls, one per behaviour.
     dataset = approach.build_dataset(seed_ids=[101, 102, 103], show_progress=False)
 
-    steps = dataset["steps_completed_fraction"]
-    success = dataset["success"]
-    applicability = dataset["applicability"]
+    steps = cast(Any, dataset["steps_completed_fraction"])
+    success = cast(Any, dataset["success"])
+    applicability = cast(Any, dataset["applicability"])
 
     assert steps.shape == (3, 1)
 
@@ -518,7 +544,10 @@ def test_build_dataset_steps_completed_fraction_invariants() -> None:
     np.testing.assert_array_equal(
         steps[app_mask] == 1.0,
         success[app_mask] == 1.0,
-        err_msg="steps_completed_fraction==1.0 must match success==1.0 for applicable entries",
+        err_msg=(
+            "steps_completed_fraction==1.0 must match success==1.0 "
+            "for applicable entries"
+        ),
     )
 
     # Verify the three specific values produced by the cycling mock.

@@ -7,11 +7,14 @@ This script compares two policies using only precomputed matrices from dataset a
 
 Policies:
 1) Baseline fixed-order:
-   - Compute global skeleton ranking from training split success rate among applicable rows.
+        - Compute global skeleton ranking from training split success rate among
+            applicable rows.
    - For each test seed, try applicable skeletons in that static order.
 2) Encoder-guided:
-   - First try a static-first skeleton (best training success-rate column) when applicable.
-   - If not applicable, deterministically fallback to model-best applicable with empty observations.
+        - First try a static-first skeleton (best training success-rate column)
+            when applicable.
+        - If not applicable, deterministically fallback to model-best applicable
+            with empty observations.
    - Then iteratively choose highest-probability feasible untried applicable skeleton
      from the MAE given partial observations.
 
@@ -32,18 +35,18 @@ Outputs:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import dill
 import hydra
+import kinder
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import kinder
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -55,10 +58,14 @@ from torch import nn
 
 @dataclass(frozen=True)
 class SplitData:
+    """Tensorized split matrices and optional per-seed planner context."""
+
     applicability: np.ndarray
     success: np.ndarray
     refinement_time: np.ndarray
-    steps_completed_fraction: np.ndarray  # falls back to binary success for old datasets
+    steps_completed_fraction: (
+        np.ndarray
+    )  # falls back to binary success for old datasets
     vocab: list[Any]
     initial_low_level_states: list[Any] | None = None
     initial_abstract_states: list[Any] | None = None
@@ -79,7 +86,7 @@ class EncoderMAE(nn.Module):
         super().__init__()
         if not hidden_dims:
             raise ValueError("model.hidden_dims must be non-empty")
-        if not (0.0 <= dropout < 1.0):
+        if dropout < 0.0 or dropout >= 1.0:
             raise ValueError("model.dropout must be in [0, 1)")
 
         dims = [input_dim, *hidden_dims, output_dim]
@@ -95,6 +102,7 @@ class EncoderMAE(nn.Module):
         self._network = nn.Sequential(*layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        """Return logits for all vocabulary columns."""
         return self._network(inputs)
 
 
@@ -154,15 +162,21 @@ def _extract_split_data(payload: dict[str, Any], split_name: str) -> SplitData:
     vocab = list(dataset["op_sequence_vocab"])
 
     if applicability.ndim != 2 or success.ndim != 2 or refinement_time.ndim != 2:
-        raise ValueError(f"{split_name}: applicability/success/refinement_time must be rank-2")
-    if applicability.shape != success.shape or applicability.shape != refinement_time.shape:
+        raise ValueError(
+            f"{split_name}: applicability/success/refinement_time must be rank-2"
+        )
+    if (
+        applicability.shape != success.shape
+        or applicability.shape != refinement_time.shape
+    ):
         raise ValueError(
             f"{split_name}: shape mismatch A{applicability.shape} "
             f"Y{success.shape} T{refinement_time.shape}"
         )
     if applicability.shape[1] != len(vocab):
         raise ValueError(
-            f"{split_name}: column count {applicability.shape[1]} != vocab size {len(vocab)}"
+            f"{split_name}: column count {applicability.shape[1]} "
+            f"!= vocab size {len(vocab)}"
         )
 
     if not _is_binary_matrix(applicability):
@@ -185,9 +199,13 @@ def _extract_split_data(payload: dict[str, Any], split_name: str) -> SplitData:
     problem_goals = dataset.get("problem_goals")
 
     num_rows = int(applicability.shape[0])
-    if initial_low_level_states is not None and len(initial_low_level_states) != num_rows:
+    if (
+        initial_low_level_states is not None
+        and len(initial_low_level_states) != num_rows
+    ):
         raise ValueError(
-            f"{split_name}: len(initial_low_level_states)={len(initial_low_level_states)} "
+            f"{split_name}: len(initial_low_level_states)="
+            f"{len(initial_low_level_states)} "
             f"!= num_rows={num_rows}"
         )
     if initial_abstract_states is not None and len(initial_abstract_states) != num_rows:
@@ -207,12 +225,16 @@ def _extract_split_data(payload: dict[str, Any], split_name: str) -> SplitData:
         refinement_time=refinement_time,
         steps_completed_fraction=steps,
         vocab=vocab,
-        initial_low_level_states=list(initial_low_level_states)
-        if initial_low_level_states is not None
-        else None,
-        initial_abstract_states=list(initial_abstract_states)
-        if initial_abstract_states is not None
-        else None,
+        initial_low_level_states=(
+            list(initial_low_level_states)
+            if initial_low_level_states is not None
+            else None
+        ),
+        initial_abstract_states=(
+            list(initial_abstract_states)
+            if initial_abstract_states is not None
+            else None
+        ),
         problem_goals=list(problem_goals) if problem_goals is not None else None,
     )
 
@@ -230,10 +252,13 @@ def _extract_training_timeout_seconds(payload: dict[str, Any]) -> float | None:
     return timeout_value
 
 
-def _assert_same_vocab(train_vocab: list[Any], other_vocab: list[Any], name: str) -> None:
+def _assert_same_vocab(
+    train_vocab: list[Any], other_vocab: list[Any], name: str
+) -> None:
     if len(train_vocab) != len(other_vocab):
         raise ValueError(
-            f"Vocab mismatch for {name}: len(train)={len(train_vocab)} len({name})={len(other_vocab)}"
+            f"Vocab mismatch for {name}: len(train)={len(train_vocab)} "
+            f"len({name})={len(other_vocab)}"
         )
     for index, (train_entry, other_entry) in enumerate(zip(train_vocab, other_vocab)):
         if train_entry != other_entry:
@@ -286,7 +311,9 @@ def _compute_training_ranking(train: SplitData) -> tuple[np.ndarray, int]:
     return np.asarray(order, dtype=np.int64), int(static_first)
 
 
-def _strict_attempt_allowed(attempt_time: float, remaining: float, epsilon: float) -> bool:
+def _strict_attempt_allowed(
+    attempt_time: float, remaining: float, epsilon: float
+) -> bool:
     return attempt_time <= (remaining + epsilon)
 
 
@@ -400,12 +427,12 @@ def _compute_generator_order_indices(
 
     abstract_plan_generator: RelationalHeuristicSearchAbstractPlanGenerator = (
         RelationalHeuristicSearchAbstractPlanGenerator(
-        env_models.types,
-        env_models.predicates,
-        env_models.operators,
-        heuristic_name,
-        seed=generator_seed,
-    )
+            env_models.types,
+            env_models.predicates,
+            env_models.operators,
+            heuristic_name,
+            seed=generator_seed,
+        )
     )
 
     ordered_indices_per_row: list[list[int]] = []
@@ -433,7 +460,7 @@ def _compute_generator_order_indices(
             op_sequence = _freeze_ground_op_sequence(skeleton)
             col_idx = vocab_to_idx.get(op_sequence)
             if col_idx is None:
-                if max_generated_skeletons_per_row > 0 and generated_count >= max_generated_skeletons_per_row:
+                if 0 < max_generated_skeletons_per_row <= generated_count:
                     break
                 continue
 
@@ -443,7 +470,7 @@ def _compute_generator_order_indices(
 
             if len(row_order) >= row_applicable_count:
                 break
-            if max_generated_skeletons_per_row > 0 and generated_count >= max_generated_skeletons_per_row:
+            if 0 < max_generated_skeletons_per_row <= generated_count:
                 break
 
         ordered_indices_per_row.append(row_order)
@@ -510,7 +537,9 @@ def _run_encoder_row(
         first_choice = int(static_first_index)
     else:
         first_probs = _model_scores_for_row(model, x_steps, m, a, device)
-        fallback_choice = _pick_best_untried_applicable(first_probs, applicable_indices, tried)
+        fallback_choice = _pick_best_untried_applicable(
+            first_probs, applicable_indices, tried
+        )
         if fallback_choice is None:
             return False, float(budget_seconds)
         first_choice = fallback_choice
@@ -570,8 +599,12 @@ def _evaluate_policy(
         "solved_count": int(outcomes_np.sum()),
         "failed_count": int((~outcomes_np).sum()),
         "success_rate": float(outcomes_np.mean()) if n_rows > 0 else float("nan"),
-        "mean_time_success_only": float(solved_times.mean()) if solved_times.size > 0 else float("nan"),
-        "mean_time_total": float(elapsed_np.mean()) if elapsed_np.size > 0 else float("nan"),
+        "mean_time_success_only": (
+            float(solved_times.mean()) if solved_times.size > 0 else float("nan")
+        ),
+        "mean_time_total": (
+            float(elapsed_np.mean()) if elapsed_np.size > 0 else float("nan")
+        ),
         "outcomes": outcomes_np,
         "elapsed_times": elapsed_np,
     }
@@ -604,7 +637,9 @@ def _plot_success_curve(
             linewidth=2,
         )
     plt.plot(budgets, encoder_success, label="Encoder-guided", linewidth=2)
-    plt.axvline(budget_marker, linestyle="--", linewidth=1.5, label=f"Budget={budget_marker:g}s")
+    plt.axvline(
+        budget_marker, linestyle="--", linewidth=1.5, label=f"Budget={budget_marker:g}s"
+    )
     plt.ylim(0.0, 1.0)
     plt.xlabel("Time budget (seconds)")
     plt.ylabel("Success rate")
@@ -645,7 +680,9 @@ def _plot_time_curve(
             linewidth=2,
         )
     plt.plot(budgets, encoder_values, label="Encoder-guided", linewidth=2)
-    plt.axvline(budget_marker, linestyle="--", linewidth=1.5, label=f"Budget={budget_marker:g}s")
+    plt.axvline(
+        budget_marker, linestyle="--", linewidth=1.5, label=f"Budget={budget_marker:g}s"
+    )
     plt.title(title)
     plt.xlabel("Time budget (seconds)")
     plt.ylabel(ylabel)
@@ -662,6 +699,7 @@ def _plot_time_curve(
     version_base=None,
 )
 def main(cfg: DictConfig) -> None:
+    """Run offline rollout evaluation and write metrics/plots artifacts."""
     if bool(cfg.bootstrap.enabled):
         _bootstrap_env_model_modules(cfg)
 
@@ -710,7 +748,9 @@ def main(cfg: DictConfig) -> None:
         raise ValueError("generator_baseline.timeout_seconds must be > 0")
     max_generated = int(cfg.generator_baseline.max_generated_skeletons_per_row)
     if max_generated < 0:
-        raise ValueError("generator_baseline.max_generated_skeletons_per_row must be >= 0")
+        raise ValueError(
+            "generator_baseline.max_generated_skeletons_per_row must be >= 0"
+        )
 
     device = _select_device(str(cfg.train.device))
     if box_offline_enabled:
@@ -737,7 +777,9 @@ def main(cfg: DictConfig) -> None:
             env_models=box_env_models,
             seed=int(cfg.box_offline.seed),
             exploration_constant=float(cfg.box_offline.exploration_constant),
-            failure_penalty_multiplier=float(cfg.box_offline.failure_penalty_multiplier),
+            failure_penalty_multiplier=float(
+                cfg.box_offline.failure_penalty_multiplier
+            ),
         )
         box_offline_approach.build_box_model_from_encoder_dataset_artifact(train_path)
         box_offline_approach.load_offline_planning_dataset_from_encoder_dataset_artifact(
@@ -948,11 +990,15 @@ def main(cfg: DictConfig) -> None:
         )
         baseline_success_curve.append(float(baseline_sweep["success_rate"]))
         if generator_order_sweep is not None:
-            generator_order_success_curve.append(float(generator_order_sweep["success_rate"]))
+            generator_order_success_curve.append(
+                float(generator_order_sweep["success_rate"])
+            )
         if box_offline_sweep is not None:
             box_offline_success_curve.append(float(box_offline_sweep["success_rate"]))
         encoder_success_curve.append(float(encoder_sweep["success_rate"]))
-        baseline_time_success_only_curve.append(float(baseline_sweep["mean_time_success_only"]))
+        baseline_time_success_only_curve.append(
+            float(baseline_sweep["mean_time_success_only"])
+        )
         if generator_order_sweep is not None:
             generator_order_time_success_only_curve.append(
                 float(generator_order_sweep["mean_time_success_only"])
@@ -961,12 +1007,18 @@ def main(cfg: DictConfig) -> None:
             box_offline_time_success_only_curve.append(
                 float(box_offline_sweep["mean_time_success_only"])
             )
-        encoder_time_success_only_curve.append(float(encoder_sweep["mean_time_success_only"]))
+        encoder_time_success_only_curve.append(
+            float(encoder_sweep["mean_time_success_only"])
+        )
         baseline_time_total_curve.append(float(baseline_sweep["mean_time_total"]))
         if generator_order_sweep is not None:
-            generator_order_time_total_curve.append(float(generator_order_sweep["mean_time_total"]))
+            generator_order_time_total_curve.append(
+                float(generator_order_sweep["mean_time_total"])
+            )
         if box_offline_sweep is not None:
-            box_offline_time_total_curve.append(float(box_offline_sweep["mean_time_total"]))
+            box_offline_time_total_curve.append(
+                float(box_offline_sweep["mean_time_total"])
+            )
         encoder_time_total_curve.append(float(encoder_sweep["mean_time_total"]))
 
     baseline_success_curve_np = np.asarray(baseline_success_curve, dtype=np.float32)
@@ -1039,7 +1091,9 @@ def main(cfg: DictConfig) -> None:
             "enabled": box_offline_enabled,
             "seed": int(cfg.box_offline.seed),
             "exploration_constant": float(cfg.box_offline.exploration_constant),
-            "failure_penalty_multiplier": float(cfg.box_offline.failure_penalty_multiplier),
+            "failure_penalty_multiplier": float(
+                cfg.box_offline.failure_penalty_multiplier
+            ),
         },
         "budget_seconds": budget_seconds,
         "baseline": {
@@ -1062,7 +1116,9 @@ def main(cfg: DictConfig) -> None:
             "success_rate": float(generator_order_metrics["success_rate"]),
             "solved_count": int(generator_order_metrics["solved_count"]),
             "failed_count": int(generator_order_metrics["failed_count"]),
-            "mean_time_success_only": float(generator_order_metrics["mean_time_success_only"]),
+            "mean_time_success_only": float(
+                generator_order_metrics["mean_time_success_only"]
+            ),
             "mean_time_total": float(generator_order_metrics["mean_time_total"]),
         }
     if box_offline_metrics is not None:
@@ -1070,7 +1126,9 @@ def main(cfg: DictConfig) -> None:
             "success_rate": float(box_offline_metrics["success_rate"]),
             "solved_count": int(box_offline_metrics["solved_count"]),
             "failed_count": int(box_offline_metrics["failed_count"]),
-            "mean_time_success_only": float(box_offline_metrics["mean_time_success_only"]),
+            "mean_time_success_only": float(
+                box_offline_metrics["mean_time_success_only"]
+            ),
             "mean_time_total": float(box_offline_metrics["mean_time_total"]),
         }
 
@@ -1149,13 +1207,21 @@ def main(cfg: DictConfig) -> None:
         baseline_success_rate=np.float32(baseline_metrics["success_rate"]),
         encoder_success_rate=np.float32(encoder_metrics["success_rate"]),
         baseline_generator_success_rate=np.float32(
-            generator_order_metrics["success_rate"] if generator_order_metrics is not None else np.nan
+            generator_order_metrics["success_rate"]
+            if generator_order_metrics is not None
+            else np.nan
         ),
         box_offline_success_rate=np.float32(
-            box_offline_metrics["success_rate"] if box_offline_metrics is not None else np.nan
+            box_offline_metrics["success_rate"]
+            if box_offline_metrics is not None
+            else np.nan
         ),
-        baseline_mean_time_success_only=np.float32(baseline_metrics["mean_time_success_only"]),
-        encoder_mean_time_success_only=np.float32(encoder_metrics["mean_time_success_only"]),
+        baseline_mean_time_success_only=np.float32(
+            baseline_metrics["mean_time_success_only"]
+        ),
+        encoder_mean_time_success_only=np.float32(
+            encoder_metrics["mean_time_success_only"]
+        ),
         baseline_generator_mean_time_success_only=np.float32(
             generator_order_metrics["mean_time_success_only"]
             if generator_order_metrics is not None

@@ -1,3 +1,5 @@
+"""BOX-style approach for scoring and selecting skeletons in TAMP planning."""
+
 import math
 import time
 from pathlib import Path
@@ -125,7 +127,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         self._refiner = self._planner._refiner  # pylint: disable=protected-access
 
         # Store training data.
-        # List of dicts, where each dict maps FrozenSkeleton -> (utility score, is_success).
+        # List of dicts mapping FrozenSkeleton -> (utility score, is_success).
         # Higher is better for utility score.
         self._data: list[dict[FrozenSkeleton, tuple[float, bool]]] = []
         self._training_initial_states: list[_X] = []
@@ -184,7 +186,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
 
         if applicability.ndim != 2 or success.ndim != 2 or refinement_time.ndim != 2:
             raise ValueError(
-                "Encoder dataset arrays applicability/success/refinement_time must be rank-2"
+                "Encoder dataset arrays "
+                "applicability/success/refinement_time must be rank-2"
             )
         if (
             applicability.shape != success.shape
@@ -263,7 +266,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         training problems. We treat each vocabulary column as a BOX candidate and
         convert each matrix entry into the same utility score used by BOX training.
         """
-        applicability, success, refinement_time, vocab, training_timeout = (
+        _applicability, success, refinement_time, vocab, training_timeout = (
             self._validate_encoder_dataset_payload(payload)
         )
 
@@ -682,7 +685,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         self._backfill_missing_training_labels()
 
         # Identify fixed set of skeletons from training
-        # Take the union of all skeletons seen during training as analogy to "constraints" from BOX paper
+        # Take the union of all skeletons seen during training as the fixed
+        # candidate set analogous to BOX constraints.
         all_skeletons: Set[FrozenSkeleton] = set()
         for problem_data in self._data:
             all_skeletons.update(problem_data.keys())
@@ -695,7 +699,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                     f"{i} is still missing {len(missing_skeletons)} skeletons."
                 )
 
-        self._skeletons_vocab = sorted(list(all_skeletons), key=lambda s: str(s))
+        self._skeletons_vocab = sorted(list(all_skeletons), key=str)
         self._skeleton_to_idx = {s: i for i, s in enumerate(self._skeletons_vocab)}
 
         N = len(self._data)
@@ -721,7 +725,9 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         # debugging: show the number of unique rows in D
         unique_rows = np.unique(D, axis=0)
         print(
-            f"[BoxApproach] Built score matrix D with shape {D.shape}, {len(unique_rows)} unique rows from {N} training problems and {M} skeletons."
+            "[BoxApproach] Built score matrix D with shape "
+            f"{D.shape}, {len(unique_rows)} unique rows from {N} "
+            f"training problems and {M} skeletons."
         )
 
         self._prior_mu, self._prior_sigma = self._compute_prior_statistics(D)
@@ -750,7 +756,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         bpg.add_abstract_state_node(s0)
         bpg.add_state_abstractor_edge(x0, s0)
 
-        print("Beginning BOX approach with timeout of {:.2f} seconds.".format(timeout))
+        print(f"Beginning BOX approach with timeout of {timeout:.2f} seconds.")
 
         start_time = time.perf_counter()
 
@@ -819,7 +825,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                 elapsed = time.perf_counter() - start_time
                 if plan is not None:
                     print(
-                        f"BOX found a plan with score {score:.4f} after {elapsed:.2f} seconds."
+                        "BOX found a plan with score "
+                        f"{score:.4f} after {elapsed:.2f} seconds."
                     )
                     return plan
 
@@ -852,7 +859,8 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
                 )
                 if plan is not None:
                     print(
-                        f"BOX fallback found a plan with skeleton {frozen} after {elapsed:.2f} seconds."
+                        "BOX fallback found a plan with skeleton "
+                        f"{frozen} after {elapsed:.2f} seconds."
                     )
                     return plan
 
@@ -1158,7 +1166,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
 
         gen = self._base_abstract_plan_generator(x0, s0, problem.goal, remaining, bpg)
 
-        # TODO: could refactor to avoid code duplication
+        # Fallback loop mirrors the shared refinement pattern used above.
         for generated_skeleton in gen:
             elapsed = time.perf_counter() - start_time
             if elapsed >= timeout:
@@ -1197,6 +1205,7 @@ class BoxApproach(BaseApproach[_O, _X, _U]):
         """
         if not self._model_built:
             return 0.0
+        del failed_skeletons
         assert self._prior_mu is not None
 
         frozen = (tuple(skeleton[0]), tuple(skeleton[1]))
