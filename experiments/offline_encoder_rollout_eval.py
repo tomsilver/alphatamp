@@ -515,7 +515,6 @@ def _run_encoder_row(
     success_row: np.ndarray,
     time_row: np.ndarray,
     steps_row: np.ndarray,
-    static_first_index: int,
     budget_seconds: float,
     epsilon: float,
     device: torch.device,
@@ -531,18 +530,16 @@ def _run_encoder_row(
     m = np.zeros_like(success_row, dtype=np.float32)
     a = applicable_row.astype(np.float32)
 
+    # Reveal all inapplicable skeletons upfront — their performance (0) is free
+    # information that is known before any attempts are made.
+    m[applicable_row <= 0.5] = 1.0
+
     tried: set[int] = set()
 
-    if static_first_index in applicable_indices:
-        first_choice = int(static_first_index)
-    else:
-        first_probs = _model_scores_for_row(model, x_steps, m, a, device)
-        fallback_choice = _pick_best_untried_applicable(
-            first_probs, applicable_indices, tried
-        )
-        if fallback_choice is None:
-            return False, float(budget_seconds)
-        first_choice = fallback_choice
+    first_probs = _model_scores_for_row(model, x_steps, m, a, device)
+    first_choice = _pick_best_untried_applicable(first_probs, applicable_indices, tried)
+    if first_choice is None:
+        return False, float(budget_seconds)
 
     while True:
         attempt_time = float(time_row[first_choice])
@@ -878,7 +875,6 @@ def main(cfg: DictConfig) -> None:
             success_row,
             time_row,
             test_split.steps_completed_fraction[row_idx],
-            static_first_index,
             budget,
             epsilon,
             device,

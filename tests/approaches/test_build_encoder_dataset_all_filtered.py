@@ -200,11 +200,13 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
         applicable_count = int(app[:, col_idx].sum())
         success_count = int(suc[:, col_idx].sum())
         if applicable_count > 0:
-            assert success_count > 0, f"kept applicable col {col_idx} had zero successes"
+            assert (
+                success_count > 0
+            ), f"kept applicable col {col_idx} had zero successes"
         else:
-            assert success_count == 0, (
-                f"kept never-applicable col {col_idx} should have zero successes"
-            )
+            assert (
+                success_count == 0
+            ), f"kept never-applicable col {col_idx} should have zero successes"
 
     # --- filtered dataset shapes ---
     filtered_app = cast(np.ndarray[Any, Any], filtered_dataset["applicability"])

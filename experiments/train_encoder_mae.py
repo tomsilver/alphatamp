@@ -15,6 +15,7 @@ Falls back to binary `success` when `steps_completed_fraction` is absent.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ import torch
 import torch.nn.functional as F
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 from omegaconf import DictConfig, OmegaConf
+from scipy.stats import spearmanr
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch import nn
 
@@ -200,16 +202,25 @@ def _select_device(device_cfg: str) -> torch.device:
 
 def _sample_reveal_mask(
     applicability: torch.Tensor,
-    reveal_probability: float,
     generator: torch.Generator,
 ) -> torch.Tensor:
-    if reveal_probability < 0.0 or reveal_probability > 1.0:
-        raise ValueError("reveal_probability must be in [0, 1]")
+    """Sample a reveal mask using a principled log-uniform scheme.
 
+    Inapplicable skeletons are always revealed (their performance is free
+    information: they fail without needing to be tried).  For the M_app
+    applicable skeletons we draw k ~ log-uniform on {0, ..., M_app-1} via
+
+        k = floor(exp(u * log(M_app + 1))) - 1,   u ~ Uniform(0, 1)
+
+    which gives P(k) ∝ 1/(k+1) and naturally handles M_app=1 (always k=0).
+    """
     # Sample on CPU for generator compatibility, then map back to input device.
     applicability_cpu = applicability.to("cpu")
     applicable_cpu = applicability_cpu > 0.5
     reveal_mask_cpu = torch.zeros_like(applicable_cpu, dtype=torch.bool)
+
+    # Always reveal inapplicable entries.
+    reveal_mask_cpu |= ~applicable_cpu
 
     num_rows = applicable_cpu.shape[0]
     for row_idx in range(num_rows):
@@ -221,19 +232,17 @@ def _sample_reveal_mask(
         if num_applicable == 0:
             continue
 
+        # M_app == 1: only one applicable skeleton — always keep it hidden (k=0).
         if num_applicable == 1:
-            # Degenerate case: cannot have both revealed and hidden applicable entries.
-            # Keep hidden target available by revealing none.
             continue
 
-        # For k >= 2, enforce at least 1 revealed and at least 1 hidden.
-        # Bias expected reveal count by reveal_probability, then clamp to [1, k-1].
-        target = torch.binomial(
-            torch.tensor(float(num_applicable)),
-            torch.tensor(reveal_probability),
-            generator=generator,
-        ).item()
-        num_revealed = max(1, min(num_applicable - 1, int(target)))
+        # Sample k ~ log-uniform on {0, ..., M_app - 1}.
+        u = torch.rand(1, generator=generator).item()
+        num_revealed = int(math.floor(math.exp(u * math.log(num_applicable + 1)))) - 1
+        num_revealed = max(0, min(num_applicable - 1, num_revealed))
+
+        if num_revealed == 0:
+            continue
 
         perm = torch.randperm(num_applicable, generator=generator)
         chosen = applicable_indices[perm[:num_revealed]]
@@ -256,7 +265,9 @@ def _masked_bce_loss(
         targets_steps: shape (B, M) — steps_completed_fraction in [0, 1].
         applicability: shape (B, M) — binary applicability mask.
         reveal_mask: shape (B, M) — True where entry is revealed (not hidden).
-        pos_weight: multiplier applied to targets > 0.5 (addresses sparse successes).
+        pos_weight: imbalance ratio (neg/pos among true successes); linearly
+            interpolated across targets so failures keep weight 1.0 and true
+            successes (target=1.0) receive weight pos_weight.
     """
     hidden_applicable = (applicability > 0.5) & (~reveal_mask)
     hidden_count = int(hidden_applicable.sum().item())
@@ -270,10 +281,11 @@ def _masked_bce_loss(
         hidden_targets,
         reduction="none",
     )
-    # Up-weight entries where the plan made meaningful progress (target > 0.5).
-    weights = torch.ones_like(hidden_targets)
-    if pos_weight > 1.0:
-        weights = torch.where(hidden_targets > 0.5, pos_weight, 1.0)
+    # Linearly interpolate weight from 1.0 (failure) to pos_weight (true success).
+    # Failures (target=0) retain full weight for contrast signal; true successes
+    # (target=1) are upweighted by the class imbalance ratio. Works symmetrically
+    # when pos_weight < 1 (successes outnumber failures).
+    weights = 1.0 + hidden_targets * (pos_weight - 1.0)
     loss = (unreduced * weights).mean()
     return loss, hidden_count
 
@@ -290,7 +302,8 @@ def _evaluate(
     model.eval()
     total_loss = 0.0
     total_hidden = 0
-    total_correct = 0
+    spearman_sum = 0.0
+    spearman_count = 0
     topk_sum: dict[int, float] = {k: 0.0 for k in top_k_values}
     topk_count: dict[int, int] = {k: 0 for k in top_k_values}
     all_hidden_scores: list[np.ndarray] = []
@@ -326,18 +339,16 @@ def _evaluate(
             total_loss += float(loss.item()) * hidden_count
             total_hidden += hidden_count
 
-            # Compare predicted steps against binary success for AUROC/AP.
+            # Scores and labels for AUROC/AP (binary success labels, threshold-free).
             probs = torch.sigmoid(logits)
             hidden_mask = (applicability_batch > 0.5) & (~reveal_batch)
             hidden_probs = probs[hidden_mask]
             hidden_labels = success_batch[hidden_mask]
-            hidden_preds = (hidden_probs >= 0.5).float()
-            total_correct += int((hidden_preds == hidden_labels).sum().item())
 
             all_hidden_scores.append(hidden_probs.detach().cpu().numpy())
             all_hidden_labels.append(hidden_labels.detach().cpu().numpy())
 
-            # Top-k success precision among untried applicable columns.
+            # Per-row Spearman correlation and top-k precision.
             for row_idx in range(success_batch.shape[0]):
                 row_mask = hidden_mask[row_idx]
                 row_candidates = int(row_mask.sum().item())
@@ -345,6 +356,16 @@ def _evaluate(
                     continue
                 row_scores = probs[row_idx][row_mask]
                 row_labels = success_batch[row_idx][row_mask]
+
+                # Spearman between predicted scores and true steps_completed_fraction.
+                row_scores_np = row_scores.detach().cpu().numpy()
+                row_steps_np = steps_batch[row_idx][row_mask].detach().cpu().numpy()
+                if len(row_scores_np) >= 2:
+                    rho = float(spearmanr(row_scores_np, row_steps_np)[0])
+                    if not np.isnan(rho):
+                        spearman_sum += rho
+                        spearman_count += 1
+
                 for top_k in top_k_values:
                     effective_k = min(top_k, row_candidates)
                     if effective_k <= 0:
@@ -355,7 +376,9 @@ def _evaluate(
                     topk_count[top_k] += 1
 
     mean_loss = total_loss / max(1, total_hidden)
-    hidden_accuracy = float(total_correct / max(1, total_hidden))
+    spearman_corr = (
+        float(spearman_sum / spearman_count) if spearman_count > 0 else float("nan")
+    )
 
     if all_hidden_scores:
         hidden_scores_np = np.concatenate(all_hidden_scores, axis=0)
@@ -384,7 +407,7 @@ def _evaluate(
     return {
         "loss": mean_loss,
         "hidden_count": total_hidden,
-        "hidden_accuracy": hidden_accuracy,
+        "spearman_corr": spearman_corr,
         "auroc": auroc,
         "average_precision": average_precision,
         "topk_precision": topk_precision,
@@ -406,7 +429,8 @@ def _evaluate_over_masks(
 
     total_weighted_loss = 0.0
     total_hidden = 0
-    total_correct_weighted = 0.0
+    spearman_weighted_sum = 0.0
+    spearman_weight = 0
     auroc_weighted_sum = 0.0
     auroc_weight = 0
     ap_weighted_sum = 0.0
@@ -428,7 +452,11 @@ def _evaluate_over_masks(
         mask_hidden = int(metrics["hidden_count"])
         total_weighted_loss += mask_loss * mask_hidden
         total_hidden += mask_hidden
-        total_correct_weighted += float(metrics["hidden_accuracy"]) * mask_hidden
+
+        mask_spearman = float(metrics["spearman_corr"])
+        if not np.isnan(mask_spearman):
+            spearman_weighted_sum += mask_spearman * mask_hidden
+            spearman_weight += mask_hidden
 
         mask_auroc = float(metrics["auroc"])
         if not np.isnan(mask_auroc):
@@ -448,7 +476,11 @@ def _evaluate_over_masks(
             topk_total_count[top_k] += count
 
     mean_loss = total_weighted_loss / max(1, total_hidden)
-    hidden_accuracy = float(total_correct_weighted / max(1, total_hidden))
+    spearman_corr = (
+        float(spearman_weighted_sum / spearman_weight)
+        if spearman_weight > 0
+        else float("nan")
+    )
     auroc = (
         float(auroc_weighted_sum / auroc_weight) if auroc_weight > 0 else float("nan")
     )
@@ -463,7 +495,7 @@ def _evaluate_over_masks(
     return {
         "loss": mean_loss,
         "hidden_count": total_hidden,
-        "hidden_accuracy": hidden_accuracy,
+        "spearman_corr": spearman_corr,
         "auroc": auroc,
         "average_precision": average_precision,
         "topk_precision": topk_precision,
@@ -695,7 +727,7 @@ def main(cfg: DictConfig) -> None:
 
     applicable_mask = train_applicability > 0.5
     # pos_weight is based on full successes (steps == 1.0) vs other applicable entries.
-    pos = float((train_steps[applicable_mask] > 0.5).sum().item())
+    pos = float((train_steps[applicable_mask] >= 1.0 - 1e-6).sum().item())
     total = int(applicable_mask.sum().item())
     neg = float(total) - pos
     if pos <= 0:
@@ -723,7 +755,6 @@ def main(cfg: DictConfig) -> None:
         val_reveal_masks.append(
             _sample_reveal_mask(
                 val_applicability,
-                float(cfg.val.reveal_probability),
                 val_mask_rng,
             )
         )
@@ -757,7 +788,7 @@ def main(cfg: DictConfig) -> None:
     best_val_loss = float("inf")
     train_losses: list[float] = []
     val_losses: list[float] = []
-    val_hidden_accuracy: list[float] = []
+    val_spearman_corr: list[float] = []
     val_auroc: list[float] = []
     val_average_precision: list[float] = []
     val_rollout_tries_random: list[float] = []
@@ -782,7 +813,6 @@ def main(cfg: DictConfig) -> None:
 
             reveal_mask = _sample_reveal_mask(
                 applicability_batch,
-                float(cfg.train.reveal_probability),
                 train_mask_rng,
             )
 
@@ -836,13 +866,13 @@ def main(cfg: DictConfig) -> None:
         )
         val_loss = float(val_metrics["loss"])
         val_hidden = int(val_metrics["hidden_count"])
-        val_acc = float(val_metrics["hidden_accuracy"])
+        val_spearman = float(val_metrics["spearman_corr"])
         val_auc = float(val_metrics["auroc"])
         val_ap = float(val_metrics["average_precision"])
         val_topk = val_metrics["topk_precision"]
 
         val_losses.append(val_loss)
-        val_hidden_accuracy.append(val_acc)
+        val_spearman_corr.append(val_spearman)
         val_auroc.append(val_auc)
         val_average_precision.append(val_ap)
         for top_k in top_k_values:
@@ -893,7 +923,8 @@ def main(cfg: DictConfig) -> None:
             f"epoch={epoch}/{num_epochs} "
             f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} "
             f"train_hidden={epoch_hidden_total} val_hidden={val_hidden} "
-            f"val_acc={val_acc:.4f} val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
+            f"val_spearman={val_spearman:.4f} "
+            f"val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
             f"{topk_summary} "
             "rollout_tries_random="
             f"{rollout_random_tries:.4f} "
@@ -938,10 +969,13 @@ def main(cfg: DictConfig) -> None:
         metrics_path,
         train_loss=np.asarray(train_losses, dtype=np.float32),
         val_loss=np.asarray(val_losses, dtype=np.float32),
-        val_hidden_accuracy=np.asarray(val_hidden_accuracy, dtype=np.float32),
+        val_spearman_corr=np.asarray(val_spearman_corr, dtype=np.float32),
         val_auroc=np.asarray(val_auroc, dtype=np.float32),
         val_average_precision=np.asarray(val_average_precision, dtype=np.float32),
-        val_rollout_tries_random=np.asarray(val_rollout_tries_random, dtype=np.float32),
+        val_rollout_tries_random=np.asarray(
+            val_rollout_tries_random,
+            dtype=np.float32,
+        ),
         val_rollout_tries_static_first=np.asarray(
             val_rollout_tries_static_first,
             dtype=np.float32,
@@ -952,8 +986,8 @@ def main(cfg: DictConfig) -> None:
 
     summary: dict[str, Any] = {
         "best_val_loss": best_val_loss,
-        "final_val_hidden_accuracy": (
-            val_hidden_accuracy[-1] if val_hidden_accuracy else float("nan")
+        "final_val_spearman_corr": (
+            val_spearman_corr[-1] if val_spearman_corr else float("nan")
         ),
         "final_val_auroc": val_auroc[-1] if val_auroc else float("nan"),
         "final_val_average_precision": (
@@ -989,7 +1023,6 @@ def main(cfg: DictConfig) -> None:
             test_reveal_masks.append(
                 _sample_reveal_mask(
                     test_applicability,
-                    float(cfg.test.reveal_probability),
                     test_mask_rng,
                 )
             )
@@ -1023,7 +1056,7 @@ def main(cfg: DictConfig) -> None:
         summary["test"] = {
             "loss": float(test_metrics["loss"]),
             "hidden_count": int(test_metrics["hidden_count"]),
-            "hidden_accuracy": float(test_metrics["hidden_accuracy"]),
+            "spearman_corr": float(test_metrics["spearman_corr"]),
             "auroc": float(test_metrics["auroc"]),
             "average_precision": float(test_metrics["average_precision"]),
             "topk_precision": {
@@ -1044,7 +1077,7 @@ def main(cfg: DictConfig) -> None:
         print(
             "test "
             f"loss={summary['test']['loss']:.6f} "
-            f"acc={summary['test']['hidden_accuracy']:.4f} "
+            f"spearman={summary['test']['spearman_corr']:.4f} "
             f"auroc={summary['test']['auroc']:.4f} "
             f"ap={summary['test']['average_precision']:.4f} "
             "rollout_tries_random="

@@ -78,6 +78,8 @@ def _bootstrap_dill_modules() -> None:
 
 
 def main() -> None:
+    """Main entry point for refiltering encoder vocab from an existing filter dataset
+    artifact."""
     parser = argparse.ArgumentParser(
         description=(
             "Re-run offline encoder vocab filtering from an existing "
@@ -134,14 +136,10 @@ def main() -> None:
 
     payload = _load_pickle(filter_artifact)
     if "dataset" not in payload:
-        raise KeyError(
-            f"Expected key 'dataset' in filter artifact: {filter_artifact}"
-        )
+        raise KeyError(f"Expected key 'dataset' in filter artifact: {filter_artifact}")
     dataset = payload["dataset"]
     if not isinstance(dataset, dict):
-        raise TypeError(
-            f"Expected payload['dataset'] to be dict, got {type(dataset)}"
-        )
+        raise TypeError(f"Expected payload['dataset'] to be dict, got {type(dataset)}")
 
     required_dataset_keys = {
         "seed_ids",
