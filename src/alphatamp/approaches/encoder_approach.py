@@ -527,7 +527,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
         """Identify vocabulary entries that meet a minimum success rate.
 
         Sequences where ``applicable_count == 0`` across all filter seeds are
-        treated as having an undefined success rate and removed.
+        treated as having an undefined success rate and are kept.
 
         Args:
             dataset: dict returned by ``build_dataset()``, must contain keys
@@ -535,9 +535,10 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             threshold: exclusive lower bound on success_rate required to keep
                 a sequence (i.e. a sequence is kept iff
                 ``success_rate > threshold``) among sequences that are
-                applicable at least once. ``0.0`` therefore removes both
-                always-fail and never-applicable sequences; ``0.1`` requires
-                a success rate strictly above 10% for applicable sequences.
+                applicable at least once. ``0.0`` therefore removes
+                always-fail applicable sequences; ``0.1`` requires a success
+                rate strictly above 10% for applicable sequences. Sequences
+                that are never applicable are always retained.
 
         Returns:
             A 3-tuple of:
@@ -548,9 +549,10 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
               kept, in the same (success_rate descending) order.
             - ``stats``: dict with keys ``original_size``, ``filtered_size``,
                             ``removed_count``, ``threshold``,
-                            ``never_applicable_count``, and ``success_rates``
-                            (list of per-column rates; ``None`` where
-                            applicable_count == 0).
+                            ``never_applicable_count``,
+                            ``never_applicable_kept_count``, and
+                            ``success_rates`` (list of per-column rates;
+                            ``None`` where applicable_count == 0).
         """
         if threshold < 0.0 or threshold > 1.0:
             raise ValueError(f"threshold must be in [0, 1], got {threshold}")
@@ -570,7 +572,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
         )
 
         # Keep applicable columns only if they strictly exceed the
-        # success-rate threshold. Never-applicable columns are removed.
+        # success-rate threshold.
         applicable_mask = applicable_counts > 0
         keep_applicable_mask = applicable_mask & (success_rates > threshold)
 
@@ -583,7 +585,8 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
 
         # Sort applicable candidates by descending success_rate.
         candidate_applicable_indices.sort(key=lambda i: float(-success_rates[i]))
-        candidate_indices = candidate_applicable_indices
+        # Keep never-applicable columns as-is (preserve original index order).
+        candidate_indices = candidate_applicable_indices + never_applicable_indices
 
         filtered_vocab = [vocab[i] for i in candidate_indices]
 
@@ -599,6 +602,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             "removed_count": len(vocab) - len(filtered_vocab),
             "threshold": threshold,
             "never_applicable_count": len(never_applicable_indices),
+            "never_applicable_kept_count": len(never_applicable_indices),
             "success_rates": readable_rates,
         }
         return filtered_vocab, candidate_indices, stats

@@ -192,14 +192,19 @@ def test_all_filtered_end_to_end(tmp_path: Path) -> None:
     assert len(keep_indices) == n_filtered
     assert all(0 <= i < n_full for i in keep_indices)
 
-    # success_rate must be > threshold (> 0.0 means at least one success)
+    # Applicable kept columns must have success_rate > threshold.
+    # Never-applicable columns are also allowed to be kept.
     app = np.asarray(applicability)
     suc = np.asarray(success)
     for col_idx in keep_indices:
         applicable_count = int(app[:, col_idx].sum())
         success_count = int(suc[:, col_idx].sum())
-        assert applicable_count > 0, f"kept col {col_idx} was never applicable"
-        assert success_count > 0, f"kept col {col_idx} had zero successes"
+        if applicable_count > 0:
+            assert success_count > 0, f"kept applicable col {col_idx} had zero successes"
+        else:
+            assert success_count == 0, (
+                f"kept never-applicable col {col_idx} should have zero successes"
+            )
 
     # --- filtered dataset shapes ---
     filtered_app = cast(np.ndarray[Any, Any], filtered_dataset["applicability"])

@@ -338,9 +338,8 @@ def _make_filter_dataset(
     }
 
 
-def test_filter_vocab_removes_never_applicable() -> None:
-    """Sequences that are never applicable should always be removed
-    (success_rate=NaN)."""
+def test_filter_vocab_keeps_never_applicable() -> None:
+    """Sequences that are never applicable should be retained."""
     # Col 0: always applicable, always fails.
     # Col 1: never applicable.
     # Col 2: always applicable, always succeeds.
@@ -351,12 +350,18 @@ def test_filter_vocab_removes_never_applicable() -> None:
     filtered_vocab, keep_indices, stats = EncoderApproach.filter_vocab_by_success_rate(
         dataset, threshold=0.0
     )
-    # Col 1 (never applicable) and Col 0 (always fails) are removed.
-    assert 1 not in keep_indices
+    # Col 0 (always-fail applicable) is removed; col 1 (never applicable) is kept.
+    assert 0 not in keep_indices
+    assert 1 in keep_indices
     assert stats["original_size"] == 3
-    assert stats["filtered_size"] == 1
-    assert keep_indices == [2]
-    assert filtered_vocab == [dataset["op_sequence_vocab"][2]]
+    assert stats["filtered_size"] == 2
+    assert stats["never_applicable_count"] == 1
+    assert stats["never_applicable_kept_count"] == 1
+    assert keep_indices == [2, 1]
+    assert filtered_vocab == [
+        dataset["op_sequence_vocab"][2],
+        dataset["op_sequence_vocab"][1],
+    ]
 
 
 def test_filter_vocab_strict_removes_always_fail() -> None:

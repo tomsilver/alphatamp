@@ -34,7 +34,7 @@ vocab:
   # to evaluate the full vocabulary before committing to a top-k selection.
   # These seeds should not overlap with train/val/test ranges.
   filter_seed_start: 500
-  filter_seed_stop: 525
+  filter_seed_stop: 550
   # Lower bound (exclusive) on success_rate: a skeleton is kept iff its
   # success_rate on the filter seeds is strictly greater than this value.
   # 0.0 removes only always-failing sequences (succeeded 0 times).
