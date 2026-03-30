@@ -435,9 +435,21 @@ def main(cfg: DictConfig) -> None:
             f"[all_filtered] Stage B: building filter-seed reference dataset "
             f"({len(filter_seeds)} seeds × {len(vocab)} vocab sequences)..."
         )
-        approach = _build_approach(**approach_kwargs)
-        approach.set_vocab(vocab)
-        filter_dataset = approach.build_dataset(filter_seeds)
+        print(
+            f"[all_filtered] Stage B workers: {num_workers} "
+            f"(run.num_workers={num_workers})"
+        )
+        if num_workers == 1:
+            approach = _build_approach(**approach_kwargs)
+            approach.set_vocab(vocab)
+            filter_dataset = approach.build_dataset(filter_seeds)
+        else:
+            filter_dataset = _build_dataset_parallel(
+                vocab=vocab,
+                split_seeds=filter_seeds,
+                num_workers=num_workers,
+                **approach_kwargs,
+            )
 
         filter_dataset_path = output_dir / "encoder_filter_dataset.pkl"
         _save_pickle(
