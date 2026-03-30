@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import dill
+import kinder
+from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from alphatamp.approaches.encoder_approach import EncoderApproach
 
@@ -40,6 +42,39 @@ def _save_pickle(path: Path, payload: dict[str, Any], overwrite: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as file:
         dill.dump(payload, file)
+
+
+def _bootstrap_dill_modules() -> None:
+    """Register dynamic planning modules required by dill deserialization."""
+    kinder.register_all_environments()
+
+    # Encoder filter artifacts in this workflow are generated from Obstruction2D
+    # difficulties, so pre-create these model modules before dill.load().
+    bootstrap_envs = [
+        ("kinder/Obstruction2D-o0-v0", 0),
+        ("kinder/Obstruction2D-o1-v0", 1),
+        ("kinder/Obstruction2D-o2-v0", 2),
+        ("kinder/Obstruction2D-o3-v0", 3),
+        ("kinder/Obstruction2D-o4-v0", 4),
+    ]
+
+    bootstrapped: list[str] = []
+    for env_id, num_obstructions in bootstrap_envs:
+        env = kinder.make(env_id)
+        try:
+            _ = create_bilevel_planning_models(
+                "obstruction2d",
+                env.observation_space,
+                env.action_space,
+                num_obstructions=num_obstructions,
+            )
+            bootstrapped.append(env_id)
+        finally:
+            env.close()  # type: ignore[no-untyped-call]
+
+    print("Bootstrapped model modules for dill:")
+    for env_id in bootstrapped:
+        print(f" - {env_id}")
 
 
 def main() -> None:
@@ -78,6 +113,11 @@ def main() -> None:
         action="store_true",
         help="Allow overwriting existing output files.",
     )
+    parser.add_argument(
+        "--skip-bootstrap",
+        action="store_true",
+        help="Skip dynamic module bootstrap before loading dill artifacts.",
+    )
 
     args = parser.parse_args()
 
@@ -88,6 +128,9 @@ def main() -> None:
         raise FileNotFoundError(f"Filter artifact not found: {filter_artifact}")
     if not 0.0 <= args.threshold <= 1.0:
         raise ValueError(f"threshold must be in [0, 1], got {args.threshold}")
+
+    if not args.skip_bootstrap:
+        _bootstrap_dill_modules()
 
     payload = _load_pickle(filter_artifact)
     if "dataset" not in payload:
