@@ -185,12 +185,19 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._use_parameter_scorer = use_parameter_scorer
         self._param_temperature = param_temperature
 
-    def reset_episode(self, obs: _O) -> None:
+    def reset_episode(self, obs: _O, truncated: bool = True) -> None:
         """Reset only episode-level state for a new environment episode.
 
         Unlike reset(), this preserves all learned state: trained Q networks, parameter
         scorers, action scorers, and all collected datasets. Use this when the
         environment is reset mid-training to avoid getting stuck in a terminal state.
+
+        Parameters
+        ----------
+        truncated : bool
+            True if the episode ended due to a step limit (no learning signal).
+            False if the episode ended due to an ApproachStepError (the
+            abstract plan failed and should be recorded).
         """
         explorer = (
             self._train_explorer
@@ -198,25 +205,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             else self._exploit_explorer
         )
 
-        # Record the in-progress parameter/action as a failure if the episode ended
-        # without task completion (timeout or ApproachStepError). Without this, episodes
-        # that time out contribute no learning signal.
+        # Record failures based on how the episode ended.
+        # - truncated (step limit): no signal — plan may be good but was found late.
+        # - ApproachStepError (plan ran out of actions): record the abstract plan
+        #   as a failure. The last action/parameter already got their success/failure
+        #   signal during execution, so only the plan-level outcome is new.
         if (
             self._train_or_eval == "train"
             and not self._completed_task
-            and self._most_recent_parameter is not None
-            and self._most_recent_abstract_action_descriptor is not None
-            and self._parameter_selection_obs is not None
+            and not truncated
         ):
             logging.info(
-                "[Failure] action=%s  reason=episode_timeout  param=%s",
-                self._most_recent_abstract_action_descriptor,
-                self._most_recent_parameter,
+                "[Failure] reason=approach_step_error  plan=%s",
+                self._current_abstract_plan,
             )
-            self._add_most_recent_abstract_action_to_dataset("failure")
-            self._add_most_recent_parameter_to_dataset("failure")
             self._add_abstract_plan_to_dataset("failure")
-
         self._current_abstract_plan_step = 0
         self._current_controller = None
         self._last_observation = obs
@@ -593,10 +596,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         return candidate_plans
     
     def generate_random_candidate_plans(self) -> list[Skeleton]:
-        """Use the random abstract plan generator to generate 
+        """Use the random abstract plan generator to generate
            a batch of abstract plans for BALD scoring.
-           
-           This will force the BALD Scorers to explore diverse 
+
+           This will force the BALD Scorers to explore diverse
            plans that may not solve the task, but could yield
            interesting data to train on.
         """
@@ -608,8 +611,18 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             candidate_plans.append(self._random_explorer.generate_abstract_plan(
                 self._last_observation
                 ))
-    
+
         return candidate_plans
+
+    def generate_exploration_candidate_plans(self) -> list[Skeleton]:
+        """Generate a mixed pool of goal-directed and random candidate plans.
+
+        Always includes heuristic (goal-directed) plans so BALD has sensible
+        options, plus random plans for diversity.
+        """
+        heuristic_plans = self.generate_candidate_plans()
+        random_plans = self.generate_random_candidate_plans()
+        return heuristic_plans + random_plans
 
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
@@ -965,10 +978,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 current_plan_str,
             )
 
-        # Generate random candidate plans for exploration
-        # These plans do not need to lead to task success
-        # but should instead explore the abstract action space
-        candidate_plans = self.generate_random_candidate_plans()
+        # Generate a mixed pool of goal-directed and random candidate plans
+        # for exploration. Goal-directed plans ensure BALD always has sensible
+        # options; random plans add diversity.
+        candidate_plans = self.generate_exploration_candidate_plans()
 
         # Score candidate plans and return best plan
         plan_to_execute = (

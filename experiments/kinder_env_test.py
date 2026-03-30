@@ -219,7 +219,7 @@ def main(
     q_network_configs = {
         "hidden_dim": 32,
         "num_layers": 2,
-        "num_epochs": 500,
+        "num_epochs": 200,
         "num_ensemble_nets": 3,
     }
 
@@ -234,7 +234,7 @@ def main(
         abstract_action_scorer_configs={"configs": abstract_action_configs},
         q_network_configs=q_network_configs,
         max_resamples=max_resamples,
-        train_every=1,
+        train_every=5,
         param_sample_count=100,
         seed=seed,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
@@ -288,7 +288,7 @@ def main(
             total_episodes += 1
             train_seed_counter += 1
             obs, _ = gym_env.reset(seed=seed + train_seed_counter)
-            approach.reset_episode(obs)
+            approach.reset_episode(obs, truncated=False)
             continue
 
         obs, reward, done, _, _ = gym_env.step(action)
