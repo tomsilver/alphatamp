@@ -304,8 +304,8 @@ def _evaluate(
     total_hidden = 0
     spearman_sum = 0.0
     spearman_count = 0
-    topk_sum: dict[int, float] = {k: 0.0 for k in top_k_values}
-    topk_count: dict[int, int] = {k: 0 for k in top_k_values}
+    norm_prec_sum: dict[int, float] = {k: 0.0 for k in top_k_values}
+    norm_prec_count: dict[int, int] = {k: 0 for k in top_k_values}
     all_hidden_scores: list[np.ndarray] = []
     all_hidden_labels: list[np.ndarray] = []
 
@@ -367,13 +367,21 @@ def _evaluate(
                         spearman_count += 1
 
                 for top_k in top_k_values:
-                    effective_k = min(top_k, row_candidates)
-                    if effective_k <= 0:
-                        continue
-                    chosen = torch.topk(row_scores, k=effective_k, largest=True).indices
-                    precision = float(row_labels[chosen].mean().item())
-                    topk_sum[top_k] += precision
-                    topk_count[top_k] += 1
+                    if top_k >= row_candidates:
+                        continue  # selecting all candidates — no ranking done
+                    n_pos = int(row_labels.sum().item())
+                    if n_pos == 0 or n_pos == row_candidates:
+                        continue  # no discrimination possible
+                    chosen = torch.topk(row_scores, k=top_k, largest=True).indices
+                    precision_at_k = float(row_labels[chosen].sum().item()) / top_k
+                    base_rate = n_pos / row_candidates
+                    ideal_precision = min(n_pos, top_k) / top_k
+                    denominator = ideal_precision - base_rate
+                    if denominator < 1e-9:
+                        continue  # guard
+                    np_k = (precision_at_k - base_rate) / denominator
+                    norm_prec_sum[top_k] += np_k
+                    norm_prec_count[top_k] += 1
 
     mean_loss = total_loss / max(1, total_hidden)
     spearman_corr = (
@@ -399,8 +407,12 @@ def _evaluate(
             average_precision_score(hidden_labels_np, hidden_scores_np)
         )
 
-    topk_precision = {
-        top_k: float(topk_sum[top_k] / max(1, topk_count[top_k]))
+    norm_precision = {
+        top_k: (
+            float(norm_prec_sum[top_k] / norm_prec_count[top_k])
+            if norm_prec_count[top_k] > 0
+            else float("nan")
+        )
         for top_k in top_k_values
     }
 
@@ -410,8 +422,8 @@ def _evaluate(
         "spearman_corr": spearman_corr,
         "auroc": auroc,
         "average_precision": average_precision,
-        "topk_precision": topk_precision,
-        "topk_count": topk_count,
+        "norm_precision": norm_precision,
+        "norm_prec_count": norm_prec_count,
     }
 
 
@@ -435,8 +447,8 @@ def _evaluate_over_masks(
     auroc_weight = 0
     ap_weighted_sum = 0.0
     ap_weight = 0
-    topk_weighted_sum: dict[int, float] = {k: 0.0 for k in top_k_values}
-    topk_total_count: dict[int, int] = {k: 0 for k in top_k_values}
+    norm_prec_weighted_sum: dict[int, float] = {k: 0.0 for k in top_k_values}
+    norm_prec_total_count: dict[int, int] = {k: 0 for k in top_k_values}
 
     for reveal_mask in reveal_masks:
         metrics = _evaluate(
@@ -468,12 +480,13 @@ def _evaluate_over_masks(
             ap_weighted_sum += mask_ap * mask_hidden
             ap_weight += mask_hidden
 
-        mask_topk = metrics["topk_precision"]
-        mask_topk_count = metrics["topk_count"]
+        mask_norm_prec = metrics["norm_precision"]
+        mask_norm_count = metrics["norm_prec_count"]
         for top_k in top_k_values:
-            count = int(mask_topk_count[top_k])
-            topk_weighted_sum[top_k] += float(mask_topk[top_k]) * count
-            topk_total_count[top_k] += count
+            count = int(mask_norm_count[top_k])
+            if count > 0 and not np.isnan(mask_norm_prec[top_k]):
+                norm_prec_weighted_sum[top_k] += float(mask_norm_prec[top_k]) * count
+            norm_prec_total_count[top_k] += count
 
     mean_loss = total_weighted_loss / max(1, total_hidden)
     spearman_corr = (
@@ -487,8 +500,12 @@ def _evaluate_over_masks(
     average_precision = (
         float(ap_weighted_sum / ap_weight) if ap_weight > 0 else float("nan")
     )
-    topk_precision = {
-        top_k: float(topk_weighted_sum[top_k] / max(1, topk_total_count[top_k]))
+    norm_precision = {
+        top_k: (
+            float(norm_prec_weighted_sum[top_k] / norm_prec_total_count[top_k])
+            if norm_prec_total_count[top_k] > 0
+            else float("nan")
+        )
         for top_k in top_k_values
     }
 
@@ -498,7 +515,7 @@ def _evaluate_over_masks(
         "spearman_corr": spearman_corr,
         "auroc": auroc,
         "average_precision": average_precision,
-        "topk_precision": topk_precision,
+        "norm_precision": norm_precision,
     }
 
 
@@ -767,6 +784,9 @@ def main(cfg: DictConfig) -> None:
 
     num_epochs = int(cfg.train.num_epochs)
     batch_size = int(cfg.train.batch_size)
+    num_train_masks = int(getattr(cfg.train, "num_masks", 1))
+    if num_train_masks < 1:
+        raise ValueError("train.num_masks must be >= 1")
     grad_clip_norm = float(cfg.train.grad_clip_norm)
     top_k_values = [int(value) for value in cfg.metrics.top_k_values]
     if not top_k_values:
@@ -793,7 +813,7 @@ def main(cfg: DictConfig) -> None:
     val_average_precision: list[float] = []
     val_rollout_tries_random: list[float] = []
     val_rollout_tries_static_first: list[float] = []
-    val_topk_history: dict[int, list[float]] = {k: [] for k in top_k_values}
+    val_norm_prec_history: dict[int, list[float]] = {k: [] for k in top_k_values}
 
     run_start_time = time.perf_counter()
     global_step = 0
@@ -809,27 +829,41 @@ def main(cfg: DictConfig) -> None:
             stop = min(start + batch_size, train_success.shape[0])
             batch_indices = perm[start:stop]
 
-            applicability_batch = train_applicability[batch_indices]
+            applicability_batch = train_applicability[batch_indices]  # CPU (B, M)
+
+            # Tile rows K times so each copy gets an independent mask.
+            if num_train_masks > 1:
+                applicability_tiled = applicability_batch.repeat_interleave(
+                    num_train_masks, dim=0
+                )  # CPU (K*B, M)
+            else:
+                applicability_tiled = applicability_batch
 
             reveal_mask = _sample_reveal_mask(
-                applicability_batch,
-                train_mask_rng,
-            )
+                applicability_tiled, train_mask_rng
+            )  # CPU (K*B, M)
 
-            applicability_batch = applicability_batch.to(device)
+            applicability_tiled = applicability_tiled.to(device)
             reveal_mask = reveal_mask.to(device)
-            steps_batch = train_steps[batch_indices].to(device)
+            steps_batch = train_steps[batch_indices].to(device)  # (B, M)
 
-            x_steps_batch = steps_batch * reveal_mask.float()
+            if num_train_masks > 1:
+                steps_tiled = steps_batch.repeat_interleave(
+                    num_train_masks, dim=0
+                )  # (K*B, M)
+            else:
+                steps_tiled = steps_batch
+
+            x_steps_tiled = steps_tiled * reveal_mask.float()
             model_input = torch.cat(
-                [x_steps_batch, reveal_mask.float(), applicability_batch], dim=1
+                [x_steps_tiled, reveal_mask.float(), applicability_tiled], dim=1
             )
 
             logits = model(model_input)
             loss, hidden_count = _masked_bce_loss(
                 logits,
-                steps_batch,
-                applicability_batch,
+                steps_tiled,
+                applicability_tiled,
                 reveal_mask,
                 pos_weight,
             )
@@ -865,18 +899,20 @@ def main(cfg: DictConfig) -> None:
             top_k_values,
         )
         val_loss = float(val_metrics["loss"])
-        val_hidden = int(val_metrics["hidden_count"])
+        val_hidden_per_row = val_metrics["hidden_count"] / (
+            val_split.success.shape[0] * len(val_reveal_masks)
+        )
         val_spearman = float(val_metrics["spearman_corr"])
         val_auc = float(val_metrics["auroc"])
         val_ap = float(val_metrics["average_precision"])
-        val_topk = val_metrics["topk_precision"]
+        val_norm_prec = val_metrics["norm_precision"]
 
         val_losses.append(val_loss)
         val_spearman_corr.append(val_spearman)
         val_auroc.append(val_auc)
         val_average_precision.append(val_ap)
         for top_k in top_k_values:
-            val_topk_history[top_k].append(float(val_topk[top_k]))
+            val_norm_prec_history[top_k].append(float(val_norm_prec[top_k]))
 
         rollout_metrics_random = _sequential_rollout_metric(
             model,
@@ -912,7 +948,7 @@ def main(cfg: DictConfig) -> None:
         )
 
         topk_summary = " ".join(
-            [f"top{top_k}={float(val_topk[top_k]):.4f}" for top_k in top_k_values]
+            [f"np{top_k}={float(val_norm_prec[top_k]):.4f}" for top_k in top_k_values]
         )
         epoch_elapsed = time.perf_counter() - epoch_start_time
         total_elapsed = time.perf_counter() - run_start_time
@@ -922,7 +958,7 @@ def main(cfg: DictConfig) -> None:
         print(
             f"epoch={epoch}/{num_epochs} "
             f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} "
-            f"train_hidden={epoch_hidden_total} val_hidden={val_hidden} "
+            f"train_hidden_per_row={epoch_hidden_total / (train_split.success.shape[0] * num_train_masks):.2f} val_hidden_per_row={val_hidden_per_row:.2f} "
             f"val_spearman={val_spearman:.4f} "
             f"val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
             f"{topk_summary} "
@@ -1002,9 +1038,11 @@ def main(cfg: DictConfig) -> None:
             else float("nan")
         ),
         "rollout_static_first_index": rollout_static_first_index,
-        "final_val_topk_precision": {
+        "final_val_norm_precision": {
             str(top_k): (
-                val_topk_history[top_k][-1] if val_topk_history[top_k] else float("nan")
+                val_norm_prec_history[top_k][-1]
+                if val_norm_prec_history[top_k]
+                else float("nan")
             )
             for top_k in top_k_values
         },
@@ -1055,12 +1093,13 @@ def main(cfg: DictConfig) -> None:
 
         summary["test"] = {
             "loss": float(test_metrics["loss"]),
-            "hidden_count": int(test_metrics["hidden_count"]),
+            "hidden_per_row": test_metrics["hidden_count"]
+            / (test_split.success.shape[0] * len(test_reveal_masks)),
             "spearman_corr": float(test_metrics["spearman_corr"]),
             "auroc": float(test_metrics["auroc"]),
             "average_precision": float(test_metrics["average_precision"]),
-            "topk_precision": {
-                str(top_k): float(test_metrics["topk_precision"][top_k])
+            "norm_precision": {
+                str(top_k): float(test_metrics["norm_precision"][top_k])
                 for top_k in top_k_values
             },
             "rollout_random": test_rollout_random,
