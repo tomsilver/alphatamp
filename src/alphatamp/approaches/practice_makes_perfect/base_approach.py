@@ -448,7 +448,12 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                         "Abstract planning ran out of actions.", out_of_actions_error
                     )
                 # Determine new task plan.
-                self._generate_new_task_goal()
+                try:
+                    self._generate_new_task_goal()
+                except AbstractPlanGenerationError:
+                    # No reachable skills remain (e.g., goal already achieved
+                    # with no reversible operators). Just idle.
+                    pass
 
                 # Return dummy action.
                 return self._return_dummy_action()
@@ -511,7 +516,11 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 # Successful execution of abstract action.
                 self._update_competence_model(True)
                 # Determine new task to execute
-                self._generate_new_task_goal()
+                try:
+                    self._generate_new_task_goal()
+                except AbstractPlanGenerationError:
+                    # No reachable skills remain; continue with current action.
+                    pass
 
             # If low-level action is successful, store it.
             if self._train_or_eval == "train":
@@ -530,9 +539,11 @@ class PracticeMakesPerfectApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._add_most_recent_parameter_to_dataset("failure")
 
                 # Determine new task to execute.
-                # If this raises AbstractPlanGenerationError, let it propagate
-                # to the caller — there is no recovery if planning also fails.
-                self._generate_new_task_goal()
+                try:
+                    self._generate_new_task_goal()
+                except AbstractPlanGenerationError:
+                    # No reachable skills remain; return dummy action below.
+                    pass
 
                 # Return dummy action
                 return self._return_dummy_action()
