@@ -273,11 +273,6 @@ def train_q_network(
     target_tensors = [torch.FloatTensor(t) for t in per_action_targets]
 
     # Training loop
-    if verbose:
-        logging.info(
-            f"Training Q-network on {len(valid_plans)} plans for {num_epochs} epochs..."
-        )
-
     epoch_losses = []
     # Use reduction='none' so we can apply masking for variable-length sequences
     loss_fn = nn.BCEWithLogitsLoss(reduction="none")

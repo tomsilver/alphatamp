@@ -2,7 +2,7 @@
 
 import logging
 import pickle
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -24,6 +24,7 @@ from bilevel_planning.utils import (
     cached_all_ground_operators,
     get_all_ground_atoms_for_predicate,
 )
+from relational_structs import ObjectCentricState
 from relational_structs.pddl import GroundAtom
 from torch import FloatTensor, Tensor, nn
 
@@ -32,6 +33,7 @@ from alphatamp.approaches.abstract_explorers.base_abstract_explorer import (
 )
 from alphatamp.approaches.abstract_explorers.batch_explorer import BatchExplorer
 from alphatamp.approaches.abstract_explorers.exploit_explorer import ExploitExplorer
+from alphatamp.approaches.abstract_explorers.random_explorer import RandomExplorer
 from alphatamp.approaches.abstract_plan_classifiers.q_network import (
     PerActionQNetwork,
     create_abstract_plan_sequence,
@@ -86,6 +88,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         param_sample_count: int = 10,
         use_abstract_plan_scorer: bool = True,
         use_parameter_scorer: bool = True,
+        abstract_action_window: int = 50,
+        param_temperature: float = 1.0,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -112,13 +116,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation: _O | None = None
 
         # Explorers.
+        self._num_candidate_plans = num_candidate_plans
         self._train_explorer = train_explorer
         self._exploit_explorer: ExploitExplorer = ExploitExplorer(
             self._env_models, self._feasibility_classifier_learner, seed
         )
         self._batch_explorer: BatchExplorer = BatchExplorer(
-            self._env_models, seed, max_abstract_plans=num_candidate_plans
+            self._env_models, seed, max_abstract_plans=self._num_candidate_plans
         )
+
+        self._random_explorer: RandomExplorer = RandomExplorer(self._env_models, seed)
 
         # Global resample count
         self._num_resamples = 0
@@ -132,6 +139,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._parameter_dataset: defaultdict[str, list] = defaultdict(list)
         self._most_recent_parameter: Any | None = None
         self._most_recent_abstract_action_descriptor: str | None = None
+        self._parameter_selection_obs: _O | None = None
 
         # Abstract Plan Dataset — keyed by (abstract_states, abstract_actions) to
         # prevent duplicate entries from repeated resample failures
@@ -140,11 +148,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._abstract_plan_dataset: dict[tuple, int] = {}
 
         # Abstract Action inits.
-        # Each entry stores (num_failures, num_attempts)
+        # Each entry stores a sliding window of recent outcomes (True=failure)
         # for a given (states, actions) key.
+        self._abstract_action_window = abstract_action_window
         self._abstract_action_dataset: defaultdict[
-            str, defaultdict[FrozenSkeleton, tuple[int, int]]
-        ] = defaultdict(lambda: defaultdict(lambda: (0, 0)))
+            str, defaultdict[FrozenSkeleton, deque[bool]]
+        ] = defaultdict(
+            lambda: defaultdict(lambda: deque(maxlen=self._abstract_action_window))
+        )
         self._abstract_action_to_action_scorer: dict[
             GroundOperator, AbstractActionScorer
         ] = {}
@@ -168,19 +179,43 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._plan_from_exploit: bool = False
         self._use_abstract_plan_scorer = use_abstract_plan_scorer
         self._use_parameter_scorer = use_parameter_scorer
+        self._param_temperature = param_temperature
 
-    def reset_episode(self, obs: _O) -> None:
+    def reset_episode(self, obs: _O, truncated: bool = True) -> None:
         """Reset only episode-level state for a new environment episode.
 
         Unlike reset(), this preserves all learned state: trained Q networks, parameter
         scorers, action scorers, and all collected datasets. Use this when the
         environment is reset mid-training to avoid getting stuck in a terminal state.
+
+        Parameters
+        ----------
+        truncated : bool
+            True if the episode ended due to a step limit (no learning signal).
+            False if the episode ended due to an ApproachStepError (the
+            abstract plan failed and should be recorded).
         """
         explorer = (
             self._train_explorer
             if self._train_or_eval == "train"
             else self._exploit_explorer
         )
+
+        # Record failures based on how the episode ended.
+        # - truncated (step limit): no signal — plan may be good but was found late.
+        # - ApproachStepError (plan ran out of actions): record the abstract plan
+        #   as a failure. The last action/parameter already got their success/failure
+        #   signal during execution, so only the plan-level outcome is new.
+        if (
+            self._train_or_eval == "train"
+            and not self._completed_task
+            and not truncated
+        ):
+            logging.info(
+                "[Failure] reason=approach_step_error  plan=%s",
+                self._current_abstract_plan,
+            )
+            self._add_abstract_plan_to_dataset("failure")
         self._current_abstract_plan_step = 0
         self._current_controller = None
         self._last_observation = obs
@@ -297,10 +332,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._add_abstract_plan_to_dataset("success")
             self._completed_task = True
 
-            # Retrain scorers
+            # Retrain scorers and Q-networks
             self._update_scorers()
-
-            # Generate new candidate plan
+            self.train_ensemble_nets()
 
     def update(self, obs: _O, reward: float, done: bool, info: dict[str, Any]) -> None:
         """Record the reward and next observation following an action."""
@@ -313,6 +347,17 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._last_observation = obs
         self._last_info = info
 
+    def _obs_to_feature_vec(self, obs: _O) -> np.ndarray:
+        """Convert an observation to a flat float numpy vector.
+
+        ObjectCentricState observations are vectorized via obs.vec(); plain numpy arrays
+        are returned as-is.
+        """
+        if isinstance(obs, ObjectCentricState):
+            objects = sorted(obs, key=str)
+            return obs.vec(objects).astype(np.float64)
+        return np.asarray(obs, dtype=np.float64)
+
     def _generate_parameter_scorer_training_data(
         self, features_and_labels: list
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -324,7 +369,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         # Generate a row in the training dataset.
         for datapoint in features_and_labels:
             state, parameter, label = datapoint
-            state_arr = np.array(state)
+            state_arr = self._obs_to_feature_vec(state)
             parameter_arr = np.array(parameter)
 
             # The features are the state observation and the parameter.
@@ -359,6 +404,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 # Train the scoring function for each grounded skill.
                 scoring_function.train(features, labels)
+
+                # Log loss info if the scorer exposes sklearn MLPClassifier internals.
+                clf = getattr(scoring_function, "_classifier", None)
+                if clf is not None and hasattr(clf, "loss_curve_"):
+                    n_pos = int(labels.sum())
+                    n_neg = len(labels) - n_pos
+                    logging.info(
+                        "[ParamPolicy] %s n=%d (pos=%d neg=%d) iters=%d loss: %.4f → %.4f",  # pylint:disable=line-too-long
+                        abstract_action_descriptor,
+                        len(labels),
+                        n_pos,
+                        n_neg,
+                        clf.n_iter_,
+                        clf.loss_curve_[0],
+                        clf.loss_,
+                    )
 
     def _generate_abstract_action_scorer_training_data(
         self, features_and_labels: list
@@ -512,8 +573,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         using the last observation.
 
         This forces the explorer to generate a plan that tries to achieve the goal.
-        However, the agent successfully completed the prior plan, the goal is to reset
-        the environment first
+        However, if the agent successfully completed the prior plan, the goal is to
+        reset the environment first
         """
 
         assert self._last_observation is not None
@@ -529,6 +590,34 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             self._last_observation, goal
         )
         return candidate_plans
+
+    def generate_random_candidate_plans(self) -> list[Skeleton]:
+        """Use the random abstract plan generator to generate a batch of abstract plans
+        for BALD scoring.
+
+        This will force the BALD Scorers to explore diverse plans that may not solve the
+        task, but could yield interesting data to train on.
+        """
+
+        assert self._last_observation is not None
+        candidate_plans: list[Skeleton] = []
+
+        for _ in range(self._num_candidate_plans):
+            candidate_plans.append(
+                self._random_explorer.generate_abstract_plan(self._last_observation)
+            )
+
+        return candidate_plans
+
+    def generate_exploration_candidate_plans(self) -> list[Skeleton]:
+        """Generate a mixed pool of goal-directed and random candidate plans.
+
+        Always includes heuristic (goal-directed) plans so BALD has sensible options,
+        plus random plans for diversity.
+        """
+        heuristic_plans = self.generate_candidate_plans()
+        random_plans = self.generate_random_candidate_plans()
+        return heuristic_plans + random_plans
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Given a list of candidate plans, score each plan based on the BALD objective
@@ -586,14 +675,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 ensemble_failure_rates.append(per_action_failure_rates.tolist())
 
             avg_prob = float(np.mean(probs))
-            plan_str = [a.short_str for a in candidate_plan[1]]
-            mean_failure_rates = np.mean(ensemble_failure_rates, axis=0).tolist()
-            logging.info(
-                "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
-                plan_str,
-                [f"{r:.4f}" for r in mean_failure_rates],
-                avg_prob,
-            )
+            # logging.info(
+            #     "[Exploit] plan=%s  mean_failure_rates=%s  avg_prob=%.4f",
+            #     [a.short_str for a in candidate_plan[1]],
+            #     [f"{r:.4f}" for r in
+            #      np.mean(ensemble_failure_rates, axis=0).tolist()],
+            #     avg_prob,
+            # )
             if avg_prob > best_avg_prob:
                 best_avg_prob = avg_prob
                 best_candidate_plan = candidate_plan
@@ -606,8 +694,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         assert (
             self._most_recent_parameter is not None
             and self._most_recent_abstract_action_descriptor is not None
+            and self._parameter_selection_obs is not None
         )
-        assert self._last_observation is not None
 
         if self._train_or_eval == "eval":
             return
@@ -615,7 +703,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 1 if training_label == "success" else 0
 
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
-            (self._last_observation, self._most_recent_parameter, label)
+            (self._parameter_selection_obs, self._most_recent_parameter, label)
         )
 
     def _add_most_recent_abstract_action_to_dataset(self, training_label: str):
@@ -636,12 +724,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         )
 
         key = (prev_abstract_states, prev_abstract_actions)
-        failures, attempts = self._abstract_action_dataset[
-            self._most_recent_abstract_action_descriptor
-        ][key]
         self._abstract_action_dataset[self._most_recent_abstract_action_descriptor][
             key
-        ] = (failures + int(is_failure), attempts + 1)
+        ].append(is_failure)
 
     def _add_abstract_plan_to_dataset(self, training_label: str):
         assert self._current_abstract_plan
@@ -669,14 +754,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """Retrain the parameter and abstract action scorers given the current stored
         dataset."""
 
-        # First reformat dataset, converting (failures, attempts) → failure rate
+        # First reformat dataset, converting sliding window → failure rate
         abstract_action_dataset = {
             k: list(
                 self._make_data(
                     abstract_plan,
-                    failures / attempts if attempts > 0 else 0.0,
+                    sum(outcomes) / len(outcomes) if outcomes else 0.0,
                 )
-                for abstract_plan, (failures, attempts) in v.items()
+                for abstract_plan, outcomes in v.items()
             )
             for k, v in self._abstract_action_dataset.items()
         }
@@ -692,39 +777,22 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             action_data: defaultdict | dict = self._abstract_action_dataset.get(
                 op.short_str, {}
             )
-            counts = list(action_data.values())
-            total_failures = sum(f for f, _ in counts)
-            total_attempts = sum(a for _, a in counts)
+            all_outcomes = [o for window in action_data.values() for o in window]
+            total_failures = sum(all_outcomes)
+            total_attempts = len(all_outcomes)
             actual_rate = (
                 total_failures / total_attempts if total_attempts > 0 else float("nan")
             )
             predicted = scorer.score(([s0], []))
             logging.info(
-                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d)",
+                "[Scorer] %s predicted=%.4f actual=%.4f (failures=%d attempts=%d window=%d)",  # pylint:disable=line-too-long
                 op.short_str,
                 predicted,
                 actual_rate,
                 total_failures,
                 total_attempts,
+                self._abstract_action_window,
             )
-            # Log per-history-key predictions to diagnose whether the scorer
-            # distinguishes different contexts (e.g. Reach vs Reach-after-Widen).
-            for (key_states, key_actions), (failures, attempts) in action_data.items():
-                if attempts == 0:
-                    continue
-                key_actual = failures / attempts
-                key_predicted = scorer.score((list(key_states), list(key_actions)))
-                action_str = [a.short_str for a in key_actions]
-                logging.info(
-                    "[Scorer-ctx] %s history=%s  predicted=%.4f actual=%.4f"
-                    " (failures=%d attempts=%d)",
-                    op.short_str,
-                    action_str,
-                    key_predicted,
-                    key_actual,
-                    failures,
-                    attempts,
-                )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -747,12 +815,15 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._current_controller,
                 scoring_function,
                 param_sample_count=self._param_sample_count,
+                temperature=self._param_temperature,
             )
-            optimal_params = parameter_policy.sample_parameters(x, obs, self._rng)
+            obs_vec = self._obs_to_feature_vec(obs)
+            optimal_params = parameter_policy.sample_parameters(x, obs_vec, self._rng)
         else:
             optimal_params = self._current_controller.sample_parameters(x, self._rng)
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
+        self._parameter_selection_obs = obs
 
         # Reset controller
         self._current_controller.reset(x, optimal_params)
@@ -845,7 +916,26 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
                 return self._last_action
             # If low level action failed, store the parameter that failed!
-            except (TrajectorySamplingFailure, IndexError):
+            except (TrajectorySamplingFailure, IndexError) as e:
+                logging.info(
+                    "[Failure] action=%s  reason=%s: %s  "
+                    "step=%d  current_state=%s  expected_next=%s  "
+                    "has_effects=%s  controller_terminated=%s  "
+                    "resample=%d/%d",
+                    a.short_str,
+                    type(e).__name__,
+                    e,
+                    self._current_abstract_plan_step,
+                    s,
+                    ns,
+                    bool(a.add_effects or a.delete_effects),
+                    (
+                        self._current_controller is not None
+                        and self._current_controller.terminated()
+                    ),
+                    self._num_resamples,
+                    self._max_resamples,
+                )
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
                     self._add_most_recent_abstract_action_to_dataset("failure")
@@ -859,24 +949,35 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # After trying a certain number of resamples, update the scorers
         # and Q-function only every train_every exhaustion events.
-        self._resample_exhaustion_count += 1
+        # Only count exhaustions and retrain during training; eval exhaustions
+        # must not modify learned models or the exhaustion counter.
         current_plan_str = (
             [a.short_str for a in self._current_abstract_plan[1]]
             if self._current_abstract_plan
             else []
         )
-        logging.info(
-            "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
-            self._resample_exhaustion_count,
-            self._timestep,
-            current_plan_str,
-        )
-        if self._resample_exhaustion_count % self._train_every == 0:
-            self._update_scorers()
-            self.train_ensemble_nets()
+        if self._train_or_eval == "train":
+            self._resample_exhaustion_count += 1
+            logging.info(
+                "[BALD] Exhaustion #%d (timestep %d), failed plan: %s",
+                self._resample_exhaustion_count,
+                self._timestep,
+                current_plan_str,
+            )
+            if self._resample_exhaustion_count % self._train_every == 0:
+                self._update_scorers()
+                self.train_ensemble_nets()
+        else:
+            logging.info(
+                "[BALD] Eval exhaustion (timestep %d), failed plan: %s",
+                self._timestep,
+                current_plan_str,
+            )
 
-        # Generate candidate plans
-        candidate_plans = self.generate_candidate_plans()
+        # Generate a mixed pool of goal-directed and random candidate plans
+        # for exploration. Goal-directed plans ensure BALD always has sensible
+        # options; random plans add diversity.
+        candidate_plans = self.generate_exploration_candidate_plans()
 
         # Score candidate plans and return best plan
         plan_to_execute = (
@@ -946,7 +1047,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
     def get_abstract_action_dataset(
         self,
-    ) -> defaultdict[str, defaultdict[FrozenSkeleton, tuple[int, int]]]:
+    ) -> defaultdict[str, defaultdict[FrozenSkeleton, deque[bool]]]:
         """Return the collected abstract action dataset."""
         return self._abstract_action_dataset
 
@@ -981,9 +1082,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 k: list(
                     self._make_data(
                         abstract_plan,
-                        failures / attempts if attempts > 0 else 0.0,
+                        sum(outcomes) / len(outcomes) if outcomes else 0.0,
                     )
-                    for abstract_plan, (failures, attempts) in v.items()
+                    for abstract_plan, outcomes in v.items()
                 )
                 for k, v in self._abstract_action_dataset.items()
             },
