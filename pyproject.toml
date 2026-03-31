@@ -24,7 +24,7 @@ dependencies = [
    "kinder-bilevel-planning",
    "bilevel-planning",
    "kinder-models",
-   "kindergarden[kinematic2d]==0.0.8",
+   "kindergarden[kinematic2d]==0.0.9",
 ]
 
 [project.optional-dependencies]
