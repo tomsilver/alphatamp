@@ -397,13 +397,22 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                     # The trajectory sampler only adds an abstract state to the BPG
                     # when a trajectory successfully reaches it, so set membership
                     # directly encodes per-step refinement success.
-                    abstract_state_set = set(bpg.abstract_states)
+                    #
+                    # NOTE: Must use list membership (bpg.abstract_states) rather
+                    # than set membership (set(bpg.abstract_states)) here.
+                    # RelationalAbstractState.__hash__ uses consistent_hash(repr(frozenset(atoms))),
+                    # and repr(frozenset) depends on internal hash-table slot layout,
+                    # not just element contents. Two equal abstract states produced
+                    # by different code paths (_abstract_successor_fn vs state_abstractor)
+                    # can have different frozenset layouts and thus different hashes,
+                    # causing set membership to silently return False even when __eq__
+                    # would return True.
                     n_steps = len(abstract_state_sequence) - 1  # exclude initial s0
                     if n_steps > 0:
                         steps_done = sum(
                             1
                             for s in abstract_state_sequence[1:]
-                            if s in abstract_state_set
+                            if s in bpg.abstract_states
                         )
                         steps_completed_fraction[seed_idx, op_sequence_idx] = (
                             float(steps_done) / n_steps
