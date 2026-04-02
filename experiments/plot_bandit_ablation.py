@@ -161,7 +161,7 @@ def main() -> None:
         agg = aggregate_runs(runs)
         steps = agg["steps"]
         n = agg["n"]
-        full_label = f"{label} (n={n})"
+        full_label = f"{label} (n=5)"
 
         (line,) = ax1.plot(steps, agg["rates_mean"], marker="o", label=full_label)
         ax1.fill_between(
@@ -188,6 +188,7 @@ def main() -> None:
         bar_colors.append(line.get_color())
 
     # --- Figure 1: Average overall success rate ---
+    ax1.axhline(y=97, color="gray", linestyle="--", linewidth=1, label="Oracle (97%)")
     ax1.set_xlabel("Step")
     ax1.set_ylabel("Average overall success rate (%)")
     ax1.set_title("Average overall success rate (mean ± stderr)")

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from collections import deque
+from collections import Counter, deque
 
 import kinder
 import matplotlib.pyplot as plt
@@ -164,7 +164,6 @@ def main(
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
     num_eval_seeds: int = 10,
-    param_temperature: float = 1.0,
 ) -> dict:
     """Run an experiment on a kinder environment and return collected metrics.
 
@@ -240,7 +239,7 @@ def main(
         seed=seed,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
         use_parameter_scorer=use_parameter_scorer,
-        param_temperature=param_temperature,
+
     )
 
     approach.train()
@@ -269,6 +268,7 @@ def main(
     total_eval_successes = 0
     param_loss: list[float] = []
     q_loss: list[float] = []
+    exploit_plan_counts: Counter[str] = Counter()
 
     header = (
         f"{'Step':>6}  "
@@ -290,6 +290,11 @@ def main(
             train_seed_counter += 1
             obs, _ = gym_env.reset(seed=seed + train_seed_counter)
             approach.reset_episode(obs, truncated=False)
+            if approach.is_plan_from_exploit():
+                plan = approach.get_abstract_plan()
+                assert plan is not None
+                key = " -> ".join(a.short_str for a in plan[1])
+                exploit_plan_counts[key] += 1
             continue
 
         obs, reward, done, _, _ = gym_env.step(action)
@@ -306,6 +311,11 @@ def main(
             train_seed_counter += 1
             obs, _ = gym_env.reset(seed=seed + train_seed_counter)
             approach.reset_episode(obs)
+            if approach.is_plan_from_exploit():
+                plan = approach.get_abstract_plan()
+                assert plan is not None
+                key = " -> ".join(a.short_str for a in plan[1])
+                exploit_plan_counts[key] += 1
 
         if (step + 1) % log_every == 0:
             rolling_rate = sum(recent) / len(recent) if recent else 0.0
@@ -336,12 +346,6 @@ def main(
             param_loss.extend(_get_param_scorer_loss_curves(approach))
             q_loss = _get_q_network_loss_curves(approach)
 
-            # Restore training state — start a fresh episode on the next train seed.
-            train_seed_counter += 1
-            obs, _ = gym_env.reset(seed=seed + train_seed_counter)
-            approach.reset_episode(obs)
-            episode_success = False
-
     print("\nDone.")
     param_ds = approach.get_parameter_dataset()
     print(f"  Total parameter samples: {sum(len(v) for v in param_ds.values())}")
@@ -363,6 +367,7 @@ def main(
         "eval_cumulative_successes": eval_cumulative_successes,
         "param_loss": param_loss,
         "q_loss": q_loss,
+        "exploit_plan_counts": exploit_plan_counts,
     }
 
 
@@ -387,10 +392,10 @@ def plot_results(
         **kwargs,
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
     # --- Overall success rate: train vs eval ---
-    ax = axes[0]
+    ax = axes[0, 0]
     ax.plot(
         results["steps"],
         [v * 100 for v in results["overall_success_rates"]],
@@ -412,18 +417,48 @@ def plot_results(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # --- Episodes over steps ---
-    ax = axes[1]
-    ax.plot(
-        results["steps"],
-        results["episode_counts"],
-        marker="^",
-        color="tab:green",
-    )
-    ax.set_xlabel("Step")
-    ax.set_ylabel("Cumulative train episodes")
-    ax.set_title("Train episodes completed over steps")
+    # --- Q-network loss ---
+    ax = axes[0, 1]
+    q_loss = results["q_loss"]
+    if q_loss:
+        ax.plot(q_loss, linewidth=1, color="tab:red")
+        ax.set_xlabel("Epoch (cumulative)")
+        ax.set_ylabel("Loss")
+        ax.set_title("Q-network training loss")
+    else:
+        ax.set_title("Q-network training loss (no data)")
     ax.grid(True, alpha=0.3)
+
+    # --- Parameter policy loss ---
+    ax = axes[1, 0]
+    param_loss = results["param_loss"]
+    if param_loss:
+        ax.plot(param_loss, linewidth=1, color="tab:purple")
+        ax.set_xlabel("Epoch (cumulative)")
+        ax.set_ylabel("Loss")
+        ax.set_title("Parameter policy loss")
+    else:
+        ax.set_title("Parameter policy loss (no data)")
+    ax.grid(True, alpha=0.3)
+
+    # --- Top 4 exploit plans histogram ---
+    ax = axes[1, 1]
+    exploit_counts = results.get("exploit_plan_counts", {})
+    if exploit_counts:
+        top4 = exploit_counts.most_common(4)
+        labels = [name for name, _ in top4]
+        counts = [count for _, count in top4]
+        # Wrap long labels
+        wrapped = [l.replace(" -> ", "\n-> ") for l in labels]
+        ax.barh(range(len(top4)), counts, color="tab:blue")
+        ax.set_yticks(range(len(top4)))
+        ax.set_yticklabels(wrapped, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Times selected")
+        ax.set_title("Top 4 exploit plans")
+    else:
+        ax.set_title("Top 4 exploit plans (no data)")
+    ax.grid(True, alpha=0.3, axis="x")
 
     fig.tight_layout()
     if save_path:
@@ -490,13 +525,6 @@ if __name__ == "__main__":
         metavar="N",
         help="Number of fixed held-out eval seeds (default: 10)",
     )
-    parser.add_argument(
-        "--param-temperature",
-        type=float,
-        default=1.0,
-        metavar="T",
-        help="Boltzmann temperature for parameter policy sampling (default: 1.0)",
-    )
     args = parser.parse_args()
 
     if args.plot:
@@ -512,7 +540,7 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
-            param_temperature=args.param_temperature,
+
         )
     else:
         main(
@@ -526,5 +554,5 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
-            param_temperature=args.param_temperature,
+
         )

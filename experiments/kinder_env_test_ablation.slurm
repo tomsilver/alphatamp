@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=08:30:00
+#SBATCH --time=12:30:00
 #SBATCH --array=0-3
 #SBATCH --output=experiments/slurm_outputs/kinder_env_test_ablation_%A_%a.out
 #SBATCH --error=experiments/slurm_outputs/kinder_env_test_ablation_%A_%a.err

@@ -89,7 +89,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         use_abstract_plan_scorer: bool = True,
         use_parameter_scorer: bool = True,
         abstract_action_window: int = 50,
-        param_temperature: float = 1.0,
+        param_epsilon: float = 0.5,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -179,7 +179,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._plan_from_exploit: bool = False
         self._use_abstract_plan_scorer = use_abstract_plan_scorer
         self._use_parameter_scorer = use_parameter_scorer
-        self._param_temperature = param_temperature
+        self._param_epsilon: float = param_epsilon
 
     def reset_episode(self, obs: _O, truncated: bool = True) -> None:
         """Reset only episode-level state for a new environment episode.
@@ -809,18 +809,30 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
 
-        # Sample new params from the Parameter Policy
-        if self._use_parameter_scorer:
+        # Epsilon-greedy parameter selection: with probability epsilon, sample
+        # uniformly at random (explore); otherwise use the learned scorer
+        # (exploit via greedy argmax).
+        explore_roll = self._rng.random()
+        if self._use_parameter_scorer and explore_roll >= self._param_epsilon:
             parameter_policy = ParameterPolicy(
                 self._current_controller,
                 scoring_function,
                 param_sample_count=self._param_sample_count,
-                temperature=self._param_temperature,
             )
             obs_vec = self._obs_to_feature_vec(obs)
             optimal_params = parameter_policy.sample_parameters(x, obs_vec, self._rng)
+            logging.debug(
+                "[ParamEpsilon] EXPLOIT eps=%.3f action=%s",
+                self._param_epsilon,
+                a.short_str,
+            )
         else:
             optimal_params = self._current_controller.sample_parameters(x, self._rng)
+            logging.debug(
+                "[ParamEpsilon] EXPLORE eps=%.3f action=%s",
+                self._param_epsilon,
+                a.short_str,
+            )
         self._most_recent_parameter = optimal_params
         self._most_recent_abstract_action_descriptor = a.short_str
         self._parameter_selection_obs = obs

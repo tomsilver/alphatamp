@@ -15,10 +15,9 @@ _X = TypeVar("_X")  # state
 class ParameterPolicy:
     """A base class for a parameter policy wrapper over a ParameterizedController.
 
-    Uses Boltzmann (softmax) sampling over candidate parameters weighted by scorer
-    outputs, controlled by a temperature parameter.  High temperature → nearly uniform
-    (preserves diversity); low temperature → approaches argmax (exploits scorer
-    confidence).
+    Generates candidate parameters and selects the one with the highest score
+    (greedy exploitation). Exploration is handled externally via epsilon-greedy
+    in the approach class.
     """
 
     def __init__(
@@ -26,15 +25,13 @@ class ParameterPolicy:
         controller: ParameterizedController,
         scoring_function: BaseScorer,
         param_sample_count=10,
-        temperature: float = 1.0,
     ) -> None:
         self._controller = controller
         self._scoring_function = scoring_function
         self._param_sample_count = param_sample_count
-        self._temperature = temperature
 
     def sample_parameters(self, x: _X, obs: _O, rng: Generator) -> Any:
-        """Sample controller parameter using Boltzmann sampling over scores."""
+        """Select the highest-scoring candidate parameter (argmax)."""
 
         candidates = []
         scores = []
@@ -44,13 +41,5 @@ class ParameterPolicy:
             candidates.append(params)
             scores.append(score)
 
-        scores_arr = np.array(scores)
-
-        # Boltzmann weights with numerical stability
-        logits = scores_arr / self._temperature
-        logits -= logits.max()
-        weights = np.exp(logits)
-        probs = weights / weights.sum()
-
-        idx = rng.choice(len(candidates), p=probs)
-        return candidates[idx]
+        best_idx = int(np.argmax(scores))
+        return candidates[best_idx]
