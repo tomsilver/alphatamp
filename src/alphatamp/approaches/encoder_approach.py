@@ -245,6 +245,70 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             seen.add(state)
         return False
 
+    @staticmethod
+    def _count_steps_completed(
+        x0: Any,
+        abstract_state_sequence: list[Any],
+        bpg: BilevelPlanningGraph,
+    ) -> int:
+        """Count the longest consecutive prefix of skeleton steps successfully refined.
+
+        Walks forward through bpg.action_edges from x0, step by step, checking
+        at each depth whether a state whose abstract state equals the target
+        appears in bpg.state_abstractor_edges and is reachable from the current
+        frontier.
+
+        Uses object identity (id()) for concrete states — reliable because BPG
+        stores objects by reference — and __eq__ for abstract states — reliable
+        because RelationalAbstractState.__eq__ compares atom sets directly,
+        independent of frozenset repr/hash layout.
+
+        This avoids the contamination bug where failed trajectory attempts for
+        step i accidentally land on s_{i+j} (j>0), adding that abstract state
+        to bpg.abstract_states even though the correct step was never reached.
+        """
+        n_steps = len(abstract_state_sequence) - 1
+        if n_steps <= 0:
+            return 0
+
+        # Build forward adjacency: concrete_state_id → set of concrete_state_ids
+        forward: dict[int, set[int]] = {}
+        for x, _, nx in bpg.action_edges:
+            forward.setdefault(id(x), set()).add(id(nx))
+
+        # Flat list of (abstract_state, concrete_state_id) for quick iteration
+        abs_edges = [(abs_s, id(conc)) for conc, abs_s in bpg.state_abstractor_edges]
+
+        frontier_ids: set[int] = {id(x0)}
+        steps_done = 0
+
+        for step in range(n_steps):
+            target_s = abstract_state_sequence[step + 1]
+
+            # BFS from current frontier through action edges
+            visited: set[int] = set(frontier_ids)
+            queue: list[int] = list(frontier_ids)
+            while queue:
+                curr_id = queue.pop()
+                for nxt_id in forward.get(curr_id, set()):
+                    if nxt_id not in visited:
+                        visited.add(nxt_id)
+                        queue.append(nxt_id)
+
+            # States with abstract_state == target_s that are reachable
+            next_frontier: set[int] = {
+                state_id
+                for abs_s, state_id in abs_edges
+                if abs_s == target_s and state_id in visited
+            }
+
+            if not next_frontier:
+                break
+            steps_done += 1
+            frontier_ids = next_frontier
+
+        return steps_done
+
     def build_vocab(
         self,
         seed_ids: list[int],
@@ -398,22 +462,14 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                     # when a trajectory successfully reaches it, so set membership
                     # directly encodes per-step refinement success.
                     #
-                    # NOTE: Must use list membership (bpg.abstract_states) rather
-                    # than set membership (set(bpg.abstract_states)) here.
-                    # RelationalAbstractState.__hash__ uses consistent_hash(repr(frozenset(atoms))),
-                    # and repr(frozenset) depends on internal hash-table slot layout,
-                    # not just element contents. Two equal abstract states produced
-                    # by different code paths (_abstract_successor_fn vs state_abstractor)
-                    # can have different frozenset layouts and thus different hashes,
-                    # causing set membership to silently return False even when __eq__
-                    # would return True.
                     n_steps = len(abstract_state_sequence) - 1  # exclude initial s0
                     if n_steps > 0:
-                        steps_done = sum(
-                            1
-                            for s in abstract_state_sequence[1:]
-                            if s in bpg.abstract_states
-                        )
+                        if plan is not None:
+                            steps_done = n_steps
+                        else:
+                            steps_done = self._count_steps_completed(
+                                x0, abstract_state_sequence, bpg
+                            )
                         steps_completed_fraction[seed_idx, op_sequence_idx] = (
                             float(steps_done) / n_steps
                         )
