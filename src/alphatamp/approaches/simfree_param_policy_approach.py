@@ -859,6 +859,13 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # After trying a certain number of resamples, update the scorers
         # and Q-function only every train_every exhaustion events.
+        # In eval mode, skip all dataset/training updates and raise immediately.
+        if self._train_or_eval == "eval":
+            raise ApproachStepError(
+                "Resample budget exhausted during evaluation.",
+                RuntimeError("Resample budget exhausted during evaluation."),
+            )
+
         self._resample_exhaustion_count += 1
         current_plan_str = (
             [a.short_str for a in self._current_abstract_plan[1]]

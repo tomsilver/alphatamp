@@ -372,6 +372,45 @@ def _exploit_plan_uses_widen(approach: SimFreeParamPolicyApproach) -> bool:
     return any("Widen" in a.short_str for a in actions)
 
 
+def _run_evaluation(
+    approach: SimFreeParamPolicyApproach,
+    eval_seeds: list[int],
+    hidden_target: float | None,
+    noise_std: float,
+) -> float:
+    """Evaluate the approach on held-out seeds without modifying training state.
+
+    For each seed, the episode runs until either success (done=True) or
+    resample exhaustion (ApproachStepError raised in eval mode).
+
+    Returns the success rate across all eval seeds.
+    """
+    eval_env = OneDimBanditEnv(hidden_target=hidden_target, execution_noise_std=noise_std)
+    approach.eval()
+
+    successes = 0
+    for eval_seed in eval_seeds:
+        obs, _ = eval_env.reset(seed=eval_seed)
+        approach.reset_episode(obs)
+
+        while True:
+            try:
+                action = approach.step()
+            except ApproachStepError:
+                break
+
+            obs, reward, done, _, _ = eval_env.step(action)
+            approach.update(obs, float(reward), done, {})
+
+            if done:
+                successes += 1
+                break
+
+    eval_env.close()
+    approach.train()
+    return successes / len(eval_seeds) if eval_seeds else 0.0
+
+
 def main(
     num_steps: int = 4000,
     max_resamples: int = 20,
@@ -382,6 +421,8 @@ def main(
     noise_std: float = 0.0,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
+    num_eval_seeds: int = 20,
+    eval_seed_offset: int = 10000,
 ) -> dict:
     """Run the bandit experiment and return collected metrics.
 
@@ -394,6 +435,7 @@ def main(
                                the exploit planner chose a Widen plan
         param_loss           — per-fit sklearn loss values
         exhaustion_counts    — cumulative resample exhaustion count at each log point
+        eval_success_rates   — held-out eval success rate at each log point
     """
 
     # Build env
@@ -439,6 +481,9 @@ def main(
     approach.train()
     approach.reset(obs, {})
 
+    # Held-out evaluation seeds (disjoint from training seeds).
+    eval_seeds = list(range(eval_seed_offset, eval_seed_offset + num_eval_seeds))
+
     # Tracking
     recent: deque[int] = deque(maxlen=20)  # per-episode success (rolling window)
     recent_widen: deque[int] = deque(
@@ -459,16 +504,17 @@ def main(
     widen_rates: list[float] = []
     cumulative_successes: list[int] = []
     exhaustion_counts: list[int] = []
+    eval_success_rates: list[float] = []
     param_loss: list[float] = []
     q_loss: list[float] = []
 
     header = (
         f"{'Step':>6}  {'Rolling success':>15}  {'Overall success':>15}  "
-        f"{'Widen rate':>10}  {'Total successes':>16}  "
+        f"{'Eval success':>13}  {'Widen rate':>10}  {'Total successes':>16}  "
         f"{'Resamples':>10}  {'Exhaustions':>12}"
     )
     print(header)
-    print("-" * 98)
+    print("-" * 110)
 
     for step in range(num_steps):
         logging.info(
@@ -513,14 +559,24 @@ def main(
             param_ds = approach.get_parameter_dataset()
             total_data = sum(len(v) for v in param_ds.values())
             exhaustion_count = approach.get_resample_exhaustion_count()
+
+            # Run held-out evaluation (use training env's actual target).
+            eval_rate = _run_evaluation(
+                approach, eval_seeds, env._target, noise_std
+            )
+            # Restore training episode state after eval.
+            approach.reset_episode(obs)
+            episode_uses_widen = _exploit_plan_uses_widen(approach)
+
             print(
                 f"{step+1:>6}  {rolling_rate:>15.2%}  {overall_rate:>15.2%}  "
-                f"{widen_rate:>10.2%}  "
+                f"{eval_rate:>13.2%}  {widen_rate:>10.2%}  "
                 f"{total_successes:>16}  {total_data:>10}  {exhaustion_count:>12}"
             )
             log_steps.append(step + 1)
             success_rates.append(rolling_rate)
             overall_success_rates.append(overall_rate)
+            eval_success_rates.append(eval_rate)
             episode_counts.append(total_episodes)
             widen_rates.append(widen_rate)
             cumulative_successes.append(total_successes)
@@ -538,6 +594,7 @@ def main(
         "steps": log_steps,
         "success_rates": success_rates,
         "overall_success_rates": overall_success_rates,
+        "eval_success_rates": eval_success_rates,
         "episode_counts": episode_counts,
         "widen_rates": widen_rates,
         "total_successes": cumulative_successes,
@@ -572,18 +629,24 @@ def plot_results(
 
     # --- Overall success rate ---
     ax = axes[0]
-    # ax.plot(results["steps"], [v * 100 for v in results["success_rates"]],
-    # marker="o", label="Rolling (last 20)")
     ax.plot(
         results["steps"],
         [v * 100 for v in results["overall_success_rates"]],
         marker="s",
         linestyle="--",
-        label="Overall",
+        label="Overall (train)",
+    )
+    ax.plot(
+        results["steps"],
+        [v * 100 for v in results["eval_success_rates"]],
+        marker="o",
+        color="tab:red",
+        label="Eval (held-out)",
     )
     ax.set_xlabel("Step")
     ax.set_ylabel("Success rate (%)")
-    ax.set_title("Overall success rate (successes / episodes)")
+    ax.set_title("Success rate")
+    ax.legend()
     ax.grid(True, alpha=0.3)
 
     # --- Widen plan fraction ---
@@ -696,6 +759,12 @@ if __name__ == "__main__":
         help="Save figure to PATH instead of displaying it",
     )
     parser.add_argument(
+        "--num-eval-seeds",
+        type=int,
+        default=20,
+        help="Number of held-out seeds for periodic evaluation (default: 20)",
+    )
+    parser.add_argument(
         "--no-abstract-plan-scorer",
         action="store_true",
         help="Ablation: always use the first candidate plan, skip BALD scoring",
@@ -717,6 +786,7 @@ if __name__ == "__main__":
             hidden_target=args.hidden_target,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
+            num_eval_seeds=args.num_eval_seeds,
         )
     else:
         main(
@@ -727,4 +797,5 @@ if __name__ == "__main__":
             hidden_target=args.hidden_target,
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
+            num_eval_seeds=args.num_eval_seeds,
         )
