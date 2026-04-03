@@ -985,6 +985,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._timestep,
                 current_plan_str,
             )
+            raise ApproachStepError(
+                "Resample budget exhausted during evaluation.",
+                RuntimeError("Resample budget exhausted during evaluation."),
+            )
 
         # Generate a mixed pool of goal-directed and random candidate plans
         # for exploration. Goal-directed plans ensure BALD always has sensible

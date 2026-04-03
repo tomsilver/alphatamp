@@ -103,13 +103,13 @@ def _run_eval_loop(
     approach: SimFreeParamPolicyApproach,
     gym_env,
     eval_seeds: list[int],
-    reset_every: int,
 ) -> tuple[float, int, int]:
     """Run held-out eval episodes and return (success_rate, successes, episodes).
 
     Switches the approach to eval mode, runs one episode per seed in
-    ``eval_seeds``, then switches back to train mode.  The same fixed seed
-    set is used at every checkpoint so results are directly comparable.
+    ``eval_seeds``, then switches back to train mode.  Each episode runs
+    until either success (done=True) or resample exhaustion
+    (ApproachStepError raised in eval mode).  No artificial truncation.
     No learning occurs during eval.
     """
     if not eval_seeds:
@@ -117,31 +117,21 @@ def _run_eval_loop(
 
     approach.eval()
     eval_successes = 0
-    last_obs = None
 
     for eval_seed in eval_seeds:
-        last_obs, _ = gym_env.reset(seed=eval_seed)
-        approach.reset_episode(last_obs)
+        obs, _ = gym_env.reset(seed=eval_seed)
+        approach.reset_episode(obs)
 
-        episode_success = False
-        for _ in range(reset_every):
+        while True:
             try:
                 action = approach.step()
             except ApproachStepError:
                 break
-            last_obs, reward, done, _, _ = gym_env.step(action)
-            approach.update(last_obs, float(reward), done, {})
+            obs, reward, done, _, _ = gym_env.step(action)
+            approach.update(obs, float(reward), done, {})
             if done:
-                episode_success = True
+                eval_successes += 1
                 break
-
-        eval_successes += int(episode_success)
-
-    # Clear lingering episode state so the subsequent train reset_episode
-    # does not record a spurious failure (the failure guard checks
-    # _most_recent_parameter, which reset_episode sets to None).
-    if last_obs is not None:
-        approach.reset_episode(last_obs)
 
     approach.train()
     num_eval = len(eval_seeds)
@@ -324,7 +314,7 @@ def main(
 
             # --- Eval loop on fixed held-out seeds ---
             eval_rate, eval_succ, _ = _run_eval_loop(
-                approach, gym_env, eval_seeds, reset_every
+                approach, gym_env, eval_seeds
             )
             total_eval_successes += eval_succ
 
@@ -521,9 +511,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-eval-seeds",
         type=int,
-        default=10,
+        default=20,
         metavar="N",
-        help="Number of fixed held-out eval seeds (default: 10)",
+        help="Number of fixed held-out eval seeds (default: 20)",
     )
     args = parser.parse_args()
 

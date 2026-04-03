@@ -28,6 +28,6 @@ esac
 .venv/bin/python -u experiments/kinder_env_test.py \
     --plot \
     --save experiments/slurm_outputs/kinder_env_test_ablation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.png \
-    --max-resamples 5 \
+    --max-resamples 10 \
     $ABLATION_FLAGS \
     "$@"
