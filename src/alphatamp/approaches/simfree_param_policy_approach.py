@@ -616,8 +616,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         plus random plans for diversity.
         """
         heuristic_plans = self.generate_candidate_plans()
-        random_plans = self.generate_random_candidate_plans()
-        return heuristic_plans + random_plans
+        #random_plans = self.generate_random_candidate_plans()
+        return heuristic_plans #+ random_plans
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
         """Given a list of candidate plans, score each plan based on the BALD objective

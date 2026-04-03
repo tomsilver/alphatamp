@@ -220,7 +220,7 @@ def main(
         "hidden_dim": 32,
         "num_layers": 2,
         "num_epochs": 200,
-        "num_ensemble_nets": 3,
+        "num_ensemble_nets": 10,
     }
 
     # Approach
@@ -479,15 +479,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Run and produce result plots",
     )
-    parser.add_argument("--num-steps", type=int, default=50000)
+    parser.add_argument("--num-steps", type=int, default=60000)
     parser.add_argument("--max-resamples", type=int, default=20)
     parser.add_argument(
         "--reset-every",
         type=int,
-        default=300,
+        default=1000,
         help="Force-reset episode after this many steps (default: 300)",
     )
-    parser.add_argument("--log-every", type=int, default=500)
+    parser.add_argument("--log-every", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--env",

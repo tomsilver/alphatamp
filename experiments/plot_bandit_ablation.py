@@ -36,7 +36,9 @@ _TASK_LABELS = {
 _TASK_ID_RE = re.compile(r"bandit_ablation_(?:\d+_)+(\d+)\.out$")
 
 # Regex for data rows: "  100  25.00%  20.00%  15.00%  42  100  5"
-_ROW_RE = re.compile(r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%")
+_ROW_RE = re.compile(
+    r"^\s*(\d+)\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%\s+(\d+)\s+(\d+)\s+(\d+)"
+)
 
 # Regex for total episodes: "  Total successes: 1249 / 1343 episodes"
 _EPISODES_RE = re.compile(r"Total successes:\s+\d+\s*/\s*(\d+)\s+episodes")
@@ -47,6 +49,7 @@ def parse_out_file(path: Path) -> dict:
     steps: list[int] = []
     success_rates: list[float] = []
     widen_rates: list[float] = []
+    exhaustions: list[int] = []
     total_episodes: int | None = None
 
     with open(path, encoding="utf-8") as f:
@@ -56,6 +59,7 @@ def parse_out_file(path: Path) -> dict:
                 steps.append(int(m.group(1)))
                 success_rates.append(float(m.group(3)) / 100.0)
                 widen_rates.append(float(m.group(4)) / 100.0)
+                exhaustions.append(int(m.group(7)))
             else:
                 m2 = _EPISODES_RE.search(line)
                 if m2:
@@ -65,6 +69,7 @@ def parse_out_file(path: Path) -> dict:
         "steps": steps,
         "success_rates": success_rates,
         "widen_rates": widen_rates,
+        "exhaustions": exhaustions,
         "total_episodes": total_episodes,
     }
 
@@ -91,8 +96,13 @@ def aggregate_runs(runs: list[dict]) -> dict:
     ]
     ep = np.array(episode_counts, dtype=float)
 
+    # Final exhaustion count (last value in each run)
+    final_exhaustions = [r["exhaustions"][-1] for r in runs if r["exhaustions"]]
+    ex = np.array(final_exhaustions, dtype=float)
+
     n = len(runs)
     n_ep = len(ep)
+    n_ex = len(ex)
     return {
         "steps": steps,
         "rates_mean": rates.mean(axis=0) * 100,
@@ -101,6 +111,8 @@ def aggregate_runs(runs: list[dict]) -> dict:
         "widens_stderr": widens.std(axis=0, ddof=1) / np.sqrt(n) * 100,
         "episodes_mean": ep.mean() if n_ep > 0 else float("nan"),
         "episodes_stderr": (ep.std(ddof=1) / np.sqrt(n_ep) if n_ep > 1 else 0.0),
+        "exhaustions_mean": ex.mean() if n_ex > 0 else float("nan"),
+        "exhaustions_stderr": (ex.std(ddof=1) / np.sqrt(n_ex) if n_ex > 1 else 0.0),
         "n": n,
     }
 
@@ -154,6 +166,8 @@ def main() -> None:
     bar_means: list[float] = []
     bar_stderrs: list[float] = []
     bar_colors: list = []
+    ex_means: list[float] = []
+    ex_stderrs: list[float] = []
 
     for task_id in sorted(groups):
         runs = groups[task_id]
@@ -186,6 +200,8 @@ def main() -> None:
         bar_means.append(agg["episodes_mean"])
         bar_stderrs.append(agg["episodes_stderr"])
         bar_colors.append(line.get_color())
+        ex_means.append(agg["exhaustions_mean"])
+        ex_stderrs.append(agg["exhaustions_stderr"])
 
     # --- Figure 1: Average overall success rate ---
     ax1.axhline(y=97, color="gray", linestyle="--", linewidth=1, label="Oracle (97%)")
@@ -220,14 +236,27 @@ def main() -> None:
     ax.grid(True, alpha=0.3, axis="y")
     fig2.tight_layout()
 
+    # --- Figure 3: Resample exhaustions ---
+    fig3, ax3 = plt.subplots(1, 1, figsize=(7, 5))
+    x = np.arange(len(bar_labels))
+    ax3.bar(x, ex_means, yerr=ex_stderrs, color=bar_colors, capsize=5, alpha=0.8)
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(bar_labels, rotation=15, ha="right")
+    ax3.set_ylabel("Total resample exhaustions")
+    ax3.set_title("Resample exhaustions over 4000 steps (mean ± stderr)")
+    ax3.grid(True, alpha=0.3, axis="y")
+    fig3.tight_layout()
+
     if args.save:
         save_path = Path(args.save)
         stem, suffix = save_path.stem, save_path.suffix
         path1 = save_path.with_name(f"{stem}_success{suffix}")
         path2 = save_path.with_name(f"{stem}_widen_episodes{suffix}")
+        path3 = save_path.with_name(f"{stem}_exhaustions{suffix}")
         fig1.savefig(path1, dpi=150)
         fig2.savefig(path2, dpi=150)
-        print(f"Figures saved to: {path1}, {path2}")
+        fig3.savefig(path3, dpi=150)
+        print(f"Figures saved to: {path1}, {path2}, {path3}")
     else:
         plt.show()
 
