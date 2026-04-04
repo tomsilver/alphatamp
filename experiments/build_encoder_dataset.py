@@ -56,7 +56,7 @@ class _WorkerArgs:
 
     env_id: str
     model_name: str
-    num_obstructions: int
+    model_kwargs: dict
     max_abstract_plans: int
     samples_per_step: int
     max_skill_horizon: int
@@ -93,7 +93,7 @@ def _dataset_worker(args: _WorkerArgs) -> bytes:
             args.model_name,
             env.observation_space,
             env.action_space,
-            num_obstructions=args.num_obstructions,
+            **args.model_kwargs,
         )
     finally:
         env.close()  # type: ignore[no-untyped-call]
@@ -175,7 +175,7 @@ def _merge_partial_datasets(
 def _build_approach(
     env_id: str,
     model_name: str,
-    num_obstructions: int,
+    model_kwargs: dict,
     max_abstract_plans: int,
     samples_per_step: int,
     max_skill_horizon: int,
@@ -193,7 +193,7 @@ def _build_approach(
             model_name,
             env.observation_space,
             env.action_space,
-            num_obstructions=num_obstructions,
+            **model_kwargs,
         )
     finally:
         env.close()  # type: ignore[no-untyped-call]
@@ -217,7 +217,7 @@ def _build_dataset_parallel(
     num_workers: int,
     env_id: str,
     model_name: str,
-    num_obstructions: int,
+    model_kwargs: dict,
     max_abstract_plans: int,
     samples_per_step: int,
     max_skill_horizon: int,
@@ -231,7 +231,7 @@ def _build_dataset_parallel(
     _parent_approach = _build_approach(
         env_id=env_id,
         model_name=model_name,
-        num_obstructions=num_obstructions,
+        model_kwargs=model_kwargs,
         max_abstract_plans=max_abstract_plans,
         samples_per_step=samples_per_step,
         max_skill_horizon=max_skill_horizon,
@@ -257,7 +257,7 @@ def _build_dataset_parallel(
         _WorkerArgs(
             env_id=env_id,
             model_name=model_name,
-            num_obstructions=num_obstructions,
+            model_kwargs=model_kwargs,
             max_abstract_plans=max_abstract_plans,
             samples_per_step=samples_per_step,
             max_skill_horizon=max_skill_horizon,
@@ -294,7 +294,8 @@ def main(cfg: DictConfig) -> None:
 
     env_id = str(cfg.env.id)
     model_name = str(cfg.env.model_name)
-    num_obstructions = int(cfg.env.model_kwargs.num_obstructions)
+    from omegaconf import OmegaConf
+    model_kwargs = dict(OmegaConf.to_container(cfg.env.model_kwargs, resolve=True))
 
     max_abstract_plans = int(cfg.encoder.max_abstract_plans)
     samples_per_step = int(cfg.encoder.samples_per_step)
@@ -356,7 +357,7 @@ def main(cfg: DictConfig) -> None:
     approach_kwargs: dict[str, Any] = {
         "env_id": env_id,
         "model_name": model_name,
-        "num_obstructions": num_obstructions,
+        "model_kwargs": model_kwargs,
         "max_abstract_plans": max_abstract_plans,
         "samples_per_step": samples_per_step,
         "max_skill_horizon": max_skill_horizon,

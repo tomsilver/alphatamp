@@ -27,7 +27,7 @@ fi
 #   $2  threshold      : success-rate lower bound (default 0.0)
 #   $3  min_appl_count : min applicability count   (default 0)
 #   $4  filter_artifact: path to the dataset pkl to filter from
-#                        (default artifacts/encoder_<difficulty>/encoder_filter_dataset.pkl)
+#                        (default artifacts_{ob|sb}/encoder_<difficulty>/encoder_filter_dataset.pkl)
 #   $5  split_name     : suffix for the output vocab filename
 #                        (default all_filtered → encoder_vocab_filtered_all_filtered.pkl)
 #
@@ -37,7 +37,7 @@ fi
 #
 #   # Re-filter using the full 500-seed training dataset:
 #   sbatch experiments/refilter_encoder_vocab.slurm o4 0.05 20 \
-#     artifacts/encoder_o4/encoder_train_dataset.pkl train_filtered
+#     artifacts_ob/encoder_o4/encoder_train_dataset.pkl train_filtered
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: sbatch experiments/refilter_encoder_vocab.slurm <difficulty> [threshold] [min_appl_count] [filter_artifact] [split_name]"
@@ -49,18 +49,27 @@ THRESHOLD="${2:-0.0}"
 MIN_APPL_COUNT="${3:-0}"
 
 case "$DIFFICULTY" in
-  o2|o3|o4)
+  o2|o3|o4|sb1|sb2|sb3|sb5|sb10)
     ;;
   *)
-    echo "Unknown difficulty: $DIFFICULTY (expected o2|o3|o4)" >&2
+    echo "Unknown difficulty: $DIFFICULTY (expected o2|o3|o4|sb1|sb2|sb3|sb5|sb10)" >&2
     exit 2
     ;;
 esac
 
+# Map difficulty name to its artifact root directory.
+artifact_dir() {
+  case "$1" in
+    o*)  echo "artifacts_ob/encoder_$1" ;;
+    sb*) echo "artifacts_sb/encoder_$1" ;;
+    *)   echo "artifacts/encoder_$1" ;;
+  esac
+}
+
 # Allow caller to override the artifact path and output split name.
-FILTER_ARTIFACT="${4:-artifacts/encoder_${DIFFICULTY}/encoder_filter_dataset.pkl}"
+FILTER_ARTIFACT="${4:-$(artifact_dir "$DIFFICULTY")/encoder_filter_dataset.pkl}"
 SPLIT_NAME="${5:-all_filtered}"
-OUTPUT_DIR="artifacts/encoder_${DIFFICULTY}"
+OUTPUT_DIR="$(artifact_dir "$DIFFICULTY")"
 
 if [[ ! -f "$FILTER_ARTIFACT" ]]; then
   echo "Missing filter artifact: $FILTER_ARTIFACT" >&2

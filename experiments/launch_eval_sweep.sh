@@ -4,20 +4,35 @@ set -euo pipefail
 # Submit offline eval jobs for all trained arch checkpoints.
 #
 # Usage:
-#   bash experiments/launch_eval_sweep.sh [o2|o3|o4|all] [steps|binary]
+#   bash experiments/launch_eval_sweep.sh [ENVS] [steps|binary]
 #
-# Default: all environments, steps mode.
-# Skips any arch_* dir that does not yet have encoder_best.pt.
+#   ENVS  Space-separated list of encoder_dataset_difficulty names, or "all".
+#         Defaults to "o2 o3 o4".
+#         "all" expands to "o2 o3 o4 sb1 sb2 sb3 sb5 sb10".
+#         Example: bash experiments/launch_eval_sweep.sh "sb1 sb2 sb3"
+#         Example: bash experiments/launch_eval_sweep.sh all
+#
+#   MODE  Evaluation mode: steps (default) or binary.
+#         Skips any arch_* dir that does not yet have encoder_best.pt.
 #
 # Outputs per (env, arch):
-#   steps mode:  artifacts/encoder_{env}/arch_{arch}/offline_eval/...
-#   binary mode: artifacts/encoder_{env}/binary_encoder/arch_{arch}/offline_eval/...
+#   steps mode:  artifacts_{ob|sb}/encoder_{env}/arch_{arch}/offline_eval/...
+#   binary mode: artifacts_{ob|sb}/encoder_{env}/binary_encoder/arch_{arch}/offline_eval/...
 
 cd "$(dirname "$0")/.."
 
-ENVS="${1:-all}"
+# Map difficulty name to its artifact root directory.
+artifact_dir() {
+  case "$1" in
+    o*)  echo "artifacts_ob/encoder_$1" ;;
+    sb*) echo "artifacts_sb/encoder_$1" ;;
+    *)   echo "artifacts/encoder_$1" ;;
+  esac
+}
+
+ENVS="${1:-o2 o3 o4}"
 if [[ "$ENVS" == "all" ]]; then
-  ENVS="o2 o3 o4"
+  ENVS="o2 o3 o4 sb1 sb2 sb3 sb5 sb10"
 fi
 
 MODE="${2:-steps}"
@@ -27,13 +42,12 @@ if [[ "$MODE" != "steps" && "$MODE" != "binary" ]]; then
 fi
 
 for env in $ENVS; do
+  env_root="$(artifact_dir "$env")"
   if [[ "$MODE" == "binary" ]]; then
-    data_root="artifacts/encoder_${env}/binary_encoder"
+    data_root="${env_root}/binary_encoder"
   else
-    data_root="artifacts/encoder_${env}"
+    data_root="${env_root}"
   fi
-  # Filtered datasets always live in the env root, regardless of mode.
-  env_root="artifacts/encoder_${env}"
 
   if [[ ! -d "$data_root" ]]; then
     echo "Missing env artifact dir: $data_root — skipping" >&2
@@ -65,4 +79,4 @@ for env in $ENVS; do
   echo "env=${env}: submitted=${submitted} skipped=${skipped}"
 done
 
-echo "Done submitting eval jobs."
+echo "Done submitting eval jobs (${ENVS})."

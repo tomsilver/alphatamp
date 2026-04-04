@@ -118,7 +118,7 @@ def _bootstrap_env_model_modules(cfg: DictConfig) -> None:
     """Register dynamic modules needed for dill deserialization."""
     env_id = str(cfg.bootstrap.env_id)
     model_name = str(cfg.bootstrap.model_name)
-    num_obstructions = int(cfg.bootstrap.num_obstructions)
+    model_kwargs = dict(OmegaConf.to_container(cfg.bootstrap.model_kwargs, resolve=True))
 
     kinder.register_all_environments()
     env = kinder.make(env_id)
@@ -127,7 +127,7 @@ def _bootstrap_env_model_modules(cfg: DictConfig) -> None:
             model_name,
             env.observation_space,
             env.action_space,
-            num_obstructions=num_obstructions,
+            **model_kwargs,
         )
     finally:
         env.close()  # type: ignore[no-untyped-call]
@@ -411,7 +411,7 @@ def _compute_generator_order_indices(
 
     env_id = str(cfg.bootstrap.env_id)
     model_name = str(cfg.bootstrap.model_name)
-    num_obstructions = int(cfg.bootstrap.num_obstructions)
+    model_kwargs = dict(OmegaConf.to_container(cfg.bootstrap.model_kwargs, resolve=True))
 
     heuristic_name = str(cfg.generator_baseline.heuristic_name)
     generator_seed = int(cfg.generator_baseline.seed)
@@ -423,7 +423,7 @@ def _compute_generator_order_indices(
             model_name,
             env.observation_space,
             env.action_space,
-            num_obstructions=num_obstructions,
+            **model_kwargs,
         )
     finally:
         env.close()  # type: ignore[no-untyped-call]
@@ -820,7 +820,7 @@ def main(cfg: DictConfig) -> None:
 
         env_id = str(cfg.bootstrap.env_id)
         model_name = str(cfg.bootstrap.model_name)
-        num_obstructions = int(cfg.bootstrap.num_obstructions)
+        model_kwargs = dict(OmegaConf.to_container(cfg.bootstrap.model_kwargs, resolve=True))
 
         kinder.register_all_environments()
         env = kinder.make(env_id)
@@ -829,7 +829,7 @@ def main(cfg: DictConfig) -> None:
                 model_name,
                 env.observation_space,
                 env.action_space,
-                num_obstructions=num_obstructions,
+                **model_kwargs,
             )
         finally:
             env.close()  # type: ignore[no-untyped-call]

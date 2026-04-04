@@ -11,6 +11,6 @@ encoder:
   vocabulary_size: 14
 
 run:
-  vocab_file: artifacts/encoder_o2/encoder_vocab_filtered_all_filtered.pkl
+  vocab_file: artifacts_ob/encoder_o2/encoder_vocab_filtered_all_filtered.pkl
 
-output_dir: artifacts/encoder_o2
+output_dir: artifacts_ob/encoder_o2

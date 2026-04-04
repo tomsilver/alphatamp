@@ -4,38 +4,46 @@ set -euo pipefail
 # Submit encoder MAE training jobs for all bottleneck architectures.
 #
 # Usage:
-#   bash experiments/launch_training_sweep.sh [o2|o3|o4|all] [steps|binary]
+#   bash experiments/launch_training_sweep.sh [ENVS] [steps|binary]
 #
-# Default: all environments, steps mode.
+#   ENVS  Space-separated list of encoder_dataset_difficulty names.
+#         Defaults to "o2 o3 o4".
+#         Example: bash experiments/launch_training_sweep.sh "sb1 sb2 sb3"
+#         Example: bash experiments/launch_training_sweep.sh "o2 o3 o4 sb1 sb2 sb3" binary
 #
-# Modes:
-#   steps   Soft-label BCE on steps_completed_fraction (default)
-#   binary  Hard BCE on binary success matrix
+#   MODE  Target mode: steps (default) or binary.
+#           steps   Soft-label BCE on steps_completed_fraction
+#           binary  Hard BCE on binary success matrix
 #
-# Architectures (hidden_dims = [128, B, 128]):
+# Architectures (hidden_dims = [128, B, 128]) where M is the filtered vocab size:
 #   no_bottleneck  B=128 (unconstrained MLP)
 #   full_M         B=M
 #   half_M         B=ceil(M/2)
 #   quarter_M      B=ceil(M/4)
 #   eighth_M       B=ceil(M/8)
 #
+# M is read dynamically from the filtered vocab artifact for each env, so it
+# reflects the actual post-filter vocabulary size without any hardcoding.
+#
 # Outputs per (env, arch):
-#   steps mode:  artifacts/encoder_{env}/arch_{arch}/encoder_best.pt
-#   binary mode: artifacts/encoder_{env}/binary_encoder/arch_{arch}/encoder_best.pt
-#   ...
+#   steps mode:  artifacts_{ob|sb}/encoder_{env}/arch_{arch}/encoder_best.pt
+#   binary mode: artifacts_{ob|sb}/encoder_{env}/binary_encoder/arch_{arch}/encoder_best.pt
 
 cd "$(dirname "$0")/.."
 
-# Vocabulary size M per environment
-declare -A ENV_M=([o2]=14 [o3]=19 [o4]=34)
+# Map difficulty name to its artifact root directory.
+artifact_dir() {
+  case "$1" in
+    o*)  echo "artifacts_ob/encoder_$1" ;;
+    sb*) echo "artifacts_sb/encoder_$1" ;;
+    *)   echo "artifacts/encoder_$1" ;;
+  esac
+}
 
 # ceil_div A B  →  ceil(A / B)
 ceil_div() { echo $(( ($1 + $2 - 1) / $2 )); }
 
-ENVS="${1:-all}"
-if [[ "$ENVS" == "all" ]]; then
-  ENVS="o2 o3 o4"
-fi
+ENVS="${1:-o2 o3 o4}"
 
 MODE="${2:-steps}"
 if [[ "$MODE" != "steps" && "$MODE" != "binary" ]]; then
@@ -44,22 +52,14 @@ if [[ "$MODE" != "steps" && "$MODE" != "binary" ]]; then
 fi
 
 for env in $ENVS; do
-  if [[ -z "${ENV_M[$env]+x}" ]]; then
-    echo "Unknown environment: $env (expected o2, o3, or o4)" >&2
-    exit 2
-  fi
-
-  M=${ENV_M[$env]}
+  env_root="$(artifact_dir "$env")"
   if [[ "$MODE" == "binary" ]]; then
-    data_root="artifacts/encoder_${env}/binary_encoder"
+    data_root="${env_root}/binary_encoder"
   else
-    data_root="artifacts/encoder_${env}"
+    data_root="${env_root}"
   fi
 
-  # Filtered datasets always live in the env root, regardless of mode.
-  env_root="artifacts/encoder_${env}"
-
-  # Verify filtered data artifacts exist before submitting
+  # Verify filtered data artifacts exist before submitting.
   for split in train validation test; do
     artifact="${env_root}/encoder_${split}_filtered_dataset.pkl"
     if [[ ! -f "$artifact" ]]; then
@@ -68,6 +68,16 @@ for env in $ENVS; do
       exit 2
     fi
   done
+
+  # Read M (filtered vocab size) dynamically from the train-filtered vocab artifact.
+  vocab_artifact="${env_root}/encoder_vocab_filtered_train_filtered.pkl"
+  if [[ ! -f "$vocab_artifact" ]]; then
+    echo "Missing vocab artifact: $vocab_artifact" >&2
+    echo "Run launch_encoder_refilter_train_matrix.sh first." >&2
+    exit 2
+  fi
+  M=$(python -c "import dill; d=dill.load(open('${vocab_artifact}','rb')); print(len(d['vocabulary']))")
+  echo "env=${env}: filtered vocab size M=${M}"
 
   declare -A ARCHS
   ARCHS[no_bottleneck]=128
@@ -93,4 +103,4 @@ for env in $ENVS; do
   unset ARCHS
 done
 
-echo "Submitted all training jobs."
+echo "Submitted all training jobs (${ENVS})."

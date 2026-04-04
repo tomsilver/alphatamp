@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Submit Stage A/B/C (all_filtered mode) jobs for o2/o3/o4.
+# Submit Stage A/B/C (all_filtered mode) jobs for one or more environments.
 #
 # all_filtered does:
 #   A) full vocab build on vocab.seed range
@@ -10,16 +10,32 @@ set -euo pipefail
 #      threshold=0.0)
 #
 # Usage:
-#   bash experiments/launch_encoder_all_filtered_matrix.sh
+#   bash experiments/launch_encoder_all_filtered_matrix.sh [ENVS]
 #
-# Outputs per difficulty:
-#   artifacts/encoder_oX/encoder_vocab_filtered_all_filtered.pkl
-#   artifacts/encoder_oX/encoder_filter_dataset.pkl
-#   artifacts/encoder_oX/encoder_filter_dataset_filtered.pkl
+#   ENVS  Space-separated list of encoder_dataset_difficulty config names.
+#         Defaults to "o2 o3 o4".
+#         Example: bash experiments/launch_encoder_all_filtered_matrix.sh "sb1 sb2 sb3"
+#         Example: bash experiments/launch_encoder_all_filtered_matrix.sh "o2 o3 o4 sb1 sb2 sb3"
+#
+# Outputs per difficulty (routed to artifacts_ob/ or artifacts_sb/ automatically):
+#   artifacts_{ob|sb}/encoder_<difficulty>/encoder_vocab_filtered_all_filtered.pkl
+#   artifacts_{ob|sb}/encoder_<difficulty>/encoder_filter_dataset.pkl
+#   artifacts_{ob|sb}/encoder_<difficulty>/encoder_filter_dataset_filtered.pkl
 
 cd "$(dirname "$0")/.."
 
-for difficulty in o2 o3 o4; do
+# Map difficulty name to its artifact root directory.
+artifact_dir() {
+  case "$1" in
+    o*)  echo "artifacts_ob/encoder_$1" ;;
+    sb*) echo "artifacts_sb/encoder_$1" ;;
+    *)   echo "artifacts/encoder_$1" ;;
+  esac
+}
+
+ENVS="${1:-o2 o3 o4}"
+
+for difficulty in $ENVS; do
   echo "Submitting all_filtered for difficulty=$difficulty"
   sbatch experiments/build_encoder_dataset.slurm \
     all_filtered 0 1 \
@@ -33,4 +49,4 @@ for difficulty in o2 o3 o4; do
 
 done
 
-echo "Submitted all all_filtered jobs (o2/o3/o4)."
+echo "Submitted all all_filtered jobs (${ENVS})."

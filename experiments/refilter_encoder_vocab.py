@@ -48,18 +48,25 @@ def _bootstrap_dill_modules() -> None:
     """Register dynamic planning modules required by dill deserialization."""
     kinder.register_all_environments()
 
-    # Encoder filter artifacts in this workflow are generated from Obstruction2D
-    # difficulties, so pre-create these model modules before dill.load().
-    bootstrap_envs = [
+    # Pre-create model modules for all supported environments before dill.load()
+    # so that dynamically generated classes can be deserialized.
+    obstruction_envs = [
         ("kinder/Obstruction2D-o0-v0", 0),
         ("kinder/Obstruction2D-o1-v0", 1),
         ("kinder/Obstruction2D-o2-v0", 2),
         ("kinder/Obstruction2D-o3-v0", 3),
         ("kinder/Obstruction2D-o4-v0", 4),
     ]
+    stickbutton_envs = [
+        ("kinder/StickButton2D-b1-v0", 1),
+        ("kinder/StickButton2D-b2-v0", 2),
+        ("kinder/StickButton2D-b3-v0", 3),
+        ("kinder/StickButton2D-b5-v0", 5),
+        ("kinder/StickButton2D-b10-v0", 10),
+    ]
 
     bootstrapped: list[str] = []
-    for env_id, num_obstructions in bootstrap_envs:
+    for env_id, num_obstructions in obstruction_envs:
         env = kinder.make(env_id)
         try:
             _ = create_bilevel_planning_models(
@@ -67,6 +74,19 @@ def _bootstrap_dill_modules() -> None:
                 env.observation_space,
                 env.action_space,
                 num_obstructions=num_obstructions,
+            )
+            bootstrapped.append(env_id)
+        finally:
+            env.close()  # type: ignore[no-untyped-call]
+
+    for env_id, num_buttons in stickbutton_envs:
+        env = kinder.make(env_id)
+        try:
+            _ = create_bilevel_planning_models(
+                "stickbutton2d",
+                env.observation_space,
+                env.action_space,
+                num_buttons=num_buttons,
             )
             bootstrapped.append(env_id)
         finally:

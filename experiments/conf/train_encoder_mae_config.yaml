@@ -5,12 +5,13 @@ bootstrap:
   enabled: true
   env_id: kinder/Obstruction2D-o2-v0
   model_name: obstruction2d
-  num_obstructions: 2
+  model_kwargs:
+    num_obstructions: 2
 
 data:
-  train_path: artifacts/encoder_o2/encoder_train_filtered_dataset.pkl
-  val_path: artifacts/encoder_o2/encoder_validation_filtered_dataset.pkl
-  test_path: artifacts/encoder_o2/encoder_test_filtered_dataset.pkl
+  train_path: artifacts_ob/encoder_o2/encoder_train_filtered_dataset.pkl
+  val_path: artifacts_ob/encoder_o2/encoder_validation_filtered_dataset.pkl
+  test_path: artifacts_ob/encoder_o2/encoder_test_filtered_dataset.pkl
 
 model:
   # hidden_dims: [128, 32, 8, 32, 128]
@@ -47,7 +48,7 @@ test:
   rollout_seed: 3036
 
 checkpoint:
-  output_dir: artifacts/encoder_o2
+  output_dir: artifacts_ob/encoder_o2
   best_filename: encoder_o2_best.pt
   last_filename: encoder_o2_last.pt
 

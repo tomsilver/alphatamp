@@ -5,17 +5,18 @@ bootstrap:
   enabled: true
   env_id: kinder/Obstruction2D-o2-v0
   model_name: obstruction2d
-  num_obstructions: 2
+  model_kwargs:
+    num_obstructions: 2
 
 data:
-  train_path: artifacts/encoder_o2/encoder_train_filtered_dataset.pkl
-  test_path: artifacts/encoder_o2/encoder_test_filtered_dataset.pkl
+  train_path: artifacts_ob/encoder_o2/encoder_train_filtered_dataset.pkl
+  test_path: artifacts_ob/encoder_o2/encoder_test_filtered_dataset.pkl
 
 checkpoint:
-  path: artifacts/encoder_o2/encoder_o2_best.pt
+  path: artifacts_ob/encoder_o2/encoder_o2_best.pt
 
 output:
-  dir: artifacts/encoder_offline_o2
+  dir: artifacts_ob/encoder_offline_o2
 
 train:
   device: auto

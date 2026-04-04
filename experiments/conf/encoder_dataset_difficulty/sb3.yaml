@@ -1,0 +1,16 @@
+# @package _global_
+
+env:
+  id: kinder/StickButton2D-b3-v0
+  model_name: stickbutton2d
+  model_kwargs:
+    num_buttons: 3
+
+encoder:
+  training_planning_timeout: 20.0
+  vocabulary_size: 50
+
+run:
+  vocab_file: artifacts_sb/encoder_sb3/encoder_vocab_filtered_all_filtered.pkl
+
+output_dir: artifacts_sb/encoder_sb3

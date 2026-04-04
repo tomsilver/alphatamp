@@ -25,7 +25,7 @@ run:
   # 1 = fully sequential (no subprocess overhead, original behaviour).
   num_workers: 4
   # Path to a pre-built vocab pickle. Required when mode="dataset".
-  vocab_file: artifacts/encoder_o4/encoder_vocab_filtered_all_filtered.pkl
+  vocab_file: artifacts_ob/encoder_o4/encoder_vocab_filtered_all_filtered.pkl
 
 vocab:
   seed_start: 0
@@ -45,4 +45,4 @@ vocab:
   # data to trust their success rate). Set to 0 to disable.
   filter_min_appl_count: 15
 
-output_dir: artifacts/encoder_o4
+output_dir: artifacts_ob/encoder_o4
