@@ -765,16 +765,7 @@ def main(cfg: DictConfig) -> None:
     num_val_masks = int(getattr(cfg.val, "num_masks", 1))
     if num_val_masks < 1:
         raise ValueError("val.num_masks must be >= 1")
-    val_reveal_masks: list[torch.Tensor] = []
-    for mask_idx in range(num_val_masks):
-        val_mask_rng = torch.Generator(device="cpu")
-        val_mask_rng.manual_seed(int(cfg.val.mask_seed) + mask_idx)
-        val_reveal_masks.append(
-            _sample_reveal_mask(
-                val_applicability,
-                val_mask_rng,
-            )
-        )
+    val_mask_base_seed = int(cfg.val.mask_seed)
 
     output_dir = _resolve_path(str(cfg.checkpoint.output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -888,6 +879,12 @@ def main(cfg: DictConfig) -> None:
 
         train_loss = epoch_weighted_loss / max(1, epoch_hidden_total)
         train_losses.append(train_loss)
+
+        val_reveal_masks = []
+        for mask_idx in range(num_val_masks):
+            val_mask_rng = torch.Generator(device="cpu")
+            val_mask_rng.manual_seed(val_mask_base_seed + (epoch - 1) * num_val_masks + mask_idx)
+            val_reveal_masks.append(_sample_reveal_mask(val_applicability, val_mask_rng))
 
         val_metrics = _evaluate_over_masks(
             model,

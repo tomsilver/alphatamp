@@ -66,6 +66,7 @@ class SplitData:
     steps_completed_fraction: (
         np.ndarray
     )  # falls back to binary success for old datasets
+    has_true_steps_completed_fraction: bool
     vocab: list[Any]
     initial_low_level_states: list[Any] | None = None
     initial_abstract_states: list[Any] | None = None
@@ -189,7 +190,8 @@ def _extract_split_data(payload: dict[str, Any], split_name: str) -> SplitData:
         raise ValueError(f"{split_name}: refinement_time must be non-negative")
 
     # Rich failure signal — fall back to binary success for old datasets.
-    if "steps_completed_fraction" in dataset:
+    has_true_steps_completed_fraction = "steps_completed_fraction" in dataset
+    if has_true_steps_completed_fraction:
         steps = np.asarray(dataset["steps_completed_fraction"], dtype=np.float32)
     else:
         steps = success.copy()
@@ -224,6 +226,7 @@ def _extract_split_data(payload: dict[str, Any], split_name: str) -> SplitData:
         success=success,
         refinement_time=refinement_time,
         steps_completed_fraction=steps,
+        has_true_steps_completed_fraction=has_true_steps_completed_fraction,
         vocab=vocab,
         initial_low_level_states=(
             list(initial_low_level_states)
@@ -565,6 +568,41 @@ def _run_encoder_row(
     return False, float(budget_seconds)
 
 
+def _run_oracle_steps_then_time_row(
+    applicable_row: np.ndarray,
+    success_row: np.ndarray,
+    time_row: np.ndarray,
+    steps_row: np.ndarray,
+    budget_seconds: float,
+    epsilon: float,
+) -> tuple[bool, float]:
+    """Oracle rollout by descending steps-completed, tie-broken by lower time."""
+    remaining = float(budget_seconds)
+    elapsed = 0.0
+
+    applicable_indices = np.nonzero(applicable_row > 0.5)[0].tolist()
+    if not applicable_indices:
+        return False, float(budget_seconds)
+
+    ordered = sorted(
+        applicable_indices,
+        key=lambda idx: (-float(steps_row[idx]), float(time_row[idx]), int(idx)),
+    )
+
+    for col_idx in ordered:
+        attempt_time = float(time_row[col_idx])
+        if not _strict_attempt_allowed(attempt_time, remaining, epsilon):
+            break
+
+        elapsed += attempt_time
+        remaining -= attempt_time
+
+        if float(success_row[col_idx]) > 0.5:
+            return True, float(min(elapsed, budget_seconds))
+
+    return False, float(budget_seconds)
+
+
 def _evaluate_policy(
     method_name: str,
     run_row_fn: Any,
@@ -612,6 +650,7 @@ def _plot_success_curve(
     baseline_success: np.ndarray,
     generator_order_success: np.ndarray | None,
     box_offline_success: np.ndarray | None,
+    oracle_steps_time_success: np.ndarray | None,
     encoder_success: np.ndarray,
     budget_marker: float,
     output_path: Path,
@@ -631,6 +670,13 @@ def _plot_success_curve(
             budgets,
             box_offline_success,
             label="BOX (offline)",
+            linewidth=2,
+        )
+    if oracle_steps_time_success is not None:
+        plt.plot(
+            budgets,
+            oracle_steps_time_success,
+            label="Oracle (steps->time)",
             linewidth=2,
         )
     plt.plot(budgets, encoder_success, label="Encoder-guided", linewidth=2)
@@ -653,6 +699,7 @@ def _plot_time_curve(
     baseline_values: np.ndarray,
     generator_order_values: np.ndarray | None,
     box_offline_values: np.ndarray | None,
+    oracle_steps_time_values: np.ndarray | None,
     encoder_values: np.ndarray,
     budget_marker: float,
     title: str,
@@ -674,6 +721,13 @@ def _plot_time_curve(
             budgets,
             box_offline_values,
             label="BOX (offline)",
+            linewidth=2,
+        )
+    if oracle_steps_time_values is not None:
+        plt.plot(
+            budgets,
+            oracle_steps_time_values,
+            label="Oracle (steps->time)",
             linewidth=2,
         )
     plt.plot(budgets, encoder_values, label="Encoder-guided", linewidth=2)
@@ -725,6 +779,16 @@ def main(cfg: DictConfig) -> None:
     vocab_to_idx = _build_vocab_to_index(train_split.vocab)
     box_offline_enabled = bool(cfg.box_offline.enabled)
     box_offline_approach: Any | None = None
+    oracle_steps_then_time_enabled = bool(cfg.oracle_steps_then_time.enabled)
+
+    if (
+        oracle_steps_then_time_enabled
+        and not test_split.has_true_steps_completed_fraction
+    ):
+        raise ValueError(
+            "oracle_steps_then_time.enabled requires true "
+            "steps_completed_fraction in test dataset"
+        )
 
     generator_order_enabled = bool(cfg.generator_baseline.enabled)
     generator_order_indices_per_row: list[list[int]] | None = None
@@ -893,6 +957,22 @@ def main(cfg: DictConfig) -> None:
         result = box_offline_approach.run_offline_planning_by_row_index(row_idx, budget)
         return bool(result["success"]), float(result["elapsed_time"])
 
+    def oracle_steps_then_time_row_runner(
+        row_idx: int,
+        applicable_row: np.ndarray,
+        success_row: np.ndarray,
+        time_row: np.ndarray,
+        budget: float,
+    ) -> tuple[bool, float]:
+        return _run_oracle_steps_then_time_row(
+            applicable_row,
+            success_row,
+            time_row,
+            test_split.steps_completed_fraction[row_idx],
+            budget,
+            epsilon,
+        )
+
     if generator_order_enabled:
         print("Computing per-row generator-order baseline indices...")
         generator_order_indices_per_row = _compute_generator_order_indices(
@@ -925,6 +1005,14 @@ def main(cfg: DictConfig) -> None:
             test_split,
             budget_seconds,
         )
+    oracle_steps_then_time_metrics: dict[str, Any] | None = None
+    if oracle_steps_then_time_enabled:
+        oracle_steps_then_time_metrics = _evaluate_policy(
+            "oracle_steps_then_time",
+            oracle_steps_then_time_row_runner,
+            test_split,
+            budget_seconds,
+        )
     encoder_metrics = _evaluate_policy(
         "encoder_guided",
         encoder_row_runner,
@@ -946,14 +1034,17 @@ def main(cfg: DictConfig) -> None:
     baseline_success_curve = []
     generator_order_success_curve = []
     box_offline_success_curve = []
+    oracle_steps_then_time_success_curve = []
     encoder_success_curve = []
     baseline_time_success_only_curve = []
     generator_order_time_success_only_curve = []
     box_offline_time_success_only_curve = []
+    oracle_steps_then_time_time_success_only_curve = []
     encoder_time_success_only_curve = []
     baseline_time_total_curve = []
     generator_order_time_total_curve = []
     box_offline_time_total_curve = []
+    oracle_steps_then_time_time_total_curve = []
     encoder_time_total_curve = []
     for sweep_budget in budgets.tolist():
         baseline_sweep = _evaluate_policy(
@@ -978,6 +1069,14 @@ def main(cfg: DictConfig) -> None:
                 test_split,
                 float(sweep_budget),
             )
+        oracle_steps_then_time_sweep: dict[str, Any] | None = None
+        if oracle_steps_then_time_enabled:
+            oracle_steps_then_time_sweep = _evaluate_policy(
+                "oracle_steps_then_time",
+                oracle_steps_then_time_row_runner,
+                test_split,
+                float(sweep_budget),
+            )
         encoder_sweep = _evaluate_policy(
             "encoder_guided",
             encoder_row_runner,
@@ -991,6 +1090,10 @@ def main(cfg: DictConfig) -> None:
             )
         if box_offline_sweep is not None:
             box_offline_success_curve.append(float(box_offline_sweep["success_rate"]))
+        if oracle_steps_then_time_sweep is not None:
+            oracle_steps_then_time_success_curve.append(
+                float(oracle_steps_then_time_sweep["success_rate"])
+            )
         encoder_success_curve.append(float(encoder_sweep["success_rate"]))
         baseline_time_success_only_curve.append(
             float(baseline_sweep["mean_time_success_only"])
@@ -1002,6 +1105,10 @@ def main(cfg: DictConfig) -> None:
         if box_offline_sweep is not None:
             box_offline_time_success_only_curve.append(
                 float(box_offline_sweep["mean_time_success_only"])
+            )
+        if oracle_steps_then_time_sweep is not None:
+            oracle_steps_then_time_time_success_only_curve.append(
+                float(oracle_steps_then_time_sweep["mean_time_success_only"])
             )
         encoder_time_success_only_curve.append(
             float(encoder_sweep["mean_time_success_only"])
@@ -1015,6 +1122,10 @@ def main(cfg: DictConfig) -> None:
             box_offline_time_total_curve.append(
                 float(box_offline_sweep["mean_time_total"])
             )
+        if oracle_steps_then_time_sweep is not None:
+            oracle_steps_then_time_time_total_curve.append(
+                float(oracle_steps_then_time_sweep["mean_time_total"])
+            )
         encoder_time_total_curve.append(float(encoder_sweep["mean_time_total"]))
 
     baseline_success_curve_np = np.asarray(baseline_success_curve, dtype=np.float32)
@@ -1027,6 +1138,11 @@ def main(cfg: DictConfig) -> None:
     box_offline_success_curve_np = (
         np.asarray(box_offline_success_curve, dtype=np.float32)
         if box_offline_enabled
+        else None
+    )
+    oracle_steps_then_time_success_curve_np = (
+        np.asarray(oracle_steps_then_time_success_curve, dtype=np.float32)
+        if oracle_steps_then_time_enabled
         else None
     )
     baseline_time_success_only_curve_np = np.asarray(
@@ -1047,6 +1163,11 @@ def main(cfg: DictConfig) -> None:
         if box_offline_enabled
         else None
     )
+    oracle_steps_then_time_time_success_only_curve_np = (
+        np.asarray(oracle_steps_then_time_time_success_only_curve, dtype=np.float32)
+        if oracle_steps_then_time_enabled
+        else None
+    )
     baseline_time_total_curve_np = np.asarray(
         baseline_time_total_curve,
         dtype=np.float32,
@@ -1063,6 +1184,11 @@ def main(cfg: DictConfig) -> None:
     box_offline_time_total_curve_np = (
         np.asarray(box_offline_time_total_curve, dtype=np.float32)
         if box_offline_enabled
+        else None
+    )
+    oracle_steps_then_time_time_total_curve_np = (
+        np.asarray(oracle_steps_then_time_time_total_curve, dtype=np.float32)
+        if oracle_steps_then_time_enabled
         else None
     )
 
@@ -1090,6 +1216,9 @@ def main(cfg: DictConfig) -> None:
             "failure_penalty_multiplier": float(
                 cfg.box_offline.failure_penalty_multiplier
             ),
+        },
+        "oracle_steps_then_time_config": {
+            "enabled": oracle_steps_then_time_enabled,
         },
         "budget_seconds": budget_seconds,
         "baseline": {
@@ -1127,6 +1256,18 @@ def main(cfg: DictConfig) -> None:
             ),
             "mean_time_total": float(box_offline_metrics["mean_time_total"]),
         }
+    if oracle_steps_then_time_metrics is not None:
+        summary["oracle_steps_then_time"] = {
+            "success_rate": float(oracle_steps_then_time_metrics["success_rate"]),
+            "solved_count": int(oracle_steps_then_time_metrics["solved_count"]),
+            "failed_count": int(oracle_steps_then_time_metrics["failed_count"]),
+            "mean_time_success_only": float(
+                oracle_steps_then_time_metrics["mean_time_success_only"]
+            ),
+            "mean_time_total": float(
+                oracle_steps_then_time_metrics["mean_time_total"]
+            ),
+        }
 
     summary_path = out_dir / "offline_encoder_eval_summary.json"
     metrics_path = out_dir / "offline_encoder_eval_metrics.npz"
@@ -1152,6 +1293,11 @@ def main(cfg: DictConfig) -> None:
             if box_offline_success_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
+        oracle_steps_then_time_success_curve=(
+            oracle_steps_then_time_success_curve_np
+            if oracle_steps_then_time_success_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
         baseline_time_success_only_curve=baseline_time_success_only_curve_np,
         encoder_time_success_only_curve=encoder_time_success_only_curve_np,
         baseline_generator_time_success_only_curve=(
@@ -1162,6 +1308,11 @@ def main(cfg: DictConfig) -> None:
         box_offline_time_success_only_curve=(
             box_offline_time_success_only_curve_np
             if box_offline_time_success_only_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
+        oracle_steps_then_time_time_success_only_curve=(
+            oracle_steps_then_time_time_success_only_curve_np
+            if oracle_steps_then_time_time_success_only_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
         baseline_time_total_curve=baseline_time_total_curve_np,
@@ -1176,6 +1327,11 @@ def main(cfg: DictConfig) -> None:
             if box_offline_time_total_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
+        oracle_steps_then_time_time_total_curve=(
+            oracle_steps_then_time_time_total_curve_np
+            if oracle_steps_then_time_time_total_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
         baseline_outcomes=baseline_metrics["outcomes"].astype(np.int8),
         encoder_outcomes=encoder_metrics["outcomes"].astype(np.int8),
         baseline_generator_outcomes=(
@@ -1186,6 +1342,11 @@ def main(cfg: DictConfig) -> None:
         box_offline_outcomes=(
             box_offline_metrics["outcomes"].astype(np.int8)
             if box_offline_metrics is not None
+            else np.asarray([], dtype=np.int8)
+        ),
+        oracle_steps_then_time_outcomes=(
+            oracle_steps_then_time_metrics["outcomes"].astype(np.int8)
+            if oracle_steps_then_time_metrics is not None
             else np.asarray([], dtype=np.int8)
         ),
         baseline_elapsed_times=baseline_metrics["elapsed_times"].astype(np.float32),
@@ -1200,6 +1361,11 @@ def main(cfg: DictConfig) -> None:
             if box_offline_metrics is not None
             else np.asarray([], dtype=np.float32)
         ),
+        oracle_steps_then_time_elapsed_times=(
+            oracle_steps_then_time_metrics["elapsed_times"].astype(np.float32)
+            if oracle_steps_then_time_metrics is not None
+            else np.asarray([], dtype=np.float32)
+        ),
         baseline_success_rate=np.float32(baseline_metrics["success_rate"]),
         encoder_success_rate=np.float32(encoder_metrics["success_rate"]),
         baseline_generator_success_rate=np.float32(
@@ -1210,6 +1376,11 @@ def main(cfg: DictConfig) -> None:
         box_offline_success_rate=np.float32(
             box_offline_metrics["success_rate"]
             if box_offline_metrics is not None
+            else np.nan
+        ),
+        oracle_steps_then_time_success_rate=np.float32(
+            oracle_steps_then_time_metrics["success_rate"]
+            if oracle_steps_then_time_metrics is not None
             else np.nan
         ),
         baseline_mean_time_success_only=np.float32(
@@ -1228,6 +1399,11 @@ def main(cfg: DictConfig) -> None:
             if box_offline_metrics is not None
             else np.nan
         ),
+        oracle_steps_then_time_mean_time_success_only=np.float32(
+            oracle_steps_then_time_metrics["mean_time_success_only"]
+            if oracle_steps_then_time_metrics is not None
+            else np.nan
+        ),
         baseline_mean_time_total=np.float32(baseline_metrics["mean_time_total"]),
         encoder_mean_time_total=np.float32(encoder_metrics["mean_time_total"]),
         baseline_generator_mean_time_total=np.float32(
@@ -1240,6 +1416,11 @@ def main(cfg: DictConfig) -> None:
             if box_offline_metrics is not None
             else np.nan
         ),
+        oracle_steps_then_time_mean_time_total=np.float32(
+            oracle_steps_then_time_metrics["mean_time_total"]
+            if oracle_steps_then_time_metrics is not None
+            else np.nan
+        ),
     )
 
     dpi = int(cfg.plot.dpi)
@@ -1248,6 +1429,7 @@ def main(cfg: DictConfig) -> None:
         baseline_success_curve_np,
         generator_order_success_curve_np,
         box_offline_success_curve_np,
+        oracle_steps_then_time_success_curve_np,
         encoder_success_curve_np,
         budget_seconds,
         success_curve_path,
@@ -1258,6 +1440,7 @@ def main(cfg: DictConfig) -> None:
         baseline_time_success_only_curve_np,
         generator_order_time_success_only_curve_np,
         box_offline_time_success_only_curve_np,
+        oracle_steps_then_time_time_success_only_curve_np,
         encoder_time_success_only_curve_np,
         budget_seconds,
         title="Refinement time on success vs budget",
@@ -1270,6 +1453,7 @@ def main(cfg: DictConfig) -> None:
         baseline_time_total_curve_np,
         generator_order_time_total_curve_np,
         box_offline_time_total_curve_np,
+        oracle_steps_then_time_time_total_curve_np,
         encoder_time_total_curve_np,
         budget_seconds,
         title="Total refinement time vs budget (including failures)",

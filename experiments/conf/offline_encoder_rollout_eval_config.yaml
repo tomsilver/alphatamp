@@ -8,8 +8,8 @@ bootstrap:
   num_obstructions: 2
 
 data:
-  train_path: artifacts/encoder_o2/encoder_train_dataset.pkl
-  test_path: artifacts/encoder_o2/encoder_test_dataset.pkl
+  train_path: artifacts/encoder_o2/encoder_train_filtered_dataset.pkl
+  test_path: artifacts/encoder_o2/encoder_test_filtered_dataset.pkl
 
 checkpoint:
   path: artifacts/encoder_o2/encoder_o2_best.pt
@@ -34,6 +34,9 @@ box_offline:
   seed: 0
   exploration_constant: 1.4142135623730951
   failure_penalty_multiplier: 1.0
+
+oracle_steps_then_time:
+  enabled: true
 
 budget:
   seconds: 20.0
