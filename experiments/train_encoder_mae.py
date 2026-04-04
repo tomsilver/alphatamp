@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -711,6 +711,18 @@ def main(cfg: DictConfig) -> None:
     if test_payload is not None:
         test_split = _extract_split_tensors(test_payload, "test")
         _assert_same_vocab(train_split.vocab, test_split.vocab, "test")
+
+    target_mode = str(getattr(cfg.train, "target_mode", "steps"))
+    if target_mode not in ("steps", "binary"):
+        raise ValueError(f"train.target_mode must be 'steps' or 'binary', got {target_mode!r}")
+    if target_mode == "binary":
+        # Replace the continuous steps signal with the binary success matrix so that
+        # the training target, model input context, and eval metrics all use 0/1 labels.
+        train_split = dataclass_replace(train_split, steps_completed_fraction=train_split.success)
+        val_split = dataclass_replace(val_split, steps_completed_fraction=val_split.success)
+        if test_split is not None:
+            test_split = dataclass_replace(test_split, steps_completed_fraction=test_split.success)
+    print(f"Target mode: {target_mode}")
 
     num_rows, vocab_size = train_split.success.shape
     val_rows, val_vocab_size = val_split.success.shape

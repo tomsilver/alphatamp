@@ -20,6 +20,7 @@ model:
   use_layer_norm: true
 
 train:
+  target_mode: steps  # "steps" (soft-label BCE on steps_completed_fraction) or "binary" (BCE on success)
   seed: 0
   device: auto
   num_epochs: 300
