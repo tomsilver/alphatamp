@@ -14,11 +14,16 @@ data:
   test_path: artifacts_ob/encoder_o2/encoder_test_filtered_dataset.pkl
 
 model:
-  # hidden_dims: [128, 32, 8, 32, 128]
-  # hidden_dims: [128, 64]
-  hidden_dims: [128, 32, 16, 32, 128]
+  arch: transformer
+  embed_dim: 32
+  n_heads: 4
+  n_layers: 2
+  ffn_dim_multiplier: 4
   dropout: 0.1
-  use_layer_norm: true
+  use_id_embed: true
+  # MLP ablation (set arch: mlp to use):
+  # hidden_dims: [128, 32, 16, 32, 128]
+  # use_layer_norm: true
 
 train:
   target_mode: steps  # "steps" (soft-label BCE on steps_completed_fraction) or "binary" (BCE on success)

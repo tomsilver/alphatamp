@@ -74,7 +74,10 @@ class SplitData:
 
 
 class EncoderMAE(nn.Module):
-    """Simple MLP masked autoencoder head producing M logits."""
+    """Simple MLP masked autoencoder head producing M logits.
+
+    Accepts inputs of shape (B, M, 3) and flattens to (B, 3*M) internally.
+    """
 
     def __init__(
         self,
@@ -103,8 +106,59 @@ class EncoderMAE(nn.Module):
         self._network = nn.Sequential(*layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Return logits for all vocabulary columns."""
-        return self._network(inputs)
+        """Return logits for all vocabulary columns.
+
+        Args:
+            inputs: (B, M, 3) observation features.
+
+        Returns:
+            logits: (B, M)
+        """
+        B, M, _ = inputs.shape
+        return self._network(inputs.reshape(B, M * 3))
+
+
+class SkeletonTransformer(nn.Module):
+    """Transformer encoder that re-ranks skeletons via cross-skeleton attention."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        embed_dim: int = 32,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        ffn_dim_multiplier: int = 4,
+        dropout: float = 0.1,
+        use_id_embed: bool = True,
+    ) -> None:
+        super().__init__()
+        self.obs_embed = nn.Linear(3, embed_dim)
+        self.id_embed = nn.Embedding(vocab_size, embed_dim) if use_id_embed else None
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=n_heads,
+            dim_feedforward=embed_dim * ffn_dim_multiplier,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.head = nn.Linear(embed_dim, 1)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        """Return per-skeleton logits.
+
+        Args:
+            obs: (B, M, 3) — [x_steps, reveal, applicability] per skeleton.
+
+        Returns:
+            logits: (B, M)
+        """
+        tokens = self.obs_embed(obs)  # (B, M, d)
+        if self.id_embed is not None:
+            tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
+        tokens = self.encoder(tokens)  # (B, M, d)
+        return self.head(tokens).squeeze(-1)  # (B, M)
 
 
 def _resolve_path(path_str: str) -> Path:
@@ -492,7 +546,7 @@ def _model_scores_for_row(
     x_steps_t = torch.from_numpy(x_steps.astype(np.float32)).unsqueeze(0).to(device)
     m_t = torch.from_numpy(m.astype(np.float32)).unsqueeze(0).to(device)
     a_t = torch.from_numpy(a.astype(np.float32)).unsqueeze(0).to(device)
-    model_input = torch.cat([x_steps_t, m_t, a_t], dim=1)
+    model_input = torch.stack([x_steps_t, m_t, a_t], dim=2)
     with torch.no_grad():
         logits = model(model_input)
         probs = torch.sigmoid(logits[0]).detach().cpu().numpy()
@@ -865,22 +919,33 @@ def main(cfg: DictConfig) -> None:
         raise KeyError("Checkpoint config missing 'model' section")
 
     model_cfg = ckpt_cfg["model"]
-    hidden_dims = [int(x) for x in model_cfg["hidden_dims"]]
+    arch = str(model_cfg.get("arch", "mlp"))
     dropout = float(model_cfg["dropout"])
-    use_layer_norm = bool(model_cfg["use_layer_norm"])
 
-    # input_dim/output_dim are stored in new-format checkpoints; fall back to old
-    # 3M/M defaults so old checkpoints continue to load correctly.
-    ckpt_input_dim = int(checkpoint.get("input_dim", 3 * ckpt_vocab_size))
-    ckpt_output_dim = int(checkpoint.get("output_dim", ckpt_vocab_size))
-
-    model = EncoderMAE(
-        input_dim=ckpt_input_dim,
-        hidden_dims=hidden_dims,
-        output_dim=ckpt_output_dim,
-        dropout=dropout,
-        use_layer_norm=use_layer_norm,
-    ).to(device)
+    if arch == "transformer":
+        model: nn.Module = SkeletonTransformer(
+            vocab_size=ckpt_vocab_size,
+            embed_dim=int(model_cfg["embed_dim"]),
+            n_heads=int(model_cfg["n_heads"]),
+            n_layers=int(model_cfg["n_layers"]),
+            ffn_dim_multiplier=int(model_cfg["ffn_dim_multiplier"]),
+            dropout=dropout,
+            use_id_embed=bool(model_cfg["use_id_embed"]),
+        ).to(device)
+    else:
+        hidden_dims = [int(x) for x in model_cfg["hidden_dims"]]
+        use_layer_norm = bool(model_cfg["use_layer_norm"])
+        # input_dim/output_dim are stored in new-format checkpoints; fall back to old
+        # 3M/M defaults so old checkpoints continue to load correctly.
+        ckpt_input_dim = int(checkpoint.get("input_dim", 3 * ckpt_vocab_size))
+        ckpt_output_dim = int(checkpoint.get("output_dim", ckpt_vocab_size))
+        model = EncoderMAE(
+            input_dim=ckpt_input_dim,
+            hidden_dims=hidden_dims,
+            output_dim=ckpt_output_dim,
+            dropout=dropout,
+            use_layer_norm=use_layer_norm,
+        ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

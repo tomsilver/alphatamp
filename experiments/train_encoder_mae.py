@@ -47,7 +47,11 @@ class SplitTensors:
 
 
 class EncoderMAE(nn.Module):
-    """Simple MLP masked autoencoder head producing M logits."""
+    """Simple MLP masked autoencoder head producing M logits.
+
+    Accepts inputs of shape (B, M, 3) and flattens to (B, 3*M) internally,
+    preserving backward compatibility with the transformer interface.
+    """
 
     def __init__(
         self,
@@ -76,8 +80,69 @@ class EncoderMAE(nn.Module):
         self._network = nn.Sequential(*layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        """Return per-column logits for masked reconstruction."""
-        return self._network(inputs)
+        """Return per-column logits for masked reconstruction.
+
+        Args:
+            inputs: (B, M, 3) observation features.
+
+        Returns:
+            logits: (B, M)
+        """
+        B, M, _ = inputs.shape
+        return self._network(inputs.reshape(B, M * 3))
+
+
+class SkeletonTransformer(nn.Module):
+    """Transformer encoder that re-ranks skeletons via cross-skeleton attention.
+
+    Each skeleton is represented as a token of dimension ``embed_dim``, formed
+    by summing a learned observation embedding (from the 3 observed features)
+    and a learned identity embedding (one per vocabulary entry).  Bidirectional
+    self-attention allows the model to condition each skeleton's score on the
+    revealed outcomes of *all other* skeletons in the same problem.
+
+    Input shape:  (B, M, 3)  — [x_steps, reveal, applicability] per skeleton
+    Output shape: (B, M)     — one logit per skeleton
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        embed_dim: int = 32,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        ffn_dim_multiplier: int = 4,
+        dropout: float = 0.1,
+        use_id_embed: bool = True,
+    ) -> None:
+        super().__init__()
+        self.obs_embed = nn.Linear(3, embed_dim)
+        self.id_embed = nn.Embedding(vocab_size, embed_dim) if use_id_embed else None
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=n_heads,
+            dim_feedforward=embed_dim * ffn_dim_multiplier,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.head = nn.Linear(embed_dim, 1)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        """Return per-skeleton logits.
+
+        Args:
+            obs: (B, M, 3) — [x_steps, reveal, applicability] per skeleton.
+
+        Returns:
+            logits: (B, M)
+        """
+        tokens = self.obs_embed(obs)  # (B, M, d)
+        if self.id_embed is not None:
+            tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
+        tokens = self.encoder(tokens)  # (B, M, d)
+        return self.head(tokens).squeeze(-1)  # (B, M)
 
 
 def _format_duration(seconds: float) -> str:
@@ -323,10 +388,10 @@ def _evaluate(
             steps_batch = steps[start:stop].to(device)
 
             x_steps_batch = steps_batch * reveal_batch.float()
-            model_input = torch.cat(
-                [x_steps_batch, reveal_batch.float(), applicability_batch], dim=1
+            obs_features = torch.stack(
+                [x_steps_batch, reveal_batch.float(), applicability_batch], dim=2
             )
-            logits = model(model_input)
+            logits = model(obs_features)
             loss, hidden_count = _masked_bce_loss(
                 logits,
                 steps_batch,
@@ -629,8 +694,8 @@ def _sequential_rollout_metric(
             success_found = first_outcome_success > 0.5
 
             while (not success_found) and (len(tried) < num_applicable):
-                model_input = torch.cat([x_steps, m, a], dim=1)
-                probs = torch.sigmoid(model(model_input)[0])
+                obs_features = torch.stack([x_steps, m, a], dim=2)
+                probs = torch.sigmoid(model(obs_features)[0])
 
                 remaining = [
                     idx for idx in applicable_indices_np.tolist() if idx not in tried
@@ -736,13 +801,27 @@ def main(cfg: DictConfig) -> None:
     device = _select_device(str(cfg.train.device))
     print(f"Using device: {device}")
 
-    model = EncoderMAE(
-        input_dim=3 * vocab_size,
-        hidden_dims=[int(x) for x in cfg.model.hidden_dims],
-        output_dim=vocab_size,
-        dropout=float(cfg.model.dropout),
-        use_layer_norm=bool(cfg.model.use_layer_norm),
-    ).to(device)
+    arch = str(getattr(cfg.model, "arch", "mlp"))
+    if arch == "transformer":
+        model: nn.Module = SkeletonTransformer(
+            vocab_size=vocab_size,
+            embed_dim=int(cfg.model.embed_dim),
+            n_heads=int(cfg.model.n_heads),
+            n_layers=int(cfg.model.n_layers),
+            ffn_dim_multiplier=int(cfg.model.ffn_dim_multiplier),
+            dropout=float(cfg.model.dropout),
+            use_id_embed=bool(cfg.model.use_id_embed),
+        ).to(device)
+    elif arch == "mlp":
+        model = EncoderMAE(
+            input_dim=3 * vocab_size,
+            hidden_dims=[int(x) for x in cfg.model.hidden_dims],
+            output_dim=vocab_size,
+            dropout=float(cfg.model.dropout),
+            use_layer_norm=bool(cfg.model.use_layer_norm),
+        ).to(device)
+    else:
+        raise ValueError(f"model.arch must be 'transformer' or 'mlp', got {arch!r}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -858,11 +937,11 @@ def main(cfg: DictConfig) -> None:
                 steps_tiled = steps_batch
 
             x_steps_tiled = steps_tiled * reveal_mask.float()
-            model_input = torch.cat(
-                [x_steps_tiled, reveal_mask.float(), applicability_tiled], dim=1
+            obs_features = torch.stack(
+                [x_steps_tiled, reveal_mask.float(), applicability_tiled], dim=2
             )
 
-            logits = model(model_input)
+            logits = model(obs_features)
             loss, hidden_count = _masked_bce_loss(
                 logits,
                 steps_tiled,
