@@ -42,12 +42,12 @@ for env in $ENVS; do
   M=${ENV_M[$env]}
   data_root="artifacts/encoder_${env}"
 
-  # Verify data artifacts exist before submitting
+  # Verify filtered data artifacts exist before submitting
   for split in train validation test; do
-    artifact="${data_root}/encoder_${split}_dataset.pkl"
+    artifact="${data_root}/encoder_${split}_filtered_dataset.pkl"
     if [[ ! -f "$artifact" ]]; then
       echo "Missing data artifact: $artifact" >&2
-      echo "Run the dataset build pipeline first." >&2
+      echo "Run launch_encoder_refilter_train_matrix.sh first to build filtered datasets." >&2
       exit 2
     fi
   done
@@ -64,9 +64,9 @@ for env in $ENVS; do
     out_dir="${data_root}/arch_${arch_name}"
     echo "Submitting env=${env} arch=${arch_name} bottleneck=${B} out=${out_dir}"
     sbatch experiments/train_encoder_mae.slurm \
-      "data.train_path=${data_root}/encoder_train_dataset.pkl" \
-      "data.val_path=${data_root}/encoder_validation_dataset.pkl" \
-      "data.test_path=${data_root}/encoder_test_dataset.pkl" \
+      "data.train_path=${data_root}/encoder_train_filtered_dataset.pkl" \
+      "data.val_path=${data_root}/encoder_validation_filtered_dataset.pkl" \
+      "data.test_path=${data_root}/encoder_test_filtered_dataset.pkl" \
       "model.hidden_dims=[128,${B},128]" \
       "checkpoint.output_dir=${out_dir}" \
       "checkpoint.best_filename=encoder_best.pt" \

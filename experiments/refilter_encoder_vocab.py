@@ -121,6 +121,36 @@ def main() -> None:
         help="Split suffix used for filtered vocab filename.",
     )
     parser.add_argument(
+        "--filtered-dataset-name",
+        type=str,
+        default="encoder_filter_dataset_filtered.pkl",
+        help=(
+            "Filename for the filtered version of --filter-artifact within --output-dir. "
+            "Defaults to 'encoder_filter_dataset_filtered.pkl' (original behaviour). "
+            "Pass 'encoder_train_filtered_dataset.pkl' when filtering the training split."
+        ),
+    )
+    parser.add_argument(
+        "--val-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to the validation dataset pkl. When provided, the same "
+            "keep_indices derived from --filter-artifact are applied and the result "
+            "is saved as encoder_validation_filtered_dataset.pkl in --output-dir."
+        ),
+    )
+    parser.add_argument(
+        "--test-path",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to the test dataset pkl. When provided, the same "
+            "keep_indices derived from --filter-artifact are applied and the result "
+            "is saved as encoder_test_filtered_dataset.pkl in --output-dir."
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Allow overwriting existing output files.",
@@ -177,7 +207,7 @@ def main() -> None:
     )
 
     filtered_vocab_path = output_dir / f"encoder_vocab_filtered_{args.split_name}.pkl"
-    filtered_filter_dataset_path = output_dir / "encoder_filter_dataset_filtered.pkl"
+    filtered_dataset_path = output_dir / args.filtered_dataset_name
 
     vocab_payload: dict[str, Any] = {
         "vocabulary": filtered_vocab,
@@ -198,9 +228,10 @@ def main() -> None:
             vocab_payload[key] = payload[key]
 
     filtered_dataset_payload: dict[str, Any] = {
-        "split": "filter_filtered",
+        "split": f"{args.split_name}_filtered",
         "dataset": filtered_dataset,
         "filter_success_rate_threshold": args.threshold,
+        "filter_min_appl_count": args.min_appl_count,
         "filter_stats": stats,
     }
     for key in (
@@ -213,11 +244,7 @@ def main() -> None:
             filtered_dataset_payload[key] = payload[key]
 
     _save_pickle(filtered_vocab_path, vocab_payload, overwrite=args.overwrite)
-    _save_pickle(
-        filtered_filter_dataset_path,
-        filtered_dataset_payload,
-        overwrite=args.overwrite,
-    )
+    _save_pickle(filtered_dataset_path, filtered_dataset_payload, overwrite=args.overwrite)
 
     print(f"Loaded filter artifact: {filter_artifact}")
     print(f"Threshold: {args.threshold}  min_appl_count: {args.min_appl_count}")
@@ -228,8 +255,38 @@ def main() -> None:
         f"insufficient_data={stats['insufficient_data_count']}, "
         f"never_applicable_kept={stats['never_applicable_kept_count']})"
     )
-    print(f"Saved filtered vocab: {filtered_vocab_path}")
-    print(f"Saved filtered filter-dataset: {filtered_filter_dataset_path}")
+    print(f"Saved filtered vocab:    {filtered_vocab_path}")
+    print(f"Saved filtered dataset:  {filtered_dataset_path}")
+
+    # ── Propagate vocab filter to val / test splits ──────────────────────────
+    for split_path_arg, split_label, out_filename in [
+        (args.val_path, "validation", "encoder_validation_filtered_dataset.pkl"),
+        (args.test_path, "test", "encoder_test_filtered_dataset.pkl"),
+    ]:
+        if split_path_arg is None:
+            continue
+        split_path = split_path_arg.resolve()
+        if not split_path.exists():
+            raise FileNotFoundError(f"{split_label} artifact not found: {split_path}")
+        split_payload = _load_pickle(split_path)
+        if "dataset" not in split_payload:
+            raise KeyError(f"Expected key 'dataset' in {split_label} artifact: {split_path}")
+        split_filtered = EncoderApproach.apply_vocab_filter_to_dataset(
+            split_payload["dataset"], keep_indices
+        )
+        split_out_payload: dict[str, Any] = {
+            "split": f"{split_label}_filtered",
+            "dataset": split_filtered,
+            "filter_success_rate_threshold": args.threshold,
+            "filter_min_appl_count": args.min_appl_count,
+            "filter_stats": stats,
+        }
+        for key in ("seed_ids", "config"):
+            if key in split_payload:
+                split_out_payload[key] = split_payload[key]
+        out_path = output_dir / out_filename
+        _save_pickle(out_path, split_out_payload, overwrite=args.overwrite)
+        print(f"Saved filtered {split_label} dataset: {out_path}")
 
 
 if __name__ == "__main__":

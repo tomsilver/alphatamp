@@ -8,9 +8,9 @@ bootstrap:
   num_obstructions: 2
 
 data:
-  train_path: artifacts/encoder_o2/encoder_train_dataset.pkl
-  val_path: artifacts/encoder_o2/encoder_validation_dataset.pkl
-  test_path: artifacts/encoder_o2/encoder_test_dataset.pkl
+  train_path: artifacts/encoder_o2/encoder_train_filtered_dataset.pkl
+  val_path: artifacts/encoder_o2/encoder_validation_filtered_dataset.pkl
+  test_path: artifacts/encoder_o2/encoder_test_filtered_dataset.pkl
 
 model:
   # hidden_dims: [128, 32, 8, 32, 128]

@@ -70,10 +70,24 @@ fi
 echo "difficulty=$DIFFICULTY  threshold=$THRESHOLD  min_appl_count=$MIN_APPL_COUNT"
 echo "artifact=$FILTER_ARTIFACT  split_name=$SPLIT_NAME"
 
+# When filtering the training dataset, propagate the vocab filter to val/test
+# and save the filtered train dataset under a distinct name.
+EXTRA_ARGS=()
+if [[ "$FILTER_ARTIFACT" == *"encoder_train_dataset.pkl" ]]; then
+  DATASET_DIR="$(dirname "$FILTER_ARTIFACT")"
+  VAL_PATH="${DATASET_DIR}/encoder_validation_dataset.pkl"
+  TEST_PATH="${DATASET_DIR}/encoder_test_dataset.pkl"
+  EXTRA_ARGS+=(--filtered-dataset-name encoder_train_filtered_dataset.pkl)
+  [[ -f "$VAL_PATH" ]]  && EXTRA_ARGS+=(--val-path  "$VAL_PATH")
+  [[ -f "$TEST_PATH" ]] && EXTRA_ARGS+=(--test-path "$TEST_PATH")
+  echo "Train-mode: propagating filter to val/test splits"
+fi
+
 python -u experiments/refilter_encoder_vocab.py \
   --filter-artifact "$FILTER_ARTIFACT" \
   --output-dir "$OUTPUT_DIR" \
   --threshold "$THRESHOLD" \
   --min-appl-count "$MIN_APPL_COUNT" \
   --split-name "$SPLIT_NAME" \
+  "${EXTRA_ARGS[@]}" \
   --overwrite

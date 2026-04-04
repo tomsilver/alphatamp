@@ -44,8 +44,8 @@ for env in $ENVS; do
     out_dir="${arch_dir}offline_eval"
     echo "Submitting eval env=${env} arch=${arch_name}"
     sbatch experiments/offline_encoder_rollout_eval.slurm \
-      "data.train_path=${data_root}/encoder_train_dataset.pkl" \
-      "data.test_path=${data_root}/encoder_test_dataset.pkl" \
+      "data.train_path=${data_root}/encoder_train_filtered_dataset.pkl" \
+      "data.test_path=${data_root}/encoder_test_filtered_dataset.pkl" \
       "checkpoint.path=${ckpt}" \
       "output.dir=${out_dir}"
     submitted=$(( submitted + 1 ))
