@@ -331,10 +331,12 @@ def main(cfg: DictConfig) -> None:
     filter_seed_start: int | None = None
     filter_seed_stop: int | None = None
     filter_threshold: float = 0.0
+    filter_min_appl_count: int = 0
     if mode == "all_filtered":
         filter_seed_start = int(cfg.vocab.get("filter_seed_start", 500))
         filter_seed_stop = int(cfg.vocab.get("filter_seed_stop", 525))
         filter_threshold = float(cfg.vocab.get("filter_success_rate_threshold", 0.0))
+        filter_min_appl_count = int(cfg.vocab.get("filter_min_appl_count", 0))
         if filter_seed_stop <= filter_seed_start:
             raise ValueError(
                 "vocab.filter_seed_stop must be greater than vocab.filter_seed_start"
@@ -343,6 +345,10 @@ def main(cfg: DictConfig) -> None:
             raise ValueError(
                 f"vocab.filter_success_rate_threshold must be in [0, 1], "
                 f"got {filter_threshold}"
+            )
+        if filter_min_appl_count < 0:
+            raise ValueError(
+                f"vocab.filter_min_appl_count must be >= 0, got {filter_min_appl_count}"
             )
 
     output_dir = Path(str(cfg.output_dir))
@@ -475,7 +481,7 @@ def main(cfg: DictConfig) -> None:
         )
         filtered_vocab, keep_indices, stats = (
             EncoderApproach.filter_vocab_by_success_rate(
-                filter_dataset, filter_threshold
+                filter_dataset, filter_threshold, min_appl_count=filter_min_appl_count
             )
         )
         filtered_dataset = EncoderApproach.apply_vocab_filter_to_dataset(
