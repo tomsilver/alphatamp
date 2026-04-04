@@ -39,6 +39,10 @@ vocab:
   # success_rate on the filter seeds is strictly greater than this value.
   # 0.0 removes only always-failing sequences (succeeded 0 times).
   # Raise to e.g. 0.05 or 0.1 for stricter quality gating.
-  filter_success_rate_threshold: 0.0
+  filter_success_rate_threshold: 0.05
+  # Minimum number of filter-seed rows in which a skeleton must be applicable.
+  # Skeletons with 0 < applicable_count < this value are removed (too little
+  # data to trust their success rate). Set to 0 to disable.
+  filter_min_appl_count: 15
 
 output_dir: artifacts/encoder_o4

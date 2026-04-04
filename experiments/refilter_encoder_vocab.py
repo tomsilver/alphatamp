@@ -105,6 +105,16 @@ def main() -> None:
         help="Success-rate threshold used by filter_vocab_by_success_rate.",
     )
     parser.add_argument(
+        "--min-appl-count",
+        type=int,
+        default=0,
+        help=(
+            "Minimum number of filter-seed rows in which a skeleton must be applicable "
+            "to be eligible for retention. Skeletons with 0 < applicable_count < this "
+            "value are removed (insufficient data). Default 0 keeps original behaviour."
+        ),
+    )
+    parser.add_argument(
         "--split-name",
         type=str,
         default="all_filtered",
@@ -130,6 +140,8 @@ def main() -> None:
         raise FileNotFoundError(f"Filter artifact not found: {filter_artifact}")
     if not 0.0 <= args.threshold <= 1.0:
         raise ValueError(f"threshold must be in [0, 1], got {args.threshold}")
+    if args.min_appl_count < 0:
+        raise ValueError(f"--min-appl-count must be >= 0, got {args.min_appl_count}")
 
     if not args.skip_bootstrap:
         _bootstrap_dill_modules()
@@ -157,6 +169,7 @@ def main() -> None:
     filtered_vocab, keep_indices, stats = EncoderApproach.filter_vocab_by_success_rate(
         dataset,
         args.threshold,
+        min_appl_count=args.min_appl_count,
     )
     filtered_dataset = EncoderApproach.apply_vocab_filter_to_dataset(
         dataset,
@@ -171,6 +184,7 @@ def main() -> None:
         "vocabulary_full": list(dataset["op_sequence_vocab"]),
         "keep_indices": keep_indices,
         "filter_success_rate_threshold": args.threshold,
+        "filter_min_appl_count": args.min_appl_count,
         "filter_stats": stats,
         "split": args.split_name,
     }
@@ -206,11 +220,13 @@ def main() -> None:
     )
 
     print(f"Loaded filter artifact: {filter_artifact}")
-    print(f"Threshold: {args.threshold}")
+    print(f"Threshold: {args.threshold}  min_appl_count: {args.min_appl_count}")
     print(
         "Vocabulary: "
         f"{stats['original_size']} -> {stats['filtered_size']} "
-        f"(removed={stats['removed_count']})"
+        f"(removed={stats['removed_count']}, "
+        f"insufficient_data={stats['insufficient_data_count']}, "
+        f"never_applicable_kept={stats['never_applicable_kept_count']})"
     )
     print(f"Saved filtered vocab: {filtered_vocab_path}")
     print(f"Saved filtered filter-dataset: {filtered_filter_dataset_path}")

@@ -588,11 +588,14 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
     def filter_vocab_by_success_rate(
         dataset: dict[str, Any],
         threshold: float,
+        min_appl_count: int = 0,
     ) -> tuple[list[FrozenGroundOpSequence], list[int], dict[str, Any]]:
         """Identify vocabulary entries that meet a minimum success rate.
 
         Sequences where ``applicable_count == 0`` across all filter seeds are
-        treated as having an undefined success rate and are kept.
+        treated as having an undefined success rate and are kept.  Sequences
+        with ``0 < applicable_count < min_appl_count`` are considered to have
+        insufficient data and are removed.
 
         Args:
             dataset: dict returned by ``build_dataset()``, must contain keys
@@ -604,6 +607,13 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
                 always-fail applicable sequences; ``0.1`` requires a success
                 rate strictly above 10% for applicable sequences. Sequences
                 that are never applicable are always retained.
+            min_appl_count: minimum number of filter-seed rows in which a
+                sequence must be applicable to be eligible for retention.
+                Sequences with ``0 < applicable_count < min_appl_count`` are
+                removed regardless of their success rate (insufficient data).
+                Sequences with ``applicable_count == 0`` (never applicable in
+                filter seeds) are always retained. Default ``0`` preserves the
+                original behaviour (no minimum applicability requirement).
 
         Returns:
             A 3-tuple of:
@@ -614,13 +624,17 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
               kept, in the same (success_rate descending) order.
             - ``stats``: dict with keys ``original_size``, ``filtered_size``,
                             ``removed_count``, ``threshold``,
+                            ``min_appl_count``,
                             ``never_applicable_count``,
-                            ``never_applicable_kept_count``, and
+                            ``never_applicable_kept_count``,
+                            ``insufficient_data_count``, and
                             ``success_rates`` (list of per-column rates;
                             ``None`` where applicable_count == 0).
         """
         if threshold < 0.0 or threshold > 1.0:
             raise ValueError(f"threshold must be in [0, 1], got {threshold}")
+        if min_appl_count < 0:
+            raise ValueError(f"min_appl_count must be >= 0, got {min_appl_count}")
 
         vocab: list[FrozenGroundOpSequence] = list(dataset["op_sequence_vocab"])
         applicability = np.asarray(dataset["applicability"], dtype=np.float32)
@@ -636,10 +650,14 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             np.nan,
         )
 
-        # Keep applicable columns only if they strictly exceed the
-        # success-rate threshold.
+        # Skeletons applicable at least once in the filter seeds.
         applicable_mask = applicable_counts > 0
-        keep_applicable_mask = applicable_mask & (success_rates > threshold)
+        # Skeletons with enough applicability observations to trust the rate.
+        well_sampled_mask = applicable_counts >= min_appl_count
+
+        # Keep applicable columns only if they are well-sampled AND strictly
+        # exceed the success-rate threshold.
+        keep_applicable_mask = applicable_mask & well_sampled_mask & (success_rates > threshold)
 
         candidate_applicable_indices = [
             i for i, keep in enumerate(keep_applicable_mask) if keep
@@ -647,6 +665,7 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
         never_applicable_indices = [
             i for i, is_applicable in enumerate(applicable_mask) if not is_applicable
         ]
+        insufficient_data_count = int((applicable_mask & ~well_sampled_mask).sum())
 
         # Sort applicable candidates by descending success_rate.
         candidate_applicable_indices.sort(key=lambda i: float(-success_rates[i]))
@@ -666,8 +685,10 @@ class EncoderApproach(BaseApproach[_O, _X, _U]):
             "filtered_size": len(filtered_vocab),
             "removed_count": len(vocab) - len(filtered_vocab),
             "threshold": threshold,
+            "min_appl_count": min_appl_count,
             "never_applicable_count": len(never_applicable_indices),
             "never_applicable_kept_count": len(never_applicable_indices),
+            "insufficient_data_count": insufficient_data_count,
             "success_rates": readable_rates,
         }
         return filtered_vocab, candidate_indices, stats

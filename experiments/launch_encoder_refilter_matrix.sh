@@ -9,14 +9,15 @@ set -euo pipefail
 #   - artifacts/encoder_oX/encoder_filter_dataset_filtered.pkl
 #
 # Usage:
-#   bash experiments/launch_encoder_refilter_matrix.sh [threshold]
+#   bash experiments/launch_encoder_refilter_matrix.sh [threshold] [min_appl_count]
 #
 # Example:
-#   bash experiments/launch_encoder_refilter_matrix.sh 0.0
+#   bash experiments/launch_encoder_refilter_matrix.sh 0.05 15
 
 cd "$(dirname "$0")/.."
 
-THRESHOLD="${1:-0.0}"
+THRESHOLD="${1:-0.05}"
+MIN_APPL_COUNT="${2:-15}"
 
 for difficulty in o2 o3 o4; do
   filter_artifact="artifacts/encoder_${difficulty}/encoder_filter_dataset.pkl"
@@ -28,8 +29,8 @@ for difficulty in o2 o3 o4; do
 done
 
 for difficulty in o2 o3 o4; do
-  echo "Submitting re-filter job for difficulty=$difficulty threshold=$THRESHOLD"
-  sbatch experiments/refilter_encoder_vocab.slurm "$difficulty" "$THRESHOLD"
+  echo "Submitting re-filter job for difficulty=$difficulty threshold=$THRESHOLD min_appl_count=$MIN_APPL_COUNT"
+  sbatch experiments/refilter_encoder_vocab.slurm "$difficulty" "$THRESHOLD" "$MIN_APPL_COUNT"
 done
 
 echo "Submitted all re-filter jobs (o2/o3/o4)."
