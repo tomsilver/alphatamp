@@ -129,11 +129,12 @@ class SkeletonTransformer(nn.Module):
         n_layers: int = 2,
         ffn_dim_multiplier: int = 4,
         dropout: float = 0.1,
-        use_id_embed: bool = True,
+        use_id_embed: bool = False,
     ) -> None:
         super().__init__()
         self.obs_embed = nn.Linear(3, embed_dim)
-        self.id_embed = nn.Embedding(vocab_size, embed_dim) if use_id_embed else None
+        self.id_embed = nn.Embedding(vocab_size, embed_dim)
+        self.prior_head = nn.Linear(embed_dim, 1)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=n_heads,
@@ -143,7 +144,8 @@ class SkeletonTransformer(nn.Module):
             norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.head = nn.Linear(embed_dim, 1)
+        self.delta_head = nn.Linear(embed_dim, 1)
+        self._use_id_embed = use_id_embed
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         """Return per-skeleton logits.
@@ -154,11 +156,13 @@ class SkeletonTransformer(nn.Module):
         Returns:
             logits: (B, M)
         """
+        prior = self.prior_head(self.id_embed.weight).squeeze(-1)  # (M,)
         tokens = self.obs_embed(obs)  # (B, M, d)
-        if self.id_embed is not None:
+        if self._use_id_embed:
             tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
         tokens = self.encoder(tokens)  # (B, M, d)
-        return self.head(tokens).squeeze(-1)  # (B, M)
+        delta = self.delta_head(tokens).squeeze(-1)  # (B, M)
+        return prior.unsqueeze(0) + delta  # (B, M)
 
 
 def _resolve_path(path_str: str) -> Path:

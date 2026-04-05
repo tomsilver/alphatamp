@@ -113,11 +113,12 @@ class SkeletonTransformer(nn.Module):
         n_layers: int = 2,
         ffn_dim_multiplier: int = 4,
         dropout: float = 0.1,
-        use_id_embed: bool = True,
+        use_id_embed: bool = False,
     ) -> None:
         super().__init__()
         self.obs_embed = nn.Linear(3, embed_dim)
-        self.id_embed = nn.Embedding(vocab_size, embed_dim) if use_id_embed else None
+        self.id_embed = nn.Embedding(vocab_size, embed_dim)
+        self.prior_head = nn.Linear(embed_dim, 1)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
             nhead=n_heads,
@@ -127,7 +128,8 @@ class SkeletonTransformer(nn.Module):
             norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.head = nn.Linear(embed_dim, 1)
+        self.delta_head = nn.Linear(embed_dim, 1)
+        self._use_id_embed = use_id_embed
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         """Return per-skeleton logits.
@@ -138,11 +140,17 @@ class SkeletonTransformer(nn.Module):
         Returns:
             logits: (B, M)
         """
+        # Prior stream: static per-skeleton logit capturing global success rate.
+        prior = self.prior_head(self.id_embed.weight).squeeze(-1)  # (M,)
+
+        # Delta stream: context-dependent residual from cross-skeleton attention.
         tokens = self.obs_embed(obs)  # (B, M, d)
-        if self.id_embed is not None:
+        if self._use_id_embed:
             tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
         tokens = self.encoder(tokens)  # (B, M, d)
-        return self.head(tokens).squeeze(-1)  # (B, M)
+        delta = self.delta_head(tokens).squeeze(-1)  # (B, M)
+
+        return prior.unsqueeze(0) + delta  # (B, M)
 
 
 def _format_duration(seconds: float) -> str:
@@ -713,6 +721,13 @@ def _sequential_rollout_metric(
     num_rows, vocab_size = success.shape
     tries_until_stop: list[int] = []
     tries_to_success_on_solvable: list[int] = []
+    prior_tries_to_success_on_solvable: list[int] = []
+
+    # Precompute static prior scores if model has a prior stream.
+    prior_scores_cpu: torch.Tensor | None = None
+    if isinstance(model, SkeletonTransformer) and hasattr(model, "prior_head"):
+        with torch.no_grad():
+            prior_scores_cpu = model.prior_head(model.id_embed.weight).squeeze(-1).cpu()
 
     with torch.no_grad():
         for row_idx in range(num_rows):
@@ -762,10 +777,27 @@ def _sequential_rollout_metric(
             if solvable:
                 tries_to_success_on_solvable.append(tries)
 
+            # Prior-only rollout: use static per-skeleton prior scores (no reveals).
+            if prior_scores_cpu is not None and solvable:
+                prior_remaining = applicable_indices_np.tolist()
+                p_tried = 0
+                p_success = False
+                while not p_success and prior_remaining:
+                    row_prior = prior_scores_cpu[
+                        torch.tensor(prior_remaining, dtype=torch.long)
+                    ]
+                    best_pos = int(torch.argmax(row_prior).item())
+                    best_idx = prior_remaining[best_pos]
+                    prior_remaining.pop(best_pos)
+                    p_tried += 1
+                    p_success = float(row_success[best_idx].item()) > 0.5
+                prior_tries_to_success_on_solvable.append(p_tried)
+
     if not tries_until_stop:
         return {
             "rollout_mean_tries_until_stop": float("nan"),
             "rollout_mean_tries_to_success_on_solvable": float("nan"),
+            "prior_rollout_mean_tries_to_success_on_solvable": float("nan"),
             "rollout_num_rows": 0.0,
             "rollout_num_solvable_rows": 0.0,
         }
@@ -777,8 +809,58 @@ def _sequential_rollout_metric(
             if tries_to_success_on_solvable
             else float("nan")
         ),
+        "prior_rollout_mean_tries_to_success_on_solvable": (
+            float(np.mean(prior_tries_to_success_on_solvable))
+            if prior_tries_to_success_on_solvable
+            else float("nan")
+        ),
         "rollout_num_rows": float(len(tries_until_stop)),
         "rollout_num_solvable_rows": float(len(tries_to_success_on_solvable)),
+    }
+
+
+def _compute_delta_stats(
+    model: nn.Module,
+    split: "SplitTensors",
+    reveal_mask: torch.Tensor,
+    device: torch.device,
+) -> dict[str, float]:
+    """Compute delta stream statistics for diagnosing transformer contribution.
+
+    Only meaningful for SkeletonTransformer (two-stream). Returns nan for other
+    architectures.
+
+    Args:
+        model: The model being evaluated.
+        split: Validation split tensors.
+        reveal_mask: (N, M) reveal mask for a single val mask sample.
+        device: Compute device.
+
+    Returns:
+        delta_mean_abs: Mean absolute value of delta across all tokens.
+        delta_within_row_std: Mean per-row std of delta (within-row discrimination).
+    """
+    nan_result = {
+        "delta_mean_abs": float("nan"),
+        "delta_within_row_std": float("nan"),
+    }
+    if not (isinstance(model, SkeletonTransformer) and hasattr(model, "prior_head")):
+        return nan_result
+
+    model.eval()
+    with torch.no_grad():
+        steps = split.steps_completed_fraction.to(device)
+        applicability = split.applicability.float().to(device)
+        mask = reveal_mask.to(device)
+        x_steps = steps * mask.float()
+        obs = torch.stack([x_steps, mask.float(), applicability], dim=2)
+        logits = model(obs)  # (N, M)
+        prior = model.prior_head(model.id_embed.weight).squeeze(-1)  # (M,)
+        delta = logits - prior.unsqueeze(0)  # (N, M)
+
+    return {
+        "delta_mean_abs": float(delta.abs().mean().item()),
+        "delta_within_row_std": float(delta.std(dim=1).mean().item()),
     }
 
 
@@ -927,6 +1009,9 @@ def main(cfg: DictConfig) -> None:
     val_auroc: list[float] = []
     val_average_precision: list[float] = []
     val_rollout_tries: list[float] = []
+    val_prior_rollout_tries: list[float] = []
+    val_delta_mean_abs: list[float] = []
+    val_delta_within_row_std: list[float] = []
     val_norm_prec_history: dict[int, list[float]] = {k: [] for k in top_k_values}
 
     run_start_time = time.perf_counter()
@@ -1045,7 +1130,19 @@ def main(cfg: DictConfig) -> None:
         rollout_tries = float(
             rollout_metrics["rollout_mean_tries_to_success_on_solvable"]
         )
+        prior_rollout_tries = float(
+            rollout_metrics["prior_rollout_mean_tries_to_success_on_solvable"]
+        )
         val_rollout_tries.append(rollout_tries)
+        val_prior_rollout_tries.append(prior_rollout_tries)
+
+        delta_stats = _compute_delta_stats(
+            model, val_split, val_reveal_masks[0], device
+        )
+        delta_mean_abs = delta_stats["delta_mean_abs"]
+        delta_within_row_std = delta_stats["delta_within_row_std"]
+        val_delta_mean_abs.append(delta_mean_abs)
+        val_delta_within_row_std.append(delta_within_row_std)
 
         topk_summary = " ".join(
             [f"np{top_k}={float(val_norm_prec[top_k]):.4f}" for top_k in top_k_values]
@@ -1062,7 +1159,8 @@ def main(cfg: DictConfig) -> None:
             f"val_spearman={val_spearman:.4f} "
             f"val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
             f"{topk_summary} "
-            f"rollout_tries={rollout_tries:.4f} "
+            f"rollout_tries={rollout_tries:.4f} prior_rollout={prior_rollout_tries:.4f} "
+            f"delta_abs={delta_mean_abs:.4f} delta_std={delta_within_row_std:.4f} "
             f"epoch_time={_format_duration(epoch_elapsed)} "
             f"elapsed={_format_duration(total_elapsed)} "
             f"eta={_format_duration(eta_seconds)}"
@@ -1107,6 +1205,9 @@ def main(cfg: DictConfig) -> None:
         val_auroc=np.asarray(val_auroc, dtype=np.float32),
         val_average_precision=np.asarray(val_average_precision, dtype=np.float32),
         val_rollout_tries=np.asarray(val_rollout_tries, dtype=np.float32),
+        val_prior_rollout_tries=np.asarray(val_prior_rollout_tries, dtype=np.float32),
+        val_delta_mean_abs=np.asarray(val_delta_mean_abs, dtype=np.float32),
+        val_delta_within_row_std=np.asarray(val_delta_within_row_std, dtype=np.float32),
         best_val_loss=np.float32(best_val_loss),
         best_val_rollout=np.float32(best_val_rollout),
         vocab_size=np.int32(vocab_size),
@@ -1124,6 +1225,15 @@ def main(cfg: DictConfig) -> None:
         "best_val_rollout": best_val_rollout,
         "final_val_rollout_tries": (
             val_rollout_tries[-1] if val_rollout_tries else float("nan")
+        ),
+        "final_prior_rollout_tries": (
+            val_prior_rollout_tries[-1] if val_prior_rollout_tries else float("nan")
+        ),
+        "final_delta_mean_abs": (
+            val_delta_mean_abs[-1] if val_delta_mean_abs else float("nan")
+        ),
+        "final_delta_within_row_std": (
+            val_delta_within_row_std[-1] if val_delta_within_row_std else float("nan")
         ),
         "final_val_norm_precision": {
             str(top_k): (
