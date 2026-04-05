@@ -962,7 +962,7 @@ def main(cfg: DictConfig) -> None:
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = (
             torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer,
-                T_max=num_epochs,
+                T_max=int(cfg.train.num_epochs),
                 eta_min=float(cfg.train.lr) * lr_min_frac,
             )
         )
