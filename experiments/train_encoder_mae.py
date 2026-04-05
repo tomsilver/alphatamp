@@ -117,7 +117,8 @@ class SkeletonTransformer(nn.Module):
     ) -> None:
         super().__init__()
         self.obs_embed = nn.Linear(3, embed_dim)
-        self.id_embed = nn.Embedding(vocab_size, embed_dim)
+        self.id_embed_prior = nn.Embedding(vocab_size, embed_dim)  # prior stream only
+        self.id_embed_delta = nn.Embedding(vocab_size, embed_dim)  # delta stream only
         self.prior_head = nn.Linear(embed_dim, 1)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -141,12 +142,12 @@ class SkeletonTransformer(nn.Module):
             logits: (B, M)
         """
         # Prior stream: static per-skeleton logit capturing global success rate.
-        prior = self.prior_head(self.id_embed.weight).squeeze(-1)  # (M,)
+        prior = self.prior_head(self.id_embed_prior.weight).squeeze(-1)  # (M,)
 
         # Delta stream: context-dependent residual from cross-skeleton attention.
         tokens = self.obs_embed(obs)  # (B, M, d)
         if self._use_id_embed:
-            tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
+            tokens = tokens + self.id_embed_delta.weight  # broadcast (M, d) → (B, M, d)
         tokens = self.encoder(tokens)  # (B, M, d)
         delta = self.delta_head(tokens).squeeze(-1)  # (B, M)
 
@@ -727,7 +728,7 @@ def _sequential_rollout_metric(
     prior_scores_cpu: torch.Tensor | None = None
     if isinstance(model, SkeletonTransformer) and hasattr(model, "prior_head"):
         with torch.no_grad():
-            prior_scores_cpu = model.prior_head(model.id_embed.weight).squeeze(-1).cpu()
+            prior_scores_cpu = model.prior_head(model.id_embed_prior.weight).squeeze(-1).cpu()
 
     with torch.no_grad():
         for row_idx in range(num_rows):
@@ -855,7 +856,7 @@ def _compute_delta_stats(
         x_steps = steps * mask.float()
         obs = torch.stack([x_steps, mask.float(), applicability], dim=2)
         logits = model(obs)  # (N, M)
-        prior = model.prior_head(model.id_embed.weight).squeeze(-1)  # (M,)
+        prior = model.prior_head(model.id_embed_prior.weight).squeeze(-1)  # (M,)
         delta = logits - prior.unsqueeze(0)  # (N, M)
 
     return {
@@ -954,6 +955,19 @@ def main(cfg: DictConfig) -> None:
         lr=float(cfg.train.lr),
         weight_decay=float(cfg.train.weight_decay),
     )
+
+    lr_schedule = getattr(cfg.train, "lr_schedule", None)
+    if lr_schedule == "cosine":
+        lr_min_frac = float(getattr(cfg.train, "lr_min_fraction", 0.01))
+        scheduler: torch.optim.lr_scheduler.LRScheduler | None = (
+            torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=num_epochs,
+                eta_min=float(cfg.train.lr) * lr_min_frac,
+            )
+        )
+    else:
+        scheduler = None
 
     train_success = train_split.success.float()
     train_applicability = train_split.applicability.float()
@@ -1182,6 +1196,9 @@ def main(cfg: DictConfig) -> None:
                 },
                 best_path,
             )
+
+        if scheduler is not None:
+            scheduler.step()
 
     torch.save(
         {

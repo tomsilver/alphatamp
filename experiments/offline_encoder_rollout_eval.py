@@ -133,7 +133,8 @@ class SkeletonTransformer(nn.Module):
     ) -> None:
         super().__init__()
         self.obs_embed = nn.Linear(3, embed_dim)
-        self.id_embed = nn.Embedding(vocab_size, embed_dim)
+        self.id_embed_prior = nn.Embedding(vocab_size, embed_dim)  # prior stream only
+        self.id_embed_delta = nn.Embedding(vocab_size, embed_dim)  # delta stream only
         self.prior_head = nn.Linear(embed_dim, 1)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_dim,
@@ -156,10 +157,10 @@ class SkeletonTransformer(nn.Module):
         Returns:
             logits: (B, M)
         """
-        prior = self.prior_head(self.id_embed.weight).squeeze(-1)  # (M,)
+        prior = self.prior_head(self.id_embed_prior.weight).squeeze(-1)  # (M,)
         tokens = self.obs_embed(obs)  # (B, M, d)
         if self._use_id_embed:
-            tokens = tokens + self.id_embed.weight  # broadcast (M, d) → (B, M, d)
+            tokens = tokens + self.id_embed_delta.weight  # broadcast (M, d) → (B, M, d)
         tokens = self.encoder(tokens)  # (B, M, d)
         delta = self.delta_head(tokens).squeeze(-1)  # (B, M)
         return prior.unsqueeze(0) + delta  # (B, M)

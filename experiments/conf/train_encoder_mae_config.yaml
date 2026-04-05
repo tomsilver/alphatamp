@@ -20,7 +20,7 @@ model:
   n_layers: 2
   ffn_dim_multiplier: 4
   dropout: 0.1
-  use_id_embed: false
+  use_id_embed: true
   # MLP ablation (set arch: mlp to use):
   # hidden_dims: [128, 32, 16, 32, 128]
   # use_layer_norm: true
@@ -29,13 +29,15 @@ train:
   target_mode: binary  # "steps" (soft-label BCE on steps_completed_fraction) or "binary" (BCE on success)
   seed: 0
   device: auto
-  num_epochs: 100
+  num_epochs: 500
   batch_size: 32
-  num_masks: 4
+  num_masks: 16
   lr: 0.001
   weight_decay: 0.0001
   grad_clip_norm: 1.0
   pairwise_lambda: 0.5  # 0.0 = pure BCE; >0 adds pairwise ranking loss
+  lr_schedule: cosine    # cosine annealing from lr → lr * lr_min_fraction
+  lr_min_fraction: 0.01  # eta_min = 0.001 * 0.01 = 1e-5
 
 val:
   mask_seed: 12345
