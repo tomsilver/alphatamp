@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=offline_encoder_eval_o2
-#SBATCH --partition=cpu
+#SBATCH --job-name=offline_encoder_eval
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=00:55:00
-#SBATCH --output=experiments/slurm_outputs/offline_encoder_eval_o2_%j.out
-#SBATCH --error=experiments/slurm_outputs/offline_encoder_eval_o2_%j.err
+#SBATCH --gres=gpu:1
+#SBATCH --time=00:30:00
+#SBATCH --output=experiments/slurm_outputs/offline_encoder_eval_%j.out
+#SBATCH --error=experiments/slurm_outputs/offline_encoder_eval_%j.err
 
 set -euo pipefail
 

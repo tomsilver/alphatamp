@@ -1,12 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=encoder_mae
-#SBATCH --partition=mig
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=32G
-#SBATCH --time=02:00:00
+#SBATCH --mem=16G
+#SBATCH --time=00:30:00
 #SBATCH --output=experiments/slurm_outputs/encoder_mae_%j.out
 #SBATCH --error=experiments/slurm_outputs/encoder_mae_%j.err
 
@@ -15,7 +14,7 @@ set -euo pipefail
 # Assumptions for this launcher:
 # - 1 MIG GPU slice with ~10GB GPU memory
 # - ~15% of full A100 compute throughput
-# - 32GB CPU/system RAM (via --mem=32G)
+# - 16GB CPU/system RAM (via --mem=16G)
 # If runs are slower than expected on this slice, increase --time first.
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
