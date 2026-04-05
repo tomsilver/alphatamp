@@ -4,20 +4,25 @@ set -euo pipefail
 # Submit offline eval jobs for all trained arch checkpoints.
 #
 # Usage:
-#   bash experiments/launch_eval_sweep.sh [ENVS] [steps|binary]
+#   bash experiments/launch_eval_sweep.sh [ENVS] [env|binary_encoder] [ARCH_GLOB]
 #
-#   ENVS  Space-separated list of encoder_dataset_difficulty names, or "all".
-#         Defaults to "o2 o3 o4".
-#         "all" expands to "o2 o3 o4 sb1 sb2 sb3 sb5 sb10".
-#         Example: bash experiments/launch_eval_sweep.sh "sb1 sb2 sb3"
-#         Example: bash experiments/launch_eval_sweep.sh all
+#   ENVS        Space-separated list of encoder_dataset_difficulty names, or "all".
+#               Defaults to "o2 o3 o4".
+#               "all" expands to "o2 o3 o4 sb1 sb2 sb3 sb5 sb10".
+#               Example: bash experiments/launch_eval_sweep.sh "sb1 sb2 sb3"
+#               Example: bash experiments/launch_eval_sweep.sh all
 #
-#   MODE  Evaluation mode: steps (default) or binary.
-#         Skips any arch_* dir that does not yet have encoder_best.pt.
+#   ARTIFACT_SUBDIR  Which subdirectory under artifacts_{ob|sb}/encoder_{env}/ to scan.
+#               "env" (default): scan directly in artifacts_{ob|sb}/encoder_{env}/
+#               "binary_encoder": scan in artifacts_{ob|sb}/encoder_{env}/binary_encoder/
+#               Skips any matching arch dir that does not yet have encoder_best.pt.
+#
+#   ARCH_GLOB   Glob pattern for arch subdirs to evaluate (default: arch_*).
+#               Example: bash experiments/launch_eval_sweep.sh "o2 o3 o4" env arch_transformer
 #
 # Outputs per (env, arch):
-#   steps mode:  artifacts_{ob|sb}/encoder_{env}/arch_{arch}/offline_eval/...
-#   binary mode: artifacts_{ob|sb}/encoder_{env}/binary_encoder/arch_{arch}/offline_eval/...
+#   env subdir:            artifacts_{ob|sb}/encoder_{env}/arch_{arch}/offline_eval/...
+#   binary_encoder subdir: artifacts_{ob|sb}/encoder_{env}/binary_encoder/arch_{arch}/offline_eval/...
 
 cd "$(dirname "$0")/.."
 
@@ -35,15 +40,17 @@ if [[ "$ENVS" == "all" ]]; then
   ENVS="o2 o3 o4 sb1 sb2 sb3 sb5 sb10"
 fi
 
-MODE="${2:-steps}"
-if [[ "$MODE" != "steps" && "$MODE" != "binary" ]]; then
-  echo "Unknown mode: $MODE (expected steps or binary)" >&2
+ARTIFACT_SUBDIR="${2:-env}"
+if [[ "$ARTIFACT_SUBDIR" != "env" && "$ARTIFACT_SUBDIR" != "binary_encoder" ]]; then
+  echo "Unknown artifact subdir: $ARTIFACT_SUBDIR (expected env or binary_encoder)" >&2
   exit 2
 fi
 
+ARCH_GLOB="${3:-arch_*}"
+
 for env in $ENVS; do
   env_root="$(artifact_dir "$env")"
-  if [[ "$MODE" == "binary" ]]; then
+  if [[ "$ARTIFACT_SUBDIR" == "binary_encoder" ]]; then
     data_root="${env_root}/binary_encoder"
   else
     data_root="${env_root}"
@@ -57,7 +64,7 @@ for env in $ENVS; do
   submitted=0
   skipped=0
 
-  for arch_dir in "${data_root}"/arch_*/; do
+  for arch_dir in "${data_root}"/${ARCH_GLOB}/; do
     [[ -d "$arch_dir" ]] || continue
     ckpt="${arch_dir}encoder_best.pt"
     if [[ ! -f "$ckpt" ]]; then

@@ -355,6 +355,74 @@ def _masked_bce_loss(
     return loss, hidden_count
 
 
+def _masked_bce_pairwise_loss(
+    logits: torch.Tensor,
+    targets_success: torch.Tensor,
+    targets_bce: torch.Tensor,
+    applicability: torch.Tensor,
+    reveal_mask: torch.Tensor,
+    pos_weight: float,
+    pairwise_lambda: float,
+) -> tuple[torch.Tensor | None, int]:
+    """BCE loss + optional pairwise ranking loss on hidden applicable entries.
+
+    Args:
+        logits: shape (B, M) — model output logits.
+        targets_success: shape (B, M) — binary 0/1 success, always. Used for pairwise.
+        targets_bce: shape (B, M) — BCE target (steps or binary per target_mode).
+        applicability: shape (B, M) — binary applicability mask.
+        reveal_mask: shape (B, M) — True where entry is revealed (not hidden).
+        pos_weight: imbalance ratio applied to BCE term only.
+        pairwise_lambda: weight of pairwise ranking term (0.0 disables it).
+    """
+    hidden_applicable = (applicability > 0.5) & (~reveal_mask)
+    hidden_count = int(hidden_applicable.sum().item())
+    if hidden_count == 0:
+        return None, 0
+
+    hidden_logits = logits[hidden_applicable]
+    hidden_targets = targets_bce[hidden_applicable]
+    unreduced = F.binary_cross_entropy_with_logits(
+        hidden_logits,
+        hidden_targets,
+        reduction="none",
+    )
+    weights = 1.0 + hidden_targets * (pos_weight - 1.0)
+    bce_loss = (unreduced * weights).mean()
+
+    if pairwise_lambda == 0.0:
+        return bce_loss, hidden_count
+
+    B = logits.shape[0]
+    pairwise_loss = 0.0
+    pair_count = 0
+    for b in range(B):
+        hidden_mask_b = hidden_applicable[b]
+        if hidden_mask_b.sum() == 0:
+            continue
+        row_logits = logits[b][hidden_mask_b]
+        row_success = targets_success[b][hidden_mask_b]
+
+        success_idx = row_success > 0.5
+        failure_idx = ~success_idx
+        if not success_idx.any() or not failure_idx.any():
+            continue
+
+        s = row_logits[success_idx]
+        f = row_logits[failure_idx]
+        margin = s.unsqueeze(1) - f.unsqueeze(0)  # (n_pos, n_neg)
+        pairwise_loss = pairwise_loss + F.softplus(-margin).mean()
+        pair_count += 1
+
+    if pair_count > 0:
+        pairwise_loss = pairwise_loss / pair_count
+        total_loss = bce_loss + pairwise_lambda * pairwise_loss
+    else:
+        total_loss = bce_loss
+
+    return total_loss, hidden_count
+
+
 def _evaluate(
     model: nn.Module,
     split: "SplitTensors",
@@ -624,30 +692,18 @@ def _sequential_rollout_metric(
     model: nn.Module,
     split: "SplitTensors",
     device: torch.device,
-    seed: int,
-    first_pick_mode: str,
-    static_first_index: int | None,
 ) -> dict[str, float]:
     """Sequentially reveal outcomes and count tries to first success.
 
-    Procedure per row:
-    1) Reveal one initial applicable skeleton outcome.
-       - random: random applicable skeleton.
-             - static-first: fixed global skeleton if applicable, else random
-                 applicable fallback.
-    2) Predict remaining untried applicable columns using the steps head.
-    3) Try highest predicted feasible/untried applicable skeleton.
-    4) Repeat until success or exhaustion.
+    Matches the test-time protocol in offline_encoder_rollout_eval.py:
+    1) Reveal inapplicable skeletons upfront (free information; their steps=0).
+    2) Model scores all applicable skeletons and picks the highest-scoring one.
+    3) Reveal that skeleton's outcome, update state.
+    4) Repeat until success or all applicable skeletons exhausted.
+
+    Unsolvable rows (no applicable skeleton succeeds) are excluded from the
+    primary metric (tries_to_success_on_solvable) since any ordering must fail.
     """
-
-    if first_pick_mode not in {"random", "static-first"}:
-        raise ValueError("first_pick_mode must be one of {'random', 'static-first'}")
-    if first_pick_mode == "static-first" and static_first_index is None:
-        raise ValueError(
-            "static_first_index is required when first_pick_mode='static-first'"
-        )
-
-    rng = np.random.default_rng(seed)
     model.eval()
 
     success = split.success
@@ -660,7 +716,7 @@ def _sequential_rollout_metric(
 
     with torch.no_grad():
         for row_idx in range(num_rows):
-            row_applicable = applicability[row_idx] > 0.5
+            row_applicable = applicability[row_idx] > 0.5  # CPU bool tensor
             applicable_indices = torch.nonzero(row_applicable, as_tuple=False).view(-1)
             num_applicable = int(applicable_indices.numel())
             if num_applicable == 0:
@@ -670,28 +726,16 @@ def _sequential_rollout_metric(
             row_steps = steps[row_idx]
             solvable = bool(torch.any(row_success[row_applicable] > 0.5).item())
 
+            # Step 0: reveal inapplicable skeletons (x_steps stays 0; they never
+            # succeeded so steps_completed_fraction=0 is the correct signal).
             x_steps = torch.zeros((1, vocab_size), dtype=torch.float32, device=device)
-            m = torch.zeros((1, vocab_size), dtype=torch.float32, device=device)
-            a = applicability[row_idx : row_idx + 1].to(device)
+            m = (~row_applicable).float().unsqueeze(0).to(device)  # 1 where inapplicable
+            a = applicability[row_idx : row_idx + 1].float().to(device)
 
             applicable_indices_np = applicable_indices.cpu().numpy()
-
-            if first_pick_mode == "random":
-                first_choice = int(rng.choice(applicable_indices_np))
-            else:
-                assert static_first_index is not None
-                if int(static_first_index) in applicable_indices_np.tolist():
-                    first_choice = int(static_first_index)
-                else:
-                    first_choice = int(rng.choice(applicable_indices_np))
-
-            first_outcome_success = float(row_success[first_choice].item())
-            x_steps[0, first_choice] = float(row_steps[first_choice].item())
-            m[0, first_choice] = 1.0
-
-            tried: set[int] = {first_choice}
-            tries = 1
-            success_found = first_outcome_success > 0.5
+            tried: set[int] = set()
+            tries = 0
+            success_found = False
 
             while (not success_found) and (len(tried) < num_applicable):
                 obs_features = torch.stack([x_steps, m, a], dim=2)
@@ -870,31 +914,19 @@ def main(cfg: DictConfig) -> None:
     if num_train_masks < 1:
         raise ValueError("train.num_masks must be >= 1")
     grad_clip_norm = float(cfg.train.grad_clip_norm)
+    pairwise_lambda = float(getattr(cfg.train, "pairwise_lambda", 0.5))
     top_k_values = [int(value) for value in cfg.metrics.top_k_values]
     if not top_k_values:
         raise ValueError("metrics.top_k_values must be non-empty")
-    rollout_seed = int(cfg.rollout.seed)
-    rollout_static_first_index_cfg = getattr(cfg.rollout, "static_first_index", None)
-    if rollout_static_first_index_cfg is None:
-        rollout_static_first_index = _compute_static_first_index(
-            train_success,
-            train_applicability,
-        )
-        print("Rollout static-first index (auto): " f"{rollout_static_first_index}")
-    else:
-        rollout_static_first_index = int(rollout_static_first_index_cfg)
-        if rollout_static_first_index < 0 or rollout_static_first_index >= vocab_size:
-            raise ValueError("rollout.static_first_index must be in [0, vocab_size)")
-        print("Rollout static-first index (config): " f"{rollout_static_first_index}")
 
     best_val_loss = float("inf")
+    best_val_rollout = float("inf")
     train_losses: list[float] = []
     val_losses: list[float] = []
     val_spearman_corr: list[float] = []
     val_auroc: list[float] = []
     val_average_precision: list[float] = []
-    val_rollout_tries_random: list[float] = []
-    val_rollout_tries_static_first: list[float] = []
+    val_rollout_tries: list[float] = []
     val_norm_prec_history: dict[int, list[float]] = {k: [] for k in top_k_values}
 
     run_start_time = time.perf_counter()
@@ -928,13 +960,18 @@ def main(cfg: DictConfig) -> None:
             applicability_tiled = applicability_tiled.to(device)
             reveal_mask = reveal_mask.to(device)
             steps_batch = train_steps[batch_indices].to(device)  # (B, M)
+            success_batch = train_success[batch_indices].to(device)  # (B, M)
 
             if num_train_masks > 1:
                 steps_tiled = steps_batch.repeat_interleave(
                     num_train_masks, dim=0
                 )  # (K*B, M)
+                success_tiled = success_batch.repeat_interleave(
+                    num_train_masks, dim=0
+                )  # (K*B, M)
             else:
                 steps_tiled = steps_batch
+                success_tiled = success_batch
 
             x_steps_tiled = steps_tiled * reveal_mask.float()
             obs_features = torch.stack(
@@ -942,12 +979,14 @@ def main(cfg: DictConfig) -> None:
             )
 
             logits = model(obs_features)
-            loss, hidden_count = _masked_bce_loss(
+            loss, hidden_count = _masked_bce_pairwise_loss(
                 logits,
+                success_tiled,
                 steps_tiled,
                 applicability_tiled,
                 reveal_mask,
                 pos_weight,
+                pairwise_lambda,
             )
             if loss is None:
                 continue
@@ -1002,38 +1041,11 @@ def main(cfg: DictConfig) -> None:
         for top_k in top_k_values:
             val_norm_prec_history[top_k].append(float(val_norm_prec[top_k]))
 
-        rollout_metrics_random = _sequential_rollout_metric(
-            model,
-            val_split,
-            device,
-            seed=rollout_seed,
-            first_pick_mode="random",
-            static_first_index=None,
+        rollout_metrics = _sequential_rollout_metric(model, val_split, device)
+        rollout_tries = float(
+            rollout_metrics["rollout_mean_tries_to_success_on_solvable"]
         )
-        rollout_metrics_static_first = _sequential_rollout_metric(
-            model,
-            val_split,
-            device,
-            seed=rollout_seed,
-            first_pick_mode="static-first",
-            static_first_index=rollout_static_first_index,
-        )
-        val_rollout_tries_random.append(
-            float(rollout_metrics_random["rollout_mean_tries_to_success_on_solvable"])
-        )
-        val_rollout_tries_static_first.append(
-            float(
-                rollout_metrics_static_first[
-                    "rollout_mean_tries_to_success_on_solvable"
-                ]
-            )
-        )
-        rollout_random_tries = float(
-            rollout_metrics_random["rollout_mean_tries_to_success_on_solvable"]
-        )
-        rollout_static_tries = float(
-            rollout_metrics_static_first["rollout_mean_tries_to_success_on_solvable"]
-        )
+        val_rollout_tries.append(rollout_tries)
 
         topk_summary = " ".join(
             [f"np{top_k}={float(val_norm_prec[top_k]):.4f}" for top_k in top_k_values]
@@ -1050,16 +1062,14 @@ def main(cfg: DictConfig) -> None:
             f"val_spearman={val_spearman:.4f} "
             f"val_auroc={val_auc:.4f} val_ap={val_ap:.4f} "
             f"{topk_summary} "
-            "rollout_tries_random="
-            f"{rollout_random_tries:.4f} "
-            "rollout_tries_static_first="
-            f"{rollout_static_tries:.4f} "
+            f"rollout_tries={rollout_tries:.4f} "
             f"epoch_time={_format_duration(epoch_elapsed)} "
             f"elapsed={_format_duration(total_elapsed)} "
             f"eta={_format_duration(eta_seconds)}"
         )
 
-        if val_loss < best_val_loss:
+        if not np.isnan(rollout_tries) and rollout_tries < best_val_rollout:
+            best_val_rollout = rollout_tries
             best_val_loss = val_loss
             torch.save(
                 {
@@ -1096,15 +1106,9 @@ def main(cfg: DictConfig) -> None:
         val_spearman_corr=np.asarray(val_spearman_corr, dtype=np.float32),
         val_auroc=np.asarray(val_auroc, dtype=np.float32),
         val_average_precision=np.asarray(val_average_precision, dtype=np.float32),
-        val_rollout_tries_random=np.asarray(
-            val_rollout_tries_random,
-            dtype=np.float32,
-        ),
-        val_rollout_tries_static_first=np.asarray(
-            val_rollout_tries_static_first,
-            dtype=np.float32,
-        ),
+        val_rollout_tries=np.asarray(val_rollout_tries, dtype=np.float32),
         best_val_loss=np.float32(best_val_loss),
+        best_val_rollout=np.float32(best_val_rollout),
         vocab_size=np.int32(vocab_size),
     )
 
@@ -1117,15 +1121,10 @@ def main(cfg: DictConfig) -> None:
         "final_val_average_precision": (
             val_average_precision[-1] if val_average_precision else float("nan")
         ),
-        "final_val_rollout_tries_random": (
-            val_rollout_tries_random[-1] if val_rollout_tries_random else float("nan")
+        "best_val_rollout": best_val_rollout,
+        "final_val_rollout_tries": (
+            val_rollout_tries[-1] if val_rollout_tries else float("nan")
         ),
-        "final_val_rollout_tries_static_first": (
-            val_rollout_tries_static_first[-1]
-            if val_rollout_tries_static_first
-            else float("nan")
-        ),
-        "rollout_static_first_index": rollout_static_first_index,
         "final_val_norm_precision": {
             str(top_k): (
                 val_norm_prec_history[top_k][-1]
@@ -1162,21 +1161,9 @@ def main(cfg: DictConfig) -> None:
             pos_weight,
             top_k_values,
         )
-        test_rollout_random = _sequential_rollout_metric(
-            model,
-            test_split,
-            device,
-            seed=int(cfg.test.rollout_seed),
-            first_pick_mode="random",
-            static_first_index=None,
-        )
-        test_rollout_static_first = _sequential_rollout_metric(
-            model,
-            test_split,
-            device,
-            seed=int(cfg.test.rollout_seed),
-            first_pick_mode="static-first",
-            static_first_index=rollout_static_first_index,
+        test_rollout = _sequential_rollout_metric(model, test_split, device)
+        test_rollout_tries = float(
+            test_rollout["rollout_mean_tries_to_success_on_solvable"]
         )
 
         summary["test"] = {
@@ -1190,16 +1177,8 @@ def main(cfg: DictConfig) -> None:
                 str(top_k): float(test_metrics["norm_precision"][top_k])
                 for top_k in top_k_values
             },
-            "rollout_random": test_rollout_random,
-            "rollout_static_first": test_rollout_static_first,
+            "rollout": test_rollout,
         }
-
-        test_rollout_random_tries = summary["test"]["rollout_random"][
-            "rollout_mean_tries_to_success_on_solvable"
-        ]
-        test_rollout_static_tries = summary["test"]["rollout_static_first"][
-            "rollout_mean_tries_to_success_on_solvable"
-        ]
 
         print(
             "test "
@@ -1207,10 +1186,7 @@ def main(cfg: DictConfig) -> None:
             f"spearman={summary['test']['spearman_corr']:.4f} "
             f"auroc={summary['test']['auroc']:.4f} "
             f"ap={summary['test']['average_precision']:.4f} "
-            "rollout_tries_random="
-            f"{test_rollout_random_tries:.4f} "
-            "rollout_tries_static_first="
-            f"{test_rollout_static_tries:.4f}"
+            f"rollout_tries={test_rollout_tries:.4f}"
         )
 
     summary_path = output_dir / "encoder_mae_summary.json"
