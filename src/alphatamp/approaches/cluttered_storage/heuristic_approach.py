@@ -270,7 +270,7 @@ class HeuristicLLMApproach(BaseApproach[_O, _X, _U]):
 
         # create the llm (unchanged)
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
-        self._llm = OpenAIModel("gpt-4.1", cache)
+        self._llm = OpenAIModel("gpt-5.2", cache)
 
         # create the abstract successor function (unchanged)
         self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
