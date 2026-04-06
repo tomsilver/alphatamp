@@ -39,10 +39,6 @@ box_offline:
 oracle_steps_then_time:
   enabled: true
 
-greedy_conditional_success_oracle:
-  enabled: false
-  min_support: 5
-
 budget:
   seconds: 20.0
   sweep_min_seconds: 1.0
