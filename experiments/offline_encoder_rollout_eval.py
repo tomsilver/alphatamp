@@ -73,6 +73,29 @@ class SplitData:
     problem_goals: list[Any] | None = None
 
 
+@dataclass(frozen=True)
+class ConditionalCandidateScore:
+    """Per-candidate score record for conditional oracle selection."""
+
+    index: int
+    score: float
+    support_count: int
+    global_success_rate: float
+    fallback_used: bool
+
+
+@dataclass(frozen=True)
+class RolloutWithMeta:
+    """Per-row rollout outcome with decision diagnostics."""
+
+    solved: bool
+    elapsed_seconds: float
+    tries_until_stop: int
+    fallback_decisions: int
+    total_decisions: int
+    row_is_solvable: bool
+
+
 class EncoderMAE(nn.Module):
     """Simple MLP masked autoencoder head producing M logits.
 
@@ -387,6 +410,93 @@ def _build_vocab_to_index(vocab: list[Any]) -> dict[Any, int]:
     return {entry: idx for idx, entry in enumerate(vocab)}
 
 
+def _compute_global_success_rates(
+    train_success: np.ndarray,
+    train_applicability: np.ndarray,
+) -> np.ndarray:
+    """Compute per-column historical success rates over applicable rows."""
+    success_counts = np.sum(train_success > 0.5, axis=0).astype(np.float64)
+    applicable_counts = np.sum(train_applicability > 0.5, axis=0).astype(np.float64)
+
+    rates = np.zeros(train_success.shape[1], dtype=np.float64)
+    valid = applicable_counts > 0.0
+    rates[valid] = success_counts[valid] / applicable_counts[valid]
+    return rates
+
+
+def _filter_consistent_training_rows(
+    train_success: np.ndarray,
+    train_applicability: np.ndarray,
+    history: list[tuple[int, int]],
+) -> np.ndarray:
+    """Return mask of training rows matching revealed row history."""
+    n_rows = int(train_success.shape[0])
+    if not history:
+        return np.ones(n_rows, dtype=bool)
+
+    consistent = np.ones(n_rows, dtype=bool)
+    for col_idx, outcome in history:
+        applicable_match = train_applicability[:, col_idx] > 0.5
+        outcome_match = np.isclose(train_success[:, col_idx], float(outcome))
+        consistent &= applicable_match & outcome_match
+    return consistent
+
+
+def _compute_conditional_candidate_scores(
+    train_success: np.ndarray,
+    train_applicability: np.ndarray,
+    consistent_rows_mask: np.ndarray,
+    remaining_indices: list[int],
+    global_success_rates: np.ndarray,
+    min_support: int,
+) -> list[ConditionalCandidateScore]:
+    """Score candidates by conditional success with deterministic fallback semantics."""
+    consistent_count = int(np.sum(consistent_rows_mask))
+    scores: list[ConditionalCandidateScore] = []
+
+    for col_idx in remaining_indices:
+        applicable_mask = train_applicability[:, col_idx] > 0.5
+        support_mask = consistent_rows_mask & applicable_mask
+        denominator = int(np.sum(support_mask))
+
+        fallback_used = consistent_count < min_support or denominator == 0
+        if fallback_used:
+            score = float(global_success_rates[col_idx])
+        else:
+            numerator = int(np.sum((train_success[:, col_idx] > 0.5) & support_mask))
+            score = float(numerator / denominator)
+
+        scores.append(
+            ConditionalCandidateScore(
+                index=int(col_idx),
+                score=score,
+                support_count=denominator,
+                global_success_rate=float(global_success_rates[col_idx]),
+                fallback_used=bool(fallback_used),
+            )
+        )
+
+    return scores
+
+
+def _select_best_conditional_candidate(
+    scores: list[ConditionalCandidateScore],
+) -> ConditionalCandidateScore | None:
+    """Select candidate via deterministic tie-break chain."""
+    if not scores:
+        return None
+
+    return max(
+        scores,
+        key=lambda item: (
+            item.score,
+            item.support_count,
+            item.global_success_rate,
+            -item.index,
+        ),
+    )
+
+
 def _run_baseline_row(
     applicable_row: np.ndarray,
     success_row: np.ndarray,
@@ -662,6 +772,181 @@ def _run_oracle_steps_then_time_row(
     return False, float(budget_seconds)
 
 
+def _run_greedy_conditional_success_oracle_row(
+    train_success: np.ndarray,
+    train_applicability: np.ndarray,
+    global_success_rates: np.ndarray,
+    test_applicable_row: np.ndarray,
+    test_success_row: np.ndarray,
+    test_time_row: np.ndarray,
+    budget_seconds: float,
+    epsilon: float,
+    min_support: int,
+) -> RolloutWithMeta:
+    """Roll out by greedy conditional success estimates from train data."""
+    remaining_budget = float(budget_seconds)
+    elapsed = 0.0
+    tries = 0
+    fallback_decisions = 0
+    total_decisions = 0
+
+    applicable_indices = np.nonzero(test_applicable_row > 0.5)[0].tolist()
+    row_is_solvable = bool(
+        np.any((test_applicable_row > 0.5) & (test_success_row > 0.5))
+    )
+    if not applicable_indices:
+        return RolloutWithMeta(
+            solved=False,
+            elapsed_seconds=float(budget_seconds),
+            tries_until_stop=0,
+            fallback_decisions=0,
+            total_decisions=0,
+            row_is_solvable=row_is_solvable,
+        )
+
+    history: list[tuple[int, int]] = []
+    tried: set[int] = set()
+
+    while True:
+        remaining_indices = [idx for idx in applicable_indices if idx not in tried]
+        if not remaining_indices:
+            break
+
+        consistent_rows_mask = _filter_consistent_training_rows(
+            train_success,
+            train_applicability,
+            history,
+        )
+        scores = _compute_conditional_candidate_scores(
+            train_success,
+            train_applicability,
+            consistent_rows_mask,
+            remaining_indices,
+            global_success_rates,
+            min_support,
+        )
+        best = _select_best_conditional_candidate(scores)
+        if best is None:
+            break
+
+        total_decisions += 1
+        if best.fallback_used:
+            fallback_decisions += 1
+
+        chosen = best.index
+        attempt_time = float(test_time_row[chosen])
+        if not _strict_attempt_allowed(attempt_time, remaining_budget, epsilon):
+            break
+
+        tries += 1
+        elapsed += attempt_time
+        remaining_budget -= attempt_time
+
+        outcome = int(float(test_success_row[chosen]) > 0.5)
+        history.append((chosen, outcome))
+        tried.add(chosen)
+        if outcome == 1:
+            return RolloutWithMeta(
+                solved=True,
+                elapsed_seconds=float(min(elapsed, budget_seconds)),
+                tries_until_stop=tries,
+                fallback_decisions=fallback_decisions,
+                total_decisions=total_decisions,
+                row_is_solvable=row_is_solvable,
+            )
+
+    return RolloutWithMeta(
+        solved=False,
+        elapsed_seconds=float(budget_seconds),
+        tries_until_stop=tries,
+        fallback_decisions=fallback_decisions,
+        total_decisions=total_decisions,
+        row_is_solvable=row_is_solvable,
+    )
+
+
+def _evaluate_greedy_conditional_success_oracle(
+    test: SplitData,
+    train_success: np.ndarray,
+    train_applicability: np.ndarray,
+    global_success_rates: np.ndarray,
+    budget_seconds: float,
+    epsilon: float,
+    min_support: int,
+) -> dict[str, Any]:
+    """Evaluate greedy conditional success oracle policy over all test rows."""
+    outcomes: list[bool] = []
+    elapsed_times: list[float] = []
+    tries_per_row: list[int] = []
+    fallback_counts: list[int] = []
+    decision_counts: list[int] = []
+    solvable_rows: list[bool] = []
+
+    n_rows = int(test.success.shape[0])
+    for row_idx in range(n_rows):
+        result = _run_greedy_conditional_success_oracle_row(
+            train_success=train_success,
+            train_applicability=train_applicability,
+            global_success_rates=global_success_rates,
+            test_applicable_row=test.applicability[row_idx],
+            test_success_row=test.success[row_idx],
+            test_time_row=test.refinement_time[row_idx],
+            budget_seconds=budget_seconds,
+            epsilon=epsilon,
+            min_support=min_support,
+        )
+        outcomes.append(bool(result.solved))
+        elapsed_times.append(float(result.elapsed_seconds))
+        tries_per_row.append(int(result.tries_until_stop))
+        fallback_counts.append(int(result.fallback_decisions))
+        decision_counts.append(int(result.total_decisions))
+        solvable_rows.append(bool(result.row_is_solvable))
+
+    outcomes_np = np.asarray(outcomes, dtype=bool)
+    elapsed_np = np.asarray(elapsed_times, dtype=np.float64)
+    solved_times = elapsed_np[outcomes_np]
+
+    tries_np = np.asarray(tries_per_row, dtype=np.int32)
+    fallback_np = np.asarray(fallback_counts, dtype=np.int32)
+    decisions_np = np.asarray(decision_counts, dtype=np.int32)
+    solvable_np = np.asarray(solvable_rows, dtype=bool)
+    fallback_fraction = float(fallback_np.sum() / decisions_np.sum()) if int(
+        decisions_np.sum()
+    ) > 0 else 0.0
+
+    tries_solvable_success_mask = solvable_np & outcomes_np
+    tries_solvable_success = tries_np[tries_solvable_success_mask]
+
+    return {
+        "method": "greedy_conditional_success_oracle",
+        "num_rows": int(n_rows),
+        "solved_count": int(outcomes_np.sum()),
+        "failed_count": int((~outcomes_np).sum()),
+        "success_rate": float(outcomes_np.mean()) if n_rows > 0 else float("nan"),
+        "mean_time_success_only": (
+            float(solved_times.mean()) if solved_times.size > 0 else float("nan")
+        ),
+        "mean_time_total": (
+            float(elapsed_np.mean()) if elapsed_np.size > 0 else float("nan")
+        ),
+        "mean_tries_until_stop": (
+            float(tries_np.mean()) if tries_np.size > 0 else float("nan")
+        ),
+        "mean_tries_to_success_on_solvable_rows_only": (
+            float(tries_solvable_success.mean())
+            if tries_solvable_success.size > 0
+            else float("nan")
+        ),
+        "fallback_decision_fraction": fallback_fraction,
+        "outcomes": outcomes_np,
+        "elapsed_times": elapsed_np,
+        "tries_until_stop": tries_np,
+        "fallback_decisions": fallback_np,
+        "total_decisions": decisions_np,
+        "row_is_solvable": solvable_np,
+    }
+
+
 def _evaluate_policy(
     method_name: str,
     run_row_fn: Any,
@@ -710,6 +995,7 @@ def _plot_success_curve(
     generator_order_success: np.ndarray | None,
     box_offline_success: np.ndarray | None,
     oracle_steps_time_success: np.ndarray | None,
+    greedy_conditional_success_oracle_success: np.ndarray | None,
     encoder_success: np.ndarray,
     budget_marker: float,
     output_path: Path,
@@ -738,6 +1024,13 @@ def _plot_success_curve(
             label="Oracle (steps->time)",
             linewidth=2,
         )
+    if greedy_conditional_success_oracle_success is not None:
+        plt.plot(
+            budgets,
+            greedy_conditional_success_oracle_success,
+            label="Oracle (greedy conditional success)",
+            linewidth=2,
+        )
     plt.plot(budgets, encoder_success, label="Encoder-guided", linewidth=2)
     plt.axvline(
         budget_marker, linestyle="--", linewidth=1.5, label=f"Budget={budget_marker:g}s"
@@ -759,6 +1052,7 @@ def _plot_time_curve(
     generator_order_values: np.ndarray | None,
     box_offline_values: np.ndarray | None,
     oracle_steps_time_values: np.ndarray | None,
+    greedy_conditional_success_oracle_values: np.ndarray | None,
     encoder_values: np.ndarray,
     budget_marker: float,
     title: str,
@@ -787,6 +1081,13 @@ def _plot_time_curve(
             budgets,
             oracle_steps_time_values,
             label="Oracle (steps->time)",
+            linewidth=2,
+        )
+    if greedy_conditional_success_oracle_values is not None:
+        plt.plot(
+            budgets,
+            greedy_conditional_success_oracle_values,
+            label="Oracle (greedy conditional success)",
             linewidth=2,
         )
     plt.plot(budgets, encoder_values, label="Encoder-guided", linewidth=2)
@@ -839,6 +1140,18 @@ def main(cfg: DictConfig) -> None:
     box_offline_enabled = bool(cfg.box_offline.enabled)
     box_offline_approach: Any | None = None
     oracle_steps_then_time_enabled = bool(cfg.oracle_steps_then_time.enabled)
+    greedy_conditional_success_oracle_enabled = bool(
+        cfg.greedy_conditional_success_oracle.enabled
+    )
+    greedy_conditional_success_oracle_min_support = int(
+        cfg.greedy_conditional_success_oracle.min_support
+    )
+    if greedy_conditional_success_oracle_min_support < 1:
+        raise ValueError("greedy_conditional_success_oracle.min_support must be >= 1")
+    global_train_success_rates = _compute_global_success_rates(
+        train_split.success,
+        train_split.applicability,
+    )
 
     if (
         oracle_steps_then_time_enabled
@@ -1083,6 +1396,19 @@ def main(cfg: DictConfig) -> None:
             test_split,
             budget_seconds,
         )
+    greedy_conditional_success_oracle_metrics: dict[str, Any] | None = None
+    if greedy_conditional_success_oracle_enabled:
+        greedy_conditional_success_oracle_metrics = (
+            _evaluate_greedy_conditional_success_oracle(
+                test=test_split,
+                train_success=train_split.success,
+                train_applicability=train_split.applicability,
+                global_success_rates=global_train_success_rates,
+                budget_seconds=budget_seconds,
+                epsilon=epsilon,
+                min_support=greedy_conditional_success_oracle_min_support,
+            )
+        )
     encoder_metrics = _evaluate_policy(
         "encoder_guided",
         encoder_row_runner,
@@ -1105,16 +1431,19 @@ def main(cfg: DictConfig) -> None:
     generator_order_success_curve = []
     box_offline_success_curve = []
     oracle_steps_then_time_success_curve = []
+    greedy_conditional_success_oracle_success_curve = []
     encoder_success_curve = []
     baseline_time_success_only_curve = []
     generator_order_time_success_only_curve = []
     box_offline_time_success_only_curve = []
     oracle_steps_then_time_time_success_only_curve = []
+    greedy_conditional_success_oracle_time_success_only_curve = []
     encoder_time_success_only_curve = []
     baseline_time_total_curve = []
     generator_order_time_total_curve = []
     box_offline_time_total_curve = []
     oracle_steps_then_time_time_total_curve = []
+    greedy_conditional_success_oracle_time_total_curve = []
     encoder_time_total_curve = []
     for sweep_budget in budgets.tolist():
         baseline_sweep = _evaluate_policy(
@@ -1147,6 +1476,19 @@ def main(cfg: DictConfig) -> None:
                 test_split,
                 float(sweep_budget),
             )
+        greedy_conditional_success_oracle_sweep: dict[str, Any] | None = None
+        if greedy_conditional_success_oracle_enabled:
+            greedy_conditional_success_oracle_sweep = (
+                _evaluate_greedy_conditional_success_oracle(
+                    test=test_split,
+                    train_success=train_split.success,
+                    train_applicability=train_split.applicability,
+                    global_success_rates=global_train_success_rates,
+                    budget_seconds=float(sweep_budget),
+                    epsilon=epsilon,
+                    min_support=greedy_conditional_success_oracle_min_support,
+                )
+            )
         encoder_sweep = _evaluate_policy(
             "encoder_guided",
             encoder_row_runner,
@@ -1164,6 +1506,10 @@ def main(cfg: DictConfig) -> None:
             oracle_steps_then_time_success_curve.append(
                 float(oracle_steps_then_time_sweep["success_rate"])
             )
+        if greedy_conditional_success_oracle_sweep is not None:
+            greedy_conditional_success_oracle_success_curve.append(
+                float(greedy_conditional_success_oracle_sweep["success_rate"])
+            )
         encoder_success_curve.append(float(encoder_sweep["success_rate"]))
         baseline_time_success_only_curve.append(
             float(baseline_sweep["mean_time_success_only"])
@@ -1180,6 +1526,14 @@ def main(cfg: DictConfig) -> None:
             oracle_steps_then_time_time_success_only_curve.append(
                 float(oracle_steps_then_time_sweep["mean_time_success_only"])
             )
+        if greedy_conditional_success_oracle_sweep is not None:
+            greedy_conditional_success_oracle_time_success_only_curve.append(
+                float(
+                    greedy_conditional_success_oracle_sweep[
+                        "mean_time_success_only"
+                    ]
+                )
+            )
         encoder_time_success_only_curve.append(
             float(encoder_sweep["mean_time_success_only"])
         )
@@ -1195,6 +1549,10 @@ def main(cfg: DictConfig) -> None:
         if oracle_steps_then_time_sweep is not None:
             oracle_steps_then_time_time_total_curve.append(
                 float(oracle_steps_then_time_sweep["mean_time_total"])
+            )
+        if greedy_conditional_success_oracle_sweep is not None:
+            greedy_conditional_success_oracle_time_total_curve.append(
+                float(greedy_conditional_success_oracle_sweep["mean_time_total"])
             )
         encoder_time_total_curve.append(float(encoder_sweep["mean_time_total"]))
 
@@ -1213,6 +1571,11 @@ def main(cfg: DictConfig) -> None:
     oracle_steps_then_time_success_curve_np = (
         np.asarray(oracle_steps_then_time_success_curve, dtype=np.float32)
         if oracle_steps_then_time_enabled
+        else None
+    )
+    greedy_conditional_success_oracle_success_curve_np = (
+        np.asarray(greedy_conditional_success_oracle_success_curve, dtype=np.float32)
+        if greedy_conditional_success_oracle_enabled
         else None
     )
     baseline_time_success_only_curve_np = np.asarray(
@@ -1238,6 +1601,14 @@ def main(cfg: DictConfig) -> None:
         if oracle_steps_then_time_enabled
         else None
     )
+    greedy_conditional_success_oracle_time_success_only_curve_np = (
+        np.asarray(
+            greedy_conditional_success_oracle_time_success_only_curve,
+            dtype=np.float32,
+        )
+        if greedy_conditional_success_oracle_enabled
+        else None
+    )
     baseline_time_total_curve_np = np.asarray(
         baseline_time_total_curve,
         dtype=np.float32,
@@ -1259,6 +1630,11 @@ def main(cfg: DictConfig) -> None:
     oracle_steps_then_time_time_total_curve_np = (
         np.asarray(oracle_steps_then_time_time_total_curve, dtype=np.float32)
         if oracle_steps_then_time_enabled
+        else None
+    )
+    greedy_conditional_success_oracle_time_total_curve_np = (
+        np.asarray(greedy_conditional_success_oracle_time_total_curve, dtype=np.float32)
+        if greedy_conditional_success_oracle_enabled
         else None
     )
 
@@ -1289,6 +1665,10 @@ def main(cfg: DictConfig) -> None:
         },
         "oracle_steps_then_time_config": {
             "enabled": oracle_steps_then_time_enabled,
+        },
+        "greedy_conditional_success_oracle_config": {
+            "enabled": greedy_conditional_success_oracle_enabled,
+            "min_support": greedy_conditional_success_oracle_min_support,
         },
         "budget_seconds": budget_seconds,
         "baseline": {
@@ -1338,6 +1718,37 @@ def main(cfg: DictConfig) -> None:
                 oracle_steps_then_time_metrics["mean_time_total"]
             ),
         }
+    if greedy_conditional_success_oracle_metrics is not None:
+        summary["greedy_conditional_success_oracle"] = {
+            "success_rate": float(
+                greedy_conditional_success_oracle_metrics["success_rate"]
+            ),
+            "solved_count": int(
+                greedy_conditional_success_oracle_metrics["solved_count"]
+            ),
+            "failed_count": int(
+                greedy_conditional_success_oracle_metrics["failed_count"]
+            ),
+            "mean_time_success_only": float(
+                greedy_conditional_success_oracle_metrics["mean_time_success_only"]
+            ),
+            "mean_time_total": float(
+                greedy_conditional_success_oracle_metrics["mean_time_total"]
+            ),
+            "mean_tries_until_stop": float(
+                greedy_conditional_success_oracle_metrics["mean_tries_until_stop"]
+            ),
+            "mean_tries_to_success_on_solvable_rows_only": float(
+                greedy_conditional_success_oracle_metrics[
+                    "mean_tries_to_success_on_solvable_rows_only"
+                ]
+            ),
+            "fallback_decision_fraction": float(
+                greedy_conditional_success_oracle_metrics[
+                    "fallback_decision_fraction"
+                ]
+            ),
+        }
 
     summary_path = out_dir / "offline_encoder_eval_summary.json"
     metrics_path = out_dir / "offline_encoder_eval_metrics.npz"
@@ -1368,6 +1779,11 @@ def main(cfg: DictConfig) -> None:
             if oracle_steps_then_time_success_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
+        greedy_conditional_success_oracle_success_curve=(
+            greedy_conditional_success_oracle_success_curve_np
+            if greedy_conditional_success_oracle_success_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
         baseline_time_success_only_curve=baseline_time_success_only_curve_np,
         encoder_time_success_only_curve=encoder_time_success_only_curve_np,
         baseline_generator_time_success_only_curve=(
@@ -1383,6 +1799,11 @@ def main(cfg: DictConfig) -> None:
         oracle_steps_then_time_time_success_only_curve=(
             oracle_steps_then_time_time_success_only_curve_np
             if oracle_steps_then_time_time_success_only_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
+        greedy_conditional_success_oracle_time_success_only_curve=(
+            greedy_conditional_success_oracle_time_success_only_curve_np
+            if greedy_conditional_success_oracle_time_success_only_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
         baseline_time_total_curve=baseline_time_total_curve_np,
@@ -1402,6 +1823,11 @@ def main(cfg: DictConfig) -> None:
             if oracle_steps_then_time_time_total_curve_np is not None
             else np.asarray([], dtype=np.float32)
         ),
+        greedy_conditional_success_oracle_time_total_curve=(
+            greedy_conditional_success_oracle_time_total_curve_np
+            if greedy_conditional_success_oracle_time_total_curve_np is not None
+            else np.asarray([], dtype=np.float32)
+        ),
         baseline_outcomes=baseline_metrics["outcomes"].astype(np.int8),
         encoder_outcomes=encoder_metrics["outcomes"].astype(np.int8),
         baseline_generator_outcomes=(
@@ -1417,6 +1843,11 @@ def main(cfg: DictConfig) -> None:
         oracle_steps_then_time_outcomes=(
             oracle_steps_then_time_metrics["outcomes"].astype(np.int8)
             if oracle_steps_then_time_metrics is not None
+            else np.asarray([], dtype=np.int8)
+        ),
+        greedy_conditional_success_oracle_outcomes=(
+            greedy_conditional_success_oracle_metrics["outcomes"].astype(np.int8)
+            if greedy_conditional_success_oracle_metrics is not None
             else np.asarray([], dtype=np.int8)
         ),
         baseline_elapsed_times=baseline_metrics["elapsed_times"].astype(np.float32),
@@ -1436,6 +1867,31 @@ def main(cfg: DictConfig) -> None:
             if oracle_steps_then_time_metrics is not None
             else np.asarray([], dtype=np.float32)
         ),
+        greedy_conditional_success_oracle_elapsed_times=(
+            greedy_conditional_success_oracle_metrics["elapsed_times"].astype(np.float32)
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.asarray([], dtype=np.float32)
+        ),
+        greedy_conditional_success_oracle_tries_until_stop=(
+            greedy_conditional_success_oracle_metrics["tries_until_stop"].astype(np.int32)
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.asarray([], dtype=np.int32)
+        ),
+        greedy_conditional_success_oracle_fallback_decisions=(
+            greedy_conditional_success_oracle_metrics["fallback_decisions"].astype(np.int32)
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.asarray([], dtype=np.int32)
+        ),
+        greedy_conditional_success_oracle_total_decisions=(
+            greedy_conditional_success_oracle_metrics["total_decisions"].astype(np.int32)
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.asarray([], dtype=np.int32)
+        ),
+        greedy_conditional_success_oracle_row_is_solvable=(
+            greedy_conditional_success_oracle_metrics["row_is_solvable"].astype(np.int8)
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.asarray([], dtype=np.int8)
+        ),
         baseline_success_rate=np.float32(baseline_metrics["success_rate"]),
         encoder_success_rate=np.float32(encoder_metrics["success_rate"]),
         baseline_generator_success_rate=np.float32(
@@ -1451,6 +1907,11 @@ def main(cfg: DictConfig) -> None:
         oracle_steps_then_time_success_rate=np.float32(
             oracle_steps_then_time_metrics["success_rate"]
             if oracle_steps_then_time_metrics is not None
+            else np.nan
+        ),
+        greedy_conditional_success_oracle_success_rate=np.float32(
+            greedy_conditional_success_oracle_metrics["success_rate"]
+            if greedy_conditional_success_oracle_metrics is not None
             else np.nan
         ),
         baseline_mean_time_success_only=np.float32(
@@ -1474,6 +1935,11 @@ def main(cfg: DictConfig) -> None:
             if oracle_steps_then_time_metrics is not None
             else np.nan
         ),
+        greedy_conditional_success_oracle_mean_time_success_only=np.float32(
+            greedy_conditional_success_oracle_metrics["mean_time_success_only"]
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.nan
+        ),
         baseline_mean_time_total=np.float32(baseline_metrics["mean_time_total"]),
         encoder_mean_time_total=np.float32(encoder_metrics["mean_time_total"]),
         baseline_generator_mean_time_total=np.float32(
@@ -1491,6 +1957,28 @@ def main(cfg: DictConfig) -> None:
             if oracle_steps_then_time_metrics is not None
             else np.nan
         ),
+        greedy_conditional_success_oracle_mean_time_total=np.float32(
+            greedy_conditional_success_oracle_metrics["mean_time_total"]
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.nan
+        ),
+        greedy_conditional_success_oracle_mean_tries_until_stop=np.float32(
+            greedy_conditional_success_oracle_metrics["mean_tries_until_stop"]
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.nan
+        ),
+        greedy_conditional_success_oracle_mean_tries_to_success_on_solvable_rows_only=np.float32(
+            greedy_conditional_success_oracle_metrics[
+                "mean_tries_to_success_on_solvable_rows_only"
+            ]
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.nan
+        ),
+        greedy_conditional_success_oracle_fallback_decision_fraction=np.float32(
+            greedy_conditional_success_oracle_metrics["fallback_decision_fraction"]
+            if greedy_conditional_success_oracle_metrics is not None
+            else np.nan
+        ),
     )
 
     dpi = int(cfg.plot.dpi)
@@ -1500,6 +1988,7 @@ def main(cfg: DictConfig) -> None:
         generator_order_success_curve_np,
         box_offline_success_curve_np,
         oracle_steps_then_time_success_curve_np,
+        greedy_conditional_success_oracle_success_curve_np,
         encoder_success_curve_np,
         budget_seconds,
         success_curve_path,
@@ -1511,6 +2000,7 @@ def main(cfg: DictConfig) -> None:
         generator_order_time_success_only_curve_np,
         box_offline_time_success_only_curve_np,
         oracle_steps_then_time_time_success_only_curve_np,
+        greedy_conditional_success_oracle_time_success_only_curve_np,
         encoder_time_success_only_curve_np,
         budget_seconds,
         title="Refinement time on success vs budget",
@@ -1524,6 +2014,7 @@ def main(cfg: DictConfig) -> None:
         generator_order_time_total_curve_np,
         box_offline_time_total_curve_np,
         oracle_steps_then_time_time_total_curve_np,
+        greedy_conditional_success_oracle_time_total_curve_np,
         encoder_time_total_curve_np,
         budget_seconds,
         title="Total refinement time vs budget (including failures)",
