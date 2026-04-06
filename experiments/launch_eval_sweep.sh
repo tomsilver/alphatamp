@@ -4,7 +4,7 @@ set -euo pipefail
 # Submit offline eval jobs for all trained arch checkpoints.
 #
 # Usage:
-#   bash experiments/launch_eval_sweep.sh [ENVS] [env|binary_encoder] [ARCH_GLOB]
+#   bash experiments/launch_eval_sweep.sh [ENVS] [env|binary_encoder] [ARCH_GLOB] [true|false] [MIN_SUPPORT]
 #
 #   ENVS        Space-separated list of encoder_dataset_difficulty names, or "all".
 #               Defaults to "o2 o3 o4".
@@ -19,6 +19,13 @@ set -euo pipefail
 #
 #   ARCH_GLOB   Glob pattern for arch subdirs to evaluate (default: arch_*).
 #               Example: bash experiments/launch_eval_sweep.sh "o2 o3 o4" env arch_transformer
+#
+#   GREEDY_ORACLE_ENABLED  Enable greedy_conditional_success_oracle baseline.
+#               Default: true.
+#               Example: bash experiments/launch_eval_sweep.sh "o2 o3 o4" env arch_* false
+#
+#   MIN_SUPPORT   min_support for greedy_conditional_success_oracle (default: 5).
+#               Example: bash experiments/launch_eval_sweep.sh "o2 o3 o4" env arch_* true 20
 #
 # Outputs per (env, arch):
 #   env subdir:            artifacts_{ob|sb}/encoder_{env}/arch_{arch}/offline_eval/...
@@ -47,6 +54,23 @@ if [[ "$ARTIFACT_SUBDIR" != "env" && "$ARTIFACT_SUBDIR" != "binary_encoder" ]]; 
 fi
 
 ARCH_GLOB="${3:-arch_*}"
+GREEDY_ORACLE_ENABLED="${4:-true}"
+GREEDY_ORACLE_MIN_SUPPORT="${5:-5}"
+
+if [[ "$GREEDY_ORACLE_ENABLED" != "true" && "$GREEDY_ORACLE_ENABLED" != "false" ]]; then
+  echo "Invalid GREEDY_ORACLE_ENABLED: $GREEDY_ORACLE_ENABLED (expected true or false)" >&2
+  exit 2
+fi
+
+if ! [[ "$GREEDY_ORACLE_MIN_SUPPORT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid MIN_SUPPORT: $GREEDY_ORACLE_MIN_SUPPORT (expected positive integer)" >&2
+  exit 2
+fi
+
+if [[ "$GREEDY_ORACLE_MIN_SUPPORT" -lt 1 ]]; then
+  echo "Invalid MIN_SUPPORT: $GREEDY_ORACLE_MIN_SUPPORT (expected >= 1)" >&2
+  exit 2
+fi
 
 for env in $ENVS; do
   env_root="$(artifact_dir "$env")"
@@ -79,7 +103,9 @@ for env in $ENVS; do
       "data.train_path=${env_root}/encoder_train_filtered_dataset.pkl" \
       "data.test_path=${env_root}/encoder_test_filtered_dataset.pkl" \
       "checkpoint.path=${ckpt}" \
-      "output.dir=${out_dir}"
+      "output.dir=${out_dir}" \
+      "greedy_conditional_success_oracle.enabled=${GREEDY_ORACLE_ENABLED}" \
+      "greedy_conditional_success_oracle.min_support=${GREEDY_ORACLE_MIN_SUPPORT}"
     submitted=$(( submitted + 1 ))
   done
 
