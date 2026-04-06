@@ -27,10 +27,10 @@ import numpy as np
 
 # Ablation labels by task ID (matches kinder_env_test_ablation.slurm)
 _TASK_LABELS = {
-    "0": "Full model",
-    "1": "No abstract plan scorer",
-    "2": "No parameter scorer",
-    "3": "No scorers",
+    "0": "COMPLETE",
+    "1": "PRACTICE",
+    "2": "EXPLORER",
+    "3": "NAIVE",
 }
 
 # Regex to extract task ID from filename like
@@ -168,11 +168,13 @@ def main() -> None:
             color=line.get_color(),
         )
 
+    ax.axhline(y=94, color="grey", linestyle="--", linewidth=1.5, label="ORACLE (94%)")
+
     ax.set_xlabel("Env step")
     ax.set_ylabel("Avg eval success rate (%)")
     ax.set_title("Eval success rate over env steps (mean ± stderr)")
     ax.set_ylim(0, 105)
-    ax.legend()
+    ax.legend(prop={"weight": "bold"})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 

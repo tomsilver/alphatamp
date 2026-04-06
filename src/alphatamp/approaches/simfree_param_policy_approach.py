@@ -617,6 +617,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         """
         heuristic_plans = self.generate_candidate_plans()
         #random_plans = self.generate_random_candidate_plans()
+        logging.info(
+            "[BALD-candidates] %d plans: %s",
+            len(heuristic_plans),
+            [[a.short_str for a in p[1]] for p in heuristic_plans],
+        )
         return heuristic_plans #+ random_plans
 
     def score_candidate_plans(self, candidate_plans: list[Skeleton]) -> Skeleton:
@@ -630,9 +635,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         for candidate_plan in candidate_plans:
 
             candidate_probabilities = []
+            per_action_rates_all = []
             # Use ensemble of Q networks to predict per-action failure rates
             for q_net in self._ensemble_nets:
                 per_action_failure_rates = q_net.predict(candidate_plan)
+                per_action_rates_all.append(per_action_failure_rates.tolist())
 
                 # Convert per-action failure rates to overall plan success probability
                 probability = convert_q_value_to_probability(
@@ -641,6 +648,16 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 candidate_probabilities.append(probability)
 
             bald_score = calculate_bald_objective(candidate_probabilities)
+
+            logging.info(
+                "[BALD-debug] plan=%s  ensemble_probs=%s  bald=%.6f  "
+                "mean_failure_rates=%s",
+                [a.short_str for a in candidate_plan[1]],
+                [f"{p:.4f}" for p in candidate_probabilities],
+                bald_score,
+                [f"{r:.4f}" for r in
+                 np.mean(per_action_rates_all, axis=0).tolist()],
+            )
 
             if bald_score > best_bald_score:
                 best_bald_score = bald_score

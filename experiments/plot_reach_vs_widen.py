@@ -28,10 +28,10 @@ import numpy as np
 
 # Ablation labels by task ID
 _TASK_LABELS = {
-    "0": "Full model",
-    "1": "No abstract plan scorer",
-    "2": "No parameter scorer",
-    "3": "No scorers",
+    "0": "COMPLETE",
+    "1": "PRACTICE",
+    "2": "EXPLORER",
+    "3": "NAIVE",
 }
 
 # Regex to extract task ID from filename
@@ -342,7 +342,7 @@ def main() -> None:
 
         ax.set_xlabel("Env Step")
         ax.set_ylabel("%")
-        ax.set_title(f"{label} (n={n})")
+        ax.set_title(f"{label} (n={n})", fontweight="bold")
         ax.set_ylim(-5, 105)
         ax.legend(loc="center right", fontsize=8)
         ax.grid(True, alpha=0.3)

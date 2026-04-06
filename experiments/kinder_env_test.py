@@ -154,6 +154,7 @@ def main(
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
     num_eval_seeds: int = 10,
+    num_candidate_plans: int = 10,
 ) -> dict:
     """Run an experiment on a kinder environment and return collected metrics.
 
@@ -229,6 +230,7 @@ def main(
         seed=seed,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
         use_parameter_scorer=use_parameter_scorer,
+        num_candidate_plans=num_candidate_plans,
 
     )
 
@@ -369,6 +371,7 @@ def plot_results(
     save_path: str | None = None,
     use_abstract_plan_scorer: bool = True,
     use_parameter_scorer: bool = True,
+    num_candidate_plans: int = 10,
     **kwargs,
 ) -> None:
     """Run main() and plot success rate and episode count."""
@@ -379,6 +382,7 @@ def plot_results(
         complexity=complexity,
         use_abstract_plan_scorer=use_abstract_plan_scorer,
         use_parameter_scorer=use_parameter_scorer,
+        num_candidate_plans=num_candidate_plans,
         **kwargs,
     )
 
@@ -435,19 +439,19 @@ def plot_results(
     ax = axes[1, 1]
     exploit_counts = results.get("exploit_plan_counts", {})
     if exploit_counts:
-        top4 = exploit_counts.most_common(4)
-        labels = [name for name, _ in top4]
-        counts = [count for _, count in top4]
+        top10 = exploit_counts.most_common(10)
+        labels = [name for name, _ in top10]
+        counts = [count for _, count in top10]
         # Wrap long labels
         wrapped = [l.replace(" -> ", "\n-> ") for l in labels]
-        ax.barh(range(len(top4)), counts, color="tab:blue")
-        ax.set_yticks(range(len(top4)))
+        ax.barh(range(len(top10)), counts, color="tab:blue")
+        ax.set_yticks(range(len(top10)))
         ax.set_yticklabels(wrapped, fontsize=8)
         ax.invert_yaxis()
         ax.set_xlabel("Times selected")
-        ax.set_title("Top 4 exploit plans")
+        ax.set_title("Top 10 exploit plans")
     else:
-        ax.set_title("Top 4 exploit plans (no data)")
+        ax.set_title("Top 10 exploit plans (no data)")
     ax.grid(True, alpha=0.3, axis="x")
 
     fig.tight_layout()
@@ -515,6 +519,13 @@ if __name__ == "__main__":
         metavar="N",
         help="Number of fixed held-out eval seeds (default: 20)",
     )
+    parser.add_argument(
+        "--num-candidate-plans",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of candidate plans for BALD scoring (default: 10)",
+    )
     args = parser.parse_args()
 
     if args.plot:
@@ -530,7 +541,7 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
-
+            num_candidate_plans=args.num_candidate_plans,
         )
     else:
         main(
@@ -544,5 +555,5 @@ if __name__ == "__main__":
             use_abstract_plan_scorer=not args.no_abstract_plan_scorer,
             use_parameter_scorer=not args.no_parameter_scorer,
             num_eval_seeds=args.num_eval_seeds,
-
+            num_candidate_plans=args.num_candidate_plans,
         )
