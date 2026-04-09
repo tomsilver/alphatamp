@@ -1,0 +1,3 @@
+_target_: alphatamp.approaches.cluttered_storage.reprompt_heuristic_approach.RepromptHeuristicApproach
+samples_per_step: 10
+training_planning_timeout: 10

@@ -51,12 +51,15 @@ def main(cfg: DictConfig):
         {
             "seed": seed,
             "approach_name": str(cfg.approach),
+            "env_name": cfg.env.id,
+            "timeout_sec": cfg.timeout_sec,
         }
     )
 
-    df = pd.DataFrame([metrics])
+    all_columns = _COLUMNS + ["seed", "approach_name", "env_name", "timeout_sec"]
+    df = pd.DataFrame([metrics]).reindex(columns=all_columns)
     print(df)
-    results_path = "results.csv"
+    results_path = cfg.get("results_path", "results.csv")
     if os.path.exists(results_path):
         df.to_csv(results_path, mode="a", header=False)
     else:
@@ -65,36 +68,49 @@ def main(cfg: DictConfig):
     env.close()  # type: ignore[no-untyped-call]
 
 
+_COLUMNS = [
+    "success",
+    "failure_reason",
+    "duration",
+    "cost",
+    "abstract_plan",
+    "avg_attempts_per_step",
+    "total_sampling_attempts",
+    "steps_above_5_attempts",
+    "attempts_per_step",
+]
+
+
 def _run_task_evaluation(env, approach, obs, timeout: float) -> dict[str, object]:
     """Run planning once and compute metrics."""
+    metrics: dict[str, object] = {col: None for col in _COLUMNS}
+
     start_time = time.perf_counter()
-    metrics: dict[str, object] = {}
     plan = None
     try:
         plan = approach.run_planning(obs, timeout=timeout)
         metrics["success"] = True
-        metrics["failure_reason"] = None
     except Exception as e:  # pylint: disable=broad-except
         metrics["success"] = False
         metrics["failure_reason"] = type(e).__name__ + ": " + str(e)
 
-    dur = time.perf_counter() - start_time
-    metrics["duration"] = dur
+    metrics["duration"] = time.perf_counter() - start_time
 
     if plan is not None:
         success, num_actions = _check_success(env, plan)
         metrics["success"] = success
         metrics["cost"] = num_actions
-    else:
-        metrics["cost"] = None
 
-    # Refinement quality metrics (only available for approaches that track them)
+    metrics["abstract_plan"] = getattr(approach, "last_abstract_plan", None)
+
     ref = getattr(approach, "last_metrics", None)
     if ref is not None:
         metrics["avg_attempts_per_step"] = ref.avg_attempts_per_step
         metrics["total_sampling_attempts"] = ref.total_attempts
         metrics["steps_above_5_attempts"] = ref.steps_above_threshold(5)
-        metrics["attempts_per_step"] = ref.attempts_per_step
+        if metrics["success"]:
+            metrics["attempts_per_step"] = ref.attempts_per_step
+
     return metrics
 
 

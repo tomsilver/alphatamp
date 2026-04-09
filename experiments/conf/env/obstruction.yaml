@@ -1,0 +1,6 @@
+id: "kinder/Obstruction2D-o3-v0"
+model_name: "obstruction2d"
+model_kwargs:
+  num_obstructions: 3
+
+  

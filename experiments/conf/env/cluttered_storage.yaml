@@ -1,4 +1,4 @@
-id: "kinder/ClutteredStorage2D-b3-v0"
+id: "kinder/ClutteredStorage2D-b15-v0"
 model_name: "clutteredstorage2d"
 model_kwargs:
-  num_blocks: 3
+  num_blocks: 15

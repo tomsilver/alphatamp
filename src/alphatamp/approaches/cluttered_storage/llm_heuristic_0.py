@@ -1,89 +1,103 @@
 
-from pyperplan.heuristics.heuristic_base import Heuristic
 from fnmatch import fnmatch
+from pyperplan.heuristics.heuristic_base import Heuristic
+
 
 def generate_heuristic(task):
     class ClutteredStorage2DHeuristic(Heuristic):
         """
-        Summary:
-            Estimates the number of actions required for all blocks to be placed on the shelf
-            as specified in the goal, given the domain structure with pick/place and shelf/not-on-shelf predicates.
-            This heuristic assumes one robot and accounts for whether the robot is holding a block.
+        Summary
+        -------
+        Greedy "count remaining placements" heuristic with a small correction for whether
+        the robot is currently holding a block. In clutteredstorage2d, the only meaningful
+        goal atoms are typically (OnShelf b s). A block that is not on its goal shelf must
+        be picked (if not already held) and placed onto that shelf.
 
-        Assumptions:
-            - There is a single robot and a single shelf.
-            - Each block is handled one at a time by the robot.
-            - The robot can only pick up or place one block at a time.
-            - The only actions are pick (from on-shelf/not-on-shelf) and place (on-shelf/not-on-shelf).
-            - Predicate strings are provided without nested structure, in consistent ordering.
+        Assumptions
+        -----------
+        - Each block has exactly one relevant goal shelf in the goal description.
+        - If a block is not currently on its goal shelf, then achieving it requires:
+          - 2 actions if the robot is HandEmpty: Pick + Place.
+          - 1 action if the robot is already Holding that same block: Place.
+        - If the robot holds a non-goal block (or a block whose goal is already satisfied),
+          it will need at least 1 extra action to "get unstuck" (place it somewhere),
+          because all Pick actions require HandEmpty.
 
-        Heuristic Initialization:
-            - The heuristic identifies which (OnShelf block shelf) facts are required in the goal.
-            - For efficiency, it extracts all (OnShelf block shelf) goals into a set.
-            - The static facts are not used as there are no static predicates in clutteredstorage2d.
+        Heuristic Initialization
+        ------------------------
+        - Parse the goal set and build a mapping: block -> required shelf (from (OnShelf b s)).
+        - No static facts are required in this domain.
 
-        Step-By-Step Thinking for Computing Heuristic:
-            1. Count the number of (OnShelf block shelf) goals not satisfied in the current state.
-               These are blocks that still need to be placed on the shelf.
-            2. For each unsatisfied (OnShelf block shelf), determine where the corresponding block is:
-                a. If it's held: Only needs to be placed (1 action).
-                b. If it's NotOnShelf: Robot must be hand-empty, pick the block (1), then place (1).
-                c. If another block is already held: First needs to put down the block (if not the target), then proceed as above.
-            3. If the robot is currently holding a block that is not needed on the shelf (i.e., not an unsatisfied goal block),
-               it must first put it down before proceeding with the next pick.
-            4. The heuristic thus estimates:
-               - For each missing goal OnShelf, needs (pick + place) unless already held (just place).
-               - If holding an "extra" block, add a "place not-on-shelf" action to clear the hand.
-            5. Returns the sum as the heuristic estimate.
-
+        Step-By-Step Thinking for Computing Heuristic
+        ---------------------------------------------
+        For a given state:
+        1) Extract whether the robot hand is empty and whether it holds some block.
+        2) Count unsatisfied goal blocks: those where (OnShelf b goal_shelf) is not true.
+        3) Base estimate:
+           - If holding the (unique) unsatisfied goal block, we count 1 for that block (Place).
+           - Otherwise, for each unsatisfied goal block, count 2 (Pick+Place).
+        4) If holding some block that is NOT the currently-needed goal block to place next,
+           add 1 as an "unload penalty" because we must place it somewhere to be able to pick.
         """
+
         def __init__(self, task):
-            # Collect relevant goal facts: all (OnShelf block shelf) entries
-            self.on_shelf_goals = set()
-            for fact in task.goals:
-                parts = fact[1:-1].split()
+            self.goals = task.goals
+            # Map each block to its goal shelf (only for (OnShelf b s) goals).
+            self.goal_shelf_of = {}
+            for g in self.goals:
+                parts = g[1:-1].split()
                 if len(parts) == 3 and parts[0] == "OnShelf":
-                    self.on_shelf_goals.add((parts[1], parts[2]))  # (block, shelf)
-            # Get blocks and shelf names
-            self.all_blocks = {block for (block, shelf) in self.on_shelf_goals}
-            self.shelves = {shelf for (block, shelf) in self.on_shelf_goals}
+                    b, s = parts[1], parts[2]
+                    self.goal_shelf_of[b] = s
 
-        def __call__(self, node):
+        def __call__(self, node) -> float:
             state = node.state
-            # Set up current block locations/status
-            on_shelf = set()
-            not_on_shelf = set()
-            held_blocks = set()
-            hand_empty = False
+
+            def match(fact, *pat):
+                parts = fact[1:-1].split()
+                return len(parts) == len(pat) and all(fnmatch(p, a) for p, a in zip(parts, pat))
+
+            hand_empty = any(match(f, "HandEmpty", "*") for f in state)
+
+            held_block = None
             for f in state:
-                parts = f[1:-1].split()
-                if parts[0] == "OnShelf":
-                    on_shelf.add((parts[1], parts[2]))
-                elif parts[0] == "NotOnShelf":
-                    not_on_shelf.add((parts[1], parts[2]))
-                elif parts[0] == "Holding":
-                    held_blocks.add(parts[2])
-                elif parts[0] == "HandEmpty":
-                    hand_empty = True
-            # Early exit if all goals already reached
-            if self.on_shelf_goals <= on_shelf:
-                return 0
+                if match(f, "Holding", "*", "*"):
+                    held_block = f[1:-1].split()[2]
+                    break
 
+            # Determine which goal blocks are unsatisfied.
+            unsat = []
+            for b, s in self.goal_shelf_of.items():
+                if f"(OnShelf {b} {s})" not in state:
+                    unsat.append(b)
+
+            if not unsat:
+                return 0.0
+
+            # Base cost: 2 per unsatisfied goal (Pick+Place), except possible 1 if already holding that goal block.
             cost = 0
-            needed = [block for (block, shelf) in self.on_shelf_goals if (block, shelf) not in on_shelf]
-
-            # If the robot is holding a block not needed as next, must put it down first (if not needed for next place)
-            if held_blocks:
-                held_block = next(iter(held_blocks))
-                if held_block in needed:
-                    # The robot is holding a needed block, one 'place' needed
-                    cost += 1
-                    needed.remove(held_block)
+            for b in unsat:
+                if held_block == b:
+                    cost += 1  # only Place needed (assuming it can be placed to goal shelf)
                 else:
-                    # The robot is holding a non-needed block, must put it down first
-                    cost += 1  # Place this non-goal block somewhere not-on-shelf
-            # Now, the hand is (or soon will be) empty; we must do pick+place for each remaining block
-            cost += 2 * len(needed)
-            return cost
+                    cost += 2  # Pick + Place
+
+            # If holding an unhelpful block, add an unload penalty (must place it somewhere first).
+            if held_block is not None:
+                # If holding a block that isn't an unsatisfied goal, or isn't the one we will place next,
+                # we must place it away first to free the hand for picks.
+                if held_block not in unsat:
+                    cost += 1
+                else:
+                    # If there are multiple unsatisfied goals and we hold one of them, that's fine;
+                    # no extra unload penalty.
+                    pass
+            else:
+                # If not holding and not hand_empty, domain usually ensures consistency, but be robust:
+                if not hand_empty:
+                    cost += 1
+
+            # Ensure heuristic is positive for non-goal states.
+            return float(max(1, cost))
 
     return ClutteredStorage2DHeuristic(task)

@@ -7,8 +7,8 @@ from conftest import MAKE_VIDEOS
 from gymnasium.wrappers import RecordVideo
 from prbench_bilevel_planning.env_models import create_bilevel_planning_models
 
-from alphatamp.approaches.cluttered_storage.heuristic_approach import (
-    HeuristicLLMApproach,
+from alphatamp.approaches.cluttered_storage.oracle_heuristic_approach import (
+    OracleHeuristicApproach,
 )
 
 
@@ -32,12 +32,12 @@ def test_heuristic_approach():
     )
 
     # Create the approach.
-    approach = HeuristicLLMApproach(
-        env_models, seed=120, samples_per_step=10, training_planning_timeout=10, use_stored_heuristic=False
+    approach = OracleHeuristicApproach(
+        env_models, seed=123, samples_per_step=10, training_planning_timeout=10, use_stored_heuristic=False
     )
 
     # Train the approach
-    obs, _ = env.reset(seed=120)
+    obs, _ = env.reset(seed=123)
 
     img = env.render()
     iio.imsave("debug.png", img)
@@ -45,7 +45,7 @@ def test_heuristic_approach():
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=500)
+    plan = approach.run_planning(obs, timeout=200)
 
     # Print refinement metrics
     m = approach.last_metrics

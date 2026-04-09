@@ -12,7 +12,7 @@ from alphatamp.approaches.cluttered_storage.reprompt_approach import (
 )
 
 
-@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
+#@pytest.mark.skip(reason="Requires LLM calls - run manually when needed")
 def test_reprompt_approach():
     """Tests for RepromptApproach()."""
 
@@ -28,16 +28,16 @@ def test_reprompt_approach():
         "clutteredstorage2d",
         env.observation_space,
         env.action_space,
-        num_blocks=3,
+        num_blocks = 3
     )
 
     # Create the approach.
     approach = RepromptApproach(
-        env_models, seed=121, samples_per_step=10, training_planning_timeout=10
+        env_models, seed=125, samples_per_step=10, training_planning_timeout=10
     )
 
     # Train the approach
-    obs, _ = env.reset(seed=121)
+    obs, _ = env.reset(seed=125)
 
     img = env.render()
     iio.imsave("debug.png", img)
@@ -45,17 +45,7 @@ def test_reprompt_approach():
     approach.train(obs)  # no-op, but keeps the pattern consistent
 
     # Create a plan
-    plan = approach.run_planning(obs, timeout=300)
-
-    # Print refinement metrics
-    m = approach.last_metrics
-    if m is not None:
-        print(f"\n=== Refinement Metrics ===")
-        print(f"  Plan length (abstract steps): {m.num_steps}")
-        print(f"  Attempts per step:            {m.attempts_per_step}")
-        print(f"  Avg attempts per step:        {m.avg_attempts_per_step:.2f}")
-        print(f"  Total sampling attempts:      {m.total_attempts}")
-        print(f"  Steps with >5 attempts:       {m.steps_above_threshold(5)}")
+    plan = approach.run_planning(obs, timeout=200)
 
     # Execute the plan
     for action in plan.actions:

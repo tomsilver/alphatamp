@@ -79,6 +79,7 @@ class RepromptLLMAbstractPlanGenerator(
         failure_context: Optional[
             Dict[str, Any]
         ] = None,  # additional failure_context parameter
+        failure_info: str = "full",  # controls how much failure info is in the prompt
     ) -> None:
         """Initialize with env models and seed."""
         super().__init__(noop_successor_fn, seed)
@@ -92,6 +93,7 @@ class RepromptLLMAbstractPlanGenerator(
             ]
         ] = None  # store llm call, so we don't recall
         self.failure_context = failure_context
+        self._failure_info = failure_info
         self._last_abstract_actions: list[GroundOperator] = []  # to store plan
         # to store failure context
         self._last_abstract_states: list[RelationalAbstractState] = []
@@ -208,20 +210,28 @@ class RepromptLLMAbstractPlanGenerator(
             idx = failed_action["index"]
             action = failed_action["action"]
             predicates = "\n".join(f"- {p}" for p in failed_action["predicates"])
-            failure_section = (
+
+            # Build failure section based on failure_info level
+            fi = self._failure_info
+            section = (
                 "Previous Attempt (FAILED)\n"
                 "-------------------------\n"
-                "The following plan was attempted but FAILED during low-level"
-                "trajectory sampling. Reason about why this plan might have failed"
+                "The following plan was attempted but FAILED during low-level "
+                "trajectory sampling. Reason about why this plan might have failed "
                 "and generate a DIFFERENT plan.\n"
                 f"Failed plan:\n{failed_plan_str}\n\n"
-                f"The plan failed at step {idx} ({action})\n"
-                "The abstract state before this action had these predicates:\n"
-                f"{predicates}"
-                f"Object positions of the failed state:\n{coords_str}\n"
-                "Reason and replan"
-                "-------------------------\n"
             )
+            if fi in ("plan_step", "plan_step_predicates", "plan_step_coords", "full"):
+                section += f"The plan failed at step {idx} ({action})\n"
+            if fi in ("plan_step_predicates", "full"):
+                section += (
+                    "The abstract state before this action had these predicates:\n"
+                    f"{predicates}\n"
+                )
+            if fi in ("plan_step_coords", "full"):
+                section += f"Object positions of the failed state:\n{coords_str}\n"
+            section += "Reason and replan\n-------------------------\n"
+            failure_section = section
 
         prompt = f"""
 You are an oracle high-level planner for a Sesame TAMP system.
@@ -292,9 +302,12 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         skeleton_batch_size: int = 100,
         num_training_skeletons_per_problem: int = 10,
         training_planning_timeout: float = 5,
+        failure_info: str = "full",
     ):
         super().__init__(env_models, seed)
         self.last_metrics: RefinementMetrics | None = None
+        self.last_abstract_plan: list[str] | None = None
+        self._failure_info = failure_info
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
@@ -315,7 +328,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
 
         # Create the llm
         cache = SQLite3PretrainedLargeModelCache(Path("llm_cache.db"))
-        self._llm = OpenAIModel("gpt-4.1", cache)
+        self._llm = OpenAIModel("gpt-5.2", cache)
 
         # Create the abstract successor function (not really used).
         self._abstract_successor_fn = RelationalAbstractSuccessorGenerator(
@@ -334,7 +347,8 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         # Create the abstract plan generator.
         initial_plan_generator: RepromptLLMAbstractPlanGenerator
         initial_plan_generator = RepromptLLMAbstractPlanGenerator(
-            self._env_models, seed=self._seed, llm=self._llm, failure_context=None
+            self._env_models, seed=self._seed, llm=self._llm, failure_context=None,
+            failure_info=self._failure_info,
         )
 
         # Finish the planner.
@@ -358,13 +372,17 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         initial_planner._refiner = tracking_refiner  # pylint: disable=protected-access
 
         # Run the planner. # Need to change the timeout param later on
-        plan, _ = initial_planner.run(problem, timeout=min(50, timeout))
+        plan, _ = initial_planner.run(problem, timeout=min(2, timeout))
         # 1. when sesame planner.run is called, the generator returns (as, aa)
         # 2. Call backtracking refiner to refine abstract plan.
         # 2a. Sample low-level traj for each abstract action
         # 3. if successful, return (plan, bpg), if failed return (none, bpg)
         # bpg contains search tree of states and actions tried. Use it next for next step
-        self.last_metrics = tracking_refiner.metrics
+        self.last_metrics = getattr(tracking_refiner, "metrics", None)
+        self.last_abstract_plan = [
+            f"{a.name}({', '.join(o.name for o in a.parameters)})"
+            for a in initial_plan_generator._last_abstract_actions  # pylint: disable=protected-access
+        ]
         if plan is not None:
             print("Initial plan succeeded.")
             return plan
@@ -389,6 +407,7 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
             seed=self._seed,
             llm=self._llm,
             failure_context=failure_context,
+            failure_info=self._failure_info,
         )
 
         replanner = SesamePlanner(
@@ -402,7 +421,11 @@ class RepromptApproach(BaseApproach[_O, _X, _U]):
         )
 
         plan, _ = replanner.run(problem, timeout=remaining_time)
-        self.last_metrics = replanner.last_metrics
+        self.last_metrics = getattr(replanner, "last_metrics", None)
+        self.last_abstract_plan = [
+            f"{a.name}({', '.join(o.name for o in a.parameters)})"
+            for a in replanned_generator._last_abstract_actions  # pylint: disable=protected-access
+        ]
 
         if plan is None:
             raise TimeoutError("No plan found")

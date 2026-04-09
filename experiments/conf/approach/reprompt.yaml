@@ -1,1 +1,2 @@
 _target_: alphatamp.approaches.cluttered_storage.reprompt_approach.RepromptApproach
+failure_info: full

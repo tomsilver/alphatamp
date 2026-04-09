@@ -1,0 +1,4 @@
+_target_: alphatamp.approaches.cluttered_storage.dumb_heuristic_approach.DumbHeuristicLLMApproach
+samples_per_step: 10
+training_planning_timeout: 10
+use_stored_heuristic: false
