@@ -75,7 +75,17 @@ _ENV_REGISTRY: dict[str, tuple[str, str, str]] = {
     "clutteredstorage2d": (
         "kinder/ClutteredStorage2D-b{n}-v0",
         "clutteredstorage2d",
-        "num_boxes",
+        "num_blocks",
+    ),
+    "motion2d": (
+        "kinder/Motion2D-p{n}-v0",
+        "motion2d",
+        "num_passages",
+    ),
+    "stickbutton2d": (
+        "kinder/StickButton2D-b{n}-v0",
+        "stickbutton2d",
+        "num_buttons",
     ),
 }
 
@@ -99,28 +109,46 @@ def _get_q_network_loss_curves(approach: SimFreeParamPolicyApproach) -> list[flo
     return list(approach.get_q_network_loss_metrics())
 
 
+def _plan_has_clearing(plan) -> bool:
+    """Return True if the plan picks AND places at least one obstruction."""
+    if plan is None:
+        return False
+    action_strs = [a.short_str for a in plan[1]]
+    has_pick = any("Pick" in s and "obstruction" in s for s in action_strs)
+    has_place = any("Place" in s and "obstruction" in s for s in action_strs)
+    return has_pick and has_place
+
+
 def _run_eval_loop(
     approach: SimFreeParamPolicyApproach,
     gym_env,
     eval_seeds: list[int],
-) -> tuple[float, int, int]:
-    """Run held-out eval episodes and return (success_rate, successes, episodes).
+) -> tuple[float, int, int, float]:
+    """Run held-out eval episodes and return (success_rate, successes, episodes, clearing_rate).
 
     Switches the approach to eval mode, runs one episode per seed in
     ``eval_seeds``, then switches back to train mode.  Each episode runs
     until either success (done=True) or resample exhaustion
     (ApproachStepError raised in eval mode).  No artificial truncation.
     No learning occurs during eval.
+
+    clearing_rate is the fraction of eval episodes whose initial plan
+    contains at least one paired PickObstruction + PlaceObstruction.
     """
     if not eval_seeds:
-        return 0.0, 0, 0
+        return 0.0, 0, 0, 0.0
 
     approach.eval()
     eval_successes = 0
+    clearing_count = 0
 
     for eval_seed in eval_seeds:
         obs, _ = gym_env.reset(seed=eval_seed)
         approach.reset_episode(obs)
+
+        plan = approach.get_abstract_plan()
+        if _plan_has_clearing(plan):
+            clearing_count += 1
 
         while True:
             try:
@@ -135,7 +163,8 @@ def _run_eval_loop(
 
     approach.train()
     num_eval = len(eval_seeds)
-    return eval_successes / num_eval, eval_successes, num_eval
+    clearing_rate = clearing_count / num_eval if num_eval else 0.0
+    return eval_successes / num_eval, eval_successes, num_eval, clearing_rate
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +286,7 @@ def main(
     exhaustion_counts: list[int] = []
     eval_success_rates: list[float] = []
     eval_cumulative_successes: list[int] = []
+    eval_clearing_rates: list[float] = []
     total_eval_successes = 0
     param_loss: list[float] = []
     q_loss: list[float] = []
@@ -265,10 +295,10 @@ def main(
     header = (
         f"{'Step':>6}  "
         f"{'[Train]':>7}  {'Roll%':>7}  {'Overall%':>8}  {'Succ':>6}  {'Exhaus':>6}  "
-        f"{'[Eval]':>6}  {'Rate%':>7}  {'Succ/N':>6}"
+        f"{'[Eval]':>6}  {'Rate%':>7}  {'Succ/N':>6}  {'Clear%':>7}"
     )
     print(header)
-    print("-" * 82)
+    print("-" * 92)
 
     for step in range(num_steps):
         logging.info("CLUTTERED RETRIEVAL STEP: %d", step)
@@ -315,7 +345,7 @@ def main(
             exhaustion_count = approach.get_resample_exhaustion_count()
 
             # --- Eval loop on fixed held-out seeds ---
-            eval_rate, eval_succ, _ = _run_eval_loop(
+            eval_rate, eval_succ, _, clearing_rate = _run_eval_loop(
                 approach, gym_env, eval_seeds
             )
             total_eval_successes += eval_succ
@@ -325,6 +355,7 @@ def main(
                 f"{'':>7}  {rolling_rate:>7.2%}  {overall_rate:>8.2%}  "
                 f"{total_successes:>6}  {exhaustion_count:>6}  "
                 f"{'':>6}  {eval_rate:>7.2%}  {eval_succ:>3}/{num_eval_seeds:<3}"
+                f"  {clearing_rate:>7.2%}"
             )
 
             log_steps.append(step + 1)
@@ -335,6 +366,7 @@ def main(
             exhaustion_counts.append(exhaustion_count)
             eval_success_rates.append(eval_rate)
             eval_cumulative_successes.append(total_eval_successes)
+            eval_clearing_rates.append(clearing_rate)
             param_loss.extend(_get_param_scorer_loss_curves(approach))
             q_loss = _get_q_network_loss_curves(approach)
 
@@ -357,6 +389,7 @@ def main(
         "exhaustion_counts": exhaustion_counts,
         "eval_success_rates": eval_success_rates,
         "eval_cumulative_successes": eval_cumulative_successes,
+        "eval_clearing_rates": eval_clearing_rates,
         "param_loss": param_loss,
         "q_loss": q_loss,
         "exploit_plan_counts": exploit_plan_counts,

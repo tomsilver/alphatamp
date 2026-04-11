@@ -189,6 +189,7 @@ experiments/temp/
 # Slurm output files
 experiments/slurm_outputs
 experiments/oracle_outputs
+experiments/slurm_outputs_other_envs
 
 # Library files from imports
 lib/

@@ -240,6 +240,12 @@ def train_q_network(
 
     for abstract_plan in abstract_plans:
         try:
+            # Skip plans with no actions (empty targets would cause shape
+            # mismatch with the sequence embedding in train_step)
+            _, actions = abstract_plan
+            if len(actions) == 0:
+                continue
+
             # Compute targets for each action in this plan
             targets = compute_per_action_targets(
                 abstract_plan,

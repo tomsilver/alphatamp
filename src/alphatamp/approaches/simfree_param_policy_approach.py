@@ -810,6 +810,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 total_attempts,
                 self._abstract_action_window,
             )
+            for key, window in action_data.items():
+                states, actions = key
+                key_failures = sum(window)
+                key_attempts = len(window)
+                history_str = " -> ".join(
+                    a.short_str for a in actions
+                ) if actions else "(initial)"
+                logging.info(
+                    "[Scorer:%s] history=[%s] failures=%d attempts=%d rate=%.4f",
+                    op.short_str,
+                    history_str,
+                    key_failures,
+                    key_attempts,
+                    key_failures / key_attempts if key_attempts > 0 else float("nan"),
+                )
 
     def _resample_controller(self, x: _X, obs: _O) -> None:
         """Resample parameters and reset the controller with the specified
@@ -828,9 +843,11 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
 
         # Epsilon-greedy parameter selection: with probability epsilon, sample
         # uniformly at random (explore); otherwise use the learned scorer
-        # (exploit via greedy argmax).
+        # (exploit via greedy argmax).  During evaluation, always exploit.
         explore_roll = self._rng.random()
-        if self._use_parameter_scorer and explore_roll >= self._param_epsilon:
+        if self._use_parameter_scorer and (
+            self._train_or_eval == "eval" or explore_roll >= self._param_epsilon
+        ):
             parameter_policy = ParameterPolicy(
                 self._current_controller,
                 scoring_function,
@@ -967,6 +984,8 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 )
                 # If training, store the previous parameter.
                 if self._train_or_eval == "train":
+                    # Record a single failure for the abstract action on exhaustion
+                    # (not per-resample, to avoid inflating failure counts).
                     self._add_most_recent_abstract_action_to_dataset("failure")
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
