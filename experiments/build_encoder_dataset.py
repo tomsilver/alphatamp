@@ -10,9 +10,12 @@ Run from repo root, e.g.:
     python experiments/build_encoder_dataset.py
 
 Modes (run.mode):
-  "all"     - build vocab then dataset in one shot (default, original behaviour)
-  "vocab"   - only build and save the vocabulary, then exit
-  "dataset" - skip vocab collection, load vocab from run.vocab_file instead
+    "all"     - build vocab then dataset in one shot (default, original behaviour)
+    "vocab"   - only build and save the vocabulary, then exit
+    "dataset" - skip vocab collection, load vocab from run.vocab_file instead
+    "all_filtered" - build uncapped full vocab, then build a small filter-seed
+                                     reference dataset (optionally pre-capped to top-k via
+                                     vocab.limit_full_vocab_before_filter), then filter offline
 
 Parallelism (run.num_workers):
   1  - sequential, no subprocess overhead (default, original behaviour)
@@ -333,11 +336,33 @@ def main(cfg: DictConfig) -> None:
     filter_seed_stop: int | None = None
     filter_threshold: float = 0.0
     filter_min_appl_count: int = 0
+    limit_full_vocab_before_filter = False
     if mode == "all_filtered":
         filter_seed_start = int(cfg.vocab.get("filter_seed_start", 500))
         filter_seed_stop = int(cfg.vocab.get("filter_seed_stop", 525))
         filter_threshold = float(cfg.vocab.get("filter_success_rate_threshold", 0.0))
         filter_min_appl_count = int(cfg.vocab.get("filter_min_appl_count", 0))
+        limit_full_vocab_before_filter_cfg = cfg.vocab.get(
+            "limit_full_vocab_before_filter", False
+        )
+        if isinstance(limit_full_vocab_before_filter_cfg, bool):
+            limit_full_vocab_before_filter = limit_full_vocab_before_filter_cfg
+        elif isinstance(limit_full_vocab_before_filter_cfg, str):
+            cfg_value = limit_full_vocab_before_filter_cfg.strip().lower()
+            if cfg_value in {"1", "true", "yes", "y", "on"}:
+                limit_full_vocab_before_filter = True
+            elif cfg_value in {"0", "false", "no", "n", "off"}:
+                limit_full_vocab_before_filter = False
+            else:
+                raise ValueError(
+                    "vocab.limit_full_vocab_before_filter must be boolean; "
+                    f"got {limit_full_vocab_before_filter_cfg!r}"
+                )
+        else:
+            raise ValueError(
+                "vocab.limit_full_vocab_before_filter must be boolean; "
+                f"got {limit_full_vocab_before_filter_cfg!r}"
+            )
         if filter_seed_stop <= filter_seed_start:
             raise ValueError(
                 "vocab.filter_seed_stop must be greater than vocab.filter_seed_start"
@@ -371,6 +396,11 @@ def main(cfg: DictConfig) -> None:
     # Step 1: obtain vocabulary
     # ------------------------------------------------------------------
     vocab: list[FrozenGroundOpSequence]
+    # all_filtered tracks two vocabularies:
+    # 1) uncapped full vocabulary saved to disk
+    # 2) optional capped Stage-B vocabulary used for filter-seed simulation
+    full_vocab_uncapped: list[FrozenGroundOpSequence] | None = None
+    stage_b_vocab: list[FrozenGroundOpSequence] | None = None
 
     if mode == "dataset":
         # Load pre-built vocabulary from file.
@@ -392,8 +422,7 @@ def main(cfg: DictConfig) -> None:
 
         if mode == "all_filtered":
             # Collect counts for ALL observed sequences without any top-k cap.
-            # Stage B will evaluate the full set; top-k selection happens after
-            # filtering by success rate (Stage C).
+            # Stage B can optionally run on a top-k slice from _refresh_vocabulary().
             print(
                 "Building full vocabulary (uncapped) from seeds "
                 f"[{vocab_seed_start}, {vocab_seed_stop})..."
@@ -401,8 +430,25 @@ def main(cfg: DictConfig) -> None:
             approach.build_full_vocab(vocab_seeds)
             counts = approach.get_op_sequence_counts()
             # Sort by descending frequency so the order is deterministic.
-            vocab = sorted(counts, key=lambda seq: -counts[seq])
-            approach.set_vocab(vocab)
+            full_vocab_uncapped = sorted(counts, key=lambda seq: -counts[seq])
+            vocab = list(full_vocab_uncapped)
+
+            if limit_full_vocab_before_filter:
+                # Reuse EncoderApproach top-k logic for Stage B capping.
+                approach._refresh_vocabulary()  # pylint: disable=protected-access
+                stage_b_vocab = approach.get_op_sequence_vocabulary()
+                print(
+                    "[all_filtered] Stage B pre-cap enabled: "
+                    f"full_uncapped={len(full_vocab_uncapped)} → "
+                    f"stage_b={len(stage_b_vocab)} "
+                    f"(encoder.vocabulary_size={vocabulary_size})"
+                )
+            else:
+                stage_b_vocab = list(full_vocab_uncapped)
+                print(
+                    "[all_filtered] Stage B pre-cap disabled: "
+                    f"using full vocabulary ({len(stage_b_vocab)} sequences)"
+                )
             vocab_out_name = f"encoder_vocab_full_{split_name}.pkl"
         else:
             print(
@@ -435,12 +481,28 @@ def main(cfg: DictConfig) -> None:
     # all_filtered stops here: run Stages B + C then exit.
     if mode == "all_filtered":
         assert filter_seed_start is not None and filter_seed_stop is not None
+        assert stage_b_vocab is not None
         filter_seeds = list(range(filter_seed_start, filter_seed_stop))
+        stage_b_vocab_for_filter = list(stage_b_vocab)
+        full_vocab_size_uncapped = (
+            len(full_vocab_uncapped)
+            if full_vocab_uncapped is not None
+            else len(stage_b_vocab_for_filter)
+        )
+        stage_b_vocab_size = len(stage_b_vocab_for_filter)
+        pre_stage_b_cap_applied = (
+            limit_full_vocab_before_filter
+            and stage_b_vocab_size < full_vocab_size_uncapped
+        )
 
-        # ---- Stage B: simulator run on filter seeds with FULL vocabulary ----
+        # ---- Stage B: simulator run on filter seeds ----
         print(
             f"[all_filtered] Stage B: building filter-seed reference dataset "
-            f"({len(filter_seeds)} seeds × {len(vocab)} vocab sequences)..."
+            f"({len(filter_seeds)} seeds × {stage_b_vocab_size} vocab sequences)..."
+        )
+        print(
+            f"[all_filtered] Stage B vocab sizes: uncapped_full={full_vocab_size_uncapped}, "
+            f"stage_b={stage_b_vocab_size}, pre_cap_applied={pre_stage_b_cap_applied}"
         )
         print(
             f"[all_filtered] Stage B workers: {num_workers} "
@@ -448,11 +510,11 @@ def main(cfg: DictConfig) -> None:
         )
         if num_workers == 1:
             approach = _build_approach(**approach_kwargs)
-            approach.set_vocab(vocab)
+            approach.set_vocab(stage_b_vocab_for_filter)
             filter_dataset = approach.build_dataset(filter_seeds)
         else:
             filter_dataset = _build_dataset_parallel(
-                vocab=vocab,
+                vocab=stage_b_vocab_for_filter,
                 split_seeds=filter_seeds,
                 num_workers=num_workers,
                 **approach_kwargs,
@@ -467,6 +529,11 @@ def main(cfg: DictConfig) -> None:
                 "config": config_dict,
                 "filter_seed_start": filter_seed_start,
                 "filter_seed_stop": filter_seed_stop,
+                "limit_full_vocab_before_filter": limit_full_vocab_before_filter,
+                "pre_stage_b_cap_applied": pre_stage_b_cap_applied,
+                "full_vocab_size_uncapped": full_vocab_size_uncapped,
+                "stage_b_vocab_size": stage_b_vocab_size,
+                "vocabulary_size_setting": vocabulary_size,
                 "dataset": filter_dataset,
             },
         )
@@ -501,12 +568,23 @@ def main(cfg: DictConfig) -> None:
             filtered_vocab_path,
             {
                 "vocabulary": filtered_vocab,
-                "vocabulary_full": vocab,
+                "vocabulary_full": (
+                    list(full_vocab_uncapped)
+                    if full_vocab_uncapped is not None
+                    else list(stage_b_vocab_for_filter)
+                ),
+                "vocabulary_stage_b": stage_b_vocab_for_filter,
                 "keep_indices": keep_indices,
+                "keep_indices_reference_vocab": "vocabulary_stage_b",
                 "filter_seed_ids": filter_seeds,
                 "filter_seed_start": filter_seed_start,
                 "filter_seed_stop": filter_seed_stop,
                 "filter_success_rate_threshold": filter_threshold,
+                "limit_full_vocab_before_filter": limit_full_vocab_before_filter,
+                "pre_stage_b_cap_applied": pre_stage_b_cap_applied,
+                "full_vocab_size_uncapped": full_vocab_size_uncapped,
+                "stage_b_vocab_size": stage_b_vocab_size,
+                "vocabulary_size_setting": vocabulary_size,
                 "filter_stats": stats,
                 "config": config_dict,
                 "split": split_name,
@@ -527,6 +605,11 @@ def main(cfg: DictConfig) -> None:
                 "filter_seed_start": filter_seed_start,
                 "filter_seed_stop": filter_seed_stop,
                 "filter_success_rate_threshold": filter_threshold,
+                "limit_full_vocab_before_filter": limit_full_vocab_before_filter,
+                "pre_stage_b_cap_applied": pre_stage_b_cap_applied,
+                "full_vocab_size_uncapped": full_vocab_size_uncapped,
+                "stage_b_vocab_size": stage_b_vocab_size,
+                "vocabulary_size_setting": vocabulary_size,
                 "filter_stats": stats,
                 "dataset": filtered_dataset,
             },

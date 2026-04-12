@@ -5,7 +5,8 @@ set -euo pipefail
 #
 # all_filtered does:
 #   A) full vocab build on vocab.seed range
-#   B) small filter-seed dataset build on full vocab
+#   B) small filter-seed dataset build on full vocab (or optional pre-capped
+#      top-k vocab when vocab.limit_full_vocab_before_filter=true)
 #   C) offline vocab filtering (remove never-successful-when-applicable for
 #      threshold=0.0)
 #
@@ -16,6 +17,13 @@ set -euo pipefail
 #         Defaults to "o2 o3 o4".
 #         Example: bash experiments/launch_encoder_all_filtered_matrix.sh "sb1 sb2 sb3"
 #         Example: bash experiments/launch_encoder_all_filtered_matrix.sh "o2 o3 o4 sb1 sb2 sb3"
+#
+# Optional Stage-B pre-cap (uses encoder.vocabulary_size as top-k):
+#   sbatch experiments/build_encoder_dataset.slurm all_filtered 0 1 \
+#     run.mode=all_filtered \
+#     encoder_dataset_difficulty=o2 \
+#     vocab.limit_full_vocab_before_filter=true \
+#     encoder.vocabulary_size=128
 #
 # Outputs per difficulty (routed to artifacts_ob/ or artifacts_sb/ automatically):
 #   artifacts_{ob|sb}/encoder_<difficulty>/encoder_vocab_filtered_all_filtered.pkl
@@ -45,7 +53,8 @@ for difficulty in $ENVS; do
     vocab.seed_stop=500 \
     vocab.filter_seed_start=500 \
     vocab.filter_seed_stop=550 \
-    vocab.filter_success_rate_threshold=0.0
+    vocab.filter_success_rate_threshold=0.05 \
+    encoder.vocabulary_size=100
 
 done
 
