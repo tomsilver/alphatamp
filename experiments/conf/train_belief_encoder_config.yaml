@@ -1,0 +1,47 @@
+data:
+  train_path: ???  # required: path to training HDF5
+  val_path: ???    # required: path to validation HDF5
+
+skeleton_encoder:
+  d_model: 128
+  n_heads: 4
+  n_layers: 2
+  max_seq_len: 256
+  dropout: 0.1
+
+token_builder:
+  d_out: 64  # d_token = d_skel + d_out = 192
+
+belief_encoder:
+  d_token: 192  # must equal skeleton_encoder.d_model + token_builder.d_out
+  d_model: 128
+  n_heads: 4
+  n_layers: 4
+  ffn_dim: 256
+  dropout: 0.1
+
+heads:
+  hidden_dim: null
+  dropout: 0.1
+  joint_y_n_heads: 4
+  joint_y_rank: 8
+
+loss:
+  lambda_f: 0.5
+  lambda_t: 0.3
+
+train:
+  seed: 0
+  device: auto
+  num_epochs: 50
+  batch_size: 64
+  lr: 3e-4
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  lr_min_fraction: 0.01
+  warmup_epochs: 5
+  epsilon: 0.1
+  log_every_steps: 20
+
+checkpoint:
+  output_dir: checkpoints/belief_encoder
