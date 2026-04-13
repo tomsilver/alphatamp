@@ -61,13 +61,15 @@ def summarize_dataset(dataset_dir: Path) -> None:
 
         seeds_loaded += 1
 
-        # Parameter dataset: dict[str, list[(obs, param, label)]]
+        # Parameter dataset: dict[str, list[entry]] where each entry is either
+        # the legacy (obs, param, label) 3-tuple or the newer
+        # (group_id, obs, param, label) 4-tuple. The label is always last.
         param_data = load_pickle(param_path)
         for action_key, entries in param_data.items():
             total_parameters += len(entries)
             param_counts_per_action[action_key] += len(entries)
             param_success_per_action[action_key] += sum(
-                1 for _, _, label in entries if label == 1
+                1 for entry in entries if entry[-1] == 1
             )
 
         # Abstract plan dataset: list[(sequence, sequence_length, label)]

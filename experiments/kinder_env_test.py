@@ -38,8 +38,8 @@ from alphatamp.approaches.feasibility_classifiers.filter_feasibility_classifier 
 from alphatamp.approaches.scorers.abstract_action_scorers.regressor_abstract_action_scorer import (  # pylint:disable=line-too-long
     AbstractActionScorer,
 )
-from alphatamp.approaches.scorers.parameter_scorers.classifier_parameter_scorer import (
-    ClassifierParameterScorer,
+from alphatamp.approaches.scorers.parameter_scorers.ranking_parameter_scorer import (
+    RankingParameterScorer,
 )
 from alphatamp.approaches.simfree_param_policy_approach import (
     SimFreeParamPolicyApproach,
@@ -248,7 +248,7 @@ def main(
         env_models=sim_free_env_models,
         feasibility_classifier_learner=feasibility_learner,
         train_explorer=train_explorer,
-        parameter_scorer_class=ClassifierParameterScorer,
+        parameter_scorer_class=RankingParameterScorer,
         parameter_scorer_configs=parameter_scorer_configs,
         abstract_action_scorer_class=AbstractActionScorer,
         abstract_action_scorer_configs={"configs": abstract_action_configs},

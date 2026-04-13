@@ -89,7 +89,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         use_abstract_plan_scorer: bool = True,
         use_parameter_scorer: bool = True,
         abstract_action_window: int = 50,
-        param_epsilon: float = 0.5,
+        param_epsilon: float = 0.0,
     ) -> None:
         super().__init__(env_models, seed)
         self._feasibility_classifier_learner = feasibility_classifier_learner
@@ -140,6 +140,14 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._most_recent_parameter: Any | None = None
         self._most_recent_abstract_action_descriptor: str | None = None
         self._parameter_selection_obs: _O | None = None
+
+        # Resample-window group id: a monotonically-increasing counter that
+        # tags every parameter sample with the "group" of resamples it was
+        # drawn with (i.e. same episode, same plan step). Parameters sharing
+        # a group competed on approximately the same state and are the basis
+        # for pairwise ranking training (positives beat negatives in-group).
+        self._resample_group_counter: int = 0
+        self._current_resample_group_id: int = 0
 
         # Abstract Plan Dataset — keyed by (abstract_states, abstract_actions) to
         # prevent duplicate entries from repeated resample failures
@@ -358,31 +366,62 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             return obs.vec(objects).astype(np.float64)
         return np.asarray(obs, dtype=np.float64)
 
-    def _generate_parameter_scorer_training_data(
-        self, features_and_labels: list
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Reformat training data into numpy arrays."""
+    def _generate_parameter_scorer_pairs(
+        self, data: list, max_pairs_per_group: int = 16
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """Build (positive, negative) training pairs from a resample-window dataset.
 
-        features_list = []
-        labels_list = []
+        Each entry in `data` is `(group_id, state, parameter, label)`. Entries
+        sharing a `group_id` all came from the same (episode, plan step)
+        resample window, so a positive ∈ group and a negative ∈ group form a
+        valid contrastive pair (the positive parameter was strictly better
+        than the negative on that attempt).
 
-        # Generate a row in the training dataset.
-        for datapoint in features_and_labels:
-            state, parameter, label = datapoint
-            state_arr = self._obs_to_feature_vec(state)
-            parameter_arr = np.array(parameter)
+        Groups that contain only positives or only negatives yield no pairs
+        and are skipped — ranking requires both.
 
-            # The features are the state observation and the parameter.
-            feature_arr = np.append(state_arr, parameter_arr)
-            label_arr = np.array(label)
+        `max_pairs_per_group` caps the pos×neg product to prevent a single
+        high-resample group from dominating training.
+        """
+        groups: defaultdict[int, dict[str, list[np.ndarray]]] = defaultdict(
+            lambda: {"pos": [], "neg": []}
+        )
+        for entry in data:
+            if len(entry) != 4:
+                # Legacy 3-tuple format without group ids — skip. Old pickles
+                # can still be loaded for inspection, just not used for
+                # ranking training.
+                continue
+            group_id, state, parameter, label = entry
+            feat = np.append(
+                self._obs_to_feature_vec(state), np.array(parameter)
+            )
+            groups[group_id]["pos" if label == 1 else "neg"].append(feat)
 
-            features_list.append(feature_arr)
-            labels_list.append(label_arr)
+        pos_list: list[np.ndarray] = []
+        neg_list: list[np.ndarray] = []
+        contributing_groups = 0
+        for g in groups.values():
+            if not g["pos"] or not g["neg"]:
+                continue
+            contributing_groups += 1
+            pairs_added = 0
+            for p in g["pos"]:
+                for n in g["neg"]:
+                    if pairs_added >= max_pairs_per_group:
+                        break
+                    pos_list.append(p)
+                    neg_list.append(n)
+                    pairs_added += 1
+                if pairs_added >= max_pairs_per_group:
+                    break
 
-        features = np.vstack(features_list)
-        labels = np.vstack(labels_list).ravel()
-
-        return (features, labels)
+        if not pos_list:
+            return None, None
+        return (
+            np.vstack(pos_list),
+            np.vstack(neg_list),
+        )
 
     def train_parameter_policy(self, parameter_dataset: dict[str, list]):
         """Train each abstract action's parameter policy given dataset."""
@@ -391,35 +430,42 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             abstract_action,
             scoring_function,
         ) in self._abstract_action_to_scoring_function.items():
-            # Segment data for each ground operator.
-
             abstract_action_descriptor = abstract_action.short_str
-            if abstract_action_descriptor in parameter_dataset:
-                features_and_labels = parameter_dataset[abstract_action_descriptor]
+            if abstract_action_descriptor not in parameter_dataset:
+                continue
 
-                # Generate training data.
-                features, labels = self._generate_parameter_scorer_training_data(
-                    features_and_labels
+            data = parameter_dataset[abstract_action_descriptor]
+            pos, neg = self._generate_parameter_scorer_pairs(data)
+            if pos is None or neg is None:
+                logging.info(
+                    "[ParamPolicy] %s n=%d: no contrastive pairs yet (need both "
+                    "a success and a failure in the same resample window) — "
+                    "skipping training",
+                    abstract_action_descriptor,
+                    len(data),
                 )
+                continue
 
-                # Train the scoring function for each grounded skill.
-                scoring_function.train(features, labels)
+            scoring_function.train(pos, neg)
 
-                # Log loss info if the scorer exposes sklearn MLPClassifier internals.
+            # Ranking scorer exposes a growing loss_curve_ list; sklearn
+            # classifier scorer exposes a per-fit loss_curve_ on its inner
+            # estimator. Both cases are logged best-effort for visibility.
+            curve: list[float] | None = getattr(
+                scoring_function, "loss_curve_", None
+            )
+            if curve is None:
                 clf = getattr(scoring_function, "_classifier", None)
-                if clf is not None and hasattr(clf, "loss_curve_"):
-                    n_pos = int(labels.sum())
-                    n_neg = len(labels) - n_pos
-                    logging.info(
-                        "[ParamPolicy] %s n=%d (pos=%d neg=%d) iters=%d loss: %.4f → %.4f",  # pylint:disable=line-too-long
-                        abstract_action_descriptor,
-                        len(labels),
-                        n_pos,
-                        n_neg,
-                        clf.n_iter_,
-                        clf.loss_curve_[0],
-                        clf.loss_,
-                    )
+                if clf is not None:
+                    curve = getattr(clf, "loss_curve_", None)
+            if curve:
+                logging.info(
+                    "[ParamPolicy] %s pairs=%d loss: %.4f → %.4f",
+                    abstract_action_descriptor,
+                    len(pos),
+                    curve[0],
+                    curve[-1],
+                )
 
     def _generate_abstract_action_scorer_training_data(
         self, features_and_labels: list
@@ -720,7 +766,12 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         label = 1 if training_label == "success" else 0
 
         self._parameter_dataset[self._most_recent_abstract_action_descriptor].append(
-            (self._parameter_selection_obs, self._most_recent_parameter, label)
+            (
+                self._current_resample_group_id,
+                self._parameter_selection_obs,
+                self._most_recent_parameter,
+                label,
+            )
         )
 
     def _add_most_recent_abstract_action_to_dataset(self, training_label: str):
@@ -826,11 +877,21 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     key_failures / key_attempts if key_attempts > 0 else float("nan"),
                 )
 
-    def _resample_controller(self, x: _X, obs: _O) -> None:
+    def _resample_controller(self, x: _X, obs: _O, new_group: bool = False) -> None:
         """Resample parameters and reset the controller with the specified
-        observation."""
+        observation.
+
+        If `new_group` is True, bump the resample-window group id before
+        sampling. Callers should pass `new_group=True` when the current plan
+        step has just advanced (or the plan was replaced), and leave it False
+        for resamples within the same window.
+        """
 
         assert self._current_abstract_plan is not None
+
+        if new_group:
+            self._resample_group_counter += 1
+            self._current_resample_group_id = self._resample_group_counter
 
         # Get the current abstract action and controller.
         a = self._current_abstract_plan[1][self._current_abstract_plan_step]
@@ -841,13 +902,27 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         self._current_controller = self._controller_generator(a)
         scoring_function = self._abstract_action_to_scoring_function[a]
 
-        # Epsilon-greedy parameter selection: with probability epsilon, sample
-        # uniformly at random (explore); otherwise use the learned scorer
-        # (exploit via greedy argmax).  During evaluation, always exploit.
+        # Parameter selection strategy:
+        #   - Training: Thompson sampling over the scorer's bootstrapped
+        #     ensemble — one head drawn per decision, argmax over
+        #     `param_sample_count` candidates under that single head. The
+        #     legacy `param_epsilon` knob is preserved for ablation; set it
+        #     to 0 (the default) to run pure Thompson.
+        #   - Evaluation: deterministic exploit on the scorer's exploit head
+        #     so decisions within a run are directly comparable.
         explore_roll = self._rng.random()
         if self._use_parameter_scorer and (
             self._train_or_eval == "eval" or explore_roll >= self._param_epsilon
         ):
+            if self._train_or_eval == "eval":
+                exploit_fn = getattr(scoring_function, "exploit", None)
+                if exploit_fn is not None:
+                    exploit_fn()
+            else:
+                sample_head_fn = getattr(scoring_function, "sample_head", None)
+                if sample_head_fn is not None:
+                    sample_head_fn(self._rng)
+
             parameter_policy = ParameterPolicy(
                 self._current_controller,
                 scoring_function,
@@ -856,9 +931,10 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
             obs_vec = self._obs_to_feature_vec(obs)
             optimal_params = parameter_policy.sample_parameters(x, obs_vec, self._rng)
             logging.debug(
-                "[ParamEpsilon] EXPLOIT eps=%.3f action=%s",
-                self._param_epsilon,
+                "[ParamPolicy] %s action=%s eps=%.3f (Thompson head draw)",
+                "EXPLOIT" if self._train_or_eval == "eval" else "THOMPSON",
                 a.short_str,
+                self._param_epsilon,
             )
         else:
             optimal_params = self._current_controller.sample_parameters(x, self._rng)
@@ -943,7 +1019,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
         x = self._env_models.observation_to_state(self._last_observation)
         # If we advanced, we need to reset a new parameterized controller.
         if advanced:
-            self._resample_controller(x, self._last_observation)
+            self._resample_controller(x, self._last_observation, new_group=True)
             self._reset_controller = False
 
         # We are using the same controller as before.
@@ -983,10 +1059,7 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                     self._max_resamples,
                 )
                 # If training, store the previous parameter.
-                if self._train_or_eval == "train":
-                    # Record a single failure for the abstract action on exhaustion
-                    # (not per-resample, to avoid inflating failure counts).
-                    self._add_most_recent_abstract_action_to_dataset("failure")
+                if self._train_or_eval == "train": 
                     self._add_most_recent_parameter_to_dataset("failure")
                     self._add_abstract_plan_to_dataset("failure")
 
@@ -1012,6 +1085,9 @@ class SimFreeParamPolicyApproach(SimulatorFreeBaseApproach[_O, _X, _U]):
                 self._timestep,
                 current_plan_str,
             )
+            # Record a single failure for the abstract action on exhaustion
+            # (not per-resample, to avoid inflating failure counts).
+            self._add_most_recent_abstract_action_to_dataset("failure")
             if self._resample_exhaustion_count % self._train_every == 0:
                 self._update_scorers()
                 self.train_ensemble_nets()
