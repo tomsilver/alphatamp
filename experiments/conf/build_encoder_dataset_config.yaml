@@ -44,5 +44,10 @@ vocab:
   # Skeletons with 0 < applicable_count < this value are removed (too little
   # data to trust their success rate). Set to 0 to disable.
   filter_min_appl_count: 15
+  # Optional Stage-B pre-cap for all_filtered mode.
+  # false: run filter-seed simulation on uncapped full vocab (original behavior)
+  # true: run filter-seed simulation on top-k vocab from _refresh_vocabulary(),
+  #       where k=encoder.vocabulary_size. Stage-A full vocab artifact remains uncapped.
+  limit_full_vocab_before_filter: true
 
 output_dir: artifacts_ob/encoder_o4
