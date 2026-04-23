@@ -1,0 +1,40 @@
+defaults:
+  - env: clutteredstorage2d_b5
+  - _self_
+
+# Which split + how many problems.
+split: train
+problem_seed_start: 0
+problem_seed_end: 500
+num_problems: 500
+
+# When set, overrides ``[problem_seed_start, problem_seed_end)`` and collects
+# exactly the listed problem ids. Useful for SLURM --array chunks and for
+# Hydra multirun. Example CLI override: ``'problem_ids=[0,5,10]'``.
+problem_ids: null
+
+# In-process worker count. 1 = sequential (today's behavior). Set to the
+# cluster's cpus_per_task (typically 8) to parallelize problem_id collection
+# across cores inside a single SLURM job. Uses spawn start method so
+# pyperplan/bilevel_planning module caches are rebuilt per worker.
+workers: 1
+
+# Pool / refinement budgets.
+K_max: 50
+abstract_plan_timeout_s: 30.0
+refinement_timeout_s: 20.0
+num_sampling_attempts_per_step: 10
+max_trajectory_steps: 100
+
+# Seeding / provenance.
+heuristic_name: "hff"
+refinement_seed_rule: "v1_blake2b_problem_skeleton"
+collect_instrumentation: false
+state_path_depth: "s0_sL_only"
+
+# IO.
+data_root: "data/spectre"
+
+hydra:
+  job:
+    chdir: false

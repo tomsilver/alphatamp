@@ -1,0 +1,13 @@
+defaults:
+  - env: clutteredstorage2d_b5
+  - _self_
+
+split: train          # vocab is *always* extracted from train per method spec §7.2
+data_root: "data/spectre"
+validate_splits:      # after extraction, OOV-check these splits and warn
+  - val
+  - test
+
+hydra:
+  job:
+    chdir: false
