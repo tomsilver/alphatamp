@@ -94,17 +94,23 @@ def build_toy_episode(
 
     s0_atoms: set = {ON_TABLE([b]) for b in blocks} | {CLEAR([b]) for b in blocks}
     s0 = _state(s0_atoms, {robot, *blocks})
-    goal_atoms = frozenset({HOLDING([robot, blocks[0]])})
+    # Goal uses a persistent-state predicate (``Clear``), not the transient
+    # ``Holding``. This mirrors the real cluttered-storage goal (``OnShelf``,
+    # not ``Holding``) — so ``Holding`` lives purely in intermediate states
+    # and exercises the trajectory-reconstruction path in vocab extraction.
+    goal_atoms = frozenset({CLEAR([blocks[0]])})
 
     skels: list[SkeletonRecord] = []
     outs: list[OutcomeRecord] = []
     for i, outcome in enumerate(outcomes):
         pick = PICK.ground((robot, blocks[i]))
         place = PLACE.ground((robot, blocks[i]))
-        final_atoms = (s0_atoms - {ON_TABLE([blocks[i]])}) | {
-            HOLDING([robot, blocks[i]])
-        }
-        final = _state(final_atoms, {robot, *blocks})
+        # Pick → Place on the same block is a STRIPS-null cycle: after Pick
+        # we have HOLDING(robot, b_i) and lose OnTable(b_i); after Place we
+        # restore OnTable(b_i), Clear(b_i) and drop HOLDING. Net effect on
+        # atoms is zero. We store the true progression so the fixture mirrors
+        # real planner output (where HOLDING never appears in s_L either).
+        final = _state(set(s0_atoms), {robot, *blocks})
         skels.append(
             SkeletonRecord(
                 skeleton_idx=i,

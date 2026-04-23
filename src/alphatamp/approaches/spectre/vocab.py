@@ -7,6 +7,18 @@ extracted from the training split *only* and then frozen for val/test use.
 The ``<OOV>`` slot is reserved at index 0 even though v0.1 hard-fails on OOV
 (``SPECTRE_METHOD_SPEC.md`` §8.5); this way, the graceful-fallback upgrade
 path is a one-line change.
+
+**Trajectory coverage.** Because we persist only ``s_0`` and the per-skeleton
+``final_abstract_state`` (Substage A, §4.1.5), a naive scan of stored atoms
+misses any predicate that only ever appears in intermediate states — e.g.
+``Holding(?robot, ?block)`` in ClutteredStorage2D, which is added by a Pick
+and deleted by the matching Place, so it never shows up in ``s_0`` or
+``s_L`` of a goal-reaching plan. We close this hole by reconstructing the full
+trajectory from ``(s_0, operator_seq)`` via STRIPS progression
+(:func:`alphatamp.approaches.spectre.trajectory.reconstruct_trajectory`) and
+scanning every atom in every reachable state. As a side benefit, this also
+means switching to Substage B later needs no schema change — the intermediate
+states are already available on demand.
 """
 
 from __future__ import annotations
@@ -15,7 +27,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from bilevel_planning.structs import RelationalAbstractState
+
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
+from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
 OOV_TOKEN = "<OOV>"
 
@@ -83,6 +98,11 @@ class Vocab:
 def extract_vocab(split_dir: Path, config_hash: str) -> Vocab:
     """Scan every episode in ``<split_dir>/episodes/`` and collect the vocab.
 
+    For each skeleton we reconstruct ``[s_0, s_1, …, s_L]`` via STRIPS
+    progression and scan every atom in every state — not just the stored
+    ``s_0`` / ``final_abstract_state`` — so predicates that only live in
+    intermediate states are not missed.
+
     Indices are assigned in lexicographic order for determinism; ``<OOV>`` is
     reserved at index 0 in each table.
     """
@@ -98,14 +118,13 @@ def extract_vocab(split_dir: Path, config_hash: str) -> Vocab:
     max_pool = 0
     max_per_type: dict[str, int] = {}
 
-    def _record_state(state) -> None:
-        nonlocal max_atoms, max_objs
+    def _record_state(state: RelationalAbstractState) -> None:
+        nonlocal max_atoms, max_objs, max_pred_arity
         max_atoms = max(max_atoms, len(state.atoms))
         max_objs = max(max_objs, len(state.objects))
         type_counts: dict[str, int] = {}
         for atom in state.atoms:
             predicate_arity.setdefault(atom.predicate.name, atom.predicate.arity)
-            nonlocal max_pred_arity
             max_pred_arity = max(max_pred_arity, atom.predicate.arity)
             for e in atom.entities:
                 type_names.add(e.type.name)
@@ -126,6 +145,18 @@ def extract_vocab(split_dir: Path, config_hash: str) -> Vocab:
                 type_names.add(e.type.name)
         for skel in ep.skeleton_pool:
             max_skel_len = max(max_skel_len, len(skel.operator_seq))
+            # Reconstruct the full trajectory so predicates like Holding —
+            # which appear only between a Pick's add-effect and its Place's
+            # delete-effect — are captured in the vocab.
+            trajectory = reconstruct_trajectory(
+                ep.initial_abstract_state, skel.operator_seq
+            )
+            # trajectory[0] == ep.initial_abstract_state, already recorded above.
+            for state in trajectory[1:]:
+                _record_state(state)
+            # Defense in depth: also scan the stored final; divergence from
+            # trajectory[-1] would indicate schema corruption but does not
+            # block vocab extraction.
             _record_state(skel.final_abstract_state)
             for op in skel.operator_seq:
                 operator_names.add(op.name)
@@ -159,30 +190,43 @@ def extract_vocab(split_dir: Path, config_hash: str) -> Vocab:
 
 
 def validate_vocab(vocab: Vocab, split_dir: Path) -> list[str]:
-    """Return a list of OOV findings; empty list means clean.
+    """Return a deduplicated list of OOV findings; empty means clean.
 
-    Does not raise — the caller decides whether to hard-fail. Findings are
-    human-readable strings of the form ``"operator 'X' in ep_00003 #2"``.
+    Does not raise — the caller decides whether to hard-fail. Findings check both stored
+    atom sets *and* the reconstructed trajectories (so an OOV predicate that only
+    appears in intermediate states is still flagged).
     """
-    findings: list[str] = []
+    findings_set: set[str] = set()
+
+    def _check_atoms(atoms, where: str) -> None:
+        for atom in atoms:
+            if atom.predicate.name not in vocab.predicates:
+                findings_set.add(f"predicate '{atom.predicate.name}' in {where}")
+            for e in atom.entities:
+                if e.type.name not in vocab.types:
+                    findings_set.add(f"type '{e.type.name}' in {where}")
+
     for path in list_episodes(split_dir):
         ep = load_episode(path)
         pid = ep.provenance.problem_id
-        for atom in ep.goal_atoms:
-            if atom.predicate.name not in vocab.predicates:
-                findings.append(
-                    f"predicate '{atom.predicate.name}' in ep_{pid:05d} goal"
-                )
+        _check_atoms(ep.goal_atoms, f"ep_{pid:05d} goal")
+        _check_atoms(ep.initial_abstract_state.atoms, f"ep_{pid:05d} s_0")
         for skel in ep.skeleton_pool:
+            loc = f"ep_{pid:05d} skel_{skel.skeleton_idx}"
+            try:
+                trajectory = reconstruct_trajectory(
+                    ep.initial_abstract_state, skel.operator_seq
+                )
+            except AssertionError as exc:
+                findings_set.add(f"invalid skeleton at {loc}: {exc}")
+                continue
+            for i, state in enumerate(trajectory[1:], start=1):
+                _check_atoms(state.atoms, f"{loc} state[{i}]")
+            _check_atoms(skel.final_abstract_state.atoms, f"{loc} stored_final")
             for op in skel.operator_seq:
                 if op.name not in vocab.operators:
-                    findings.append(
-                        f"operator '{op.name}' in ep_{pid:05d} skel_{skel.skeleton_idx}"
-                    )
+                    findings_set.add(f"operator '{op.name}' in {loc}")
                 for arg in op.parameters:
                     if arg.type.name not in vocab.types:
-                        findings.append(
-                            f"type '{arg.type.name}' in ep_{pid:05d}"
-                            f" skel_{skel.skeleton_idx}"
-                        )
-    return findings
+                        findings_set.add(f"type '{arg.type.name}' in {loc}")
+    return sorted(findings_set)
