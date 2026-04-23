@@ -36,6 +36,7 @@ _CLUTTERED_STORAGE_ENTRY_POINT = (
 _CLUTTERED_RETRIEVAL_ENTRY_POINT = (
     "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv"
 )
+_STICK_BUTTON_ENTRY_POINT = "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv"
 
 
 def cluttered_storage_variants(block_counts: range | list[int]) -> list[ExtraVariant]:
@@ -65,6 +66,27 @@ def cluttered_retrieval_variants(
             kwarg_value=n,
         )
         for n in obstruction_counts
+    ]
+
+
+def stick_button_variants(button_counts: range | list[int]) -> list[ExtraVariant]:
+    """Variants of ``StickButton2D`` parameterized by ``num_buttons``.
+
+    Kinder pre-registers ``b{1,2,3,5,10}`` natively; use this helper to
+    bootstrap any additional counts (e.g. ``b4``, ``b6``, ``b8``) that an
+    experiment may want. For the five pre-registered counts this helper is
+    a no-op at registration time — ``register_extra_envs`` skips ids already
+    present in ``gymnasium.registry``.
+    """
+    return [
+        ExtraVariant(
+            family="StickButton2D",
+            variant_char="b",
+            entry_point=_STICK_BUTTON_ENTRY_POINT,
+            kwarg_name="num_buttons",
+            kwarg_value=n,
+        )
+        for n in button_counts
     ]
 
 
