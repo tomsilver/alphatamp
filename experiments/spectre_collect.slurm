@@ -23,7 +23,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=16G
 #SBATCH --time=12:00:00
 #SBATCH --output=experiments/slurm_outputs/spectre_collect_%A_%a.out
 #SBATCH --error=experiments/slurm_outputs/spectre_collect_%A_%a.err

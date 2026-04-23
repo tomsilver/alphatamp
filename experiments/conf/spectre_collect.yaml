@@ -22,9 +22,9 @@ workers: 1
 # Pool / refinement budgets.
 K_max: 50
 abstract_plan_timeout_s: 30.0
-refinement_timeout_s: 20.0
-num_sampling_attempts_per_step: 10
-max_trajectory_steps: 100
+refinement_timeout_s: 30.0
+num_sampling_attempts_per_step: 5
+max_trajectory_steps: 200
 
 # Seeding / provenance.
 heuristic_name: "hff"
