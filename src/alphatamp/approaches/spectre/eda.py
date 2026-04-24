@@ -489,6 +489,223 @@ class _MarginalStats:
         return (s + 1.0) / (a + 2.0)
 
 
+@dataclass(frozen=True)
+class SkeletonKeyStats:
+    """Per-canonical-key training statistics, ranked for presentation."""
+
+    key: SkeletonKey
+    successes: int
+    appearances: int
+    p_hat: float
+
+
+def format_skeleton_key(key: SkeletonKey) -> str:
+    """Pretty-print a canonical skeleton key as a numbered ``op(args)`` list."""
+    lines = []
+    for step, (op_name, args) in enumerate(key, start=1):
+        lines.append(f"  {step:2d}. {op_name}({', '.join(args)})")
+    return "\n".join(lines)
+
+
+def top_successful_skeleton_keys(
+    train: LoadedSplit,
+    n: int = 10,
+    rank_by: Literal["successes", "p_hat"] = "successes",
+) -> list[SkeletonKeyStats]:
+    """Top-``n`` canonical skeleton keys by historical success on ``train``.
+
+    ``rank_by="successes"`` sorts by raw success count (how often the plan
+    actually worked in training). ``rank_by="p_hat"`` uses the Laplace-smoothed
+    rate ``(successes+1)/(appearances+2)`` — the same score B3 uses — which
+    down-weights rare keys that happened to succeed once. Ties are broken
+    first by appearances (desc), then lexicographically by the key itself.
+    """
+    stats = _fit_marginals(train)
+    rows = [
+        SkeletonKeyStats(
+            key=k,
+            successes=stats.successes.get(k, 0),
+            appearances=stats.appearances[k],
+            p_hat=stats.p_hat(k),
+        )
+        for k in stats.appearances
+    ]
+    if rank_by == "successes":
+        rows.sort(key=lambda r: (-r.successes, -r.appearances, r.key))
+    else:
+        rows.sort(key=lambda r: (-r.p_hat, -r.appearances, r.key))
+    return rows[:n]
+
+
+@dataclass(frozen=True)
+class SuccessOccurrence:
+    """One successful (problem, skeleton_idx) pair in which a key appeared."""
+
+    problem_id: int
+    skeleton_idx: int
+    refinement_seed: int
+    refinement_wall_clock_s: float
+
+
+def find_test_successes_for_key(
+    target_key: SkeletonKey,
+    test: LoadedSplit,
+) -> list[SuccessOccurrence]:
+    """Every test episode where ``target_key`` appeared *and* succeeded.
+
+    The canonical key is matched after canonicalization; ``skeleton_idx`` is
+    the pool index in the raw (and canonical) episode — both share it because
+    :func:`canonicalize_episode` does not reorder the pool.
+    """
+    out: list[SuccessOccurrence] = []
+    for ep_idx, ep in enumerate(test.episodes):
+        keys = test.skeleton_keys[ep_idx]
+        for pool_idx, k in enumerate(keys):
+            if k != target_key:
+                continue
+            outcome = ep.outcomes[pool_idx]
+            if outcome.outcome != "success":
+                continue
+            out.append(
+                SuccessOccurrence(
+                    problem_id=ep.provenance.problem_id,
+                    skeleton_idx=pool_idx,
+                    refinement_seed=outcome.refinement_seed,
+                    refinement_wall_clock_s=outcome.refinement_wall_clock_s,
+                )
+            )
+    return out
+
+
+def render_successful_refinement_video(
+    *,
+    env_id: str,
+    model_name: str,
+    model_kwargs: dict[str, int | float | str],
+    problem_id: int,
+    skeleton_idx: int,
+    K_max: int,
+    heuristic_name: str,
+    abstract_plan_timeout_s: float,
+    refinement_timeout_s: float,
+    num_sampling_attempts_per_step: int,
+    max_trajectory_steps: int,
+    refinement_seed_rule: str,
+    video_dir: Path,
+    video_name_prefix: str,
+) -> Path:
+    """Reproduce a stored success and save a video of its execution.
+
+    Reconstructs the (``env``, ``env_models``, ``bpg``, ``plan_generator``,
+    ``trajectory_sampler``, ``refiner``) tuple exactly as :func:`collect_episode`
+    did, then executes the refined action sequence on a
+    :class:`gymnasium.wrappers.RecordVideo`-wrapped env.
+
+    Raises ``RuntimeError`` if refinement returns ``None`` (indicates non-
+    determinism between collection and replay — usually a config mismatch).
+    """
+    # Heavy imports deferred — EDA functions that don't render videos shouldn't
+    # pay the import cost of the full planning substrate.
+    import itertools
+
+    import kinder as _kinder
+    from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
+        RelationalHeuristicSearchAbstractPlanGenerator,
+    )
+    from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
+    from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
+    from bilevel_planning.structs import RelationalAbstractGoal
+    from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
+        ParameterizedControllerTrajectorySampler,
+    )
+    from bilevel_planning.utils import RelationalControllerGenerator
+    from gymnasium.wrappers import RecordVideo
+    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+
+    from alphatamp.approaches.spectre.collect import _refinement_seed
+    from alphatamp.approaches.spectre.env_registry import register_extra_envs
+
+    register_extra_envs()
+    video_dir.mkdir(parents=True, exist_ok=True)
+    env = _kinder.make(env_id, render_mode="rgb_array")
+    env = RecordVideo(
+        env,
+        video_folder=str(video_dir),
+        name_prefix=video_name_prefix,
+        episode_trigger=lambda i: i == 0,
+    )
+    try:
+        obs, _ = env.reset(seed=problem_id)
+        env_models = create_bilevel_planning_models(
+            model_name,
+            env.observation_space,
+            env.action_space,
+            **model_kwargs,
+        )
+        x0 = env_models.observation_to_state(obs)
+        s0 = env_models.state_abstractor(x0)
+        goal = env_models.goal_deriver(x0)
+        assert isinstance(goal, RelationalAbstractGoal)
+
+        bpg: BilevelPlanningGraph = BilevelPlanningGraph()
+        bpg.add_abstract_state_node(s0)
+        bpg.add_state_node(x0)
+        bpg.add_state_abstractor_edge(x0, s0)
+
+        plan_generator: RelationalHeuristicSearchAbstractPlanGenerator = (
+            RelationalHeuristicSearchAbstractPlanGenerator(
+                env_models.types,
+                env_models.predicates,
+                env_models.operators,
+                heuristic_name=heuristic_name,
+                seed=problem_id,
+            )
+        )
+        pool = list(
+            itertools.islice(
+                plan_generator(x0, s0, goal, abstract_plan_timeout_s, bpg), K_max
+            )
+        )
+        if skeleton_idx >= len(pool):
+            raise RuntimeError(
+                f"skeleton_idx {skeleton_idx} >= regenerated pool size {len(pool)}"
+            )
+        state_plan, action_plan = pool[skeleton_idx]
+
+        trajectory_sampler = ParameterizedControllerTrajectorySampler(
+            controller_generator=RelationalControllerGenerator(env_models.skills),
+            transition_function=env_models.transition_fn,
+            state_abstractor=env_models.state_abstractor,
+            max_trajectory_steps=max_trajectory_steps,
+        )
+        seed = _refinement_seed(refinement_seed_rule, problem_id, skeleton_idx)
+        refiner = BacktrackingRefiner(
+            trajectory_sampler=trajectory_sampler,
+            num_sampling_attempts_per_step=num_sampling_attempts_per_step,
+            seed=seed,
+        )
+        plan = refiner(x0, state_plan, action_plan, refinement_timeout_s, bpg)
+        if plan is None:
+            raise RuntimeError(
+                f"Refinement returned None for problem_id={problem_id},"
+                f" skeleton_idx={skeleton_idx}; replay diverged from collection"
+            )
+
+        done = False
+        for action in plan.actions:
+            _, _, done, _, _ = env.step(action)
+            if done:
+                break
+        if not done:
+            raise RuntimeError(
+                f"Plan executed without signalling 'done' on problem {problem_id}"
+            )
+    finally:
+        env.close()  # type: ignore[no-untyped-call]
+
+    return video_dir / f"{video_name_prefix}-episode-0.mp4"
+
+
 def _fit_marginals(train: LoadedSplit) -> _MarginalStats:
     stats = _MarginalStats()
     for ep_idx, ep in enumerate(train.episodes):
