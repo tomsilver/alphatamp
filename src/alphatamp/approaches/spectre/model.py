@@ -253,7 +253,7 @@ class _OperatorTokenEncoder(nn.Module):
 class _StateTokenEncoder(nn.Module):
     """Per-state atom-pool sub-encoder Φ_s per spec §4.3 (Set Transformer pool)."""
 
-    def __init__(self, vocab: Vocab) -> None:
+    def __init__(self, vocab: Vocab, use_atom_sab2: bool = True) -> None:
         super().__init__()
         self.max_pred_arity = max(int(vocab.max_predicate_arity), 1)
         self.pred_emb = nn.Embedding(
@@ -275,10 +275,12 @@ class _StateTokenEncoder(nn.Module):
         # Two SAB layers per spec §12 fallback: the relational join required
         # for RT2D ("this passage's width-atom mentions the same id as this
         # operator's passage-arg") needs more than a single attention pass to
-        # form. Enabled by default after empirical AUROC(0) collapse on the
-        # one-SAB configuration.
+        # form. The second SAB is toggleable so the 1-SAB baseline can be
+        # ablated without reverting commits.
         self.atom_sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
-        self.atom_sab2 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+        self.atom_sab2: SetAttentionBlock | None = (
+            SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS) if use_atom_sab2 else None
+        )
         self.atom_pma = PoolingByMultiheadAttention(dim=D_MODEL, n_heads=N_HEADS)
         # Type-histogram path
         self.type_hist_proj = nn.Linear(len(vocab.types), D_TYPE_HIST)
@@ -309,7 +311,8 @@ class _StateTokenEncoder(nn.Module):
         atom_tok = self.atom_proj(atom_in)
         atom_tok = self.atom_ln(atom_tok)
         atom_tok = self.atom_sab1(atom_tok, atom_mask)
-        atom_tok = self.atom_sab2(atom_tok, atom_mask)
+        if self.atom_sab2 is not None:
+            atom_tok = self.atom_sab2(atom_tok, atom_mask)
         atom_pool = self.atom_pma(atom_tok, atom_mask)
         # Empty-state edge case: PMA returns zero vector when atom_mask is
         # all-False. type-histogram path still carries a signal.
@@ -322,10 +325,10 @@ class _StateTokenEncoder(nn.Module):
 class SkeletonEncoder(nn.Module):
     """Φ: skeleton → 64-dim embedding (spec §4)."""
 
-    def __init__(self, vocab: Vocab) -> None:
+    def __init__(self, vocab: Vocab, use_atom_sab2: bool = True) -> None:
         super().__init__()
         self.op_enc = _OperatorTokenEncoder(vocab)
-        self.state_enc = _StateTokenEncoder(vocab)
+        self.state_enc = _StateTokenEncoder(vocab, use_atom_sab2=use_atom_sab2)
         self.token_type_emb = nn.Embedding(num_embeddings=3, embedding_dim=D_MODEL)
         # +2 to accommodate (s_0, ..., s_L) sequence; +4 of slack.
         self.seq_pos_emb = nn.Embedding(
@@ -533,10 +536,15 @@ class Scorer(nn.Module):
 class SpectreModel(nn.Module):
     """Composes Φ, Ψ, σ per spec §10.3."""
 
-    def __init__(self, vocab: Vocab, prior_dropout_p: float = 0.2) -> None:
+    def __init__(
+        self,
+        vocab: Vocab,
+        prior_dropout_p: float = 0.2,
+        use_atom_sab2: bool = True,
+    ) -> None:
         super().__init__()
         self.vocab = vocab
-        self.skeleton_encoder = SkeletonEncoder(vocab)
+        self.skeleton_encoder = SkeletonEncoder(vocab, use_atom_sab2=use_atom_sab2)
         self.context_encoder = ContextEncoder()
         self.scorer = Scorer(prior_dropout_p=prior_dropout_p)
 

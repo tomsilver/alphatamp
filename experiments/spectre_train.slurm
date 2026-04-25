@@ -31,7 +31,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=experiments/slurm_outputs/spectre_train_%A_%a.out
 #SBATCH --error=experiments/slurm_outputs/spectre_train_%A_%a.err
-#SBATCH --array=0-2
+#SBATCH --array=0
 
 set -euo pipefail
 mkdir -p experiments/slurm_outputs

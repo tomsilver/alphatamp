@@ -22,6 +22,9 @@ train:
   prior_dropout_p: 0.2
   augment: true
 
+  # Architecture toggles
+  use_atom_sab2: true
+
   # F-sampling (spec §8.2 default rollout_aligned_mix)
   f_sampling_mode: "rollout_aligned_mix"
   f_sampling_mix_weights: [0.25, 0.25, 0.5]
@@ -40,6 +43,10 @@ train:
 
   # DataLoader
   num_workers: 0
+
+  # Early stopping (0 patience = disabled)
+  early_stop_patience: 10
+  early_stop_min_epochs: 5
 
 hydra:
   job:

@@ -60,6 +60,12 @@ class TrainingConfig:
     prior_dropout_p: float = 0.2
     augment: bool = True
 
+    # Architecture toggles
+    # ``use_atom_sab2``: include the 2nd SAB in Φ_s atom-pool. Default True
+    # preserves current behavior; set False to ablate against the 1-SAB
+    # baseline (spec §4.3 original).
+    use_atom_sab2: bool = True
+
     # F-sampling (spec §8.2 default mix weights)
     f_sampling_mode: str = "rollout_aligned_mix"
     f_sampling_mix_weights: tuple[float, float, float] = (0.25, 0.25, 0.5)
@@ -78,6 +84,13 @@ class TrainingConfig:
 
     # DataLoader
     num_workers: int = 0  # 0 = single-process (LRU cache works simply)
+
+    # Early stopping
+    # Stop when val_loss has not improved for ``early_stop_patience`` epochs,
+    # provided we have already trained at least ``early_stop_min_epochs``.
+    # Set ``early_stop_patience = 0`` to disable.
+    early_stop_patience: int = 0
+    early_stop_min_epochs: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +204,64 @@ class EvalReport:
     per_t_count: dict[int, int]
 
 
+def _accumulate_auroc_buckets(
+    logits: torch.Tensor,
+    batch: SpectreBatch,
+    t_max: int,
+    scores_by_t: dict[int, list[float]],
+    labels_by_t: dict[int, list[int]],
+    top1_correct_by_t: dict[int, int],
+    top1_total_by_t: dict[int, int],
+) -> None:
+    """Stratify-by-|F| accumulator for AUROC(t) + top-1 hit rate.
+
+    Mutates the four passed-in dicts in place. Shared between train and val
+    loops so on-the-fly train AUROC matches the validation definition.
+    """
+    f_sizes = batch.f_mask.sum(dim=-1).cpu().tolist()
+    r_mask = batch.r_mask.cpu()
+    r_succ = batch.r_success_mask.cpu()
+    logits_cpu = logits.detach().cpu()
+    for ex_idx, t in enumerate(f_sizes):
+        t = int(t)
+        if t > t_max:
+            continue
+        row_logits = logits_cpu[ex_idx]
+        row_mask = r_mask[ex_idx]
+        row_succ = r_succ[ex_idx]
+        # AUROC over R-valid slots only.
+        for j in range(row_mask.numel()):
+            if not row_mask[j].item():
+                continue
+            scores_by_t[t].append(float(row_logits[j].item()))
+            labels_by_t[t].append(1 if row_succ[j].item() else 0)
+        # Top-1 hit rate: argmax index over R-valid slots.
+        masked = row_logits.clone()
+        masked[~row_mask] = -float("inf")
+        pick = int(masked.argmax().item())
+        top1_total_by_t[t] += 1
+        if row_succ[pick].item():
+            top1_correct_by_t[t] += 1
+
+
+def _finalize_auroc(
+    scores_by_t: dict[int, list[float]],
+    labels_by_t: dict[int, list[int]],
+    top1_correct_by_t: dict[int, int],
+    top1_total_by_t: dict[int, int],
+    t_max: int,
+) -> tuple[dict[int, float | None], dict[int, float | None], dict[int, int]]:
+    auroc_by_t: dict[int, float | None] = {
+        t: _safe_auroc(scores_by_t[t], labels_by_t[t]) for t in range(t_max + 1)
+    }
+    top1_by_t: dict[int, float | None] = {
+        t: (top1_correct_by_t[t] / top1_total_by_t[t]) if top1_total_by_t[t] else None
+        for t in range(t_max + 1)
+    }
+    per_t_count = {t: top1_total_by_t[t] for t in range(t_max + 1)}
+    return auroc_by_t, top1_by_t, per_t_count
+
+
 def _evaluate(
     model: SpectreModel,
     val_dataset: SpectreDataset,
@@ -207,7 +278,6 @@ def _evaluate(
         num_workers=cfg.num_workers,
     )
     losses: list[float] = []
-    # Per-|F| stratified scores/labels for AUROC(t); top-1 hit rate counts.
     scores_by_t: dict[int, list[float]] = defaultdict(list)
     labels_by_t: dict[int, list[int]] = defaultdict(list)
     top1_correct_by_t: dict[int, int] = defaultdict(int)
@@ -219,41 +289,24 @@ def _evaluate(
             logits = model(batch)
             loss = plackett_luce_loss(logits, batch.r_success_mask, batch.r_mask)
             losses.append(float(loss.item()))
-            f_sizes = batch.f_mask.sum(dim=-1).cpu().tolist()
-            r_mask = batch.r_mask.cpu()
-            r_succ = batch.r_success_mask.cpu()
-            logits_cpu = logits.cpu()
-            for ex_idx, t in enumerate(f_sizes):
-                t = int(t)
-                if t > cfg.auroc_t_max:
-                    continue
-                row_logits = logits_cpu[ex_idx]
-                row_mask = r_mask[ex_idx]
-                row_succ = r_succ[ex_idx]
-                # AUROC over R-valid slots only.
-                for j in range(row_mask.numel()):
-                    if not row_mask[j].item():
-                        continue
-                    scores_by_t[t].append(float(row_logits[j].item()))
-                    labels_by_t[t].append(1 if row_succ[j].item() else 0)
-                # Top-1 hit rate: argmax index over R-valid slots.
-                masked = row_logits.clone()
-                masked[~row_mask] = -float("inf")
-                pick = int(masked.argmax().item())
-                top1_total_by_t[t] += 1
-                if row_succ[pick].item():
-                    top1_correct_by_t[t] += 1
+            _accumulate_auroc_buckets(
+                logits,
+                batch,
+                cfg.auroc_t_max,
+                scores_by_t,
+                labels_by_t,
+                top1_correct_by_t,
+                top1_total_by_t,
+            )
 
     val_loss = float(np.mean(losses)) if losses else float("nan")
-    auroc_by_t: dict[int, float | None] = {
-        t: _safe_auroc(scores_by_t[t], labels_by_t[t])
-        for t in range(cfg.auroc_t_max + 1)
-    }
-    top1_by_t: dict[int, float | None] = {
-        t: (top1_correct_by_t[t] / top1_total_by_t[t]) if top1_total_by_t[t] else None
-        for t in range(cfg.auroc_t_max + 1)
-    }
-    per_t_count = {t: top1_total_by_t[t] for t in range(cfg.auroc_t_max + 1)}
+    auroc_by_t, top1_by_t, per_t_count = _finalize_auroc(
+        scores_by_t,
+        labels_by_t,
+        top1_correct_by_t,
+        top1_total_by_t,
+        cfg.auroc_t_max,
+    )
     return EvalReport(
         val_loss=val_loss,
         auroc_by_t=auroc_by_t,
@@ -315,7 +368,11 @@ def train(
         num_f_samples_per_epoch=cfg.num_f_samples_per_val_episode,
     )
 
-    model = SpectreModel(vocab, prior_dropout_p=cfg.prior_dropout_p).to(device)
+    model = SpectreModel(
+        vocab,
+        prior_dropout_p=cfg.prior_dropout_p,
+        use_atom_sab2=cfg.use_atom_sab2,
+    ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=cfg.lr,
@@ -354,8 +411,27 @@ def train(
     }
     (out_dir / "model_meta.json").write_text(json.dumps(meta, indent=2))
 
+    # Random-Φ + ZeroPrior + zero-init head baseline. With the spec §6.3
+    # initialization this should produce ~0.5 AUROC at every t (uniform
+    # ranking), confirming the architecture initializes as the spec
+    # describes. Anything materially off 0.5 means the init drifted.
+    random_phi_model = SpectreModel(
+        vocab,
+        prior_dropout_p=cfg.prior_dropout_p,
+        use_atom_sab2=cfg.use_atom_sab2,
+    ).to(device)
+    random_phi_report = _evaluate(random_phi_model, val_dataset, vocab, cfg, device)
+    random_phi_baseline = {
+        "val_loss": random_phi_report.val_loss,
+        "auroc": {str(k): v for k, v in random_phi_report.auroc_by_t.items()},
+        "top1": {str(k): v for k, v in random_phi_report.top1_by_t.items()},
+        "per_t_count": {str(k): v for k, v in random_phi_report.per_t_count.items()},
+    }
+    del random_phi_model
+
     best_loss = float("inf")
     best_auroc3: float | None = None
+    epochs_since_improve = 0
     best_path = out_dir / "best.pt"
     last_path = out_dir / "last.pt"
 
@@ -364,6 +440,13 @@ def train(
         train_dataset.set_epoch(epoch)
         model.train()
         train_losses: list[float] = []
+        # Train-side AUROC accumulators, mirroring _evaluate. Shapes drift
+        # across the epoch as parameters update; this is a "smoothed"
+        # in-loop snapshot used only to detect train-vs-val divergence.
+        train_scores_by_t: dict[int, list[float]] = defaultdict(list)
+        train_labels_by_t: dict[int, list[int]] = defaultdict(list)
+        train_top1_correct: dict[int, int] = defaultdict(int)
+        train_top1_total: dict[int, int] = defaultdict(int)
         for batch in train_loader:
             batch = _move_batch(batch, device)
             logits = model(batch)
@@ -375,11 +458,27 @@ def train(
             scheduler.step()
             train_losses.append(float(loss.item()))
             global_step += 1
+            _accumulate_auroc_buckets(
+                logits,
+                batch,
+                cfg.auroc_t_max,
+                train_scores_by_t,
+                train_labels_by_t,
+                train_top1_correct,
+                train_top1_total,
+            )
 
         train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
+        train_auroc_by_t, train_top1_by_t, train_per_t_count = _finalize_auroc(
+            train_scores_by_t,
+            train_labels_by_t,
+            train_top1_correct,
+            train_top1_total,
+            cfg.auroc_t_max,
+        )
         report = _evaluate(model, val_dataset, vocab, cfg, device)
 
-        log_record = {
+        log_record: dict[str, object] = {
             "epoch": epoch,
             "global_step": global_step,
             "train_loss": train_loss,
@@ -388,7 +487,12 @@ def train(
             "auroc": {str(k): v for k, v in report.auroc_by_t.items()},
             "top1": {str(k): v for k, v in report.top1_by_t.items()},
             "per_t_count": {str(k): v for k, v in report.per_t_count.items()},
+            "train_auroc": {str(k): v for k, v in train_auroc_by_t.items()},
+            "train_top1": {str(k): v for k, v in train_top1_by_t.items()},
+            "train_per_t_count": {str(k): v for k, v in train_per_t_count.items()},
         }
+        if epoch == 0:
+            log_record["random_phi_baseline"] = random_phi_baseline
         log_handle.write(json.dumps(log_record) + "\n")
         log_handle.flush()
         print(
@@ -421,6 +525,7 @@ def train(
         if is_better:
             best_loss = report.val_loss
             best_auroc3 = cur_auroc3
+            epochs_since_improve = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -431,6 +536,19 @@ def train(
                 },
                 best_path,
             )
+        else:
+            epochs_since_improve += 1
+
+        if (
+            cfg.early_stop_patience > 0
+            and epoch + 1 >= cfg.early_stop_min_epochs
+            and epochs_since_improve >= cfg.early_stop_patience
+        ):
+            print(
+                f"early stop: no val_loss improvement for"
+                f" {epochs_since_improve} epochs (patience={cfg.early_stop_patience})"
+            )
+            break
 
     log_handle.close()
     return best_path
