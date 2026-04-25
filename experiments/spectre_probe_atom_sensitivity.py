@@ -43,7 +43,10 @@ from alphatamp.approaches.spectre.dataset import (
     SpectreDataset,
     collate_spectre_batch,
 )
-from alphatamp.approaches.spectre.env_registry import get_type_aug_policy
+from alphatamp.approaches.spectre.env_registry import (
+    get_static_tag_predicates,
+    get_type_aug_policy,
+)
 from alphatamp.approaches.spectre.model import SpectreModel
 from alphatamp.approaches.spectre.priors import ZeroPrior
 from alphatamp.approaches.spectre.vocab import Vocab
@@ -61,16 +64,34 @@ class ProbeRow:
 
 
 def _load_checkpoint(
-    ckpt_path: Path, vocab: Vocab, device: torch.device
+    ckpt_path: Path,
+    vocab: Vocab,
+    device: torch.device,
+    fallback_static_tag_predicates: list[str] | None = None,
 ) -> SpectreModel:
     state = torch.load(ckpt_path, map_location=device, weights_only=False)
     cfg_dict = state.get("config", {}) or {}
     use_atom_sab2 = bool(cfg_dict.get("use_atom_sab2", True))
     prior_dropout_p = float(cfg_dict.get("prior_dropout_p", 0.2))
+    use_static_tag_pool = bool(cfg_dict.get("use_static_tag_pool", False))
+    # Prefer the list explicitly saved with the checkpoint (recorded by
+    # train.py at save time); fall back to the env-registry list passed
+    # by the probe driver. Pass None when the pool is disabled so the
+    # constructor builds the legacy single-pool path.
+    saved_tags = state.get("static_tag_predicates")
+    if use_static_tag_pool:
+        static_tag_predicates: list[str] | None = list(
+            saved_tags if saved_tags else (fallback_static_tag_predicates or [])
+        )
+        if not static_tag_predicates:
+            static_tag_predicates = None
+    else:
+        static_tag_predicates = None
     model = SpectreModel(
         vocab,
         prior_dropout_p=prior_dropout_p,
         use_atom_sab2=use_atom_sab2,
+        static_tag_predicates=static_tag_predicates,
     ).to(device)
     model.load_state_dict(state["model_state_dict"])
     model.eval()
@@ -330,6 +351,256 @@ def _probe_d2_linear_separability(
     return float(np.mean(aurocs)), n_pos, n_neg
 
 
+def _passage_type_ids(vocab: Vocab) -> set[int]:
+    """All vocab type ids whose name describes a passage object."""
+    out: set[int] = set()
+    for type_name in vocab.types:
+        if type_name == "passage" or type_name.startswith("passage_color_"):
+            out.add(vocab.type_idx(type_name))
+    return out
+
+
+def _used_passage_args(
+    op_arg_type_ids: torch.Tensor,  # (L, A)
+    op_arg_local_ids: torch.Tensor,  # (L, A)
+    op_mask: torch.Tensor,  # (L,)
+    passage_type_ids: set[int],
+) -> set[tuple[int, int]]:
+    """Return ``{(type_id, local_id)}`` for passages used as op args in this skeleton."""
+    used: set[tuple[int, int]] = set()
+    L, A = op_arg_type_ids.shape
+    for l_idx in range(L):
+        if not bool(op_mask[l_idx].item()):
+            continue
+        for a_idx in range(A):
+            t = int(op_arg_type_ids[l_idx, a_idx].item())
+            if t in passage_type_ids:
+                used.add((t, int(op_arg_local_ids[l_idx, a_idx].item())))
+    return used
+
+
+def _mutate_passage_width_subset(
+    batch: SpectreBatch,
+    b: int,
+    pw_idx: int,
+    target_passages: set[tuple[int, int]],
+    swap_a: int,
+    swap_b: int,
+) -> SpectreBatch:
+    """Clone ``batch``; swap width_level on PassageWidth atoms whose passage
+    arg ``(type_id, local_id)`` is in ``target_passages``. Touches only
+    example ``b``; other examples in the batch are aliased.
+    """
+    new = _clone_batch(batch)
+    pred_match = (new.s0_pred_ids[b] == pw_idx) & new.s0_atom_mask[b]
+    if not pred_match.any():
+        return new
+    m0 = new.s0_pred_ids.shape[1]
+    for m in range(m0):
+        if not bool(pred_match[m].item()):
+            continue
+        p_type = int(new.s0_arg_type_ids[b, m, 0].item())
+        p_local = int(new.s0_arg_local_ids[b, m, 0].item())
+        if (p_type, p_local) not in target_passages:
+            continue
+        wl = int(new.s0_arg_local_ids[b, m, 1].item())
+        if wl == swap_a:
+            new.s0_arg_local_ids[b, m, 1] = swap_b
+        elif wl == swap_b:
+            new.s0_arg_local_ids[b, m, 1] = swap_a
+    return new
+
+
+def _encode_single_skeleton(
+    model: SpectreModel, batch: SpectreBatch, b: int, j: int
+) -> torch.Tensor:
+    """Encode one skeleton (example ``b``, slot ``j``) using ``batch``'s s_0.
+
+    Returns shape ``(D,)``. Uses B=1 K=1 slices so a per-skeleton-mutated
+    s_0 can be passed in via the batch object without altering other
+    examples' encodings.
+    """
+    e = model.encode_pool(
+        batch.r_op_ids[b : b + 1, j : j + 1],
+        batch.r_op_arg_type_ids[b : b + 1, j : j + 1],
+        batch.r_op_arg_local_ids[b : b + 1, j : j + 1],
+        batch.r_op_mask[b : b + 1, j : j + 1],
+        batch.s0_pred_ids[b : b + 1],
+        batch.s0_arg_type_ids[b : b + 1],
+        batch.s0_arg_local_ids[b : b + 1],
+        batch.s0_atom_mask[b : b + 1],
+        batch.s0_type_histogram[b : b + 1],
+        batch.r_sL_pred_ids[b : b + 1, j : j + 1],
+        batch.r_sL_arg_type_ids[b : b + 1, j : j + 1],
+        batch.r_sL_arg_local_ids[b : b + 1, j : j + 1],
+        batch.r_sL_atom_mask[b : b + 1, j : j + 1],
+    )
+    return e[0, 0]
+
+
+@dataclass
+class D3Summary:
+    """Summary statistics for D.3 used-vs-unused binding specificity.
+
+    The ratio of means is the robust aggregate; mean of per-skeleton ratios
+    is biased upward by skeletons with very small Δ_unused. Median and
+    geometric mean of per-skeleton ratios both summarize the typical
+    skeleton without the small-denominator inflation.
+    """
+
+    ratio_of_means: float
+    median_of_ratios: float
+    geomean_of_ratios: float
+    mean_of_ratios: float  # kept for transparency; do not interpret naively
+    n_ratios: int
+    n_skipped: int
+
+
+def _probe_d3_binding_specificity(
+    model: SpectreModel,
+    val_dataset: SpectreDataset,
+    vocab: Vocab,
+    device: torch.device,
+    batch_size: int = 4,
+    swap_a: int = 1,
+    swap_b: int = 3,
+) -> tuple[ProbeRow, ProbeRow, D3Summary]:
+    """D.3: per-skeleton, mutate PassageWidth on USED vs UNUSED passages.
+
+    For each skeleton in the val pool, identify the passages it uses as
+    operator args, partition the s_0 PassageWidth atoms into a "used" set
+    and "unused" set, flip ``width_level`` on each set independently, and
+    compute ``‖e' − e‖ / ‖e‖`` per skeleton. Returns the per-skeleton
+    distributions of Δ_used and Δ_unused as ``ProbeRow``s plus a
+    :class:`D3Summary` with multiple aggregates of the per-skeleton ratio
+    so the caller can reason about typical-vs-tail behavior.
+    """
+    loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=lambda b: collate_spectre_batch(b, vocab),
+    )
+    pw_idx = vocab.pred_idx("PassageWidth")
+    passage_type_ids = _passage_type_ids(vocab)
+    if not passage_type_ids:
+        empty = D3Summary(
+            ratio_of_means=float("nan"),
+            median_of_ratios=float("nan"),
+            geomean_of_ratios=float("nan"),
+            mean_of_ratios=float("nan"),
+            n_ratios=0,
+            n_skipped=0,
+        )
+        return (
+            _summarize("D.3 used", []),
+            _summarize("D.3 unused", []),
+            empty,
+        )
+
+    used_deltas: list[float] = []
+    unused_deltas: list[float] = []
+    ratios: list[float] = []
+    n_skipped = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            batch = _move_batch(batch, device)
+            bsz = batch.r_op_ids.shape[0]
+            kpool = batch.r_op_ids.shape[1]
+            m0 = batch.s0_pred_ids.shape[1]
+            for b in range(bsz):
+                pred_mask_row = (batch.s0_pred_ids[b] == pw_idx) & batch.s0_atom_mask[b]
+                if not pred_mask_row.any():
+                    continue
+                # All passage args mentioned in this example's PassageWidth atoms.
+                all_passages: set[tuple[int, int]] = set()
+                for m in range(m0):
+                    if not bool(pred_mask_row[m].item()):
+                        continue
+                    all_passages.add(
+                        (
+                            int(batch.s0_arg_type_ids[b, m, 0].item()),
+                            int(batch.s0_arg_local_ids[b, m, 0].item()),
+                        )
+                    )
+                for j in range(kpool):
+                    if not bool(batch.r_mask[b, j].item()):
+                        continue
+                    used = (
+                        _used_passage_args(
+                            batch.r_op_arg_type_ids[b, j],
+                            batch.r_op_arg_local_ids[b, j],
+                            batch.r_op_mask[b, j],
+                            passage_type_ids,
+                        )
+                        & all_passages
+                    )
+                    unused = all_passages - used
+                    if not used or not unused:
+                        # Ratio is undefined if either partition is empty;
+                        # skip but track for the report.
+                        n_skipped += 1
+                        continue
+
+                    e_orig = _encode_single_skeleton(model, batch, b, j)
+                    used_batch = _mutate_passage_width_subset(
+                        batch, b, pw_idx, used, swap_a, swap_b
+                    )
+                    e_used = _encode_single_skeleton(model, used_batch, b, j)
+                    unused_batch = _mutate_passage_width_subset(
+                        batch, b, pw_idx, unused, swap_a, swap_b
+                    )
+                    e_unused = _encode_single_skeleton(model, unused_batch, b, j)
+
+                    base = float(e_orig.norm().clamp(min=1e-9).item())
+                    d_used = float((e_used - e_orig).norm().item()) / base
+                    d_unused = float((e_unused - e_orig).norm().item()) / base
+                    used_deltas.append(d_used)
+                    unused_deltas.append(d_unused)
+                    if d_unused > 1e-6:
+                        ratios.append(d_used / d_unused)
+
+    used_row = _summarize("PassageWidth: USED passages flipped", used_deltas)
+    unused_row = _summarize("PassageWidth: UNUSED passages flipped", unused_deltas)
+
+    # Robust aggregate: ratio of population means (no small-denom inflation).
+    if used_deltas and unused_deltas:
+        mean_used = float(np.mean(used_deltas))
+        mean_unused = float(np.mean(unused_deltas))
+        ratio_of_means = mean_used / mean_unused if mean_unused > 0 else float("nan")
+    else:
+        ratio_of_means = float("nan")
+
+    if ratios:
+        ratios_arr = np.asarray(ratios, dtype=np.float64)
+        # Geomean is well-defined for strictly-positive ratios; the mask
+        # above already filters d_unused, but a zero d_used yields a zero
+        # ratio that breaks log. Drop those for the geomean only.
+        positive = ratios_arr[ratios_arr > 0]
+        geomean = (
+            float(np.exp(np.mean(np.log(positive)))) if positive.size else float("nan")
+        )
+        summary = D3Summary(
+            ratio_of_means=ratio_of_means,
+            median_of_ratios=float(np.median(ratios_arr)),
+            geomean_of_ratios=geomean,
+            mean_of_ratios=float(np.mean(ratios_arr)),
+            n_ratios=int(ratios_arr.size),
+            n_skipped=n_skipped,
+        )
+    else:
+        summary = D3Summary(
+            ratio_of_means=ratio_of_means,
+            median_of_ratios=float("nan"),
+            geomean_of_ratios=float("nan"),
+            mean_of_ratios=float("nan"),
+            n_ratios=0,
+            n_skipped=n_skipped,
+        )
+    return used_row, unused_row, summary
+
+
 def _print_d1_table(rows: list[ProbeRow]) -> None:
     print(f"\n{'mutation':<48s} {'mean':>8s} {'p10':>8s} {'p90':>8s} {'n':>6s}")
     print("-" * 80)
@@ -383,7 +654,12 @@ def main(cfg: DictConfig) -> None:
     )
     print(f"  val episodes: {len(val_dataset)}")
 
-    model = _load_checkpoint(ckpt_path, vocab, device)
+    model = _load_checkpoint(
+        ckpt_path,
+        vocab,
+        device,
+        fallback_static_tag_predicates=get_static_tag_predicates(env_variant),
+    )
 
     # ---------------- D.1 ----------------
     print("\n[D.1] Atom-sensitivity probe")
@@ -407,6 +683,34 @@ def main(cfg: DictConfig) -> None:
     print("  If linear-probe AUROC >> live AUROC(0): e(s) carries linearly-")
     print("  separable success signal but σ has converged to mis-using it.")
     print("  If linear-probe AUROC ≈ 0.5: Φ's representation is the bottleneck.")
+
+    # ---------------- D.3 ----------------
+    print("\n[D.3] Binding-specificity probe (per-skeleton USED vs UNUSED passages)")
+    used_row, unused_row, d3 = _probe_d3_binding_specificity(
+        model, val_dataset, vocab, device
+    )
+    _print_d1_table([used_row, unused_row])
+    print(
+        f"  ratio of means        Δ_used.mean / Δ_unused.mean = {d3.ratio_of_means:.3f}"
+    )
+    print(
+        f"  median of ratios      median_i (Δ_used / Δ_unused) = {d3.median_of_ratios:.3f}"
+    )
+    print(
+        f"  geomean of ratios     exp(mean log(ratios))        = {d3.geomean_of_ratios:.3f}"
+    )
+    print(
+        f"  mean of ratios (biased; do not interpret naively)    = {d3.mean_of_ratios:.3f}"
+    )
+    print(f"  n_ratios={d3.n_ratios}  skipped (empty used/unused set)={d3.n_skipped}")
+    print(
+        "\nInterpretation (use ratio_of_means and median_of_ratios; mean_of_ratios is biased):"
+    )
+    print("  ratio >> 1 (≥ 3): Φ binds passage-width to specific operator args.")
+    print("    → Bottleneck is in σ; try Step F3-A (Φ-dropout / larger σ).")
+    print("  ratio ≈ 1–2: Φ reads PassageWidth globally with weak binding.")
+    print("    → Bottleneck is in the SkeletonEncoder transformer; try Step F3-B.")
+    print("  ratio ≈ 0 or both Δs ≈ control: Φ_s collapsed; re-investigate F1.")
 
 
 if __name__ == "__main__":

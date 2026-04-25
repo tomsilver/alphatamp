@@ -251,9 +251,21 @@ class _OperatorTokenEncoder(nn.Module):
 
 
 class _StateTokenEncoder(nn.Module):
-    """Per-state atom-pool sub-encoder Φ_s per spec §4.3 (Set Transformer pool)."""
+    """Per-state atom-pool sub-encoder Φ_s per spec §4.3 (Set Transformer pool).
 
-    def __init__(self, vocab: Vocab, use_atom_sab2: bool = True) -> None:
+    Single-pool by default. When constructed with a non-empty
+    ``static_tag_predicate_ids`` buffer, atoms whose predicate id is in
+    that set are routed to a separate SAB+PMA stream (F3-B-(1)
+    "predicate-type-conditioned pooling"). The two stream outputs and the
+    type-histogram are concatenated and projected back to ``D_MODEL``.
+    """
+
+    def __init__(
+        self,
+        vocab: Vocab,
+        use_atom_sab2: bool = True,
+        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         super().__init__()
         self.max_pred_arity = max(int(vocab.max_predicate_arity), 1)
         self.pred_emb = nn.Embedding(
@@ -272,19 +284,50 @@ class _StateTokenEncoder(nn.Module):
         atom_in = D_PRED_NAME + self.max_pred_arity * (D_TYPE + D_LOCAL)
         self.atom_proj = nn.Linear(atom_in, D_MODEL)
         self.atom_ln = nn.LayerNorm(D_MODEL)
-        # Two SAB layers per spec §12 fallback: the relational join required
-        # for RT2D ("this passage's width-atom mentions the same id as this
-        # operator's passage-arg") needs more than a single attention pass to
-        # form. The second SAB is toggleable so the 1-SAB baseline can be
-        # ablated without reverting commits.
+        # Primary (legacy) atom pool. With ``use_static_tag_pool`` enabled
+        # this becomes the "fluent" stream; otherwise it pools all atoms.
         self.atom_sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
         self.atom_sab2: SetAttentionBlock | None = (
             SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS) if use_atom_sab2 else None
         )
         self.atom_pma = PoolingByMultiheadAttention(dim=D_MODEL, n_heads=N_HEADS)
+
+        # F3-B-(1) static-tag stream. Built only when caller supplies a
+        # non-empty predicate-name list AND at least one of those names
+        # exists in the vocab. Stored as a buffer of vocab pred-ids so a
+        # checkpoint round-trips cleanly across vocab order changes.
+        resolved_ids: list[int] = []
+        if static_tag_predicates:
+            for name in static_tag_predicates:
+                if name in vocab.predicates:
+                    pid = vocab.pred_idx(name)
+                    if pid > 0:  # exclude <OOV>/pad
+                        resolved_ids.append(pid)
+        resolved_ids = sorted(set(resolved_ids))
+        self.use_static_tag_pool = len(resolved_ids) > 0
+        self.register_buffer(
+            "static_tag_predicate_ids",
+            torch.tensor(resolved_ids, dtype=torch.long),
+            persistent=True,
+        )
+        if self.use_static_tag_pool:
+            self.atom_sab1_static = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+            self.atom_sab2_static: SetAttentionBlock | None = (
+                SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+                if use_atom_sab2
+                else None
+            )
+            self.atom_pma_static = PoolingByMultiheadAttention(
+                dim=D_MODEL, n_heads=N_HEADS
+            )
+
         # Type-histogram path
         self.type_hist_proj = nn.Linear(len(vocab.types), D_TYPE_HIST)
-        self.state_proj = nn.Linear(D_MODEL + D_TYPE_HIST, D_MODEL)
+        # state_proj input grows by one D_MODEL when the static stream is on.
+        state_proj_in = (
+            D_MODEL + D_TYPE_HIST + (D_MODEL if self.use_static_tag_pool else 0)
+        )
+        self.state_proj = nn.Linear(state_proj_in, D_MODEL)
         self.state_ln = nn.LayerNorm(D_MODEL)
         self._atom_in = atom_in
 
@@ -292,6 +335,20 @@ class _StateTokenEncoder(nn.Module):
     def atom_in_features(self) -> int:
         """Atom-token Linear input dim ``32 + P*24`` (spec §4.3)."""
         return self._atom_in
+
+    def _pool_one_stream(
+        self,
+        atom_tok: Tensor,
+        mask: Tensor,
+        sab1: SetAttentionBlock,
+        sab2: SetAttentionBlock | None,
+        pma: PoolingByMultiheadAttention,
+    ) -> Tensor:
+        """Run a single SAB(+SAB)+PMA pool stream over the masked atoms."""
+        h = sab1(atom_tok, mask)
+        if sab2 is not None:
+            h = sab2(h, mask)
+        return pma(h, mask)
 
     def forward(
         self,
@@ -301,7 +358,7 @@ class _StateTokenEncoder(nn.Module):
         atom_mask: Tensor,  # (..., M) bool
         type_histogram: Tensor,  # (..., T) long
     ) -> Tensor:  # (..., D_MODEL)
-        """Pool atom tokens via SAB + PMA, then concat type-histogram (spec §4.3)."""
+        """Pool atom tokens via SAB+PMA (single or dual stream), then concat type-histogram."""
         pe = self.pred_emb(pred_ids)
         te = self.arg_type_emb(arg_type_ids)
         le = self.arg_local_emb(arg_local_ids)
@@ -310,14 +367,39 @@ class _StateTokenEncoder(nn.Module):
         atom_in = torch.cat([pe, arg_tok], dim=-1)
         atom_tok = self.atom_proj(atom_in)
         atom_tok = self.atom_ln(atom_tok)
-        atom_tok = self.atom_sab1(atom_tok, atom_mask)
-        if self.atom_sab2 is not None:
-            atom_tok = self.atom_sab2(atom_tok, atom_mask)
-        atom_pool = self.atom_pma(atom_tok, atom_mask)
-        # Empty-state edge case: PMA returns zero vector when atom_mask is
-        # all-False. type-histogram path still carries a signal.
+
         thist = self.type_hist_proj(type_histogram.float())
-        state_in = torch.cat([atom_pool, thist], dim=-1)
+
+        if self.use_static_tag_pool:
+            # Build static-vs-fluent partition from atom_mask AND predicate.
+            # ``isin`` over a buffer of allowed pred-ids works on any
+            # leading-dim shape so this handles (M,), (B, M), (B, K, M).
+            # Cast: ``register_buffer`` annotation returns ``Tensor | Module``
+            # per nn.Module typing; the buffer we registered is a Tensor.
+            static_ids = self.static_tag_predicate_ids
+            assert isinstance(static_ids, Tensor)
+            is_static_pred = torch.isin(pred_ids, static_ids)
+            static_mask = atom_mask & is_static_pred
+            fluent_mask = atom_mask & (~is_static_pred)
+            static_pool = self._pool_one_stream(
+                atom_tok,
+                static_mask,
+                self.atom_sab1_static,
+                self.atom_sab2_static,
+                self.atom_pma_static,
+            )
+            fluent_pool = self._pool_one_stream(
+                atom_tok, fluent_mask, self.atom_sab1, self.atom_sab2, self.atom_pma
+            )
+            state_in = torch.cat([static_pool, fluent_pool, thist], dim=-1)
+        else:
+            atom_pool = self._pool_one_stream(
+                atom_tok, atom_mask, self.atom_sab1, self.atom_sab2, self.atom_pma
+            )
+            # Empty-state edge case: PMA returns zero vector when atom_mask is
+            # all-False. type-histogram path still carries a signal.
+            state_in = torch.cat([atom_pool, thist], dim=-1)
+
         out = self.state_ln(self.state_proj(state_in))
         return torch.nn.functional.gelu(out)
 
@@ -325,10 +407,19 @@ class _StateTokenEncoder(nn.Module):
 class SkeletonEncoder(nn.Module):
     """Φ: skeleton → 64-dim embedding (spec §4)."""
 
-    def __init__(self, vocab: Vocab, use_atom_sab2: bool = True) -> None:
+    def __init__(
+        self,
+        vocab: Vocab,
+        use_atom_sab2: bool = True,
+        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         super().__init__()
         self.op_enc = _OperatorTokenEncoder(vocab)
-        self.state_enc = _StateTokenEncoder(vocab, use_atom_sab2=use_atom_sab2)
+        self.state_enc = _StateTokenEncoder(
+            vocab,
+            use_atom_sab2=use_atom_sab2,
+            static_tag_predicates=static_tag_predicates,
+        )
         self.token_type_emb = nn.Embedding(num_embeddings=3, embedding_dim=D_MODEL)
         # +2 to accommodate (s_0, ..., s_L) sequence; +4 of slack.
         self.seq_pos_emb = nn.Embedding(
@@ -541,10 +632,15 @@ class SpectreModel(nn.Module):
         vocab: Vocab,
         prior_dropout_p: float = 0.2,
         use_atom_sab2: bool = True,
+        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         super().__init__()
         self.vocab = vocab
-        self.skeleton_encoder = SkeletonEncoder(vocab, use_atom_sab2=use_atom_sab2)
+        self.skeleton_encoder = SkeletonEncoder(
+            vocab,
+            use_atom_sab2=use_atom_sab2,
+            static_tag_predicates=static_tag_predicates,
+        )
         self.context_encoder = ContextEncoder()
         self.scorer = Scorer(prior_dropout_p=prior_dropout_p)
 

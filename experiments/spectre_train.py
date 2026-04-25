@@ -21,7 +21,10 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from alphatamp.approaches.spectre.env_registry import get_type_aug_policy
+from alphatamp.approaches.spectre.env_registry import (
+    get_static_tag_predicates,
+    get_type_aug_policy,
+)
 from alphatamp.approaches.spectre.train import TrainingConfig, train
 from alphatamp.approaches.spectre.vocab import Vocab
 
@@ -65,6 +68,7 @@ def main(cfg: DictConfig) -> None:
     if not type_aug_policy and vocab.type_aug_policy:
         # Fallback: use the policy already serialized in the vocab JSON.
         type_aug_policy = dict(vocab.type_aug_policy)
+    static_tag_predicates = get_static_tag_predicates(env_variant)
 
     out_dir = Path(cfg.out_dir) / env_variant / f"seed_{int(cfg.seed)}"
     training_cfg = _build_training_config(cfg)
@@ -75,6 +79,8 @@ def main(cfg: DictConfig) -> None:
     print(f"  vocab={vocab_path} (config_hash={vocab.config_hash})")
     print(f"  out_dir={out_dir}")
     print(f"  config={asdict(training_cfg)}")
+    if training_cfg.use_static_tag_pool:
+        print(f"  static_tag_predicates={static_tag_predicates}")
 
     best_path = train(
         cfg=training_cfg,
@@ -83,6 +89,7 @@ def main(cfg: DictConfig) -> None:
         vocab=vocab,
         type_aug_policy=type_aug_policy,
         out_dir=out_dir,
+        static_tag_predicates=static_tag_predicates,
     )
     print(f"Wrote best checkpoint to {best_path}")
 

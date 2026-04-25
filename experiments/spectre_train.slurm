@@ -22,13 +22,12 @@
 #           log.jsonl,model_meta.json}
 #
 #SBATCH --job-name=spectre_train
-#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=16G
-#SBATCH --time=02:00:00
+#SBATCH --time=00:59:55
 #SBATCH --output=experiments/slurm_outputs/spectre_train_%A_%a.out
 #SBATCH --error=experiments/slurm_outputs/spectre_train_%A_%a.err
 #SBATCH --array=0
@@ -61,5 +60,5 @@ SEED=${SLURM_ARRAY_TASK_ID:-0}
     seed=${SEED} \
     train.lr=1e-4 \
     train.weight_decay=5e-4 \
-    train.num_f_samples_per_epoch=4 \
+    train.num_f_samples_per_epoch=8 \
     "$@"

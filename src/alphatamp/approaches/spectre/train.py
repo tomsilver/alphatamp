@@ -66,6 +66,15 @@ class TrainingConfig:
     # baseline (spec §4.3 original).
     use_atom_sab2: bool = True
 
+    # ``use_static_tag_pool``: F3-B-(1) predicate-type-conditioned pooling.
+    # When True, atoms whose predicate-name is in
+    # ``env_registry.get_static_tag_predicates(env_variant)`` are routed
+    # through a dedicated SAB+PMA stream that does not compete with the
+    # fluent atom pool. Caller must pass ``static_tag_predicates`` to
+    # :func:`train`; if absent the model silently falls back to the
+    # single-pool path.
+    use_static_tag_pool: bool = False
+
     # F-sampling (spec §8.2 default mix weights)
     f_sampling_mode: str = "rollout_aligned_mix"
     f_sampling_mix_weights: tuple[float, float, float] = (0.25, 0.25, 0.5)
@@ -329,6 +338,7 @@ def train(
     out_dir: Path,
     prior: BasePrior | None = None,
     device: Optional[torch.device | str] = None,
+    static_tag_predicates: list[str] | tuple[str, ...] | None = None,
 ) -> Path:
     """Run a SPECTRE training session and return the path of ``best.pt``.
 
@@ -368,10 +378,19 @@ def train(
         num_f_samples_per_epoch=cfg.num_f_samples_per_val_episode,
     )
 
+    # Resolve the static-tag predicate list: only honored when
+    # ``cfg.use_static_tag_pool`` is set; otherwise pass None so the model
+    # uses the single-pool path even if a list was supplied by the caller.
+    resolved_static_tags = (
+        list(static_tag_predicates)
+        if (cfg.use_static_tag_pool and static_tag_predicates)
+        else None
+    )
     model = SpectreModel(
         vocab,
         prior_dropout_p=cfg.prior_dropout_p,
         use_atom_sab2=cfg.use_atom_sab2,
+        static_tag_predicates=resolved_static_tags,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -403,6 +422,7 @@ def train(
         "config": asdict(cfg),
         "vocab_config_hash": vocab.config_hash,
         "type_aug_policy": dict(type_aug_policy or {}),
+        "static_tag_predicates": list(resolved_static_tags or []),
         "num_episodes_train": train_dataset.num_episodes,
         "num_episodes_val": val_dataset.num_episodes,
         "num_train_examples_per_epoch": len(train_dataset),
@@ -510,6 +530,7 @@ def train(
                 "optimizer_state_dict": optimizer.state_dict(),
                 "config": asdict(cfg),
                 "vocab_config_hash": vocab.config_hash,
+                "static_tag_predicates": list(resolved_static_tags or []),
             },
             last_path,
         )

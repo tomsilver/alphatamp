@@ -13,7 +13,7 @@ train:
   beta1: 0.9
   beta2: 0.999
   batch_size: 16
-  epochs: 100
+  epochs: 30
   warmup_steps: 500
   lr_min: 1e-5
   grad_clip: 1.0
@@ -23,7 +23,17 @@ train:
   augment: true
 
   # Architecture toggles
-  use_atom_sab2: true
+  # 1-SAB Φ_s preserves atom-arg local-id signal that the 2-SAB variant
+  # smooths away — ablation runs c2_revert / e_augoff showed PassageWidth
+  # sensitivity Δ jumping from 0.0002 (2 SABs) → 0.1148 (1 SAB).
+  use_atom_sab2: false
+
+  # F3-B-(1) predicate-type-conditioned pooling: route static-tag atoms
+  # (PassageWidth/ItemSize/Connects on RT2D, see env_registry) through a
+  # dedicated SAB+PMA stream so they do not compete for attention with
+  # the larger fluent atom population. Default off; flip on per-run via
+  # `train.use_static_tag_pool=true` to enable for the F3-B run.
+  use_static_tag_pool: false
 
   # F-sampling (spec §8.2 default rollout_aligned_mix)
   f_sampling_mode: "rollout_aligned_mix"
@@ -32,7 +42,7 @@ train:
   f_sampling_log_normal_sigma: 1.0
 
   # F-subsample multiplier (spec §8.1 fix #5)
-  num_f_samples_per_epoch: 4
+  num_f_samples_per_epoch: 8
   num_f_samples_per_val_episode: 4
 
   # Reproducibility (overridden by top-level cfg.seed at instantiation)

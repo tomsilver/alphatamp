@@ -66,6 +66,30 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
 }
 
 
+# Per-env static-tag predicate registry for the F3-B-(1) dual-stream Φ_s
+# pool. When ``use_static_tag_pool=True`` is set on TrainingConfig, atoms
+# whose predicate-name is in this list are routed to a dedicated SAB+PMA
+# stream so they don't compete for attention with the larger fluent atom
+# population. Empty / missing entries leave the legacy single-pool path.
+#
+# RT2D rationale: PassageWidth (9 atoms) and ItemSize (3 atoms) are the
+# load-bearing static tags whose values determine refinement-time
+# feasibility. Connects (18 atoms) is also static (K₃,₃ topology, fixed
+# across all problems) and is included so the static stream sees the
+# whole "shape of the world" not just the tag values.
+_RT2D_STATIC_TAG_PREDICATES: list[str] = [
+    "PassageWidth",
+    "ItemSize",
+    "Connects",
+]
+
+_STATIC_TAG_PREDICATES: dict[str, list[str]] = {
+    "routedtransport2d_n2_v1": _RT2D_STATIC_TAG_PREDICATES,
+    "routedtransport2d_n3_v1": _RT2D_STATIC_TAG_PREDICATES,
+    "routedtransport2d_n4_v1": _RT2D_STATIC_TAG_PREDICATES,
+}
+
+
 def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
     """Return the per-type augmentability policy for an env variant.
 
@@ -74,6 +98,16 @@ def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
     kinder envs).
     """
     return dict(_TYPE_AUG_POLICIES.get(env_variant, {}))
+
+
+def get_static_tag_predicates(env_variant: str) -> list[str]:
+    """Return the predicate-name list for the static-tag pool stream.
+
+    Empty list if the env has no registry entry; ``_StateTokenEncoder``
+    treats that as "single-pool legacy path". Callers may union with
+    ``vocab.predicates`` to drop names the vocab has not seen.
+    """
+    return list(_STATIC_TAG_PREDICATES.get(env_variant, []))
 
 
 def cluttered_storage_variants(block_counts: range | list[int]) -> list[ExtraVariant]:
