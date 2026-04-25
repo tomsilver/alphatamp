@@ -272,7 +272,13 @@ class _StateTokenEncoder(nn.Module):
         atom_in = D_PRED_NAME + self.max_pred_arity * (D_TYPE + D_LOCAL)
         self.atom_proj = nn.Linear(atom_in, D_MODEL)
         self.atom_ln = nn.LayerNorm(D_MODEL)
-        self.atom_sab = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+        # Two SAB layers per spec §12 fallback: the relational join required
+        # for RT2D ("this passage's width-atom mentions the same id as this
+        # operator's passage-arg") needs more than a single attention pass to
+        # form. Enabled by default after empirical AUROC(0) collapse on the
+        # one-SAB configuration.
+        self.atom_sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+        self.atom_sab2 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
         self.atom_pma = PoolingByMultiheadAttention(dim=D_MODEL, n_heads=N_HEADS)
         # Type-histogram path
         self.type_hist_proj = nn.Linear(len(vocab.types), D_TYPE_HIST)
@@ -302,7 +308,8 @@ class _StateTokenEncoder(nn.Module):
         atom_in = torch.cat([pe, arg_tok], dim=-1)
         atom_tok = self.atom_proj(atom_in)
         atom_tok = self.atom_ln(atom_tok)
-        atom_tok = self.atom_sab(atom_tok, atom_mask)
+        atom_tok = self.atom_sab1(atom_tok, atom_mask)
+        atom_tok = self.atom_sab2(atom_tok, atom_mask)
         atom_pool = self.atom_pma(atom_tok, atom_mask)
         # Empty-state edge case: PMA returns zero vector when atom_mask is
         # all-False. type-histogram path still carries a signal.

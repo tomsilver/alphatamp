@@ -41,9 +41,25 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 # One seed per array task. Defaults to seed=0 if invoked without an array.
 SEED=${SLURM_ARRAY_TASK_ID:-0}
 
+# Tier 1 anti-overfitting defaults (vs. spec §8.4 baseline):
+#   lr 3e-4 → 1e-4               (slower convergence, less train memorization)
+#   weight_decay 1e-4 → 5e-4     (stronger L2)
+#   num_f_samples_per_epoch 8→4  (halve per-epoch train repetition)
+# An initial run at the spec defaults showed val_loss bottoming at epoch 2
+# and AUROC(0) stuck at random (~0.50, below the §11.2 bar of 0.55). These
+# overrides give the per-step gradient less leverage to overfit before val
+# AUROC has time to climb; pair them with the model.py Tier 2 fix (two-SAB
+# atom pool) per spec §12.
+#
+# Override on the command line when needed, e.g.:
+#   sbatch experiments/spectre_train.slurm train.lr=2e-4
+#
 # train.py auto-detects CUDA (falls back to CPU). On CPU-only clusters,
 # drop the `--gres=gpu:1` line above and the run will still complete in
 # a few hours at the default config.
 .venv/bin/python -u experiments/spectre_train.py \
     seed=${SEED} \
+    train.lr=1e-4 \
+    train.weight_decay=5e-4 \
+    train.num_f_samples_per_epoch=4 \
     "$@"
