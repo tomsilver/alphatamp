@@ -58,6 +58,18 @@ train:
   early_stop_patience: 10
   early_stop_min_epochs: 5
 
+  # Per-epoch deployment-style rollout eval (mean attempts to first success
+  # on train + val via eda.spectre_evaluate). ~10s/epoch overhead. Required
+  # when checkpoint_metric == "val_rollout_attempts".
+  rollout_eval_each_epoch: true
+  rollout_attempt_budget: 20
+
+  # ``checkpoint_metric``: drives best.pt selection AND early stopping.
+  #   val_rollout_attempts (default): tracks the deployment metric the
+  #     EDA notebook reports. Lower is better; val_loss is the tiebreak.
+  #   val_loss: legacy — min PL loss with AUROC(3) as tiebreak.
+  checkpoint_metric: "val_rollout_attempts"
+
 hydra:
   job:
     chdir: false

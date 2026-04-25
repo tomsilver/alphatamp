@@ -95,11 +95,33 @@ class TrainingConfig:
     num_workers: int = 0  # 0 = single-process (LRU cache works simply)
 
     # Early stopping
-    # Stop when val_loss has not improved for ``early_stop_patience`` epochs,
-    # provided we have already trained at least ``early_stop_min_epochs``.
-    # Set ``early_stop_patience = 0`` to disable.
+    # Stop when the configured ``checkpoint_metric`` has not improved for
+    # ``early_stop_patience`` epochs, provided we have already trained at
+    # least ``early_stop_min_epochs``. Set ``early_stop_patience = 0`` to
+    # disable.
     early_stop_patience: int = 0
     early_stop_min_epochs: int = 5
+
+    # Per-epoch deployment-style rollout evaluation. When enabled the
+    # trainer runs ``eda.spectre_evaluate`` on the full train and val
+    # splits each epoch and logs ``train/val_rollout_attempts`` plus
+    # standard deviation and censoring rate. ~10s per epoch overhead on
+    # CPU; required when ``checkpoint_metric == "val_rollout_attempts"``.
+    rollout_eval_each_epoch: bool = True
+
+    # ``checkpoint_metric``: how to pick ``best.pt``.
+    #   "val_rollout_attempts": min mean-attempts on val rollout (lower is
+    #     better), with val_loss as tiebreak (lower is better). Most
+    #     directly tracks the deployment metric.
+    #   "val_loss": legacy — min val PL loss with AUROC(3) tiebreak (higher
+    #     auroc3 is better).
+    # Early stopping uses the same metric.
+    checkpoint_metric: str = "val_rollout_attempts"
+
+    # ``rollout_attempt_budget``: attempt budget used inside the per-epoch
+    # rollout eval. Mirrors the test-time budget the EDA notebook uses
+    # so train-time and reported numbers are directly comparable.
+    rollout_attempt_budget: int = 20
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +347,78 @@ def _evaluate(
 
 
 # ---------------------------------------------------------------------------
+# Per-epoch deployment-style rollout eval (test-time attempt loop on val/train)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RolloutSummary:
+    """Mean / std / censoring rate over per-episode attempts.
+
+    Mirrors the columns the EDA notebook reports for B1–B5 + SPECTRE so
+    the per-epoch console output is directly comparable.
+    """
+
+    mean_attempts: float
+    std_attempts: float
+    censoring_rate: float
+    n_episodes: int
+
+    def to_dict(self) -> dict[str, float | int]:
+        return {
+            "mean_attempts": self.mean_attempts,
+            "std_attempts": self.std_attempts,
+            "censoring_rate": self.censoring_rate,
+            "n_episodes": self.n_episodes,
+        }
+
+
+def _summarize_rollout(
+    arr_attempts: np.ndarray, arr_censored: np.ndarray
+) -> RolloutSummary:
+    if arr_attempts.size == 0:
+        return RolloutSummary(
+            mean_attempts=float("nan"),
+            std_attempts=float("nan"),
+            censoring_rate=float("nan"),
+            n_episodes=0,
+        )
+    return RolloutSummary(
+        mean_attempts=float(arr_attempts.mean()),
+        std_attempts=float(arr_attempts.std()),
+        censoring_rate=float(arr_censored.mean()),
+        n_episodes=int(arr_attempts.size),
+    )
+
+
+def _checkpoint_metric_tuple(
+    cfg: TrainingConfig,
+    val_loss: float,
+    val_auroc3: float | None,
+    val_rollout_attempts: float | None,
+) -> tuple[float, float]:
+    """Return a tuple whose lexicographic min is the "best" checkpoint.
+
+    Lex-min semantics let us encode any (primary, tiebreak) ordering with
+    "lower is better" by negating quantities where higher is better.
+    """
+    if cfg.checkpoint_metric == "val_rollout_attempts":
+        if val_rollout_attempts is None or math.isnan(val_rollout_attempts):
+            # Defensive: fall back to val_loss if rollout produced no
+            # measurement (e.g., no trainable val episodes).
+            return (float("inf"), val_loss)
+        return (val_rollout_attempts, val_loss)
+    if cfg.checkpoint_metric == "val_loss":
+        # Primary: min val_loss. Tiebreak: max auroc3 → use -auroc3.
+        tiebreak = -val_auroc3 if val_auroc3 is not None else 0.0
+        return (val_loss, tiebreak)
+    raise ValueError(
+        f"Unknown checkpoint_metric={cfg.checkpoint_metric!r};"
+        " expected one of {'val_rollout_attempts', 'val_loss'}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # train()
 # ---------------------------------------------------------------------------
 
@@ -449,8 +543,26 @@ def train(
     }
     del random_phi_model
 
-    best_loss = float("inf")
-    best_auroc3: float | None = None
+    # Load LoadedSplit objects once for per-epoch deployment-style rollout
+    # eval. Lazy import to avoid pulling eda's heavy video-rendering
+    # imports into the training startup path. The rollout itself runs
+    # ``inference.init_inference_state`` + ``select_next_skeleton`` per
+    # episode — same code path the notebook uses for SPECTRE evaluation.
+    rollout_train_split = None
+    rollout_val_split = None
+    if cfg.rollout_eval_each_epoch or cfg.checkpoint_metric == "val_rollout_attempts":
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre import eda as _eda
+
+        print("Loading splits for per-epoch rollout eval...")
+        rollout_train_split = _eda.load_split_episodes(train_dir)
+        rollout_val_split = _eda.load_split_episodes(val_dir)
+        print(
+            f"  rollout: train={len(rollout_train_split.episodes)} eps,"
+            f" val={len(rollout_val_split.episodes)} eps"
+        )
+
+    best_metric: tuple[float, float] = (float("inf"), float("inf"))
     epochs_since_improve = 0
     best_path = out_dir / "best.pt"
     last_path = out_dir / "last.pt"
@@ -498,6 +610,41 @@ def train(
         )
         report = _evaluate(model, val_dataset, vocab, cfg, device)
 
+        # Per-epoch deployment-style rollout eval on train + val. Same code
+        # path the notebook uses for SPECTRE evaluation, so the numbers are
+        # directly comparable to the EDA summary table. Train-vs-val gap is
+        # the primary overfitting signal at the deployment metric.
+        train_rollout_summary: RolloutSummary | None = None
+        val_rollout_summary: RolloutSummary | None = None
+        if rollout_train_split is not None and rollout_val_split is not None:
+            # pylint: disable=import-outside-toplevel
+            from alphatamp.approaches.spectre import eda as _eda
+
+            train_rollout = _eda.spectre_evaluate(
+                rollout_train_split,
+                model,
+                vocab,
+                attempt_budget=cfg.rollout_attempt_budget,
+                prior=prior,
+                device=device,
+                name="train_rollout",
+            )
+            val_rollout = _eda.spectre_evaluate(
+                rollout_val_split,
+                model,
+                vocab,
+                attempt_budget=cfg.rollout_attempt_budget,
+                prior=prior,
+                device=device,
+                name="val_rollout",
+            )
+            train_rollout_summary = _summarize_rollout(
+                train_rollout.attempts, train_rollout.censored
+            )
+            val_rollout_summary = _summarize_rollout(
+                val_rollout.attempts, val_rollout.censored
+            )
+
         log_record: dict[str, object] = {
             "epoch": epoch,
             "global_step": global_step,
@@ -511,18 +658,33 @@ def train(
             "train_top1": {str(k): v for k, v in train_top1_by_t.items()},
             "train_per_t_count": {str(k): v for k, v in train_per_t_count.items()},
         }
+        if train_rollout_summary is not None:
+            log_record["train_rollout"] = train_rollout_summary.to_dict()
+        if val_rollout_summary is not None:
+            log_record["val_rollout"] = val_rollout_summary.to_dict()
         if epoch == 0:
             log_record["random_phi_baseline"] = random_phi_baseline
         log_handle.write(json.dumps(log_record) + "\n")
         log_handle.flush()
+
+        rollout_str = ""
+        if train_rollout_summary is not None and val_rollout_summary is not None:
+            rollout_str = (
+                f" train_att={train_rollout_summary.mean_attempts:.2f}±"
+                f"{train_rollout_summary.std_attempts:.2f}"
+                f" val_att={val_rollout_summary.mean_attempts:.2f}±"
+                f"{val_rollout_summary.std_attempts:.2f}"
+                f" gap={val_rollout_summary.mean_attempts - train_rollout_summary.mean_attempts:+.2f}"
+            )
         print(
             f"epoch={epoch:02d} train_loss={train_loss:.4f}"
             f" val_loss={report.val_loss:.4f}"
             f" auroc0={report.auroc_by_t.get(0)}"
             f" auroc3={report.auroc_by_t.get(3)}"
+            f"{rollout_str}"
         )
 
-        # Save last; checkpoint best by (val_loss, auroc3 tie-break).
+        # Save last; pick best.pt via the configured metric.
         torch.save(
             {
                 "epoch": epoch,
@@ -534,18 +696,18 @@ def train(
             },
             last_path,
         )
-        cur_auroc3 = report.auroc_by_t.get(3)
-        is_better = report.val_loss < best_loss
-        if (
-            (not is_better)
-            and math.isclose(report.val_loss, best_loss)
-            and cur_auroc3 is not None
-            and (best_auroc3 is None or cur_auroc3 > best_auroc3)
-        ):
-            is_better = True
+        val_rollout_attempts = (
+            val_rollout_summary.mean_attempts if val_rollout_summary else None
+        )
+        cur_metric = _checkpoint_metric_tuple(
+            cfg,
+            val_loss=report.val_loss,
+            val_auroc3=report.auroc_by_t.get(3),
+            val_rollout_attempts=val_rollout_attempts,
+        )
+        is_better = cur_metric < best_metric
         if is_better:
-            best_loss = report.val_loss
-            best_auroc3 = cur_auroc3
+            best_metric = cur_metric
             epochs_since_improve = 0
             torch.save(
                 {
@@ -554,6 +716,9 @@ def train(
                     "optimizer_state_dict": optimizer.state_dict(),
                     "config": asdict(cfg),
                     "vocab_config_hash": vocab.config_hash,
+                    "static_tag_predicates": list(resolved_static_tags or []),
+                    "checkpoint_metric": cfg.checkpoint_metric,
+                    "checkpoint_metric_value": list(cur_metric),
                 },
                 best_path,
             )
@@ -566,7 +731,7 @@ def train(
             and epochs_since_improve >= cfg.early_stop_patience
         ):
             print(
-                f"early stop: no val_loss improvement for"
+                f"early stop: no {cfg.checkpoint_metric} improvement for"
                 f" {epochs_since_improve} epochs (patience={cfg.early_stop_patience})"
             )
             break
