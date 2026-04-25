@@ -1,0 +1,94 @@
+{
+  "config_hash": "8b9772a1aaea",
+  "max_atoms_per_state": 35,
+  "max_objects_per_state": 25,
+  "max_objects_per_type": {
+    "item": 3,
+    "passage_color_a": 3,
+    "passage_color_b": 3,
+    "passage_color_c": 3,
+    "robot": 1,
+    "size_level": 3,
+    "width_level": 3,
+    "zone": 6
+  },
+  "max_operator_arity": 5,
+  "max_pool_size": 30,
+  "max_predicate_arity": 3,
+  "max_skeleton_length": 19,
+  "operators": {
+    "<OOV>": 0,
+    "PickItemSide": 1,
+    "PickItemTop": 2,
+    "PlaceItemSide": 3,
+    "PlaceItemTop": 4,
+    "TraverseEmpty": 5,
+    "TraverseLoadedColorA": 6,
+    "TraverseLoadedColorB": 7,
+    "TraverseLoadedColorC": 8
+  },
+  "predicates": {
+    "<OOV>": {
+      "arity": 0,
+      "idx": 0
+    },
+    "At": {
+      "arity": 2,
+      "idx": 1
+    },
+    "Connects": {
+      "arity": 3,
+      "idx": 2
+    },
+    "HandEmpty": {
+      "arity": 1,
+      "idx": 3
+    },
+    "HeldGraspSide": {
+      "arity": 2,
+      "idx": 4
+    },
+    "HeldGraspTop": {
+      "arity": 2,
+      "idx": 5
+    },
+    "Holding": {
+      "arity": 2,
+      "idx": 6
+    },
+    "ItemAt": {
+      "arity": 2,
+      "idx": 7
+    },
+    "ItemSize": {
+      "arity": 2,
+      "idx": 8
+    },
+    "PassageWidth": {
+      "arity": 2,
+      "idx": 9
+    }
+  },
+  "type_aug_policy": {
+    "item": true,
+    "passage": false,
+    "passage_color_a": false,
+    "passage_color_b": false,
+    "passage_color_c": false,
+    "robot": true,
+    "size_level": false,
+    "width_level": false,
+    "zone": false
+  },
+  "types": {
+    "<OOV>": 0,
+    "item": 1,
+    "passage_color_a": 2,
+    "passage_color_b": 3,
+    "passage_color_c": 4,
+    "robot": 5,
+    "size_level": 6,
+    "width_level": 7,
+    "zone": 8
+  }
+}

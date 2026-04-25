@@ -74,14 +74,22 @@ def _gather_types(episode: EpisodeRecord) -> dict[str, Type]:
 def _renumber_mapping(
     episode: EpisodeRecord,
     rng: np.random.Generator | None,
+    type_aug_policy: dict[str, bool] | None = None,
 ) -> dict[str, Object]:
     """Build a ``old_name -> new Object`` mapping with canonical-named objects.
 
     New object names are ``"{type_name}_{idx}"`` where ``idx`` is a within-type
     permutation index. ``Type`` instances are reused from the input episode so
     hierarchical-typing semantics are preserved.
+
+    ``type_aug_policy`` is a ``{type_name: augmentable}`` dict (per
+    ``SPECTRE_RT2D_METHOD_SPEC.md`` §4.6). Missing keys default to
+    ``augmentable=True`` (backwards-compatible). When ``rng is None`` the
+    policy is irrelevant — every type uses the deterministic alphabetical
+    order.
     """
     type_table = _gather_types(episode)
+    policy = type_aug_policy or {}
 
     by_type: dict[str, list[str]] = defaultdict(list)
     for obj_name, type_name in episode.object_registry.items():
@@ -90,11 +98,11 @@ def _renumber_mapping(
     mapping: dict[str, Object] = {}
     for type_name in sorted(by_type):
         names = sorted(by_type[type_name])
-        permutation = (
-            list(range(len(names)))
-            if rng is None
-            else list(rng.permutation(len(names)))
-        )
+        augmentable = policy.get(type_name, True)
+        if rng is None or not augmentable:
+            permutation: list[int] = list(range(len(names)))
+        else:
+            permutation = list(rng.permutation(len(names)))
         if type_name not in type_table:
             # Registry mentions a type that appears only in object_registry but
             # nowhere inside a Type-carrying field. This can't happen in
@@ -134,6 +142,7 @@ def _remap_operator(op: GroundOperator, mapping: dict[str, Object]) -> GroundOpe
 def canonicalize_episode(
     episode: EpisodeRecord,
     rng: np.random.Generator | None = None,
+    type_aug_policy: dict[str, bool] | None = None,
 ) -> EpisodeRecord:
     """Return a new ``EpisodeRecord`` with typed-local-id object names.
 
@@ -145,8 +154,12 @@ def canonicalize_episode(
 
     Outcomes, provenance, and summary are passed through unchanged since they
     do not reference Object instances.
+
+    ``type_aug_policy`` (a ``{type_name: augmentable}`` dict per spec §4.6)
+    suppresses the random within-type permutation for non-augmentable types
+    even when ``rng`` is provided. Missing keys default to augmentable.
     """
-    mapping = _renumber_mapping(episode, rng)
+    mapping = _renumber_mapping(episode, rng, type_aug_policy)
 
     new_s0 = _remap_state(episode.initial_abstract_state, mapping)
     new_goal = frozenset(_remap_atom(a, mapping) for a in episode.goal_atoms)

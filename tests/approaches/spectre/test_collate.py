@@ -76,10 +76,11 @@ def test_type_histogram_sums_to_num_objects(tmp_path: Path) -> None:
 def test_empty_f_still_collates(tmp_path: Path) -> None:
     """Examples with empty F produce width-1 F tensors (no crash)."""
     ds, vocab = _fixture(tmp_path)
-    # Force an F=∅ example by picking an RNG that yields no selections.
-    # We do this by just taking many samples and looking for one with empty F.
+    # The per-call RNG is deterministic in (seed, episode, f_sample, epoch),
+    # so to find an F=∅ sample we sweep over epochs (each epoch reseeds).
     found = False
-    for _ in range(50):
+    for epoch in range(50):
+        ds.set_epoch(epoch)
         for i in range(len(ds)):
             ex = ds[i]
             if len(ex.f_skeletons) == 0:
@@ -90,4 +91,4 @@ def test_empty_f_still_collates(tmp_path: Path) -> None:
                 break
         if found:
             break
-    assert found, "Expected to observe at least one empty-F sample in 50 draws"
+    assert found, "Expected to observe at least one empty-F sample in 50 epochs"

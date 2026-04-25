@@ -39,6 +39,43 @@ _CLUTTERED_RETRIEVAL_ENTRY_POINT = (
 _STICK_BUTTON_ENTRY_POINT = "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv"
 
 
+# Per-type augmentation policy tables for SPECTRE Φ training-time
+# object-renumbering augmentation (spec §4.6 / §10.1). Missing keys default to
+# ``augmentable=True`` so kinder vocabs round-trip unchanged.
+#
+# RT2D needs width_level / size_level / passage subtypes pinned to deterministic
+# local ids: width and size are totally ordered, and the static Connects
+# topology over zones / passages is fixed across all problems. Permuting any of
+# those types destroys the relational signal RT2D is engineered to test.
+_RT2D_TYPE_AUG_POLICY: dict[str, bool] = {
+    "robot": True,
+    "item": True,
+    "zone": False,
+    "passage": False,
+    "passage_color_a": False,
+    "passage_color_b": False,
+    "passage_color_c": False,
+    "width_level": False,
+    "size_level": False,
+}
+
+_TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
+    "routedtransport2d_n2_v1": _RT2D_TYPE_AUG_POLICY,
+    "routedtransport2d_n3_v1": _RT2D_TYPE_AUG_POLICY,
+    "routedtransport2d_n4_v1": _RT2D_TYPE_AUG_POLICY,
+}
+
+
+def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
+    """Return the per-type augmentability policy for an env variant.
+
+    Returns an empty dict for envs that have no policy entry; callers treat
+    missing keys as ``augmentable=True`` (backwards-compatible with all
+    kinder envs).
+    """
+    return dict(_TYPE_AUG_POLICIES.get(env_variant, {}))
+
+
 def cluttered_storage_variants(block_counts: range | list[int]) -> list[ExtraVariant]:
     """Variants of ``ClutteredStorage2D`` parameterized by ``num_blocks``."""
     return [
@@ -95,12 +132,24 @@ def register_extra_envs(
 ) -> None:
     """Register kinder variants that are not registered by default.
 
-    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``.
+    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``
+    plus ``RoutedTransport2D-n{2,3,4}``. RoutedTransport2D is wired through
+    the same registry but lives under
+    ``alphatamp.approaches.spectre.envs.routedtransport2d`` (the import is
+    deferred so consumers that never collect RT2D don't pay the import cost).
     """
     kinder.register_all_environments()
 
     if variants is None:
-        variants = cluttered_storage_variants(range(1, 16))
+        # Local import — keeps RT2D module out of import-time hot path for
+        # callers who only touch kinder envs.
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.routedtransport2d.gym_env import (
+            routed_transport_variants,
+        )
+
+        variants = list(cluttered_storage_variants(range(1, 16)))
+        variants.extend(routed_transport_variants([2, 3, 4]))
 
     for v in variants:
         if v.gym_id in gymnasium.registry:

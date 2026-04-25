@@ -11,11 +11,13 @@ warnings on unknown operator / predicate / type names. Per
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
 
+from alphatamp.approaches.spectre.env_registry import get_type_aug_policy
 from alphatamp.approaches.spectre.io import load_episode
 from alphatamp.approaches.spectre.vocab import (
     extract_vocab,
@@ -44,6 +46,13 @@ def main(cfg: DictConfig) -> None:
     train_hash = load_episode(first).provenance.config_hash
 
     vocab = extract_vocab(train_dir, config_hash=train_hash)
+
+    # Inject the per-type augmentation policy from the env registry per
+    # SPECTRE_RT2D_METHOD_SPEC.md §10.1. Empty dict for kinder envs (which
+    # treat every type as augmentable=True).
+    type_aug_policy = get_type_aug_policy(env_variant)
+    if type_aug_policy:
+        vocab = replace(vocab, type_aug_policy=type_aug_policy)
 
     out = data_root / "derived" / env_variant / "train_vocab.json"
     vocab.to_json(out)

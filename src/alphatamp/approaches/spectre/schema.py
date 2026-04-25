@@ -30,7 +30,13 @@ Outcome = Literal["success", "fail", "error"]
 
 @dataclass(frozen=True)
 class ProvenanceBlock:
-    """Per-episode provenance, pipeline spec §5.3."""
+    """Per-episode provenance, pipeline spec §5.3.
+
+    ``scene_latent`` is populated only by environments whose refinement is
+    governed by an externally-sampled per-episode latent (currently:
+    RoutedTransport2D, where it carries ``(blocked_color, blocked_grasp)``).
+    For the kinder envs it stays ``None`` and round-trips unchanged.
+    """
 
     problem_id: int
     env_id: str
@@ -41,6 +47,7 @@ class ProvenanceBlock:
     git_sha: str
     collection_timestamp: str
     package_versions: dict[str, str]
+    scene_latent: Optional[dict[str, str]] = None
 
 
 @dataclass(frozen=True)

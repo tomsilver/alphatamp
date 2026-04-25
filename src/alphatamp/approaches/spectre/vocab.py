@@ -50,6 +50,10 @@ class Vocab:
     max_objects_per_state: int
     max_pool_size: int
     max_objects_per_type: dict[str, int] = field(default_factory=dict)
+    # Per-type augmentability for object-renumbering augmentation
+    # (SPECTRE_RT2D_METHOD_SPEC.md §4.6 / §10.1). Missing keys default to
+    # augmentable=True so kinder vocabs round-trip unchanged.
+    type_aug_policy: dict[str, bool] = field(default_factory=dict)
 
     def to_json(self, path: Path) -> None:
         """Write a JSON serialization."""
@@ -62,7 +66,13 @@ class Vocab:
         """Load a vocab JSON written by ``to_json``."""
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
+        # Older vocab JSON files predate type_aug_policy; treat them as all-augmentable.
+        raw.setdefault("type_aug_policy", {})
         return cls(**raw)
+
+    def is_augmentable(self, type_name: str) -> bool:
+        """Default-True policy lookup, per spec §10.1 backwards-compatibility note."""
+        return self.type_aug_policy.get(type_name, True)
 
     def op_idx(self, name: str) -> int:
         """Map an operator name to its embedding index.
