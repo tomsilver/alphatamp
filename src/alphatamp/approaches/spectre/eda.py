@@ -33,13 +33,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import numpy as np
 
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.schema import EpisodeRecord
+
+if TYPE_CHECKING:
+    import torch
+
+    from alphatamp.approaches.spectre.model import SpectreModel
+    from alphatamp.approaches.spectre.priors import BasePrior
+    from alphatamp.approaches.spectre.vocab import Vocab
 
 SkeletonKey = tuple[tuple[str, tuple[str, ...]], ...]
 
@@ -871,6 +878,94 @@ def adaptive_historical_baseline(
         problem_ids[out_idx] = ep.provenance.problem_id
     return BaselineResult(
         name="B4_adaptive_historical",
+        attempts=attempts,
+        wall_clock=wall_clock,
+        censored=censored,
+        problem_ids=problem_ids,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SPECTRE evaluator (candidate method, not a baseline)
+#
+# SPECTRE is the learned ranker we want to compare *against* B1–B5; it is
+# not itself a baseline. The function below produces a ``BaselineResult``
+# only because the per-episode (attempts, wall_clock, censored, problem_ids)
+# schema is generic — reusing it lets SPECTRE drop into the existing
+# notebook summary table and ``adaptive_premium`` / ``headroom`` helpers
+# without special casing.
+# ---------------------------------------------------------------------------
+
+
+def spectre_evaluate(
+    test: LoadedSplit,
+    model: SpectreModel,
+    vocab: Vocab,
+    attempt_budget: int = 20,
+    prior: BasePrior | None = None,
+    device: torch.device | str = "cpu",
+    name: str = "SPECTRE",
+) -> BaselineResult:
+    """Run a trained SPECTRE model on every trainable test episode.
+
+    Per-episode loop: encode the pool once via
+    :func:`inference.init_inference_state`, then iterate
+    ``select_next_skeleton`` → look up the recorded outcome →
+    ``record_failure`` until success, budget exhaustion, or pool empty.
+    Censoring rule and ``attempts == attempt_budget + 1`` convention match
+    :func:`_simulate_traversal` exactly so the returned arrays align with
+    the B1–B5 ``BaselineResult``\\ s for paired bootstraps.
+    """
+    # Local imports — torch is optional for non-SPECTRE uses of this module,
+    # so we only require it when callers actually want SPECTRE evaluation.
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre import inference as _inference
+    from alphatamp.approaches.spectre.priors import ZeroPrior
+
+    if prior is None:
+        prior = ZeroPrior()
+
+    trainable = _trainable_episodes(test)
+    attempts = np.zeros(len(trainable), dtype=float)
+    wall_clock = np.zeros(len(trainable), dtype=float)
+    censored = np.zeros(len(trainable), dtype=bool)
+    problem_ids = np.zeros(len(trainable), dtype=np.int64)
+
+    for out_idx, ep_idx in enumerate(trainable):
+        ep = test.episodes[ep_idx]
+        state = _inference.init_inference_state(
+            model, ep, vocab, prior=prior, device=device
+        )
+        steps = 0
+        wall = 0.0
+        finished = False
+        while steps < attempt_budget:
+            if not bool(state.pool_mask.any().item()):
+                # Pool exhausted before reaching budget — censored, same
+                # convention as ``_simulate_traversal``.
+                attempts[out_idx] = attempt_budget + 1
+                censored[out_idx] = True
+                finished = True
+                break
+            idx = _inference.select_next_skeleton(state, model)
+            outcome = ep.outcomes[idx]
+            steps += 1
+            wall += outcome.refinement_wall_clock_s
+            if outcome.outcome == "success":
+                attempts[out_idx] = steps
+                censored[out_idx] = False
+                finished = True
+                break
+            _inference.record_failure(state, idx)
+        if not finished:
+            # Hit the budget without a success.
+            attempts[out_idx] = attempt_budget + 1
+            censored[out_idx] = True
+        wall_clock[out_idx] = wall
+        problem_ids[out_idx] = ep.provenance.problem_id
+
+    return BaselineResult(
+        name=name,
         attempts=attempts,
         wall_clock=wall_clock,
         censored=censored,

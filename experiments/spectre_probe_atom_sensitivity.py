@@ -43,6 +43,7 @@ from alphatamp.approaches.spectre.dataset import (
     SpectreDataset,
     collate_spectre_batch,
 )
+from alphatamp.approaches.spectre import inference
 from alphatamp.approaches.spectre.env_registry import (
     get_static_tag_predicates,
     get_type_aug_policy,
@@ -69,33 +70,13 @@ def _load_checkpoint(
     device: torch.device,
     fallback_static_tag_predicates: list[str] | None = None,
 ) -> SpectreModel:
-    state = torch.load(ckpt_path, map_location=device, weights_only=False)
-    cfg_dict = state.get("config", {}) or {}
-    use_atom_sab2 = bool(cfg_dict.get("use_atom_sab2", True))
-    prior_dropout_p = float(cfg_dict.get("prior_dropout_p", 0.2))
-    use_static_tag_pool = bool(cfg_dict.get("use_static_tag_pool", False))
-    # Prefer the list explicitly saved with the checkpoint (recorded by
-    # train.py at save time); fall back to the env-registry list passed
-    # by the probe driver. Pass None when the pool is disabled so the
-    # constructor builds the legacy single-pool path.
-    saved_tags = state.get("static_tag_predicates")
-    if use_static_tag_pool:
-        static_tag_predicates: list[str] | None = list(
-            saved_tags if saved_tags else (fallback_static_tag_predicates or [])
-        )
-        if not static_tag_predicates:
-            static_tag_predicates = None
-    else:
-        static_tag_predicates = None
-    model = SpectreModel(
+    """Forward to the shared loader so probe + notebook + future tools agree."""
+    return inference.load_checkpoint(
+        ckpt_path,
         vocab,
-        prior_dropout_p=prior_dropout_p,
-        use_atom_sab2=use_atom_sab2,
-        static_tag_predicates=static_tag_predicates,
-    ).to(device)
-    model.load_state_dict(state["model_state_dict"])
-    model.eval()
-    return model
+        device=device,
+        fallback_static_tag_predicates=fallback_static_tag_predicates,
+    )
 
 
 def _encode_pool(model: SpectreModel, batch: SpectreBatch) -> torch.Tensor:

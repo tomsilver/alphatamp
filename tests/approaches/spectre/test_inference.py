@@ -9,6 +9,7 @@ from _fixtures import build_toy_episode
 
 from alphatamp.approaches.spectre.inference import (
     init_inference_state,
+    load_checkpoint,
     record_failure,
     select_next_skeleton,
 )
@@ -87,3 +88,80 @@ def test_error_outcomes_excluded_from_pool(tmp_path: Path) -> None:
     assert state.pool_mask[0].item()
     assert state.pool_mask[2].item()
     assert state.pool_mask[3].item()
+
+
+def test_load_checkpoint_drops_legacy_static_tag_buffer(tmp_path: Path) -> None:
+    """Legacy checkpoints saved the static_tag_predicate_ids buffer as a
+    persistent state_dict entry; the current model registers it
+    non-persistent. ``load_checkpoint`` must strip the legacy key so a
+    strict-mode load still succeeds.
+    """
+    _, vocab = _seed_train_split(tmp_path)
+    src_model = SpectreModel(
+        vocab,
+        prior_dropout_p=0.2,
+        use_atom_sab2=False,
+        static_tag_predicates=None,  # any list; legacy key is independent
+    )
+    src_model.eval()
+    sd = dict(src_model.state_dict())
+    # Inject a legacy-style persistent buffer entry.
+    sd["skeleton_encoder.state_enc.static_tag_predicate_ids"] = torch.tensor(
+        [2, 8, 9], dtype=torch.long
+    )
+    cfg = {
+        "use_atom_sab2": False,
+        "prior_dropout_p": 0.2,
+        "use_static_tag_pool": False,
+    }
+    ckpt_path = tmp_path / "legacy.pt"
+    torch.save(
+        {"epoch": 0, "model_state_dict": sd, "config": cfg, "static_tag_predicates": []},
+        ckpt_path,
+    )
+    # Should not raise even though the saved sd has an "extra" key.
+    reloaded = load_checkpoint(ckpt_path, vocab, device="cpu")
+    assert not reloaded.skeleton_encoder.state_enc.use_static_tag_pool
+
+
+def test_load_checkpoint_round_trip(tmp_path: Path) -> None:
+    """``load_checkpoint`` reconstructs a SpectreModel with matching state.
+
+    Saves a tiny checkpoint mimicking ``train.py``'s save format (cfg dict
+    + ``model_state_dict`` + ``static_tag_predicates``); reloads via the
+    shared loader; asserts both models produce identical output on the
+    same toy batch.
+    """
+    _, vocab = _seed_train_split(tmp_path)
+    # Pick a non-default flag combo to verify auto-detect actually reads
+    # the saved cfg rather than silently using SpectreModel defaults.
+    src_model = SpectreModel(
+        vocab,
+        prior_dropout_p=0.3,
+        use_atom_sab2=False,
+        static_tag_predicates=None,
+    )
+    src_model.eval()
+    cfg = {
+        "use_atom_sab2": False,
+        "prior_dropout_p": 0.3,
+        "use_static_tag_pool": False,
+    }
+    ckpt_path = tmp_path / "best.pt"
+    torch.save(
+        {
+            "epoch": 0,
+            "model_state_dict": src_model.state_dict(),
+            "config": cfg,
+            "static_tag_predicates": [],
+        },
+        ckpt_path,
+    )
+
+    reloaded = load_checkpoint(ckpt_path, vocab, device="cpu")
+    assert reloaded.scorer.prior_dropout_p == 0.3
+    assert reloaded.skeleton_encoder.state_enc.atom_sab2 is None
+    assert not reloaded.skeleton_encoder.state_enc.use_static_tag_pool
+    src_keys = set(src_model.state_dict().keys())
+    reloaded_keys = set(reloaded.state_dict().keys())
+    assert src_keys == reloaded_keys

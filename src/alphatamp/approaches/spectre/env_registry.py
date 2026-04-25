@@ -74,13 +74,22 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
 #
 # RT2D rationale: PassageWidth (9 atoms) and ItemSize (3 atoms) are the
 # load-bearing static tags whose values determine refinement-time
-# feasibility. Connects (18 atoms) is also static (K₃,₃ topology, fixed
-# across all problems) and is included so the static stream sees the
-# whole "shape of the world" not just the tag values.
+# feasibility.
+#
+# F3-B-(1ʹ) update: Connects (18 atoms) was originally included on the
+# theory that the static stream should see "the shape of the world".
+# Empirical result (run f3b_static_pool, log
+# experiments/slurm_outputs/spectre_train_7349651_0.out): Connects is
+# *identical across every RT2D problem* (the K₃,₃ topology never changes),
+# so 60% of the static stream's input carries zero discriminative gradient.
+# The model learned the static stream is mostly noise and pushed its
+# contribution toward a constant — leaving Φ functionally blind to s_0
+# (D.1 PassageWidth Δ collapsed from 0.115 to 0.0004). With Connects
+# excluded, the static stream pools 12 informative atoms only; Connects
+# is still routed to the fluent stream so the topology remains visible.
 _RT2D_STATIC_TAG_PREDICATES: list[str] = [
     "PassageWidth",
     "ItemSize",
-    "Connects",
 ]
 
 _STATIC_TAG_PREDICATES: dict[str, list[str]] = {

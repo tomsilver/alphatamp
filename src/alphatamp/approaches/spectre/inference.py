@@ -18,6 +18,7 @@ broadcasted σ. For ``K ≤ 30`` and ``t ≤ 30`` both are trivial.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from torch import Tensor
@@ -31,6 +32,54 @@ from alphatamp.approaches.spectre.model import SpectreModel
 from alphatamp.approaches.spectre.priors import BasePrior, ZeroPrior
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.vocab import Vocab
+
+
+def load_checkpoint(
+    ckpt_path: Path,
+    vocab: Vocab,
+    device: torch.device | str = "cpu",
+    fallback_static_tag_predicates: list[str] | None = None,
+) -> SpectreModel:
+    """Load a :class:`SpectreModel` from a training checkpoint.
+
+    Auto-detects the architecture flags saved by ``train.py``:
+    ``use_atom_sab2``, ``prior_dropout_p``, ``use_static_tag_pool``, and
+    the resolved ``static_tag_predicates`` list. ``fallback_static_tag_predicates``
+    is consulted when the checkpoint pre-dates the F3-B-(1) save format
+    (callers should pass ``env_registry.get_static_tag_predicates(env_variant)``).
+
+    Returns ``model.eval()``.
+    """
+    state = torch.load(ckpt_path, map_location=device, weights_only=False)
+    cfg_dict = state.get("config", {}) or {}
+    use_atom_sab2 = bool(cfg_dict.get("use_atom_sab2", True))
+    prior_dropout_p = float(cfg_dict.get("prior_dropout_p", 0.2))
+    use_static_tag_pool = bool(cfg_dict.get("use_static_tag_pool", False))
+    saved_tags = state.get("static_tag_predicates")
+    if use_static_tag_pool:
+        static_tag_predicates: list[str] | None = list(
+            saved_tags if saved_tags else (fallback_static_tag_predicates or [])
+        )
+        if not static_tag_predicates:
+            static_tag_predicates = None
+    else:
+        static_tag_predicates = None
+    model = SpectreModel(
+        vocab,
+        prior_dropout_p=prior_dropout_p,
+        use_atom_sab2=use_atom_sab2,
+        static_tag_predicates=static_tag_predicates,
+    ).to(device)
+    sd = dict(state["model_state_dict"])
+    # ``static_tag_predicate_ids`` is a non-persistent buffer in the current
+    # model (always rebuilt from ``static_tag_predicates`` at construction).
+    # Drop any legacy persistent-buffer entry from older checkpoints so
+    # ``strict=True`` load still passes; the saved value is redundant with
+    # the constructor argument.
+    sd.pop("skeleton_encoder.state_enc.static_tag_predicate_ids", None)
+    model.load_state_dict(sd)
+    model.eval()
+    return model
 
 
 @dataclass
@@ -161,6 +210,7 @@ def record_failure(state: InferenceState, skeleton_idx: int) -> None:
 __all__ = [
     "InferenceState",
     "init_inference_state",
-    "select_next_skeleton",
+    "load_checkpoint",
     "record_failure",
+    "select_next_skeleton",
 ]

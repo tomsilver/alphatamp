@@ -305,10 +305,15 @@ class _StateTokenEncoder(nn.Module):
                         resolved_ids.append(pid)
         resolved_ids = sorted(set(resolved_ids))
         self.use_static_tag_pool = len(resolved_ids) > 0
+        # Non-persistent: the buffer is always rebuilt from the constructor
+        # ``static_tag_predicates`` argument, so we don't write it into
+        # ``state_dict`` (would break legacy checkpoints that pre-date
+        # F3-B-(1) with a "missing key" error). The cfg dict + env_registry
+        # already let ``inference.load_checkpoint`` recover the list.
         self.register_buffer(
             "static_tag_predicate_ids",
             torch.tensor(resolved_ids, dtype=torch.long),
-            persistent=True,
+            persistent=False,
         )
         if self.use_static_tag_pool:
             self.atom_sab1_static = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
