@@ -55,6 +55,7 @@ def load_checkpoint(
     use_atom_sab2 = bool(cfg_dict.get("use_atom_sab2", True))
     prior_dropout_p = float(cfg_dict.get("prior_dropout_p", 0.2))
     use_static_tag_pool = bool(cfg_dict.get("use_static_tag_pool", False))
+    dropout_p = float(cfg_dict.get("dropout_p", 0.1))
     saved_tags = state.get("static_tag_predicates")
     if use_static_tag_pool:
         static_tag_predicates: list[str] | None = list(
@@ -69,6 +70,7 @@ def load_checkpoint(
         prior_dropout_p=prior_dropout_p,
         use_atom_sab2=use_atom_sab2,
         static_tag_predicates=static_tag_predicates,
+        dropout_p=dropout_p,
     ).to(device)
     sd = dict(state["model_state_dict"])
     # ``static_tag_predicate_ids`` is a non-persistent buffer in the current

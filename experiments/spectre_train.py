@@ -37,8 +37,11 @@ def _build_training_config(cfg: DictConfig) -> TrainingConfig:
         raw["f_sampling_mix_weights"], list
     ):
         raw["f_sampling_mix_weights"] = tuple(raw["f_sampling_mix_weights"])
-    if "seed" not in raw or raw["seed"] is None:
-        raw["seed"] = int(cfg.seed)
+    # The slurm wrapper passes ``seed=$SEED`` at the top-level Hydra
+    # namespace (which also drives the out_dir). Top-level always wins
+    # over ``train.seed`` so ``--array=1-3`` actually trains seeds 1/2/3
+    # — not three copies of seed 0.
+    raw["seed"] = int(cfg.seed)
     return TrainingConfig(**raw)
 
 

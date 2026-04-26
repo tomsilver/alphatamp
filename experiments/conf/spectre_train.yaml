@@ -21,6 +21,9 @@ train:
   # Regularization
   prior_dropout_p: 0.2
   augment: true
+  # Per-module dropout. Bump to 0.2 / 0.3 with stronger weight_decay to
+  # fight overfitting on the train→val rollout-attempts gap.
+  dropout_p: 0.1
 
   # Architecture toggles
   # 1-SAB Φ_s preserves atom-arg local-id signal that the 2-SAB variant
@@ -45,7 +48,10 @@ train:
   num_f_samples_per_epoch: 8
   num_f_samples_per_val_episode: 4
 
-  # Reproducibility (overridden by top-level cfg.seed at instantiation)
+  # Reproducibility — vestigial: ALWAYS overridden by top-level cfg.seed
+  # in spectre_train.py:_build_training_config. The slurm wrapper passes
+  # ``seed=$SEED`` at the top level, which is what determines the actual
+  # training seed. Don't rely on this yaml value.
   seed: 0
 
   # Validation

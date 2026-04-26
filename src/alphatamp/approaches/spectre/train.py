@@ -59,6 +59,11 @@ class TrainingConfig:
     # Regularization
     prior_dropout_p: float = 0.2
     augment: bool = True
+    # Per-module dropout (attention, FFN, transformer, scorer MLP).
+    # Threaded into every nn.Dropout / MultiheadAttention dropout in
+    # ``model.py``. Default 0.1 matches the original spec; bump to
+    # 0.2–0.3 to fight overfitting (Tier 1 of the latest plan).
+    dropout_p: float = 0.1
 
     # Architecture toggles
     # ``use_atom_sab2``: include the 2nd SAB in Φ_s atom-pool. Default True
@@ -485,6 +490,7 @@ def train(
         prior_dropout_p=cfg.prior_dropout_p,
         use_atom_sab2=cfg.use_atom_sab2,
         static_tag_predicates=resolved_static_tags,
+        dropout_p=cfg.dropout_p,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -533,6 +539,7 @@ def train(
         vocab,
         prior_dropout_p=cfg.prior_dropout_p,
         use_atom_sab2=cfg.use_atom_sab2,
+        dropout_p=cfg.dropout_p,
     ).to(device)
     random_phi_report = _evaluate(random_phi_model, val_dataset, vocab, cfg, device)
     random_phi_baseline = {

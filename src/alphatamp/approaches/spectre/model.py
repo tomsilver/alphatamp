@@ -31,7 +31,7 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 D_MODEL = 64
 N_HEADS = 4
-DROPOUT = 0.1
+DROPOUT = 0.1  # default; per-instance ``dropout_p`` overrides
 FFN_DIM = 256
 
 D_OP_NAME = 32
@@ -72,21 +72,26 @@ class SetAttentionBlock(nn.Module):
     embeddings — used over true sets of atoms / failure embeddings.
     """
 
-    def __init__(self, dim: int = D_MODEL, n_heads: int = N_HEADS) -> None:
+    def __init__(
+        self,
+        dim: int = D_MODEL,
+        n_heads: int = N_HEADS,
+        dropout_p: float = DROPOUT,
+    ) -> None:
         super().__init__()
         self.attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=n_heads,
-            dropout=DROPOUT,
+            dropout=dropout_p,
             batch_first=True,
         )
         self.ln1 = nn.LayerNorm(dim)
         self.ffn = nn.Sequential(
             nn.Linear(dim, FFN_DIM),
             nn.GELU(),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout_p),
             nn.Linear(FFN_DIM, dim),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout_p),
         )
         self.ln2 = nn.LayerNorm(dim)
 
@@ -115,23 +120,28 @@ class SetAttentionBlock(nn.Module):
 class PoolingByMultiheadAttention(nn.Module):
     """``PMA_{k=1}``: one learned seed attends over a masked token set."""
 
-    def __init__(self, dim: int = D_MODEL, n_heads: int = N_HEADS) -> None:
+    def __init__(
+        self,
+        dim: int = D_MODEL,
+        n_heads: int = N_HEADS,
+        dropout_p: float = DROPOUT,
+    ) -> None:
         super().__init__()
         self.seed = nn.Parameter(torch.zeros(1, 1, dim))
         nn.init.normal_(self.seed, std=0.02)
         self.attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=n_heads,
-            dropout=DROPOUT,
+            dropout=dropout_p,
             batch_first=True,
         )
         self.ln = nn.LayerNorm(dim)
         self.ffn = nn.Sequential(
             nn.Linear(dim, FFN_DIM),
             nn.GELU(),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout_p),
             nn.Linear(FFN_DIM, dim),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout_p),
         )
         self.ln2 = nn.LayerNorm(dim)
 
@@ -185,7 +195,7 @@ def _flatten_set_dims(
 class _OperatorTokenEncoder(nn.Module):
     """Operator-token sub-encoder per spec §4.2."""
 
-    def __init__(self, vocab: Vocab) -> None:
+    def __init__(self, vocab: Vocab, dropout_p: float = DROPOUT) -> None:
         super().__init__()
         self.max_op_arity = max(int(vocab.max_operator_arity), 1)
         self.op_name_emb = nn.Embedding(
@@ -214,7 +224,7 @@ class _OperatorTokenEncoder(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(d_in, 128),
             nn.GELU(),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout_p),
             nn.Linear(128, D_MODEL),
         )
         self._d_in = d_in
@@ -265,6 +275,7 @@ class _StateTokenEncoder(nn.Module):
         vocab: Vocab,
         use_atom_sab2: bool = True,
         static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+        dropout_p: float = DROPOUT,
     ) -> None:
         super().__init__()
         self.max_pred_arity = max(int(vocab.max_predicate_arity), 1)
@@ -286,11 +297,17 @@ class _StateTokenEncoder(nn.Module):
         self.atom_ln = nn.LayerNorm(D_MODEL)
         # Primary (legacy) atom pool. With ``use_static_tag_pool`` enabled
         # this becomes the "fluent" stream; otherwise it pools all atoms.
-        self.atom_sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
-        self.atom_sab2: SetAttentionBlock | None = (
-            SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS) if use_atom_sab2 else None
+        self.atom_sab1 = SetAttentionBlock(
+            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
         )
-        self.atom_pma = PoolingByMultiheadAttention(dim=D_MODEL, n_heads=N_HEADS)
+        self.atom_sab2: SetAttentionBlock | None = (
+            SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
+            if use_atom_sab2
+            else None
+        )
+        self.atom_pma = PoolingByMultiheadAttention(
+            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
+        )
 
         # F3-B-(1) static-tag stream. Built only when caller supplies a
         # non-empty predicate-name list AND at least one of those names
@@ -316,14 +333,16 @@ class _StateTokenEncoder(nn.Module):
             persistent=False,
         )
         if self.use_static_tag_pool:
-            self.atom_sab1_static = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+            self.atom_sab1_static = SetAttentionBlock(
+                dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
+            )
             self.atom_sab2_static: SetAttentionBlock | None = (
-                SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS)
+                SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
                 if use_atom_sab2
                 else None
             )
             self.atom_pma_static = PoolingByMultiheadAttention(
-                dim=D_MODEL, n_heads=N_HEADS
+                dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
             )
 
         # Type-histogram path
@@ -417,13 +436,15 @@ class SkeletonEncoder(nn.Module):
         vocab: Vocab,
         use_atom_sab2: bool = True,
         static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+        dropout_p: float = DROPOUT,
     ) -> None:
         super().__init__()
-        self.op_enc = _OperatorTokenEncoder(vocab)
+        self.op_enc = _OperatorTokenEncoder(vocab, dropout_p=dropout_p)
         self.state_enc = _StateTokenEncoder(
             vocab,
             use_atom_sab2=use_atom_sab2,
             static_tag_predicates=static_tag_predicates,
+            dropout_p=dropout_p,
         )
         self.token_type_emb = nn.Embedding(num_embeddings=3, embedding_dim=D_MODEL)
         # +2 to accommodate (s_0, ..., s_L) sequence; +4 of slack.
@@ -436,7 +457,7 @@ class SkeletonEncoder(nn.Module):
             d_model=D_MODEL,
             nhead=N_HEADS,
             dim_feedforward=FFN_DIM,
-            dropout=DROPOUT,
+            dropout=dropout_p,
             activation="gelu",
             batch_first=True,
             norm_first=False,
@@ -546,12 +567,12 @@ class SkeletonEncoder(nn.Module):
 class ContextEncoder(nn.Module):
     """Ψ: failure-set → 64-dim context (spec §5)."""
 
-    def __init__(self) -> None:
+    def __init__(self, dropout_p: float = DROPOUT) -> None:
         super().__init__()
         self.input_ln = nn.LayerNorm(D_MODEL)
-        self.sab1 = SetAttentionBlock(D_MODEL, N_HEADS)
-        self.sab2 = SetAttentionBlock(D_MODEL, N_HEADS)
-        self.pma = PoolingByMultiheadAttention(D_MODEL, N_HEADS)
+        self.sab1 = SetAttentionBlock(D_MODEL, N_HEADS, dropout_p=dropout_p)
+        self.sab2 = SetAttentionBlock(D_MODEL, N_HEADS, dropout_p=dropout_p)
+        self.pma = PoolingByMultiheadAttention(D_MODEL, N_HEADS, dropout_p=dropout_p)
         self.out_proj = nn.Linear(D_MODEL, D_MODEL)
         # Learned "no-failure" context, returned when |F| == 0.
         self.c0 = nn.Parameter(torch.zeros(D_MODEL))
@@ -581,7 +602,11 @@ class ContextEncoder(nn.Module):
 class Scorer(nn.Module):
     """σ: ``(e(s), c, π(s)) → scalar`` (spec §6)."""
 
-    def __init__(self, prior_dropout_p: float = 0.2) -> None:
+    def __init__(
+        self,
+        prior_dropout_p: float = 0.2,
+        dropout_p: float = DROPOUT,
+    ) -> None:
         super().__init__()
         self.prior_dropout_p = prior_dropout_p
         # π_proj: spec calls for diagonal init at α=0.1 with zero bias.
@@ -594,10 +619,10 @@ class Scorer(nn.Module):
         in_dim = D_MODEL + D_MODEL + 8
         self.fc1 = nn.Linear(in_dim, 128)
         self.ln1 = nn.LayerNorm(128)
-        self.dropout1 = nn.Dropout(DROPOUT)
+        self.dropout1 = nn.Dropout(dropout_p)
         self.fc2 = nn.Linear(128, 64)
         self.ln2 = nn.LayerNorm(64)
-        self.dropout2 = nn.Dropout(DROPOUT)
+        self.dropout2 = nn.Dropout(dropout_p)
         self.head = nn.Linear(64, 1)
         with torch.no_grad():
             self.head.weight.zero_()
@@ -638,6 +663,7 @@ class SpectreModel(nn.Module):
         prior_dropout_p: float = 0.2,
         use_atom_sab2: bool = True,
         static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+        dropout_p: float = DROPOUT,
     ) -> None:
         super().__init__()
         self.vocab = vocab
@@ -645,9 +671,10 @@ class SpectreModel(nn.Module):
             vocab,
             use_atom_sab2=use_atom_sab2,
             static_tag_predicates=static_tag_predicates,
+            dropout_p=dropout_p,
         )
-        self.context_encoder = ContextEncoder()
-        self.scorer = Scorer(prior_dropout_p=prior_dropout_p)
+        self.context_encoder = ContextEncoder(dropout_p=dropout_p)
+        self.scorer = Scorer(prior_dropout_p=prior_dropout_p, dropout_p=dropout_p)
 
     @property
     def empty_context(self) -> Tensor:

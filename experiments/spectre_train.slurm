@@ -27,7 +27,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=16G
-#SBATCH --time=00:59:55
+#SBATCH --time=03:30:00
 #SBATCH --output=experiments/slurm_outputs/spectre_train_%A_%a.out
 #SBATCH --error=experiments/slurm_outputs/spectre_train_%A_%a.err
 #SBATCH --array=0
