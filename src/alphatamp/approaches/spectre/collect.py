@@ -97,9 +97,19 @@ def _make_plan_generator(
 ):  # pragma: no cover — return type union widens to whatever the impl supports
     """Build the abstract plan generator.
 
-    RT2D uses closed-form enumeration; kinder envs use heuristic search.
+    Three-way dispatch:
+
+    - RT2D + ``plan_generator="closed_form"`` (default) → deterministic
+      enumeration via :class:`ClosedFormSkeletonGenerator`.
+    - RT2D + ``plan_generator="heuristic_search"`` → the same A*+FF generator
+      the kinder envs use; ordering becomes problem-instance-aware.
+    - Any kinder env → A*+FF (the ``plan_generator`` field is ignored; kinder
+      envs have no closed-form option).
     """
-    if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
+    if (
+        cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME
+        and cfg.plan_generator == "closed_form"
+    ):
         # pylint: disable=import-outside-toplevel
         from alphatamp.approaches.spectre.envs.routedtransport2d.plan_generator import (
             ClosedFormSkeletonGenerator,
@@ -117,6 +127,7 @@ def _make_plan_generator(
         return ClosedFormSkeletonGenerator(
             problem=problem, seed=problem_id, k_cap=cfg.K_max
         )
+    del obs  # heuristic-search path takes its inputs from env_models alone
     return RelationalHeuristicSearchAbstractPlanGenerator(
         env_models.types,
         env_models.predicates,

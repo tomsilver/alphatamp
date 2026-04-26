@@ -38,12 +38,12 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import DataLoader
 
+from alphatamp.approaches.spectre import inference
 from alphatamp.approaches.spectre.dataset import (
     SpectreBatch,
     SpectreDataset,
     collate_spectre_batch,
 )
-from alphatamp.approaches.spectre import inference
 from alphatamp.approaches.spectre.env_registry import (
     get_static_tag_predicates,
     get_type_aug_policy,
@@ -119,9 +119,8 @@ def _swap_local_id_for_predicate(
     swap_a: int,
     swap_b: int,
 ) -> SpectreBatch:
-    """Swap encoded local-id ``swap_a`` ↔ ``swap_b`` in a specified arg slot
-    of every real atom matching ``pred_idx``.
-    """
+    """Swap encoded local-id ``swap_a`` ↔ ``swap_b`` in a specified arg slot of every
+    real atom matching ``pred_idx``."""
     new = _clone_batch(batch)
     pred_match = (batch.s0_pred_ids == pred_idx) & batch.s0_atom_mask  # (B, M0)
     arg_col = new.s0_arg_local_ids[..., arg_slot]  # view of (B, M0)
@@ -347,7 +346,8 @@ def _used_passage_args(
     op_mask: torch.Tensor,  # (L,)
     passage_type_ids: set[int],
 ) -> set[tuple[int, int]]:
-    """Return ``{(type_id, local_id)}`` for passages used as op args in this skeleton."""
+    """Return ``{(type_id, local_id)}`` for passages used as op args in this
+    skeleton."""
     used: set[tuple[int, int]] = set()
     L, A = op_arg_type_ids.shape
     for l_idx in range(L):
@@ -368,8 +368,10 @@ def _mutate_passage_width_subset(
     swap_a: int,
     swap_b: int,
 ) -> SpectreBatch:
-    """Clone ``batch``; swap width_level on PassageWidth atoms whose passage
-    arg ``(type_id, local_id)`` is in ``target_passages``. Touches only
+    """Clone ``batch``; swap width_level on PassageWidth atoms whose passage arg
+    ``(type_id, local_id)`` is in ``target_passages``.
+
+    Touches only
     example ``b``; other examples in the batch are aliased.
     """
     new = _clone_batch(batch)
@@ -423,10 +425,10 @@ def _encode_single_skeleton(
 class D3Summary:
     """Summary statistics for D.3 used-vs-unused binding specificity.
 
-    The ratio of means is the robust aggregate; mean of per-skeleton ratios
-    is biased upward by skeletons with very small Δ_unused. Median and
-    geometric mean of per-skeleton ratios both summarize the typical
-    skeleton without the small-denominator inflation.
+    The ratio of means is the robust aggregate; mean of per-skeleton ratios is biased
+    upward by skeletons with very small Δ_unused. Median and geometric mean of per-
+    skeleton ratios both summarize the typical skeleton without the small-denominator
+    inflation.
     """
 
     ratio_of_means: float

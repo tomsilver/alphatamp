@@ -91,9 +91,10 @@ def test_error_outcomes_excluded_from_pool(tmp_path: Path) -> None:
 
 
 def test_load_checkpoint_drops_legacy_static_tag_buffer(tmp_path: Path) -> None:
-    """Legacy checkpoints saved the static_tag_predicate_ids buffer as a
-    persistent state_dict entry; the current model registers it
-    non-persistent. ``load_checkpoint`` must strip the legacy key so a
+    """Legacy checkpoints saved the static_tag_predicate_ids buffer as a persistent
+    state_dict entry; the current model registers it non-persistent.
+
+    ``load_checkpoint`` must strip the legacy key so a
     strict-mode load still succeeds.
     """
     _, vocab = _seed_train_split(tmp_path)
@@ -116,7 +117,12 @@ def test_load_checkpoint_drops_legacy_static_tag_buffer(tmp_path: Path) -> None:
     }
     ckpt_path = tmp_path / "legacy.pt"
     torch.save(
-        {"epoch": 0, "model_state_dict": sd, "config": cfg, "static_tag_predicates": []},
+        {
+            "epoch": 0,
+            "model_state_dict": sd,
+            "config": cfg,
+            "static_tag_predicates": [],
+        },
         ckpt_path,
     )
     # Should not raise even though the saved sd has an "extra" key.

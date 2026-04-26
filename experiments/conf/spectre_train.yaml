@@ -21,6 +21,13 @@ train:
   # Regularization
   prior_dropout_p: 0.2
   augment: true
+  # ``prior_type``: which BasePrior subclass to use for π(s).
+  #   zero (default): π ≡ 0 (the original baseline; also what every legacy
+  #     checkpoint was trained against).
+  #   heuristic: per-episode z-score of the negated pyperplan FF trajectory
+  #     cost (RT2D-only). Surfaces the same FF signal the new B2 baseline
+  #     uses into the model so σ has a warm start.
+  prior_type: "zero"
   # Per-module dropout. Bump to 0.2 / 0.3 with stronger weight_decay to
   # fight overfitting on the train→val rollout-attempts gap.
   dropout_p: 0.1

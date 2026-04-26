@@ -382,7 +382,8 @@ class _StateTokenEncoder(nn.Module):
         atom_mask: Tensor,  # (..., M) bool
         type_histogram: Tensor,  # (..., T) long
     ) -> Tensor:  # (..., D_MODEL)
-        """Pool atom tokens via SAB+PMA (single or dual stream), then concat type-histogram."""
+        """Pool atom tokens via SAB+PMA (single or dual stream), then concat type-
+        histogram."""
         pe = self.pred_emb(pred_ids)
         te = self.arg_type_emb(arg_type_ids)
         le = self.arg_local_emb(arg_local_ids)
@@ -600,7 +601,7 @@ class ContextEncoder(nn.Module):
 
 
 class Scorer(nn.Module):
-    """σ: ``(e(s), c, π(s)) → scalar`` (spec §6)."""
+    """Σ: ``(e(s), c, π(s)) → scalar`` (spec §6)."""
 
     def __init__(
         self,
@@ -699,7 +700,10 @@ class SpectreModel(nn.Module):
         sL_arg_local_ids: Tensor,
         sL_atom_mask: Tensor,
     ) -> Tensor:
-        """Run Φ over a pool slice. ``s_0`` carries no skeleton dim."""
+        """Run Φ over a pool slice.
+
+        ``s_0`` carries no skeleton dim.
+        """
         # Replicate s_0 type histogram to per-skeleton (matches spec §4.1
         # which expects ``sL_type_histogram`` per skeleton; in RT2D no
         # operator add/deletes objects, so it equals ``s0_type_histogram``).

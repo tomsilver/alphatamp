@@ -29,7 +29,7 @@ from alphatamp.approaches.spectre.dataset import (
     collate_spectre_batch,
 )
 from alphatamp.approaches.spectre.model import SpectreModel
-from alphatamp.approaches.spectre.priors import BasePrior, ZeroPrior
+from alphatamp.approaches.spectre.priors import BasePrior, ZeroPrior, make_prior
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.vocab import Vocab
 
@@ -82,6 +82,24 @@ def load_checkpoint(
     model.load_state_dict(sd)
     model.eval()
     return model
+
+
+def load_prior_for_checkpoint(ckpt_path: Path) -> BasePrior:
+    """Reconstruct the ``BasePrior`` the checkpoint was trained against.
+
+    Reads ``cfg.prior_type`` from the saved checkpoint and dispatches via
+    :func:`priors.make_prior`. Pre-``prior_type`` checkpoints (which always
+    used ZeroPrior) silently fall back to ``ZeroPrior`` so eval scripts
+    against legacy runs keep working.
+
+    Mirror of :func:`load_checkpoint`'s discovery — kept as a separate
+    helper so callers that already have the model don't pay the prior
+    construction cost they don't need.
+    """
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg_dict = state.get("config", {}) or {}
+    prior_type = str(cfg_dict.get("prior_type", "zero"))
+    return make_prior(prior_type)
 
 
 @dataclass
@@ -213,6 +231,7 @@ __all__ = [
     "InferenceState",
     "init_inference_state",
     "load_checkpoint",
+    "load_prior_for_checkpoint",
     "record_failure",
     "select_next_skeleton",
 ]

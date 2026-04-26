@@ -37,7 +37,7 @@ from alphatamp.approaches.spectre.dataset import (
 )
 from alphatamp.approaches.spectre.loss import plackett_luce_loss
 from alphatamp.approaches.spectre.model import SpectreModel
-from alphatamp.approaches.spectre.priors import BasePrior, ZeroPrior
+from alphatamp.approaches.spectre.priors import BasePrior, make_prior
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
@@ -59,6 +59,14 @@ class TrainingConfig:
     # Regularization
     prior_dropout_p: float = 0.2
     augment: bool = True
+    # ``prior_type``: which BasePrior subclass to use for π(s).
+    #   "zero" — ZeroPrior (the original baseline; π ≡ 0).
+    #   "heuristic" — HeuristicPrior (per-episode z-score of the negated
+    #     pyperplan FF trajectory cost; RT2D-only). Same FF score the new
+    #     B2 baseline uses, surfaced into the model so σ has a warm start.
+    # Recorded in ``model_meta.json`` so eval/inference can reconstruct
+    # the matching prior at test time.
+    prior_type: str = "zero"
     # Per-module dropout (attention, FFN, transformer, scorer MLP).
     # Threaded into every nn.Dropout / MultiheadAttention dropout in
     # ``model.py``. Default 0.1 matches the original spec; bump to
@@ -251,8 +259,8 @@ def _accumulate_auroc_buckets(
 ) -> None:
     """Stratify-by-|F| accumulator for AUROC(t) + top-1 hit rate.
 
-    Mutates the four passed-in dicts in place. Shared between train and val
-    loops so on-the-fly train AUROC matches the validation definition.
+    Mutates the four passed-in dicts in place. Shared between train and val loops so on-
+    the-fly train AUROC matches the validation definition.
     """
     f_sizes = batch.f_mask.sum(dim=-1).cpu().tolist()
     r_mask = batch.r_mask.cpu()
@@ -360,8 +368,8 @@ def _evaluate(
 class RolloutSummary:
     """Mean / std / censoring rate over per-episode attempts.
 
-    Mirrors the columns the EDA notebook reports for B1–B5 + SPECTRE so
-    the per-epoch console output is directly comparable.
+    Mirrors the columns the EDA notebook reports for B1–B5 + SPECTRE so the per-epoch
+    console output is directly comparable.
     """
 
     mean_attempts: float
@@ -404,8 +412,8 @@ def _checkpoint_metric_tuple(
 ) -> tuple[float, float]:
     """Return a tuple whose lexicographic min is the "best" checkpoint.
 
-    Lex-min semantics let us encode any (primary, tiebreak) ordering with
-    "lower is better" by negating quantities where higher is better.
+    Lex-min semantics let us encode any (primary, tiebreak) ordering with "lower is
+    better" by negating quantities where higher is better.
     """
     if cfg.checkpoint_metric == "val_rollout_attempts":
         if val_rollout_attempts is None or math.isnan(val_rollout_attempts):
@@ -445,7 +453,7 @@ def train(
     ``model_meta.json``.
     """
     if prior is None:
-        prior = ZeroPrior()
+        prior = make_prior(cfg.prior_type)
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(device) if not isinstance(device, torch.device) else device
@@ -531,8 +539,9 @@ def train(
     }
     (out_dir / "model_meta.json").write_text(json.dumps(meta, indent=2))
 
-    # Random-Φ + ZeroPrior + zero-init head baseline. With the spec §6.3
-    # initialization this should produce ~0.5 AUROC at every t (uniform
+    # Random-Φ + zero-init head baseline. The scorer's head.weight is
+    # zero-initialized, so the untrained logit is identically 0 regardless of
+    # prior_type — this should produce ~0.5 AUROC at every t (uniform
     # ranking), confirming the architecture initializes as the spec
     # describes. Anything materially off 0.5 means the init drifted.
     random_phi_model = SpectreModel(
