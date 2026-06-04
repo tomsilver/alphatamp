@@ -176,8 +176,9 @@ datasets/
 # Debugging folder
 debug/
 
-# Archived files
-archive/
+# Archived files (root archive/ of old experiment results only; anchored so
+# nested dirs like src/alphatamp/approaches/spectre/docs/archive/ stay tracked)
+/archive/
 
 # Hydra temporary output files
 experiments/outputs/
