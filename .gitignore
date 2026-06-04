@@ -201,8 +201,6 @@ artifacts_sb/
 *.ipynb
 data/synthetic_validation/
 tests/datasets/
-tests/test_box_approach_loading.py.bak
-tests/test_integration_m3_m6.py
 tests/approaches/box_approach_performance_summary.png
 
 # Local sandbox/scratch dirs
