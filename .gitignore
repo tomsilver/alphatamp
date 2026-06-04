@@ -186,11 +186,36 @@ outputs/
 # Temporary experiment files
 experiments/temp/
 
-<<<<<<< HEAD
 # Slurm output files
 experiments/slurm_outputs
 
-=======
 # Library files from imports
 lib/
->>>>>>> 63a9e13 (updated repos to use kindergarden from pypi, separate kinder-baselines instead of using subdirectories of prpl-mono)
+
+.claude/
+artifacts_hdf5/
+artifacts_ob/
+artifacts_sb/
+
+*.ipynb
+data/synthetic_validation/
+tests/datasets/
+tests/test_box_approach_loading.py.bak
+tests/test_integration_m3_m6.py
+tests/approaches/box_approach_performance_summary.png
+
+# Local sandbox/scratch dirs
+.data/
+.sandbox-home/
+.sandbox-tmp/
+
+# Spectre data artifacts (collection outputs, derived datasets, checkpoints).
+# Note: data/spectre/derived/routedtransport2d_n3_v1/train_vocab.json was
+# tracked before this rule and stays tracked; new derived files need `git add -f`.
+data/spectre/raw/
+data/spectre/checkpoints/
+data/spectre/configs/
+data/spectre/derived/
+
+# Untracked analysis output from analyze_cluttered_storage.ipynb
+experiments/analyze_cluttered_storage.pkl
