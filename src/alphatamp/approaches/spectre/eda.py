@@ -368,6 +368,9 @@ class BaselineResult:
         assert len(self.censored) == n
         assert len(self.problem_ids) == n
 
+    def set_name(self, new_name: str) -> None:
+        self.name = new_name
+
 
 def _trainable_episodes(split: LoadedSplit) -> list[int]:
     """Indices of episodes with at least one success (Group 2 subset, §2)."""
