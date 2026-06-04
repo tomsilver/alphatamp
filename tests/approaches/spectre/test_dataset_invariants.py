@@ -149,7 +149,7 @@ def test_rollout_aligned_mix_collapses_to_pure_modes() -> None:
     pure_lognormal = _draw((0.0, 0.0, 1.0))
 
     # uniform_subsets ⇒ Bernoulli(0.5) per index ⇒ heavy mass near 7-8.
-    assert max(pure_subsets, key=pure_subsets.get) in {6, 7, 8, 9}
+    assert max(pure_subsets, key=lambda k: pure_subsets[k]) in {6, 7, 8, 9}
     # uniform_size ⇒ flat over {0..15}; mode is roughly uniform, mean ≈ 7.5.
     mean_size = sum(k * v for k, v in pure_size.items()) / sum(pure_size.values())
     assert 6.5 < mean_size < 8.5

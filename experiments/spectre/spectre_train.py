@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any, cast
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -31,7 +32,7 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 
 def _build_training_config(cfg: DictConfig) -> TrainingConfig:
-    raw = OmegaConf.to_container(cfg.train, resolve=True)
+    raw = cast(dict[str, Any], OmegaConf.to_container(cfg.train, resolve=True))
     assert isinstance(raw, dict)
     # OmegaConf returns lists for tuple fields; convert back.
     if "f_sampling_mix_weights" in raw and isinstance(
