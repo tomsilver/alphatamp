@@ -1,8 +1,9 @@
 # SPECTRE — Living Proposal
 
-**S**keleton-**P**ool **E**ncoding with **C**ontext-**T**racking for **RE**ordering:
-a learned adaptive re-ranker that reorders a TAMP skeleton pool *during* the
-refinement loop, conditioning on the skeletons that have already failed.
+**S**keleton-**P**ool **E**mbedding with **C**ontextual **T**ransformer for
+**RE**ordering: a learned adaptive re-ranker that reorders a TAMP skeleton pool
+*during* the refinement loop, conditioning on the skeletons that have already
+failed.
 
 This is the single living document for the project. It consolidates the original
 spec stack (see [`archive/README.md`](archive/README.md)); where it disagrees

@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AlphaTAMP is a shared research monorepo for the PRPL lab covering multiple projects on "learning to accelerate TAMP" (task-and-motion planning). Each project lives under `src/alphatamp/approaches/` as a self-contained *approach* that plugs into a common bilevel-planning substrate from upstream lab packages.
 
-Two must-read context docs before doing anything substantive:
-- `SPECTRE_METHOD_SPEC.md` — the method spec for the current active project (skeleton-reordering via Set-Transformer) on branch `adaptive`. New work here is a *new* approach that is effectively separate from existing approaches in this folder.
-- `KEY_DEPENDENCIES.md` — the minimal upstream-package + substrate-file list that must be understood to touch this repo.
+**Per-project context lives in each approach's own directory** — look for a `CLAUDE.md` inside `src/alphatamp/approaches/<approach>/` before doing substantive work on that project. The currently active project is SPECTRE: see `src/alphatamp/approaches/spectre/CLAUDE.md` (its specs, experiment layout, and conventions live under that package's `docs/`).
+
+Monorepo-wide must-read: `KEY_DEPENDENCIES.md` — the minimal upstream-package + substrate-file list that must be understood to touch this repo.
 
 ## Environment and commands
 
@@ -32,7 +32,7 @@ CI and formatting:
 All approaches consume a common substrate from the PRPL monorepo dependencies:
 - `relational_structs` — `LiftedOperator`, `GroundOperator`, `GroundAtom`, `Predicate`, `Type`, `Object`, PDDL plumbing.
 - `bilevel_planning` — `structs.py` (core types: `RelationalAbstractState`, `LiftedSkill`/`GroundSkill`, `SesameModels`, `ParameterizedController`, `PlanningProblem`, `Plan`), `pddl.py`, abstract plan generators, trajectory samplers.
-- `kinder` / `kinder-bilevel-planning` / `kinder-models` — the five 2D environments (`ClutteredRetrieval2D`, `ClutteredStorage2D`, `Motion2D`, `Obstruction2D`, `StickButton2D`) and their env-models factory (`create_bilevel_planning_models`). SPECTRE evaluates on ClutteredRetrieval2D-o10 and ClutteredStorage2D-b7/-b15.
+- `kinder` / `kinder-bilevel-planning` / `kinder-models` — the five 2D environments (`ClutteredRetrieval2D`, `ClutteredStorage2D`, `Motion2D`, `Obstruction2D`, `StickButton2D`) and their env-models factory (`create_bilevel_planning_models`).
 
 A `Skeleton` in this repo (`src/alphatamp/structs.py`) is `tuple[list[RelationalAbstractState], list[GroundOperator]]` — interleaved abstract-state sequence and ground-operator sequence produced by the symbolic planner.
 
@@ -53,22 +53,12 @@ Entrypoints under `experiments/` use Hydra with configs in `experiments/conf/`:
 
 Hydra approach configs use `_target_: <fully.qualified.ClassName>` and are instantiated via `hydra.utils.instantiate(cfg.approach, env_models, seed)`.
 
-### SPECTRE (current active project, branch `adaptive`)
-
-Per `SPECTRE_METHOD_SPEC.md`, SPECTRE is a new approach (not yet wired in) that replaces the static skeleton ranker with a learned adaptive re-ranker:
-- **Skeleton Encoder Φ:** per-skeleton, permutation-equivariant over object identities (typed-local-id canonicalization §4.1.4). Transformer over interleaved `[STATE, OP, STATE, OP, …]` tokens → 64-dim `e(s)`.
-- **Context Encoder Ψ:** Set-Transformer (SAB×2 + PMA_k=1) over the set of failed-skeleton embeddings ℱ_t → 64-dim context `c_t`. Must be permutation-invariant; empty-history uses a learned `c₀`.
-- **Scorer σ:** MLP over `[e(s); c_t; π_proj(π(s))]` → scalar logit. Prior-dropout 0.2 during training; weights initialized so untrained σ ≈ α·π (behaves like the static ranker at step 1).
-- **Loss:** listwise Plackett-Luce `ℒ = logsumexp(logits over R) − logsumexp(logits over SUCC ∩ R)`. This choice is load-bearing — Attempt 2 failed precisely because pointwise BCE is not rollout-aligned.
-- **F-subset sampling:** each training example is `(R, SUCC∩R, F)` where F ⊆ FAIL_e. **F must contain only failed skeletons, never successes** (test-time distribution); violating this was a root cause of Attempt-2 failure.
-- **Plug-in prior π:** external static ranker (HSR, PIGINet, or zero). Not trained jointly.
-
-Substrate-derived constants to respect: per-episode attempt budget ≤ 20; dataset budget 500 train / 100 val / 100 test per environment; every reported number is mean ± std over ≥ 3 seeds.
+Project-specific experiment trees live in subdirectories of `experiments/` and are self-contained (entry points + their own `conf/`): e.g. `experiments/spectre/`. The shared `experiments/conf/` tree is for the runners listed above — do not add project-specific configs to it.
 
 ## Repo conventions worth knowing
 
 - `src/alphatamp/structs.py` re-exports the `Skeleton` / `FrozenSkeleton` type aliases used across approaches; prefer these over re-defining tuples locally.
 - Approaches that need to run without a simulator import `sesame_models_to_sim_free`; do not duplicate that stripping logic.
-- Notebooks under `experiments/*.ipynb` are for analysis against collected pickles/datasets (`tests/datasets/*.pkl`, `experiments/*.pkl`). Treat them as scratch — they are not part of CI.
+- Notebooks under `experiments/**/*.ipynb` are for analysis against collected pickles/datasets (`tests/datasets/*.pkl`, `experiments/*.pkl`). Treat them as scratch — they are not part of CI.
 - `lib/` vendors external JS libraries for visualizations; `archive/` holds old experiment results; `unit_test_videos/` is a scratch output dir.
 - There is no `.cursor/`, `.cursorrules`, or `.github/copilot-instructions.md` in this repo at time of writing.
