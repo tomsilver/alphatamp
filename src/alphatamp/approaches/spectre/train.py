@@ -10,7 +10,7 @@ Public surface:
 - :func:`train` — runs the full loop, writes ``best.pt`` + ``log.jsonl`` +
   ``model_meta.json`` under ``out_dir``.
 
-The Hydra entrypoint at ``experiments/spectre_train.py`` constructs a
+The Hydra entrypoint at ``experiments/spectre/spectre_train.py`` constructs a
 ``TrainingConfig`` from cfg and calls :func:`train`.
 """
 
