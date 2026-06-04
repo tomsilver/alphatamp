@@ -3,8 +3,8 @@ _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 # Slurm job settings — adjust these to match your cluster.
 partition: cpu        # e.g. "gpu", "cpu", "short"
 timeout_min: 300       # wall-clock limit per job in minutes
-cpus_per_task: 8       # pair with workers=8 in spectre_collect.yaml for 8x fanout
-mem_gb: 32             # 8 workers × ~2-4GB peak each; leave headroom
+cpus_per_task: 4
+mem_gb: 16
 gpus_per_node: null    # set to 1 if your jobs need a GPU
 nodes: 1
 tasks_per_node: 1
