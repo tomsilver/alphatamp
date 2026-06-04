@@ -1,4 +1,4 @@
-"""Tests for the parallel-collection refactor of ``experiments/spectre_collect``.
+"""Tests for the parallel-collection refactor of ``experiments/spectre/spectre_collect``.
 
 Covers two layers:
 
@@ -21,7 +21,7 @@ from omegaconf import OmegaConf
 
 
 def _load_spectre_collect_module() -> ModuleType:
-    """Import ``experiments/spectre_collect.py`` without relying on sys.path.
+    """Import ``experiments/spectre/spectre_collect.py`` without relying on sys.path.
 
     The ``experiments/`` directory is a scripts folder, not a package, so we
     load it by file path. Cached under ``"spectre_collect_module"`` to avoid
@@ -29,7 +29,12 @@ def _load_spectre_collect_module() -> ModuleType:
     """
     if "spectre_collect_module" in sys.modules:
         return sys.modules["spectre_collect_module"]
-    path = Path(__file__).resolve().parents[3] / "experiments" / "spectre_collect.py"
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "experiments"
+        / "spectre"
+        / "spectre_collect.py"
+    )
     spec = importlib.util.spec_from_file_location("spectre_collect_module", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
