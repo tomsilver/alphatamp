@@ -2,16 +2,16 @@
 # Submit three SLURM jobs (train / val / test) for SPECTRE dataset collection
 # on kinder/ClutteredStorage2D-b5-v0. Each job runs ``spectre_collect.slurm``
 # with ``workers=8`` inside the SLURM allocation so one job saturates all
-# 8 cores (see experiments/conf/hydra/launcher/slurm.yaml).
+# 8 cores (see experiments/spectre/conf/hydra/launcher/slurm.yaml).
 #
-# Split seed ranges follow SPECTRE_METHOD_SPEC.md §5.1:
+# Split seed ranges follow src/alphatamp/approaches/spectre/docs/archive/SPECTRE_METHOD_SPEC.md §5.1:
 #   train = [0, 500)    500 problems
 #   val   = [500, 600)  100 problems
 #   test  = [600, 700)  100 problems
 #
 # Usage from the repo root:
 #
-#   ./experiments/submit_spectre_clutteredstorage2d_b5.sh
+#   ./experiments/spectre/submit_spectre_clutteredstorage2d_b5.sh
 #
 # Overrides (via environment variables):
 #   TRAIN_START, TRAIN_END, VAL_START, VAL_END, TEST_START, TEST_END  (ints)
@@ -54,7 +54,7 @@ submit_split() {
         -J "${jobname}" \
         -o "${OUT_DIR}/${jobname}_%j.out" \
         -e "${OUT_DIR}/${jobname}_%j.err" \
-        experiments/spectre_collect.slurm \
+        experiments/spectre/spectre_collect.slurm \
             env=${ENV_VARIANT} \
             split=${split} \
             problem_seed_start=${start} \
@@ -78,5 +78,5 @@ Cancel:   scancel -u \$USER --name=spectre_${ENV_VARIANT}_train  # or val / test
 Output:   ${DATA_ROOT}/raw/${ENV_VARIANT}/{train,val,test}/episodes/ep_NNNNN.pkl.gz
 
 After all three jobs finish, build the vocab from the train split:
-  python experiments/spectre_build_vocab.py data_root=${DATA_ROOT}
+  python experiments/spectre/spectre_build_vocab.py data_root=${DATA_ROOT}
 EOF

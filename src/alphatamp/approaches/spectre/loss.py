@@ -1,6 +1,6 @@
 """Plackett-Luce listwise loss for SPECTRE training.
 
-Per ``SPECTRE_RT2D_METHOD_SPEC.md`` §8.3 / §10.4. The top-1 PL formulation
+Per ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §8.3 / §10.4. The top-1 PL formulation
 ``ℒ = −log(Z_+ / Z)`` is rollout-aligned: it is the negative log-probability
 that an argmax-pick over R lands on a successful skeleton, which is the
 training-time analog of the time-to-first-success metric.

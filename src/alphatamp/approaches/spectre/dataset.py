@@ -4,7 +4,7 @@ Online F-subset sampling (pipeline spec §11): ``__getitem__`` loads an episode,
 samples ``F ⊆ FAIL_e``, and returns a structured training example. Tensorization
 happens in ``collate_spectre_batch`` so the Dataset output stays inspectable.
 
-Per ``SPECTRE_RT2D_METHOD_SPEC.md`` this module now exposes:
+Per ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` this module now exposes:
 
 - :class:`FSamplingConfig` — four sampling modes per §8.2 (fix #4). Default
   ``rollout_aligned_mix`` weights ``(0.25, 0.25, 0.5)`` on
@@ -305,7 +305,8 @@ class SpectreDataset(Dataset[SpectreTrainingExample]):
 class SpectreBatch:
     """One collated training batch.
 
-    Shapes follow ``SPECTRE_RT2D_METHOD_SPEC.md`` §10.2. All integer id tensors
+    Shapes follow ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §10.2. All
+    integer id tensors
     use 0 = ``<OOV>`` / padding; the mask tensors distinguish real tokens
     from pads. Per spec §10.2 footnote and AS-BUILT §3.7, ``s_0`` is stored
     once per example and replicated per-skeleton at model-input time;

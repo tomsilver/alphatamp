@@ -1,6 +1,6 @@
 """Training loop for the SPECTRE model on RT2D (and any kinder env).
 
-Implements ``SPECTRE_RT2D_METHOD_SPEC.md`` §8: AdamW + cosine LR with linear
+Implements ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §8: AdamW + cosine LR with linear
 warmup, gradient clipping, F-subsample multiplier, prior dropout, per-epoch
 validation with PL loss + AUROC(t) for ``t ∈ {0, 1, 2, 3}``.
 

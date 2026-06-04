@@ -1,6 +1,6 @@
 """SPECTRE model: Φ skeleton encoder, Ψ context encoder, σ scorer.
 
-Implements ``SPECTRE_RT2D_METHOD_SPEC.md`` §3–§6 with the four mandatory
+Implements ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §3–§6 with the four mandatory
 fixes from §9 already wired in:
 
 - **Fix #1 (Set-Transformer atom pool).** :class:`SkeletonEncoder` pools

@@ -1,6 +1,6 @@
 """STRIPS progression over a stored skeleton.
 
-Per ``SPECTRE_METHOD_SPEC.md`` §4.1.5 (and §8.1 on Substage B), intermediate
+Per ``docs/archive/SPECTRE_METHOD_SPEC.md`` §4.1.5 (and §8.1 on Substage B), intermediate
 abstract states ``s_1, …, s_{L-1}`` are deterministic functions of
 ``(s_0, g_1, …, g_i)`` under STRIPS semantics and are therefore recoverable at
 encode / analysis time. We persist only ``s_0`` plus each skeleton's

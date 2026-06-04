@@ -8,7 +8,8 @@ Eight lifted operators total:
 - TraverseLoadedColorA/B/C        — loaded traversal split by passage color
 
 Passage subtyping is load-bearing: typed-local-id renumbering (per
-``SPECTRE_METHOD_SPEC.md`` §4.1.4) groups objects by type, so the canonical key
+``docs/archive/SPECTRE_METHOD_SPEC.md`` §4.1.4) groups objects by type, so the
+canonical key
 for ``TraverseLoadedColorA(...)`` is distinct from ``TraverseLoadedColorB(...)``.
 This is what gives B4 access to the color-family signal (spec lines 99-103).
 

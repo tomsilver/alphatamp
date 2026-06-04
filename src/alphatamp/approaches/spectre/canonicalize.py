@@ -1,6 +1,6 @@
 """Typed-local-id canonicalization for cross-problem skeleton equivariance.
 
-Per ``SPECTRE_METHOD_SPEC.md`` §4.1.4: two skeletons that differ only by an
+Per ``docs/archive/SPECTRE_METHOD_SPEC.md`` §4.1.4: two skeletons that differ only by an
 object renumbering must produce identical embeddings. We achieve this by
 substituting every concrete object name with a within-type index
 (``obstruction_0``, ``target_0``, ...).
@@ -83,7 +83,7 @@ def _renumber_mapping(
     hierarchical-typing semantics are preserved.
 
     ``type_aug_policy`` is a ``{type_name: augmentable}`` dict (per
-    ``SPECTRE_RT2D_METHOD_SPEC.md`` §4.6). Missing keys default to
+    ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §4.6). Missing keys default to
     ``augmentable=True`` (backwards-compatible). When ``rng is None`` the
     policy is irrelevant — every type uses the deterministic alphabetical
     order.

@@ -2,11 +2,12 @@
 
 Run once after train collection completes::
 
-    python experiments/spectre_build_vocab.py
+    python experiments/spectre/spectre_build_vocab.py
 
 OOV-checks val/test if their episodes are present, printing (not raising)
 warnings on unknown operator / predicate / type names. Per
-``SPECTRE_METHOD_SPEC.md`` §7.2, v0.1 assumes no OOV at test time.
+``src/alphatamp/approaches/spectre/docs/archive/SPECTRE_METHOD_SPEC.md`` §7.2,
+v0.1 assumes no OOV at test time.
 """
 
 from __future__ import annotations
@@ -48,8 +49,9 @@ def main(cfg: DictConfig) -> None:
     vocab = extract_vocab(train_dir, config_hash=train_hash)
 
     # Inject the per-type augmentation policy from the env registry per
-    # SPECTRE_RT2D_METHOD_SPEC.md §10.1. Empty dict for kinder envs (which
-    # treat every type as augmentable=True).
+    # src/alphatamp/approaches/spectre/docs/archive/SPECTRE_RT2D_METHOD_SPEC.md
+    # §10.1. Empty dict for kinder envs (which treat every type as
+    # augmentable=True).
     type_aug_policy = get_type_aug_policy(env_variant)
     if type_aug_policy:
         vocab = replace(vocab, type_aug_policy=type_aug_policy)

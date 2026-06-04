@@ -1,4 +1,4 @@
-"""Test-time inference helper per ``SPECTRE_RT2D_METHOD_SPEC.md`` §10.5.
+"""Test-time inference helper per ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §10.5.
 
 Usage:
 

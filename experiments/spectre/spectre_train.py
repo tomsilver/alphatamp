@@ -2,15 +2,16 @@
 
 Usage::
 
-    python experiments/spectre_train.py env=routedtransport2d_n3_v1 seed=0
-    python experiments/spectre_train.py -m env=routedtransport2d_n3_v1 seed=0,1,2
+    python experiments/spectre/spectre_train.py env=routedtransport2d_n3_v1 seed=0
+    python experiments/spectre/spectre_train.py -m env=routedtransport2d_n3_v1 seed=0,1,2
 
 Reads ``data/spectre/raw/<env_variant>/{train,val}/episodes/`` (collected by
-``experiments/spectre_collect.py``) and ``data/spectre/derived/<env_variant>/
+``experiments/spectre/spectre_collect.py``) and ``data/spectre/derived/<env_variant>/
 train_vocab.json``. Writes checkpoints + a JSONL training log under
 ``data/spectre/checkpoints/<env_variant>/seed_<seed>/``.
 
-See ``SPECTRE_RT2D_METHOD_SPEC.md`` §8 for the full training contract.
+See ``src/alphatamp/approaches/spectre/docs/archive/SPECTRE_RT2D_METHOD_SPEC.md``
+§8 for the full training contract.
 """
 
 from __future__ import annotations

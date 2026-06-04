@@ -7,17 +7,17 @@ Parallelism modes (composable):
    this is paired with ``#SBATCH --cpus-per-task=N`` so one SLURM job
    saturates its allocated cores::
 
-       python experiments/spectre_collect.py workers=8 \
+       python experiments/spectre/spectre_collect.py workers=8 \
            split=train problem_seed_start=0 problem_seed_end=500
 
 2. **Hydra multirun (for heterogeneous / very-many-job scheduling)**: sweep
    ``problem_ids`` (single-element lists) and let the Hydra launcher spawn
    one job per element::
 
-       python experiments/spectre_collect.py -m \
+       python experiments/spectre/spectre_collect.py -m \
            'problem_ids=[[0]],[[1]],[[2]]' hydra/launcher=joblib
 
-       python experiments/spectre_collect.py -m \
+       python experiments/spectre/spectre_collect.py -m \
            'problem_ids=[[0]],[[1]],[[2]]' hydra/launcher=slurm
 
 3. **Sequential batch (default, debugging)**: ``workers=1`` runs the

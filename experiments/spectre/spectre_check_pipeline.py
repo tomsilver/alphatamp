@@ -17,11 +17,11 @@ Does *not* train anything. Prints a short report per split.
 
 Usage::
 
-    python experiments/spectre_check_pipeline.py
+    python experiments/spectre/spectre_check_pipeline.py
 
 Overrides mirror ``spectre_collect.yaml`` (``data_root``, ``env``). Example::
 
-    python experiments/spectre_check_pipeline.py data_root=/scratch/spectre
+    python experiments/spectre/spectre_check_pipeline.py data_root=/scratch/spectre
 """
 
 from __future__ import annotations
@@ -132,7 +132,8 @@ def main(cfg: DictConfig) -> None:
     vocab_path = data_root / "derived" / env_variant / "train_vocab.json"
     if not vocab_path.exists():
         raise FileNotFoundError(
-            f"No vocab at {vocab_path}; run experiments/spectre_build_vocab.py first"
+            f"No vocab at {vocab_path}; "
+            "run experiments/spectre/spectre_build_vocab.py first"
         )
     vocab = Vocab.from_json(vocab_path)
 

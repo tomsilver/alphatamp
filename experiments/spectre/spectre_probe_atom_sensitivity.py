@@ -19,7 +19,7 @@ is in Φ's representation itself (architectural failure).
 
 Usage::
 
-    python experiments/spectre_probe_atom_sensitivity.py \
+    python experiments/spectre/spectre_probe_atom_sensitivity.py \
         env=routedtransport2d_n3_v1 seed=0
 """
 

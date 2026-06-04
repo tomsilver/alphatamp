@@ -7,14 +7,14 @@
 #    [problem_seed_start, problem_seed_end) range with 8 parallel workers
 #    inside the job:
 #
-#        sbatch experiments/spectre_collect.slurm \
+#        sbatch experiments/spectre/spectre_collect.slurm \
 #            split=train problem_seed_start=0 problem_seed_end=500
 #
 # B) Chunked array. Uncomment the `#SBATCH --array=0-9` line and the
 #    chunk-size logic below to split the full range across 10 array tasks
 #    of 50 problems each (10 jobs × 8 workers = ~500 problems at once):
 #
-#        sbatch experiments/spectre_collect.slurm split=train
+#        sbatch experiments/spectre/spectre_collect.slurm split=train
 #
 # Any trailing arguments are forwarded to Hydra overrides.
 #
@@ -45,7 +45,7 @@ else
     CHUNK_ARGS=""
 fi
 
-.venv/bin/python -u experiments/spectre_collect.py \
+.venv/bin/python -u experiments/spectre/spectre_collect.py \
     workers=8 \
     ${CHUNK_ARGS} \
     "$@"

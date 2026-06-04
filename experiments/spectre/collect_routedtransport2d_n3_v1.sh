@@ -1,7 +1,7 @@
 #!/bin/bash
 # Collect the full SPECTRE dataset for RoutedTransport2D-n3-v1 locally.
 #
-# Three splits per ROUTED_TRANSPORT2D_SPEC.md §4.4:
+# Three splits per src/alphatamp/approaches/spectre/docs/archive/ROUTED_TRANSPORT2D_SPEC.md §4.4:
 #   train = [0, 500)        500 problems
 #   val   = [1000, 1100)    100 problems
 #   test  = [2000, 2100)    100 problems
@@ -12,13 +12,13 @@
 #
 # Usage from the repo root:
 #
-#   ./experiments/collect_routedtransport2d_n3_v1.sh
+#   ./experiments/spectre/collect_routedtransport2d_n3_v1.sh
 #
 # Overrides (env vars):
 #   DATA_ROOT     default: data/spectre
 #   K_MAX         default: 30 (the family-balanced cap from spec §5.1)
 #   EXTRA_ARGS    extra Hydra overrides forwarded verbatim to every split,
-#                 e.g.  EXTRA_ARGS="workers=4" ./experiments/collect_...
+#                 e.g.  EXTRA_ARGS="workers=4" ./experiments/spectre/collect_...
 
 set -euo pipefail
 
@@ -41,7 +41,7 @@ run_split() {
     echo
     echo "=== ${ENV_VARIANT} / ${split}: collecting ${count} problems [seeds ${start}, ${end})"
     # shellcheck disable=SC2086  # EXTRA_ARGS is intentionally word-split
-    python experiments/spectre_collect.py \
+    python experiments/spectre/spectre_collect.py \
         env="${ENV_VARIANT}" \
         split="${split}" \
         problem_seed_start="${start}" \
@@ -70,6 +70,6 @@ Quick sanity check:
   ls ${DATA_ROOT}/raw/${ENV_VARIANT}/val/episodes/   | wc -l   # expect 100
   ls ${DATA_ROOT}/raw/${ENV_VARIANT}/test/episodes/  | wc -l   # expect 100
 
-Next step — run EDA on the collected splits (see SPECTRE_EDA_SPEC.md):
-  python experiments/spectre_build_vocab.py data_root=${DATA_ROOT}
+Next step — run EDA on the collected splits (see src/alphatamp/approaches/spectre/docs/archive/SPECTRE_EDA_SPEC.md):
+  python experiments/spectre/spectre_build_vocab.py data_root=${DATA_ROOT}
 EOF

@@ -1,6 +1,6 @@
 """Exploratory data analysis for SPECTRE training collections.
 
-Implements the full diagnostic battery defined in ``SPECTRE_EDA_SPEC.md``:
+Implements the full diagnostic battery defined in ``docs/archive/SPECTRE_EDA_SPEC.md``:
 
 - **Group 1 — episode sanity** (§3): pool-cap confirmation, cross-problem
   skeleton diversity (rarefaction + Jaccard), episode success rate,
@@ -1174,7 +1174,7 @@ def _assert_aligned(x: BaselineResult, y: BaselineResult) -> None:
 
 @dataclass(frozen=True)
 class PassBarVerdict:
-    """Pass/fail decision per SPECTRE_EDA_SPEC.md §6 with interpretation."""
+    """Pass/fail decision per docs/archive/SPECTRE_EDA_SPEC.md §6 with interpretation."""
 
     pool_cap_saturated: bool
     diversity_nontrivial: bool
@@ -1228,8 +1228,9 @@ def evaluate_pass_bar(
 ) -> PassBarVerdict:
     """Combine the Group 1/3 scalars into a :class:`PassBarVerdict`.
 
-    Thresholds match the primary conditions in SPECTRE_EDA_SPEC.md §6. Exposed as kwargs
-    so the notebook can loosen them for pilot data without editing source.
+    Thresholds match the primary conditions in docs/archive/SPECTRE_EDA_SPEC.md
+    §6. Exposed as kwargs so the notebook can loosen them for pilot data
+    without editing source.
     """
     return PassBarVerdict(
         pool_cap_saturated=pool_cap_fraction_value >= pool_cap_threshold,

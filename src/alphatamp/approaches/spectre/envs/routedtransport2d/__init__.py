@@ -1,7 +1,8 @@
 """RoutedTransport2D v1 — multi-axis-latent, tag-augmented K_3,3 substrate.
 
-See ``ROUTED_TRANSPORT2D_SPEC.md`` (repo root) for the design rationale and
-``SPECTRE_METHOD_SPEC.md`` for the method-side contracts this env satisfies.
+See ``docs/archive/ROUTED_TRANSPORT2D_SPEC.md`` (spectre package docs) for the
+design rationale and ``docs/archive/SPECTRE_METHOD_SPEC.md`` for the
+method-side contracts this env satisfies.
 
 Public surface:
 

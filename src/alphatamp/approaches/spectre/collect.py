@@ -2,8 +2,9 @@
 
 Non-short-circuiting: every skeleton in the pool is refined regardless of
 earlier successes. This is the defining difference from the standard SeSaMe
-planner behavior (which stops at first success). See ``SPECTRE_METHOD_SPEC.md``
-§5.1 and ``SPECTRE_TRAINING_PIPELINE_SPEC.md`` §6.
+planner behavior (which stops at first success). See
+``docs/archive/SPECTRE_METHOD_SPEC.md`` §5.1 and
+``docs/archive/SPECTRE_TRAINING_PIPELINE_SPEC.md`` §6.
 """
 
 from __future__ import annotations

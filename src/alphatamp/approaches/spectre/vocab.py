@@ -1,12 +1,13 @@
 """Vocabulary extraction for the skeleton encoder Φ.
 
-Per ``SPECTRE_METHOD_SPEC.md`` §4.1 the encoder uses fixed-size embedding tables
+Per ``docs/archive/SPECTRE_METHOD_SPEC.md`` §4.1 the encoder uses fixed-size
+embedding tables
 keyed by lifted-operator name, predicate name, and type name. The vocab is
 extracted from the training split *only* and then frozen for val/test use.
 
 The ``<OOV>`` slot is reserved at index 0 even though v0.1 hard-fails on OOV
-(``SPECTRE_METHOD_SPEC.md`` §8.5); this way, the graceful-fallback upgrade
-path is a one-line change.
+(``docs/archive/SPECTRE_METHOD_SPEC.md`` §8.5); this way, the graceful-fallback
+upgrade path is a one-line change.
 
 **Trajectory coverage.** Because we persist only ``s_0`` and the per-skeleton
 ``final_abstract_state`` (Substage A, §4.1.5), a naive scan of stored atoms
@@ -51,7 +52,7 @@ class Vocab:
     max_pool_size: int
     max_objects_per_type: dict[str, int] = field(default_factory=dict)
     # Per-type augmentability for object-renumbering augmentation
-    # (SPECTRE_RT2D_METHOD_SPEC.md §4.6 / §10.1). Missing keys default to
+    # (docs/archive/SPECTRE_RT2D_METHOD_SPEC.md §4.6 / §10.1). Missing keys default to
     # augmentable=True so kinder vocabs round-trip unchanged.
     type_aug_policy: dict[str, bool] = field(default_factory=dict)
 
@@ -82,7 +83,7 @@ class Vocab:
         if name not in self.operators:
             raise KeyError(
                 f"Unknown lifted operator '{name}'. OOV fallback not"
-                " implemented; see SPECTRE_METHOD_SPEC.md §8.5."
+                " implemented; see docs/archive/SPECTRE_METHOD_SPEC.md §8.5."
             )
         return self.operators[name]
 

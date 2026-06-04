@@ -1,6 +1,7 @@
 """Plug-in static priors for SPECTRE.
 
-Per ``SPECTRE_METHOD_SPEC.md`` §4.4, the prior is a per-skeleton scalar score
+Per ``docs/archive/SPECTRE_METHOD_SPEC.md`` §4.4, the prior is a per-skeleton
+scalar score
 from any context-independent ranker. Two implementations ship today:
 
 - :class:`ZeroPrior` — π ≡ 0 (the "no prior" reference baseline).

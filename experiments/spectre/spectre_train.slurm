@@ -4,17 +4,17 @@
 # Default: array of 3 jobs, one per seed, 20-epoch training each
 # (spec §8.4 + §8.7 — multi-seed protocol).
 #
-#     sbatch experiments/spectre_train.slurm
+#     sbatch experiments/spectre/spectre_train.slurm
 #
 # Single-seed override:
-#     sbatch --array=0 experiments/spectre_train.slurm
+#     sbatch --array=0 experiments/spectre/spectre_train.slurm
 #
 # More seeds (e.g. spec §8.7's "expand to 5 if seed std exceeds gap/2"):
-#     sbatch --array=0-4 experiments/spectre_train.slurm
+#     sbatch --array=0-4 experiments/spectre/spectre_train.slurm
 #
 # Different env / hyperparams (forwarded to Hydra after `--`):
-#     sbatch experiments/spectre_train.slurm env=routedtransport2d_n4_v1
-#     sbatch experiments/spectre_train.slurm train.num_f_samples_per_epoch=4
+#     sbatch experiments/spectre/spectre_train.slurm env=routedtransport2d_n4_v1
+#     sbatch experiments/spectre/spectre_train.slurm train.num_f_samples_per_epoch=4
 #
 # Reads:    data/spectre/raw/<env_variant>/{train,val}/episodes/
 #           data/spectre/derived/<env_variant>/train_vocab.json
@@ -51,12 +51,12 @@ SEED=${SLURM_ARRAY_TASK_ID:-0}
 # atom pool) per spec §12.
 #
 # Override on the command line when needed, e.g.:
-#   sbatch experiments/spectre_train.slurm train.lr=2e-4
+#   sbatch experiments/spectre/spectre_train.slurm train.lr=2e-4
 #
 # train.py auto-detects CUDA (falls back to CPU). On CPU-only clusters,
 # drop the `--gres=gpu:1` line above and the run will still complete in
 # a few hours at the default config.
-.venv/bin/python -u experiments/spectre_train.py \
+.venv/bin/python -u experiments/spectre/spectre_train.py \
     seed=${SEED} \
     train.lr=1e-4 \
     train.weight_decay=5e-4 \
