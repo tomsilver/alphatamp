@@ -369,7 +369,8 @@ class BaselineResult:
         assert len(self.problem_ids) == n
 
     def set_name(self, new_name: str) -> None:
-        self.name = new_name
+        # Frozen dataclass: direct assignment raises FrozenInstanceError.
+        object.__setattr__(self, "name", new_name)
 
 
 def _trainable_episodes(split: LoadedSplit) -> list[int]:
