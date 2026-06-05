@@ -677,17 +677,21 @@ def main(cfg: DictConfig) -> None:
         f"  ratio of means        Δ_used.mean / Δ_unused.mean = {d3.ratio_of_means:.3f}"
     )
     print(
-        f"  median of ratios      median_i (Δ_used / Δ_unused) = {d3.median_of_ratios:.3f}"
+        f"  median of ratios      median_i (Δ_used / Δ_unused) = "
+        f"{d3.median_of_ratios:.3f}"
     )
     print(
-        f"  geomean of ratios     exp(mean log(ratios))        = {d3.geomean_of_ratios:.3f}"
+        f"  geomean of ratios     exp(mean log(ratios))        = "
+        f"{d3.geomean_of_ratios:.3f}"
     )
     print(
-        f"  mean of ratios (biased; do not interpret naively)    = {d3.mean_of_ratios:.3f}"
+        f"  mean of ratios (biased; do not interpret naively)    = "
+        f"{d3.mean_of_ratios:.3f}"
     )
     print(f"  n_ratios={d3.n_ratios}  skipped (empty used/unused set)={d3.n_skipped}")
     print(
-        "\nInterpretation (use ratio_of_means and median_of_ratios; mean_of_ratios is biased):"
+        "\nInterpretation (use ratio_of_means and median_of_ratios; "
+        "mean_of_ratios is biased):"
     )
     print("  ratio >> 1 (≥ 3): Φ binds passage-width to specific operator args.")
     print("    → Bottleneck is in σ; try Step F3-A (Φ-dropout / larger σ).")

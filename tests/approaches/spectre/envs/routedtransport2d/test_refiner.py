@@ -141,7 +141,6 @@ def test_size_width_gate_overrides_grasp_gate_only_when_color_clean() -> None:
     size_width fires.
     """
     p = make_problem(seed=42, variant="n3-v1")
-    gen = ClosedFormSkeletonGenerator(p, k_cap=30)
     # Pick a skeleton in a family that uses non-blocked colors and non-blocked grasp.
     blocked_color = p.blocked_color
     blocked_grasp = p.blocked_grasp
@@ -166,6 +165,7 @@ def test_size_width_gate_overrides_grasp_gate_only_when_color_clean() -> None:
 
 
 def test_three_gate_refiner_class_sets_last_outcome() -> None:
+    """ThreeGateRefiner exposes its structured outcome via last_outcome."""
     p = make_problem(seed=0, variant="n3-v1")
     gen = ClosedFormSkeletonGenerator(p, k_cap=30)
     state_plan, action_plan = next(

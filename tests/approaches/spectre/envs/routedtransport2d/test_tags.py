@@ -20,6 +20,7 @@ from alphatamp.approaches.spectre.envs.routedtransport2d.tags import (
 
 
 def test_initial_state_has_nine_passage_widths() -> None:
+    """S0 carries exactly one PassageWidth atom per passage (9 total)."""
     p = make_problem(seed=0, variant="n3-v1")
     width_atoms = [
         a for a in p.initial_abstract_state.atoms if a.predicate is ops.PassageWidth
@@ -30,6 +31,7 @@ def test_initial_state_has_nine_passage_widths() -> None:
 
 
 def test_initial_state_has_one_itemsize_per_item() -> None:
+    """S0 carries exactly one ItemSize atom per item."""
     p = make_problem(seed=0, variant="n3-v1")
     size_atoms = [
         a for a in p.initial_abstract_state.atoms if a.predicate is ops.ItemSize

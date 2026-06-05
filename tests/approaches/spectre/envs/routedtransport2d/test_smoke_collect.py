@@ -5,6 +5,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
 from alphatamp.approaches.spectre.collect import collect_episode, episode_path
 from alphatamp.approaches.spectre.config import CollectionConfig
 from alphatamp.approaches.spectre.eda import load_split_episodes
@@ -30,6 +32,7 @@ def _rt2d_cfg() -> CollectionConfig:
 
 
 def test_collect_episode_produces_valid_record() -> None:
+    """Spec §8.3 #12: a collected episode satisfies the record invariants."""
     cfg = _rt2d_cfg()
     ep = collect_episode(cfg, problem_id=0)
     # Schema invariants checked by EpisodeRecord.__post_init__; these are
@@ -47,6 +50,7 @@ def test_collect_episode_produces_valid_record() -> None:
 
 
 def test_collect_to_disk_and_eda_load() -> None:
+    """Episodes written via the io helpers round-trip through the EDA loader."""
     cfg = _rt2d_cfg()
     with tempfile.TemporaryDirectory() as tmp:
         data_root = Path(tmp)
@@ -73,8 +77,6 @@ def test_collect_to_disk_and_eda_load() -> None:
 def test_at_least_60pct_problems_solve_with_random_selector() -> None:
     """Spec §8.3 #12: random selection within the budget succeeds on ≥60% of
     problems."""
-    import numpy as np
-
     cfg = _rt2d_cfg()
     rng = np.random.default_rng(0)
     successes = 0

@@ -54,7 +54,12 @@ def test_removing_one_color_leaves_connected_six_cycle() -> None:
         while frontier:
             nxt: list[str] = []
             for z in frontier:
-                for _p, nbr in topo._color_pair_neighbors(z, cp_tuple):
+                neighbors = (
+                    topo._color_pair_neighbors(  # pylint: disable=protected-access
+                        z, cp_tuple
+                    )
+                )
+                for _p, nbr in neighbors:
                     if nbr not in seen:
                         seen.add(nbr)
                         nxt.append(nbr)
@@ -64,20 +69,25 @@ def test_removing_one_color_leaves_connected_six_cycle() -> None:
 
 @pytest.mark.parametrize("color", list(topo.COLORS))
 def test_color_of_passage_roundtrip(color: str) -> None:
+    """color_of_passage inverts PASSAGE_NAMES for every passage."""
     for p_name in topo.PASSAGE_NAMES[color]:
         assert topo.color_of_passage(p_name) == color
 
 
 def test_bfs_path_empty_when_src_eq_dst() -> None:
-    assert topo.bfs_color_pair_path("L1", "L1", ("A", "B")) == []
+    """A path from a zone to itself is the empty hop list."""
+    assert not topo.bfs_color_pair_path("L1", "L1", ("A", "B"))
 
 
 def test_bfs_path_same_side_two_hops_via_color_pair_subgraph() -> None:
-    # The earlier bug: R2 → R1 via {B, C} requires the (C, B) detour ordering
-    # because (B, C) starting from R2 ends at R3, not R1.
+    """Same-side travel takes two hops through the color-pair subgraph.
+
+    The earlier bug: R2 → R1 via {B, C} requires the (C, B) detour ordering
+    because (B, C) starting from R2 ends at R3, not R1.
+    """
     hops = topo.bfs_color_pair_path("R2", "R1", ("B", "C"))
     assert len(hops) == 2
-    src_to_mid, mid_to_dst = hops
+    src_to_mid, mid_to_dst = hops  # pylint: disable=unbalanced-tuple-unpacking
     assert src_to_mid[1] == "R2"
     assert mid_to_dst[2] == "R1"
     # Intermediate zone is on the L side (we crossed the bipartition).
@@ -88,13 +98,14 @@ def test_bfs_path_same_side_two_hops_via_color_pair_subgraph() -> None:
 
 
 def test_bfs_path_opposite_side_direct_in_pair() -> None:
+    """Opposite-side travel is one hop when the direct color is in the pair."""
     hops = topo.bfs_color_pair_path("L1", "R1", ("A", "B"))
     assert len(hops) == 1  # Direct passage: L1-R1 is color A, in pair.
     assert topo.color_of_passage(hops[0][0]) == "A"
 
 
 def test_bfs_path_opposite_side_direct_not_in_pair_uses_three_hops() -> None:
-    # L1-R1 is color A; with color_pair {B, C}, we need 3 hops in the 6-cycle.
+    """L1-R1 is color A; with pair {B, C} the 6-cycle forces three hops."""
     hops = topo.bfs_color_pair_path("L1", "R1", ("B", "C"))
     assert len(hops) == 3
     for p_name, _src, _dst in hops:
@@ -102,6 +113,7 @@ def test_bfs_path_opposite_side_direct_not_in_pair_uses_three_hops() -> None:
 
 
 def test_color_pairs_are_three_unordered_pairs() -> None:
+    """color_pairs() is exactly the three unordered 2-subsets of {A,B,C}."""
     pairs = topo.color_pairs()
     assert len(pairs) == 3
     assert all(len(p) == 2 for p in pairs)

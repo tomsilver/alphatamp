@@ -112,10 +112,10 @@ def _make_plan_generator(
         and cfg.plan_generator == "closed_form"
     ):
         # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.plan_generator import (
+        from alphatamp.approaches.spectre.envs.routedtransport2d.plan_generator import (  # pylint: disable=line-too-long
             ClosedFormSkeletonGenerator,
         )
-        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (
+        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (  # pylint: disable=line-too-long
             ProblemInstance,
         )
 
@@ -150,7 +150,7 @@ def _make_refiner(
     """
     if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
         # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (
+        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (  # pylint: disable=line-too-long
             ProblemInstance,
         )
         from alphatamp.approaches.spectre.envs.routedtransport2d.refiner import (

@@ -22,6 +22,7 @@ from alphatamp.approaches.spectre.envs.routedtransport2d.refiner import (
 
 
 def test_at_least_one_success_per_problem_majority() -> None:
+    """A large majority of generated problems admit at least one success."""
     n_problems = 100
     succ_counts = []
     for seed in range(n_problems):

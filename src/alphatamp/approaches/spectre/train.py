@@ -378,6 +378,7 @@ class RolloutSummary:
     n_episodes: int
 
     def to_dict(self) -> dict[str, float | int]:
+        """Return the summary as a JSON-serializable dict (for log.jsonl)."""
         return {
             "mean_attempts": self.mean_attempts,
             "std_attempts": self.std_attempts,
@@ -685,12 +686,15 @@ def train(
 
         rollout_str = ""
         if train_rollout_summary is not None and val_rollout_summary is not None:
+            att_gap = (
+                val_rollout_summary.mean_attempts - train_rollout_summary.mean_attempts
+            )
             rollout_str = (
                 f" train_att={train_rollout_summary.mean_attempts:.2f}±"
                 f"{train_rollout_summary.std_attempts:.2f}"
                 f" val_att={val_rollout_summary.mean_attempts:.2f}±"
                 f"{val_rollout_summary.std_attempts:.2f}"
-                f" gap={val_rollout_summary.mean_attempts - train_rollout_summary.mean_attempts:+.2f}"
+                f" gap={att_gap:+.2f}"
             )
         print(
             f"epoch={epoch:02d} train_loss={train_loss:.4f}"

@@ -55,7 +55,9 @@ def test_dispatch_closed_form_default() -> None:
         predicates=ALL_PREDICATES,
         operators=ALL_OPERATORS,
     )
-    gen = _make_plan_generator(cfg, env_models, obs, problem_id=0)  # type: ignore[arg-type]
+    gen = _make_plan_generator(
+        cfg, env_models, obs, problem_id=0  # type: ignore[arg-type]
+    )
     assert isinstance(gen, ClosedFormSkeletonGenerator)
 
 
@@ -69,7 +71,9 @@ def test_dispatch_heuristic_search_for_rt2d() -> None:
         predicates=ALL_PREDICATES,
         operators=ALL_OPERATORS,
     )
-    gen = _make_plan_generator(cfg, env_models, {}, problem_id=0)  # type: ignore[arg-type]
+    gen = _make_plan_generator(
+        cfg, env_models, {}, problem_id=0  # type: ignore[arg-type]
+    )
     assert isinstance(gen, RelationalHeuristicSearchAbstractPlanGenerator)
 
 

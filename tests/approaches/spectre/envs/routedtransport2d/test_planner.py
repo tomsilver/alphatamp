@@ -14,6 +14,7 @@ from alphatamp.approaches.spectre.envs.routedtransport2d.plan_generator import (
 from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (
     make_problem,
 )
+from alphatamp.approaches.spectre.trajectory import apply_operator
 
 
 @pytest.mark.parametrize(
@@ -105,8 +106,6 @@ def test_skeleton_uses_exactly_one_grasp_mode() -> None:
 def test_state_plan_aligns_with_operator_progression() -> None:
     """state_plan[i+1] must equal STRIPS application of action_plan[i] to
     state_plan[i]."""
-    from alphatamp.approaches.spectre.trajectory import apply_operator
-
     p = make_problem(seed=0, variant="n3-v1")
     gen = ClosedFormSkeletonGenerator(p, k_cap=30)
     for state_plan, action_plan in gen(

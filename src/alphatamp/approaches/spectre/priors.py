@@ -109,7 +109,7 @@ def _build_rt2d_domain_gen(heuristic_name: str) -> Any:
     ``ALL_OPERATORS``) and is reused across every episode.
     """
     # pylint: disable=import-outside-toplevel
-    from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
+    from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (  # pylint: disable=line-too-long
         RelationalHeuristicSearchAbstractPlanGenerator,
     )
 

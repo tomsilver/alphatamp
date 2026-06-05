@@ -7,6 +7,10 @@ existing ``BaselineResult`` schema, and that the produced order actually
 differs from default-order on at least one episode.
 """
 
+# Pytest injects fixtures by parameter name, so test params legitimately
+# shadow the module-scoped ``split`` fixture.
+# pylint: disable=redefined-outer-name
+
 from __future__ import annotations
 
 import pytest

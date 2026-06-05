@@ -12,6 +12,10 @@ Builds a real RT2D episode via ``collect_episode``, then exercises:
   same problem produce identical π)
 """
 
+# Pytest injects fixtures by parameter name, so test params legitimately
+# shadow the module-scoped ``episode`` fixture.
+# pylint: disable=redefined-outer-name
+
 from __future__ import annotations
 
 import dataclasses
@@ -46,6 +50,7 @@ def _rt2d_episode(problem_id: int = 0, k_max: int = 12):
 
 @pytest.fixture(scope="module")
 def episode():
+    """Module-shared canonicalized RT2D episode (collection is the slow part)."""
     return _rt2d_episode(problem_id=0, k_max=12)
 
 
@@ -89,7 +94,9 @@ def test_per_episode_zscore_property(episode):
 
 def test_sign_convention_lowest_ff_gets_highest_pi(episode):
     """The skeleton with the lowest raw FF score must get the largest π."""
-    domain_gen = priors_mod._build_rt2d_domain_gen("hff")
+    domain_gen = priors_mod._build_rt2d_domain_gen(  # pylint: disable=protected-access
+        "hff"
+    )
     raw = priors_mod.ff_trajectory_scores(domain_gen, episode)
     p = HeuristicPrior()
     pi = np.array(
@@ -108,7 +115,6 @@ def test_sign_convention_lowest_ff_gets_highest_pi(episode):
 def test_zero_variance_pool_returns_zeros():
     """Synthetic episode where ff_trajectory_scores returns an all-equal array must fall
     back to all-zero π without raising."""
-    p = HeuristicPrior()
     # Inject the cache directly with a degenerate raw vector to bypass
     # the (real) RT2D scoring — we're testing the normalization branch.
     raw_constant = np.full(5, 42.0, dtype=np.float32)

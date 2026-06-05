@@ -369,7 +369,11 @@ class BaselineResult:
         assert len(self.problem_ids) == n
 
     def set_name(self, new_name: str) -> None:
-        # Frozen dataclass: direct assignment raises FrozenInstanceError.
+        """Rename in place (e.g. for display labels in comparison tables).
+
+        Frozen dataclass: direct assignment raises FrozenInstanceError, so
+        use the standard ``object.__setattr__`` escape hatch.
+        """
         object.__setattr__(self, "name", new_name)
 
 
@@ -545,10 +549,12 @@ def heuristic_search_baseline(
     for out_idx, ep_idx in enumerate(trainable):
         ep = test.episodes[ep_idx]
 
-        # Score = Σ h(sᵢ) over the reconstructed STRIPS trajectory; lower
-        # is better for ranking, ties broken by original pool index.
+        # Score = Σ h(sᵢ) over the reconstructed STRIPS trajectory; lower is
+        # better for ranking. sorted() is stable, so ties keep their original
+        # pool-index order — the spec's tiebreak — without an explicit (s, i)
+        # key (whose loop-closing lambda pylint/mypy both object to).
         raw_scores = ff_trajectory_scores(domain_gen, ep)
-        order = sorted(range(len(raw_scores)), key=lambda i: (raw_scores[i], i))
+        order = sorted(range(len(raw_scores)), key=raw_scores.__getitem__)
 
         a, w, c = _simulate_traversal(ep, order, attempt_budget)
         attempts[out_idx] = a
@@ -645,10 +651,10 @@ def top_successful_skeleton_keys(
         SkeletonKeyStats(
             key=k,
             successes=stats.successes.get(k, 0),
-            appearances=stats.appearances[k],
+            appearances=appearances,
             p_hat=stats.p_hat(k),
         )
-        for k in stats.appearances
+        for k, appearances in stats.appearances.items()
     ]
     if rank_by == "successes":
         rows.sort(key=lambda r: (-r.successes, -r.appearances, r.key))
@@ -726,10 +732,11 @@ def render_successful_refinement_video(
     """
     # Heavy imports deferred — EDA functions that don't render videos shouldn't
     # pay the import cost of the full planning substrate.
+    # pylint: disable=import-outside-toplevel
     import itertools
 
     import kinder as _kinder
-    from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
+    from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (  # pylint: disable=line-too-long
         RelationalHeuristicSearchAbstractPlanGenerator,
     )
     from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
@@ -1175,7 +1182,8 @@ def _assert_aligned(x: BaselineResult, y: BaselineResult) -> None:
 
 @dataclass(frozen=True)
 class PassBarVerdict:
-    """Pass/fail decision per docs/archive/SPECTRE_EDA_SPEC.md §6 with interpretation."""
+    """Pass/fail decision per docs/archive/SPECTRE_EDA_SPEC.md §6 with
+    interpretation."""
 
     pool_cap_saturated: bool
     diversity_nontrivial: bool
@@ -1229,9 +1237,9 @@ def evaluate_pass_bar(
 ) -> PassBarVerdict:
     """Combine the Group 1/3 scalars into a :class:`PassBarVerdict`.
 
-    Thresholds match the primary conditions in docs/archive/SPECTRE_EDA_SPEC.md
-    §6. Exposed as kwargs so the notebook can loosen them for pilot data
-    without editing source.
+    Thresholds match the primary conditions in docs/archive/SPECTRE_EDA_SPEC.md §6.
+    Exposed as kwargs so the notebook can loosen them for pilot data without editing
+    source.
     """
     return PassBarVerdict(
         pool_cap_saturated=pool_cap_fraction_value >= pool_cap_threshold,

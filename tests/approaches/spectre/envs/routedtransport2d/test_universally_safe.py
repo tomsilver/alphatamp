@@ -19,6 +19,7 @@ from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator impor
 
 
 def test_no_skeleton_safe_in_all_six_modes() -> None:
+    """No pooled skeleton survives every (blocked_color, blocked_grasp) mode."""
     p = make_problem(seed=0, variant="n3-v1")
     gen = ClosedFormSkeletonGenerator(p, k_cap=30)
     pool = list(
