@@ -1,4 +1,5 @@
-"""Tests for the parallel-collection refactor of ``experiments/spectre/spectre_collect``.
+"""Tests for the parallel-collection refactor of
+``experiments/spectre/spectre_collect``.
 
 Covers two layers:
 
