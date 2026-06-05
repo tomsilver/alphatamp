@@ -193,7 +193,11 @@ experiments/slurm_outputs
 # Library files from imports
 lib/
 
-.claude/
+# Claude Code: track shared skills, ignore local state (sessions, settings).
+# `.claude/` as a dir-ignore would prevent re-including children, hence the
+# `.claude/*` + negation pattern.
+.claude/*
+!.claude/skills/
 artifacts_hdf5/
 artifacts_ob/
 artifacts_sb/
