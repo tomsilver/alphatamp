@@ -6,8 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AlphaTAMP is a shared research monorepo for the PRPL lab covering multiple projects on "learning to accelerate TAMP" (task-and-motion planning). Each project lives under `src/alphatamp/approaches/` as a self-contained *approach* that plugs into a common bilevel-planning substrate from upstream lab packages.
 
-**Per-project context lives in each approach's own directory** — look for a `CLAUDE.md` inside `src/alphatamp/approaches/<approach>/` before doing substantive work on that project. The currently active project is SPECTRE: see `src/alphatamp/approaches/spectre/CLAUDE.md` (its specs, experiment layout, and conventions live under that package's `docs/`).
-
+**Per-project context lives in each approach's own directory** — look for a `CLAUDE.md` inside `src/alphatamp/approaches/<approach>/` before doing substantive work on that project.
 Monorepo-wide must-read: `KEY_DEPENDENCIES.md` — the minimal upstream-package + substrate-file list that must be understood to touch this repo.
 
 ## Environment and commands
