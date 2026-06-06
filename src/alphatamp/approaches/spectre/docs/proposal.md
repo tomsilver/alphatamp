@@ -10,7 +10,11 @@ spec stack (see [`archive/README.md`](archive/README.md)); where it disagrees
 with an archived spec, this document wins. Full architectural detail lives in
 `archive/SPECTRE_RT2D_METHOD_SPEC.md`; full data-pipeline detail in
 `archive/SPECTRE_TRAINING_PIPELINE_AS_BUILT.md`. Related work:
-[`research_lit.md`](research_lit.md).
+[`research_lit.md`](research_lit.md). A paper-style narrative snapshot of the
+method and results as of 2026-04-27 — including the formal problem statement
+(π, ℱₜ, the Attempts/T objectives) — is frozen at
+[`archive/SPECTRE_WRITEUP_APR_2026.md`](archive/SPECTRE_WRITEUP_APR_2026.md);
+known-stale points are catalogued in [`archive/README.md`](archive/README.md).
 
 ---
 
@@ -144,11 +148,14 @@ Run in order; each gate must pass before spending compute on the next stage.
 4. **End-to-end bar** (test split, ≥ 3 seeds): beat B3 by ≥ 1 attempt; beat B4
    by ≥ 0.3 attempts (headline); step-1 success rate no worse than B2.
 
-**Metric discipline (hard-won):** validation **AUROC(3)** is the offline metric
-that actually predicts test-time attempts. The atom-sensitivity probes
-(D.1/D.2, `experiments/spectre/spectre_probe_atom_sensitivity.py`) do *not*
-predict rollout performance — they are diagnostics only; never optimize for
-them.
+**Metric discipline (hard-won):** model selection and early stopping are
+**rollout-based** — `val_rollout_attempts` (simulated sparse rollout on the
+val split, attempt budget 20; `checkpoint_metric` in `train.py`) — because the
+test-time objective is itself rollout-based. Validation AUROC(3) is a
+*secondary* offline diagnostic (it drives the during-training gates in §5),
+never the selection criterion. The atom-sensitivity probes (D.1/D.2,
+`experiments/spectre/spectre_probe_atom_sensitivity.py`) do *not* predict
+rollout performance — they are diagnostics only; never optimize for them.
 
 ## 6. Open questions / current frontier
 
@@ -164,6 +171,22 @@ them.
   constant. If problem topologies ever vary, this must be revisited.
 - **Φ_s pooling depth / Ψ depth** — one more SAB layer each if the acceptance
   bar is missed (RT2D spec §12).
+- **Ψ's fixed-size summary.** Ψ pools the whole failure set into one d=64
+  vector; distinct failure patterns compete for capacity at large |F|. If
+  long episodes suffer, expose the per-failure embeddings to the scorer
+  directly instead of (or alongside) the pooled c_t (writeup, Limitations).
+- **Data efficiency.** Collection refines every pooled skeleton per problem —
+  the dominant collection cost — and scaling of test attempts with |D| is
+  uncharacterized; a 1–2 order-of-magnitude sweep over training-set size is
+  among the most informative experiments not yet run (writeup, Limitations).
+- **Compositional generalization.** Train on one (N, zones, passages)
+  configuration, test on another. The architecture factors across object
+  counts by design (typed local ids, set pooling, variable-length sequences)
+  but this has never been tested (writeup, Future work).
+- **x₀-conditioned prior.** A PIGINet-style feasibility predictor over the
+  concrete initial state as an additional scorer input — a strict
+  generalization of the current deliberately x₀-free setup (writeup, Future
+  work).
 - **DAgger round** — only if test-time gap appears that offline AUROC(t) does
   not predict.
 - **Deferred from the original spec:** cost-weighted PL (wall-clock metric),

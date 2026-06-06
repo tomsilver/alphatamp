@@ -15,3 +15,29 @@ references like "METHOD §4.1.4" in code docstrings resolve against these files.
 | `SPECTRE_EDA_SPEC.md` | Pre-training EDA gates: Group 1 sanity, baselines B1–B5, adaptive premium Δ and headroom H, pass bar. |
 | `ROUTED_TRANSPORT2D_SPEC.md` | RoutedTransport2D environment spec (v1): K₃,₃ topology, scene latent, per-problem tags, three-gate refiner. |
 | `SYNTHETIC_ENVIRONMENT.md` | Motivation memo for building RT2D — why the kinder kinematic2d envs let a lookup-table baseline win, and the required properties of a replacement env. |
+
+## Snapshots
+
+Dated, frozen, paper-style exports of the whole project state (method +
+results + frontier). Unlike the spec docs above they are narrative snapshots,
+not design documents. The living docs remain the source of truth and win on
+disagreement; staleness annotations live here, not in the snapshot files.
+
+| File | One-line note |
+|---|---|
+| `SPECTRE_WRITEUP_APR_2026.md` | Paper-style snapshot (2026-04-27) of the method and RT2D-n3 results: attempts to first success ↓41–62% and refinement wall-clock ↓36–57% vs Pure Planning + two memoization baselines; checkpoints selected with rollout-based validation (post-2026-04-25). |
+
+Known-stale points in `SPECTRE_WRITEUP_APR_2026.md`:
+
+- Baselines are named Pure Planning / Static Historical / Adaptive Historical
+  (≈ B2 / B3 / B4); the living convention is B1–B5, and B4 is implemented as
+  Naive-Bayes log-odds over pairwise failure conditionals, not raw conditional
+  frequency.
+- Reported spreads are std over the 100 test instances; the current reporting
+  bar is mean ± std over ≥ 3 training seeds (multi-seed confirmation pending).
+- One deliberate post-deposit edit (2026-06-06, §Training): the sentence
+  originally read "each allowed 30 refinement attempts", conflating the RT2D
+  candidate-pool cap (`k_cap = 30` in `envs/routedtransport2d/plan_generator.py`;
+  every pooled skeleton is refined during collection) with the evaluation
+  attempt budget (20, `eda.py` / `rollout_attempt_budget`). It now states both
+  numbers explicitly. Snapshots are otherwise never edited after deposit.

@@ -25,7 +25,7 @@ StickButton2D-b5 collections are historical.
 |---|---|
 | Package (model, dataset, collection, EDA) | `src/alphatamp/approaches/spectre/` — do not move; it IS `alphatamp.approaches.spectre` |
 | RT2D environment | `src/alphatamp/approaches/spectre/envs/routedtransport2d/`, registered via `env_registry.py` |
-| Docs (living proposal, ADR log, lab notebook, lit review, archived specs) | `src/alphatamp/approaches/spectre/docs/` |
+| Docs (living proposal, ADR log, lab notebook, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | Hydra entry points + configs + SLURM launchers + analysis notebook | `experiments/spectre/` (configs under `experiments/spectre/conf/`) |
 | Tests | `tests/approaches/spectre/` (RT2D env tests under `envs/routedtransport2d/`) |
 | Data (gitignored) | `data/spectre/{raw,derived,checkpoints,configs}/` — the `data_root: "data/spectre"` convention is relative to the repo root |
@@ -68,10 +68,13 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
 - **Vocab from train only;** id 0 = `<PAD>`/`<OOV>`; local-id 0 = pad.
 - **Augmentation:** training only; per-type policy from `env_registry.py`
   (ordered/semantic RT2D types are non-augmentable).
-- **Metrics:** model selection is rollout-based on val; AUROC(3) is the
-  offline metric that predicts test attempts. The D.1/D.2 atom-sensitivity
-  probes do NOT predict rollout performance — diagnostics only, never
-  optimization targets.
+- **Metrics:** model selection and early stopping are rollout-based —
+  `val_rollout_attempts` (simulated sparse rollout on val, attempt budget 20;
+  `checkpoint_metric` in `train.py`) — chosen to align with the rollout-based
+  test-time objective. AUROC(3) is a secondary offline diagnostic (drives the
+  during-training de-risking gates), never the selection criterion. The
+  D.1/D.2 atom-sensitivity probes do NOT predict rollout performance —
+  diagnostics only, never optimization targets.
 - **Reporting:** every number is mean ± std over ≥ 3 seeds.
 - Record run outcomes in `docs/notebook.md`; lasting decisions in
   `docs/decisions.md`; method changes in `docs/proposal.md`. Archived specs in

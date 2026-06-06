@@ -18,4 +18,18 @@ Format:
 
 ---
 
-(no entries yet)
+## 2026-04-27 — RT2D-n3 paper-snapshot results (writeup)
+
+- What: full pipeline on RoutedTransport2D-n3-v1 (500/100/100); SPECTRE vs
+  Pure Planning (≈ B2), Static Historical (≈ B3), Adaptive Historical (≈ B4).
+  Checkpoint selected by rollout-based val selection; eval attempt budget 20.
+- Result: attempts to first success ↓ 41–62% and refinement wall-clock
+  ↓ 36–57% vs the baselines; Adaptive Historical needs 57.3% more refinement
+  time than SPECTRE; success-at-K: ~80% of instances within 9 attempts vs
+  ~18 for Adaptive Historical.
+- Takeaway / next: the gap over Adaptive Historical (which also conditions on
+  F) is attributable to representation — generalizing across structurally
+  similar skeletons — not failure-conditioning per se. Spreads are over 100
+  test instances, not the ≥ 3-seed bar; multi-seed confirmation pending. Full
+  narrative: [`archive/SPECTRE_WRITEUP_APR_2026.md`](archive/SPECTRE_WRITEUP_APR_2026.md)
+  (known-stale points: [`archive/README.md`](archive/README.md)).

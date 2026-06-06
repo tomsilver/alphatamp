@@ -6,6 +6,32 @@ not, and why.
 
 ---
 
+## 2026-06-06 — Dated writeup snapshots in `docs/archive/`
+
+**Context.** A high-quality paper-style writeup of the full project state was
+deposited as `archive/SPECTRE_WRITEUP_APR_2026.md` (dated 2026-04-27 — two
+days after the move to rollout-based model selection, whose checkpoints its
+results use). It is a valuable reference but will go stale; the living docs
+must not defer to it.
+
+**Decision.** Writeups are dated, frozen, narrative exports named
+`SPECTRE_WRITEUP_<MON>_<YYYY>.md` under `docs/archive/`, catalogued in the
+"Snapshots" section of `archive/README.md`. The living docs (`proposal.md` /
+`decisions.md` / `notebook.md`) remain the source of truth and win on
+disagreement. At deposit time: reconcile any divergence into the living docs
+first (headline results → a dated `notebook.md` entry; new limitations /
+future-work items → `proposal.md` §6), then freeze. After freezing, snapshots
+are not edited — staleness annotations go in `archive/README.md`. (One
+documented exception: the 2026-06-06 fix of the writeup's pool-cap-30 /
+attempt-budget-20 conflation.)
+
+**Consequences.** `notebook.md` seeded with the 2026-04-27 results entry;
+writeup-only limitations (data efficiency, Ψ fixed-size summary,
+compositional generalization, x₀-conditioned prior) merged into
+`proposal.md` §6. Next snapshot due when multi-seed RT2D results land.
+
+---
+
 ## 2026-06-04 — Silo refactor: scope and placement
 
 **Context.** Spectre files were scattered across a shared monorepo (root spec
@@ -90,9 +116,14 @@ on branch `spectre-refactor`; safety/reversibility prioritized over tidiness.
 - **2026-04 — Set-Transformer atom pooling, per-type augmentation policy,
   vocab-driven arity sizing, rollout-aligned F-mix, F-sample multiplier** —
   RT2D fixes 1–5 (`archive/SPECTRE_RT2D_METHOD_SPEC.md` §9).
-- **2026-04 — AUROC(3) is the offline metric that predicts test attempts;
+- **2026-04 — AUROC(3) is the offline diagnostic that tracks test attempts;
   atom-sensitivity probes (D.1/D.2) are red herrings.** Never optimize for the
-  probes.
+  probes. *Superseded for model selection (2026-04-25): checkpointing and
+  early stopping use rollout-based `val_rollout_attempts` (see the
+  overfitting-response entry below); AUROC(3) remains a secondary diagnostic.*
 - **2026-04/05 — Overfitting response sequence:** diagnose → extra dropout →
-  rollout-based validation/checkpoint selection → heuristic (FF z-score) prior
-  as warm start (`train.prior_type`). Evaluation of prior choice pending.
+  rollout-based validation/checkpoint selection (`checkpoint_metric =
+  "val_rollout_attempts"` in `train.py`, used for both checkpointing and early
+  stopping — aligned with the rollout-based test-time objective) → heuristic
+  (FF z-score) prior as warm start (`train.prior_type`). Evaluation of prior
+  choice pending.
