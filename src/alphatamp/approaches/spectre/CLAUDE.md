@@ -76,8 +76,34 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
   D.1/D.2 atom-sensitivity probes do NOT predict rollout performance —
   diagnostics only, never optimization targets.
 - **Reporting:** every number is mean ± std over ≥ 3 seeds.
-- Record run outcomes in `docs/notebook.md`; lasting decisions in
-  `docs/decisions.md`; method changes in `docs/proposal.md`. Archived specs in
-  `docs/archive/` are historical — do not edit them.
+- **Doc updates are part of development** — see "Documentation discipline"
+  below. Archived specs and snapshots in `docs/archive/` are frozen — never
+  edit them; annotations go in `docs/archive/README.md`.
 - Tests: `pytest tests/approaches/spectre/` (slow tests skipped by default;
   `-m ""` to include).
+
+## Documentation discipline — keep the living docs alive
+
+The living docs are the project's research memory: code records *what*, the
+docs record *why*. Commit messages and checkpoint dirs are not a research
+log. After any change that is more than mechanical, decide — **before
+committing** — which of these needs an entry, and ship the entry **in the
+same commit** as the change:
+
+| The work... | Update | Format |
+|---|---|---|
+| produced any run/EDA/probe/ablation numbers — **including failed and negative runs** | `docs/notebook.md` | dated What / Result / Takeaway-next entry (format at top of file) |
+| chose between alternatives with lasting consequences, killed an approach, or changed a convention / invariant / metric / protocol | `docs/decisions.md` | ADR: context → decision → consequences, newest first |
+| changed the method, loss, architecture, data pipeline, or evaluation protocol | `docs/proposal.md` | edit in place — it must always describe the *current* method; also reconcile §6 (add new unknowns, remove resolved ones) |
+
+Exempt: mechanical refactors, formatting, typo fixes, CI appeasement —
+anything that cannot affect results or future decisions.
+
+Litmus test: *"In 3 months, will we know this happened and why?"* If the
+change could alter a number in a future writeup/snapshot, or a future
+contributor could plausibly re-litigate the choice, it needs an entry.
+
+This rule exists because the passive version of it failed: `notebook.md`
+stayed empty for the project's first ~2 months of training runs, and the
+load-bearing rollout-metric decision (`b74b593`) got its ADR only
+retroactively. Write entries at change time, not archaeology time.

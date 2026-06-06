@@ -6,6 +6,35 @@ not, and why.
 
 ---
 
+## 2026-06-06 — Documentation discipline codified in CLAUDE.md
+
+**Context.** The instruction to keep the living docs updated was a single
+passive bullet ("Record run outcomes in notebook.md; lasting decisions in
+decisions.md; method changes in proposal.md") — where but never when. It
+demonstrably failed: `notebook.md` stayed empty for ~2 months of training
+runs, every pre-refactor ADR below was reconstructed retroactively, and the
+stale AUROC-as-key-metric claims survived ~6 weeks after the rollout-metric
+change.
+
+**Decision.** The spectre `CLAUDE.md` gains a "Documentation discipline"
+section: a change-type → doc → format routing table (run numbers — including
+negative results — → `notebook.md`; lasting choices → `decisions.md` ADR;
+method/pipeline/protocol changes → `proposal.md` in place + §6 reconcile), a
+before-commit rule (the doc entry ships in the same commit as the change),
+a materiality threshold (mechanical refactors/formatting/typos exempt), and
+a litmus test ("in 3 months, will we know this happened and why?").
+
+**Alternative rejected.** Mechanical enforcement via a Claude Code hook:
+project-level `.claude/settings.json` is committed and would fire for every
+user of the shared monorepo, not just spectre development. A personal
+`settings.local.json` hook remains an option if instructions alone prove
+insufficient.
+
+**Consequences.** Doc updates are part of the definition of done for any
+non-trivial spectre commit. This entry is the first written under the rule.
+
+---
+
 ## 2026-06-06 — Dated writeup snapshots in `docs/archive/`
 
 **Context.** A high-quality paper-style writeup of the full project state was
