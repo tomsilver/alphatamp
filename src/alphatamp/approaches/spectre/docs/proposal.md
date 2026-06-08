@@ -29,7 +29,9 @@ carries exploitable information about which remaining skeletons to try next**,
 and a learned, failure-conditioned re-ranker can beat any static order.
 
 Metric: **mean time-to-first-success** (attempts) on a held-out test split,
-mean ± std over ≥ 3 seeds, attempt budget 20. Headline comparison: the
+mean ± std over ≥ 3 seeds, evaluated uncensored at attempt budget 30 (= the
+candidate-pool cap, so the budget never binds — see `decisions.md`
+2026-06-07). Headline comparison: the
 **adaptivity premium** over B4 (the strongest non-learned adaptive baseline).
 SPECTRE is the candidate method; B1–B5 are the baselines (never the reverse):
 

@@ -1025,6 +1025,7 @@ def spectre_evaluate(
     prior: BasePrior | None = None,
     device: torch.device | str = "cpu",
     name: str = "SPECTRE",
+    freeze_context: bool = False,
 ) -> BaselineResult:
     """Run a trained SPECTRE model on every trainable test episode.
 
@@ -1035,6 +1036,10 @@ def spectre_evaluate(
     Censoring rule and ``attempts == attempt_budget + 1`` convention match
     :func:`_simulate_traversal` exactly so the returned arrays align with
     the B1–B5 ``BaselineResult``\\ s for paired bootstraps.
+
+    ``freeze_context=True`` runs the frozen-context ablation: the context
+    vector is pinned to the learned empty-F ``c_0`` at every step (see
+    :func:`inference.select_next_skeleton`).
     """
     # Local imports — torch is optional for non-SPECTRE uses of this module,
     # so we only require it when callers actually want SPECTRE evaluation.
@@ -1067,7 +1072,9 @@ def spectre_evaluate(
                 censored[out_idx] = True
                 finished = True
                 break
-            idx = _inference.select_next_skeleton(state, model)
+            idx = _inference.select_next_skeleton(
+                state, model, freeze_context=freeze_context
+            )
             outcome = ep.outcomes[idx]
             steps += 1
             wall += outcome.refinement_wall_clock_s
@@ -1091,6 +1098,182 @@ def spectre_evaluate(
         censored=censored,
         problem_ids=problem_ids,
     )
+
+
+# ---------------------------------------------------------------------------
+# Frozen-context ablation — traced evaluator + comparison metrics
+#
+# ``spectre_evaluate_traced`` deliberately mirrors ``spectre_evaluate``'s
+# loop (~25 duplicated lines) instead of changing its return contract:
+# ``spectre_evaluate`` is the per-epoch hot path in ``train.py`` and the
+# ``BaselineResult`` schema is consumed by the notebook and the paired
+# bootstrap helpers. The metric functions below are pure so they can be
+# unit-tested on hand-built traces.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChoiceStep:
+    """One attempt in a traced SPECTRE rollout."""
+
+    step: int  # 1-based attempt index
+    idx: int  # chosen pool index
+    outcome: str  # "success" | "fail"
+
+
+def spectre_evaluate_traced(
+    test: LoadedSplit,
+    model: SpectreModel,
+    vocab: Vocab,
+    attempt_budget: int = 20,
+    prior: BasePrior | None = None,
+    device: torch.device | str = "cpu",
+    name: str = "SPECTRE",
+    freeze_context: bool = False,
+) -> tuple[BaselineResult, list[list[ChoiceStep]]]:
+    """:func:`spectre_evaluate` plus the per-episode chosen-skeleton trace.
+
+    Identical loop, episode order (``_trainable_episodes``), and
+    ``attempt_budget + 1`` censoring convention; additionally returns one
+    ``list[ChoiceStep]`` per trainable episode, index-aligned with the
+    ``BaselineResult`` arrays. A trace ends at the first success or at the
+    budget/pool-exhaustion cut, so ``len(trace) <= attempt_budget``.
+    """
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre import inference as _inference
+    from alphatamp.approaches.spectre.priors import ZeroPrior
+
+    if prior is None:
+        prior = ZeroPrior()
+
+    trainable = _trainable_episodes(test)
+    attempts = np.zeros(len(trainable), dtype=float)
+    wall_clock = np.zeros(len(trainable), dtype=float)
+    censored = np.zeros(len(trainable), dtype=bool)
+    problem_ids = np.zeros(len(trainable), dtype=np.int64)
+    traces: list[list[ChoiceStep]] = []
+
+    for out_idx, ep_idx in enumerate(trainable):
+        ep = test.episodes[ep_idx]
+        state = _inference.init_inference_state(
+            model, ep, vocab, prior=prior, device=device
+        )
+        steps = 0
+        wall = 0.0
+        finished = False
+        trace: list[ChoiceStep] = []
+        while steps < attempt_budget:
+            if not bool(state.pool_mask.any().item()):
+                attempts[out_idx] = attempt_budget + 1
+                censored[out_idx] = True
+                finished = True
+                break
+            idx = _inference.select_next_skeleton(
+                state, model, freeze_context=freeze_context
+            )
+            outcome = ep.outcomes[idx]
+            steps += 1
+            wall += outcome.refinement_wall_clock_s
+            trace.append(ChoiceStep(step=steps, idx=idx, outcome=outcome.outcome))
+            if outcome.outcome == "success":
+                attempts[out_idx] = steps
+                censored[out_idx] = False
+                finished = True
+                break
+            _inference.record_failure(state, idx)
+        if not finished:
+            attempts[out_idx] = attempt_budget + 1
+            censored[out_idx] = True
+        wall_clock[out_idx] = wall
+        problem_ids[out_idx] = ep.provenance.problem_id
+        traces.append(trace)
+
+    result = BaselineResult(
+        name=name,
+        attempts=attempts,
+        wall_clock=wall_clock,
+        censored=censored,
+        problem_ids=problem_ids,
+    )
+    return result, traces
+
+
+def per_index_agreement(
+    full: list[list[ChoiceStep]],
+    frozen: list[list[ChoiceStep]],
+    max_index: int = 20,
+) -> list[tuple[int, float, int]]:
+    """Same-choice agreement rate at each attempt index.
+
+    For 1-based index ``t``, an episode is *co-running* iff both traces
+    have a step at ``t`` (neither variant succeeded / was cut before ``t``).
+    Returns ``(t, agreement, n_co_running)`` for ``t = 1 … max_index``,
+    where ``agreement`` is the fraction of co-running episodes whose two
+    variants chose the same pool index at ``t`` (``nan`` when no episode
+    is co-running). ``agreement(1) == 1.0`` by construction: at attempt 1
+    the failure set is empty, so the full variant also scores with ``c_0``.
+    """
+    assert len(full) == len(frozen), "paired trace lists required"
+    rows: list[tuple[int, float, int]] = []
+    for t in range(1, max_index + 1):
+        n_co = 0
+        n_agree = 0
+        for tr_a, tr_b in zip(full, frozen):
+            if len(tr_a) >= t and len(tr_b) >= t:
+                n_co += 1
+                if tr_a[t - 1].idx == tr_b[t - 1].idx:
+                    n_agree += 1
+        rate = (n_agree / n_co) if n_co else float("nan")
+        rows.append((t, rate, n_co))
+    return rows
+
+
+def first_divergence_distribution(
+    full: list[list[ChoiceStep]],
+    frozen: list[list[ChoiceStep]],
+) -> dict[int | str, int]:
+    """Histogram of the first attempt index where the variants diverge.
+
+    Per episode: the smallest ``t <= min(len(full_i), len(frozen_i))`` with
+    differing chosen indices, or ``"never"`` when one trace is a prefix of
+    the other (including identical traces). Because both variants share
+    ``c_0`` at the empty failure set, the minimum possible divergence
+    index is 2.
+    """
+    assert len(full) == len(frozen), "paired trace lists required"
+    hist: dict[int | str, int] = {}
+    for tr_a, tr_b in zip(full, frozen):
+        diverged_at: int | str = "never"
+        for t in range(1, min(len(tr_a), len(tr_b)) + 1):
+            if tr_a[t - 1].idx != tr_b[t - 1].idx:
+                diverged_at = t
+                break
+        hist[diverged_at] = hist.get(diverged_at, 0) + 1
+    return hist
+
+
+def win_tie_loss(a: BaselineResult, b: BaselineResult) -> tuple[int, int, int]:
+    """Paired per-episode ``(wins, ties, losses)`` for ``a`` vs ``b``.
+
+    A "win" is ``a.attempts[i] < b.attempts[i]`` — ``a`` reached its first
+    success in strictly fewer attempts on episode ``i``. Requires aligned
+    results (same trainable-episode filter; checked via ``problem_ids``).
+    """
+    _assert_aligned(a, b)
+    wins = int(np.sum(a.attempts < b.attempts))
+    ties = int(np.sum(a.attempts == b.attempts))
+    losses = int(np.sum(a.attempts > b.attempts))
+    return wins, ties, losses
+
+
+def success_at_k(result: BaselineResult, k_max: int = 20) -> np.ndarray:
+    """``out[k-1]`` = fraction of episodes solved within ``<= k`` attempts.
+
+    Censored episodes carry ``attempts == attempt_budget + 1`` and so never
+    count as solved for any ``k <= attempt_budget``.
+    """
+    ks = np.arange(1, k_max + 1, dtype=float)
+    return np.array([float(np.mean(result.attempts <= k)) for k in ks], dtype=float)
 
 
 # ---------------------------------------------------------------------------

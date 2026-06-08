@@ -6,6 +6,42 @@ not, and why.
 
 ---
 
+## 2026-06-07 — Report uncensored evaluation results (attempt budget = pool cap)
+
+**Context.** The RT2D-n3 headline table and figures
+(`experiments/spectre/analyze_spectre.ipynb`) were generated with
+`ATTEMPT_BUDGET = 30` — equal to the candidate-pool cap — while the living
+docs and the writeup described the evaluation attempt budget as 20. At budget
+20, ~2–4% of episodes hit the cap and are censored to 21 (budget + 1); at
+budget 30 the budget never binds (pool ≤ 30), so every episode runs to its
+true first-success attempt and nothing is censored. The frozen-context
+ablation (notebook 2026-06-06) surfaced the discrepancy: the full-variant
+mean only reproduced the headline at budget 30, not 20.
+
+**Decision.** Headline / reported evaluation metrics use the **uncensored**
+budget — attempt budget = candidate-pool cap (30 for RT2D-n3) — so reported
+attempt counts are the true time-to-first-success with no censoring. An
+uncensored distribution is more informative than a censored one, especially
+in the tail: it shows where any method (SPECTRE included) does badly rather
+than collapsing those episodes to a single censored value. This is the
+standard for SPECTRE evaluation tables going forward; if a future env's pool
+cap differs, the eval budget tracks that cap.
+
+**Scope — what this does NOT change.** Model selection and early stopping stay
+on `val_rollout_attempts` at its own rollout budget (20) — a separate knob
+from evaluation reporting (selection picks the checkpoint; this decision
+governs how the chosen checkpoint is reported). The rollout-metric discipline
+(proposal.md §5) is untouched.
+
+**Consequences.** Writeup §Training and `archive/README.md` corrected 20 → 30
+(the writeup's headline numbers were always budget-30; only the stated budget
+was wrong). Pending reconciliation in the same commit: the "attempt budget 20"
+phrasing in `proposal.md` §1 and the spectre `CLAUDE.md` headline line, which
+refer to the evaluation/reporting budget and should read 30 (uncensored) — the
+`val_rollout_attempts` mentions (budget 20, model selection) stay as-is.
+
+---
+
 ## 2026-06-06 — Documentation discipline codified in CLAUDE.md
 
 **Context.** The instruction to keep the living docs updated was a single

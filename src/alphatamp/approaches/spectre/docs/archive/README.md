@@ -35,9 +35,17 @@ Known-stale points in `SPECTRE_WRITEUP_APR_2026.md`:
   frequency.
 - Reported spreads are std over the 100 test instances; the current reporting
   bar is mean ± std over ≥ 3 training seeds (multi-seed confirmation pending).
-- One deliberate post-deposit edit (2026-06-06, §Training): the sentence
-  originally read "each allowed 30 refinement attempts", conflating the RT2D
-  candidate-pool cap (`k_cap = 30` in `envs/routedtransport2d/plan_generator.py`;
-  every pooled skeleton is refined during collection) with the evaluation
-  attempt budget (20, `eda.py` / `rollout_attempt_budget`). It now states both
-  numbers explicitly. Snapshots are otherwise never edited after deposit.
+- Two deliberate post-deposit edits to §Training (snapshots are otherwise
+  never edited after deposit):
+  - 2026-06-06: the sentence originally read "each allowed 30 refinement
+    attempts", conflating the RT2D candidate-pool cap (`k_cap = 30` in
+    `envs/routedtransport2d/plan_generator.py`; every pooled skeleton is
+    refined during collection) with the evaluation attempt budget. The edit
+    split the pool cap from the eval budget into two explicit numbers.
+  - 2026-06-07: that split initially recorded the eval budget as 20, but the
+    headline table, distribution, and success-at-K figures were in fact
+    generated at an attempt budget of 30 (`analyze_spectre.ipynb`,
+    `ATTEMPT_BUDGET = 30`). At 30 the budget equals the pool cap and never
+    binds, so the reported numbers are uncensored; the sentence now reads 30.
+    See the 2026-06-07 `decisions.md` entry adopting uncensored evaluation as
+    the standard.

@@ -15,7 +15,9 @@ refinement, it picks the next skeleton to try. Candidate method = SPECTRE;
 baselines are B1–B5 (random, default order, static-historical,
 adaptive-historical, oracle) — never describe spectre-specific code or labels
 as a "baseline". Headline metric: mean time-to-first-success vs B4, mean ± std
-over ≥ 3 seeds, attempt budget 20. Primary evaluation env:
+over ≥ 3 seeds, evaluated uncensored at attempt budget 30 (= the candidate-pool
+cap, so the budget never binds; `decisions.md` 2026-06-07). Model selection
+(`val_rollout_attempts`) stays at its own budget 20. Primary evaluation env:
 RoutedTransport2D-n3-v1 (in-package); ClutteredStorage2D-b5/b7 and
 StickButton2D-b5 collections are historical.
 

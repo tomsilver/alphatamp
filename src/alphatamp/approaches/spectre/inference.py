@@ -188,10 +188,22 @@ def init_inference_state(
     )
 
 
-def select_next_skeleton(state: InferenceState, model: SpectreModel) -> int:
-    """Return the argmax-index over the remaining pool (spec §10.5)."""
+def select_next_skeleton(
+    state: InferenceState,
+    model: SpectreModel,
+    freeze_context: bool = False,
+) -> int:
+    """Return the argmax-index over the remaining pool (spec §10.5).
+
+    ``freeze_context=True`` is the frozen-context ablation: the context
+    vector fed to σ is forced to the learned empty-F vector ``c_0`` at
+    every step — regardless of ``state.fail_indices`` — by always taking
+    the all-False-mask path through ``encode_context``. Only the context
+    is frozen; the pool still shrinks via ``record_failure``, so the
+    resulting policy is exactly a static ranking by the initial logits.
+    """
     device = state.e_S.device
-    if state.fail_indices:
+    if state.fail_indices and not freeze_context:
         f_emb = state.e_S[state.fail_indices].unsqueeze(0)  # (1, |F|, D)
         f_mask = torch.ones(1, len(state.fail_indices), dtype=torch.bool, device=device)
     else:

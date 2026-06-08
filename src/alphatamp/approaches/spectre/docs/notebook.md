@@ -18,6 +18,62 @@ Format:
 
 ---
 
+## 2026-06-06 — Frozen-context (Ψ) ablation on RT2D-n3
+
+- What: inference-time ablation of the context encoder — at every rollout
+  step the scorer's context vector is pinned to the learned empty-F `c₀`
+  (the frozen variant is exactly a learned *static* ranker), vs the full
+  adaptive pipeline. Same checkpoint (`r3_visit_rate/seed_0`, the headline
+  model), deterministic paired rollouts over the 100 test episodes.
+  Runner: `experiments/spectre/spectre_ablate_context.py`; artifacts in
+  `data/spectre/derived/ablation_context/`.
+- Result (attempt budget 20): full **5.55 ± 5.18** vs frozen
+  **6.53 ± 5.70** attempts; paired Δ (frozen − full) = **+0.98
+  [95% CI +0.39, +1.57]**; per-episode win/tie/loss 32/54/14. At budget 30
+  (the analysis notebook's setting; never binds — censoring 0): full 5.67
+  (reproduces the headline row exactly) vs frozen 6.73, Δ +1.06
+  [+0.45, +1.67]. Placement: frozen (6.73) still far ahead of B4 (9.62)
+  and B3 (12.47), landing between B2-FF (6.31) and B1-random (6.81).
+  Same-choice agreement: 1.0 at t=1 (by construction — full also uses
+  `c₀` at empty F), ~0.89 at t=2–3, ≤0.26 from t=5 on; first divergence
+  concentrated at t=4–5; the success-at-K gap is concentrated mid-rollout
+  (0.82 vs 0.69 at K=9; identical at K=1–3).
+- Takeaway / next: Ψ is **not dead weight** — failure-conditioning buys
+  ~1 attempt (CI excludes zero), concentrated mid-rollout once a few
+  failures accumulate — but the majority of SPECTRE's margin over B4
+  (3.95 attempts) comes from the static Φ+σ ranking (frozen alone beats
+  B4 by 2.89). This quantifies the 2026-04-27 "representation, not
+  failure-conditioning per se" claim: adaptivity ≈ 27% of the B4 margin.
+  Caveats: single seed; inference-time freeze (σ was trained expecting a
+  varying c) may understate what a trained-static architecture could do —
+  a retrain-without-Ψ variant is the natural follow-up if a sharper
+  number is needed.
+- Side-finding (eval protocol): the analysis notebook's headline table was
+  generated with `ATTEMPT_BUDGET = 30`, not the documented 20 — at 30 the
+  budget never binds (pool cap 30, censoring 0), so the headline numbers
+  are effectively uncensored. The budget-20 protocol numbers for the same
+  checkpoint are 5.55 (full) with 2% censoring. Reconciled 2026-06-07:
+  adopted uncensored (budget = pool cap = 30) evaluation as the reporting
+  standard — see the `decisions.md` 2026-06-07 entry; writeup + archive README
+  corrected 20 → 30.
+
+---
+
+## 2026-06-06 — Multi-seed checkpoints are duplicates (seed-forwarding bug)
+
+- What: while selecting checkpoints for the Ψ ablation, hashed every
+  `best.pt` under `data/spectre/checkpoints/`.
+- Result: `c1_baseline_seeds/seed_1` ≡ `seed_2` (identical md5; both save
+  `seed: 0` in their config) and legacy `routedtransport2d_n3_v1/seed_1`
+  ≡ `seed_2` — the seed override never reached training in those runs.
+  Only `heuristic_prior/{seed_0,1,2}` are three genuinely distinct seeds.
+- Takeaway / next: no valid multi-seed run of any zero-prior recipe exists
+  yet; the ≥3-seed reporting bar is currently unmeetable without retraining.
+  Diagnose the slurm/Hydra seed-forwarding path before the next multi-seed
+  launch (fix deferred).
+
+---
+
 ## 2026-04-27 — RT2D-n3 paper-snapshot results (writeup)
 
 - What: full pipeline on RoutedTransport2D-n3-v1 (500/100/100); SPECTRE vs

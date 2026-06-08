@@ -354,7 +354,8 @@ We gather an offline dataset of 500 training, 100 validation, and 100
 held-out test problems. For each problem the symbolic planner's candidate
 pool is capped at 30 skeletons, and every pooled skeleton is refined
 (non-short-circuiting) to annotate its outcome; evaluation rollouts use an
-attempt budget of 20.
+attempt budget of 30 — equal to the candidate-pool cap, so the budget never
+binds and the reported attempt counts are uncensored.
 
 #### Training Objective.
 
