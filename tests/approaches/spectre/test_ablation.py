@@ -142,6 +142,8 @@ def _trace(*idxs: int) -> list[ChoiceStep]:
 
 
 def test_per_index_agreement_handles_unequal_lengths() -> None:
+    """Per-index agreement only counts co-running episodes; t past either trace end
+    yields a nan rate with n_co=0."""
     full = [_trace(0, 1, 2), _trace(0, 2)]
     frozen = [_trace(0, 1, 3), _trace(0)]
     rows = per_index_agreement(full, frozen, max_index=4)
@@ -157,6 +159,8 @@ def test_per_index_agreement_handles_unequal_lengths() -> None:
 
 
 def test_first_divergence_distribution() -> None:
+    """First-divergence histogram bins each episode by its first differing index and
+    counts prefix-identical pairs as ``"never"``."""
     full = [_trace(0, 1, 2), _trace(0, 2), _trace(5, 1)]
     frozen = [_trace(0, 1, 3), _trace(0), _trace(5, 1, 9)]
     hist = first_divergence_distribution(full, frozen)
@@ -179,12 +183,15 @@ def _result(attempts: list[float], name: str = "x") -> BaselineResult:
 
 
 def test_win_tie_loss() -> None:
+    """Per-episode win/tie/loss counts compare two BaselineResults elementwise."""
     a = _result([1, 5, 21, 3])
     b = _result([2, 5, 4, 21])
     assert win_tie_loss(a, b) == (2, 1, 1)
 
 
 def test_success_at_k_censored_never_solved() -> None:
+    """Success@k is monotone non-decreasing and never credits an episode whose first
+    success is censored at the budget."""
     # attempts: 1, 3, 21 (censored at budget 20).
     res = _result([1, 3, 21])
     curve = success_at_k(res, k_max=20)

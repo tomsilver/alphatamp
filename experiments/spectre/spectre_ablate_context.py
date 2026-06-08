@@ -34,7 +34,7 @@ Usage::
     # explicit checkpoint list (e.g. a future multi-seed rerun):
     python experiments/spectre/spectre_ablate_context.py \
         env=routedtransport2d_n3_v1 \
-        '+ckpts=[data/spectre/checkpoints/r3_visit_rate/routedtransport2d_n3_v1/seed_0/best.pt]'
+        '+ckpts=[data/spectre/checkpoints/<run>/<env>/seed_0/best.pt]'
 """
 
 from __future__ import annotations
