@@ -24,7 +24,7 @@ Reported per checkpoint:
 Artifacts (JSON + CSV) land under ``<data_root>/derived/ablation_context/``
 (gitignored); headline numbers go into ``docs/notebook.md`` by hand. The
 frozen-SPECTRE row for the B1–B5 comparison table can be rebuilt in
-``analyze_spectre.ipynb`` from the dumped per-episode arrays.
+``analyze_spectre.py`` from the dumped per-episode arrays.
 
 Usage::
 
@@ -55,7 +55,7 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 # Default evaluation attempt budget — the documented protocol (proposal.md,
 # ``attempt_budget + 1 == 21`` censoring). Override with ``+attempt_budget=30``
-# to match ``analyze_spectre.ipynb``'s headline table, which was generated
+# to match ``analyze_spectre.py``'s headline table, which was generated
 # with ATTEMPT_BUDGET = 30 (≥ the pool cap, so it never binds: censoring 0).
 DEFAULT_ATTEMPT_BUDGET = 20
 

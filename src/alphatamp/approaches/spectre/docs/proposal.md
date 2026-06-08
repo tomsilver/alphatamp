@@ -126,8 +126,8 @@ exact commands):
    added against overfitting; static environment predicates separated out
    (and `Connects` dropped from them while topology is constant across
    problems).
-4. **Experiments / analysis** — `experiments/spectre/analyze_spectre.ipynb`
-   drives `eda.py`: EDA gates, B1–B5 baseline brackets, rollout simulation of
+4. **Experiments / analysis** — `experiments/spectre/analyze_spectre.py`
+   (a marimo notebook) drives `eda.py`: EDA gates, B1–B5 baseline brackets, rollout simulation of
    trained checkpoints, method-comparison table + attempt-distribution plots.
    `spectre_check_pipeline.py` sanity-checks a collection; multi-seed training
    via `spectre_train.slurm`.

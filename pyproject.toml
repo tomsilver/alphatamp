@@ -32,6 +32,7 @@ develop = [
     "black",
     "docformatter",
     "isort",
+    "marimo",
     "mypy",
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
@@ -64,7 +65,7 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*"]
+exclude = ["venv/*", ".venv/*", "experiments/spectre/analyze_spectre\\.py$"]
 
 [tool.pytest.ini_options]
 markers = [

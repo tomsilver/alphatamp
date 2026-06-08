@@ -58,8 +58,9 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    `python experiments/spectre/spectre_train.py env=routedtransport2d_n3_v1 seed=0`
    — or `sbatch --array=0-2 experiments/spectre/spectre_train.slurm` (one seed
    per array task; extra Hydra overrides forwarded).
-5. **Analyze / experiments:** `experiments/spectre/analyze_spectre.ipynb`
-   (drives `eda.py`: EDA gates, B1–B5 brackets, rollout simulation, comparison
+5. **Analyze / experiments:** `experiments/spectre/analyze_spectre.py`
+   (a marimo notebook — run with `marimo edit experiments/spectre/analyze_spectre.py`;
+   drives `eda.py`: EDA gates, B1–B5 brackets, rollout simulation, comparison
    table). Diagnostics:
    `python experiments/spectre/spectre_probe_atom_sensitivity.py env=routedtransport2d_n3_v1 seed=0`.
 
