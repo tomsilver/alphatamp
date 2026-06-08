@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.9"
+__generated_with = "0.23.6"
 app = marimo.App()
 
 
@@ -13,8 +13,7 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     # SPECTRE EDA
 
     Go/no-go diagnostic battery per `SPECTRE_EDA_SPEC.md`. Runs Group 1 sanity,
@@ -28,8 +27,7 @@ def _(mo):
     honest comparison. B3/B4 additionally fit `»` on the **train** split.
     Validation is intentionally untouched — reserved for SPECTRE's own
     hyperparameter selection later.
-    """
-    )
+    """)
     return
 
 
@@ -122,11 +120,9 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## 1. Load splits (train + test)
-    """
-    )
+    """)
     return
 
 
@@ -149,13 +145,11 @@ def _(eda, test_dir, train_dir):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## Group 1 — episode sanity (on train)
 
     Per spec §1, Group 1 describes the training collection itself.
-    """
-    )
+    """)
     return
 
 
@@ -222,8 +216,7 @@ def _(ATTEMPT_BUDGET, eda, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## 3.5 Train↔test key-overlap diagnostic
 
     Interpretation context for Group 2 / Group 3:
@@ -232,8 +225,7 @@ def _(mo):
     - `≤ 0.1`: disjoint-pool regime, B3/B4 degenerate to default order,
       Δ≈0 is mechanical. SPECTRE's Φ/Ψ may still exploit structure the discrete
       baselines cannot (spec §5.1 caveat).
-    """
-    )
+    """)
     return
 
 
@@ -260,8 +252,7 @@ def _(eda, test, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## Group 2 — baselines (all five on test)
 
     B1 random floor, B2 heuristic-aware order, B3 static-historical (fit on
@@ -275,8 +266,7 @@ def _(mo):
     closed-form lex order produced by the routedtransport2d enumerator is
     reported as `B2_default_order_lex` alongside it as a sanity row, but is not
     the baseline we compare against (it ignores the problem instance).
-    """
-    )
+    """)
     return
 
 
@@ -311,13 +301,11 @@ def _(ATTEMPT_BUDGET, eda, pd, test, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## SPECTRE — candidate method
 
     SPECTRE is the trained ranker we want to compare *against* B1–B5 (it is **not** a baseline). Loads `SPECTRE_CHECKPOINT_PATH`, runs the same per-episode attempt loop on test, and appends a row to the summary table above. Reuses `BaselineResult` only because its per-episode (attempts, wall_clock, censored, problem_ids) schema is generic.
-    """
-    )
+    """)
     return
 
 
@@ -380,7 +368,82 @@ def _(
     # Append SPECTRE row to the summary table above. The 'baseline' column name
     # is kept for backwards compatibility; row label distinguishes SPECTRE from B1-B5.
     summary_1
-    return (spectre_result,)
+    return device, spectre_model, spectre_prior, spectre_result, vocab
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Frozen-context (Ψ) ablation — is the context encoder load-bearing?
+
+    De-risking ablation: does SPECTRE's strength come from the skeleton encoder
+    Φ, or from the failure-conditioning context encoder Ψ? We compare the full
+    pipeline against a **frozen-context** variant that, at every rollout step,
+    pins the scorer's context vector to the learned empty-set vector `c₀`
+    regardless of the actual failure set — removing the adaptive element. With a
+    fixed context the per-skeleton scores never change, so the frozen variant is
+    exactly a **learned static ranker**; the full-vs-frozen gap is SPECTRE's own
+    analogue of the B3−B4 adaptive premium.
+
+    Both variants share the checkpoint and the deterministic rollout, so the
+    comparison is perfectly paired per episode. At attempt 1 the failure set is
+    empty and the full variant *also* uses `c₀`, so the two always agree on the
+    first pick — divergence can only begin at attempt 2.
+
+    Inference-time freeze only (no retraining). Implementation +
+    method/decision notes: `docs/notebook.md` (2026-06-06 entry),
+    `docs/decisions.md`, and the `spectre_ablate_context.py` runner (whose
+    numbers these cells reproduce).
+    """)
+    return
+
+
+@app.cell
+def _(
+    ATTEMPT_BUDGET,
+    device,
+    eda,
+    np,
+    spectre_model,
+    spectre_prior,
+    spectre_result,
+    test,
+    vocab,
+):
+    # Traced rollouts for both variants (same checkpoint, deterministic). The
+    # full run reproduces the headline ``spectre_result`` exactly; we keep its
+    # trace and reuse ``spectre_result`` for the BaselineResult-based metrics.
+    abl_full_res, full_traces = eda.spectre_evaluate_traced(
+        test,
+        spectre_model,
+        vocab,
+        attempt_budget=ATTEMPT_BUDGET,
+        prior=spectre_prior,
+        device=device,
+        name="SPECTRE",
+        freeze_context=False,
+    )
+    frozen_result, frozen_traces = eda.spectre_evaluate_traced(
+        test,
+        spectre_model,
+        vocab,
+        attempt_budget=ATTEMPT_BUDGET,
+        prior=spectre_prior,
+        device=device,
+        name="SPECTRE-frozen-context",
+        freeze_context=True,
+    )
+    # The ablation's full variant must match the headline SPECTRE row.
+    assert np.allclose(abl_full_res.attempts, spectre_result.attempts)
+    print(
+        f"full mean attempts:   {spectre_result.attempts.mean():.3f}"
+        f"  (censoring {spectre_result.censored.mean():.3f})"
+    )
+    print(
+        f"frozen mean attempts: {frozen_result.attempts.mean():.3f}"
+        f"  (censoring {frozen_result.censored.mean():.3f})"
+    )
+    return frozen_result, frozen_traces, full_traces
 
 
 @app.cell
@@ -391,14 +454,28 @@ def _(SPECTRE_NAME):
         "B2_default_order": "Abstract Plan Generator",
         "B3_static_historical": "Static Historical Baseline",
         "B4_adaptive_historical": "Adaptive Historical Baseline",
+        "SPECTRE-frozen-context": "Frozen-Context Ablation (Static Ranker)",
         SPECTRE_NAME: SPECTRE_NAME,
     }
     return (rename,)
 
 
 @app.cell
-def _(ATTEMPT_BUDGET, b2_lex, b3, b4, np, plt, rename, spectre_result):
-    baselines = [b2_lex, b3, b4, spectre_result]  # SPECTRE compared against B2-B4
+def _(
+    ATTEMPT_BUDGET,
+    b2_lex,
+    b3,
+    b4,
+    frozen_result,
+    np,
+    plt,
+    rename,
+    spectre_result,
+):
+    # B2-B4 baselines, then the frozen-context ablation, then full SPECTRE. The
+    # frozen variant is an ablation of SPECTRE, NOT a baseline (baselines are
+    # B1-B5); it gets its own color so it never reads as full SPECTRE's purple.
+    baselines = [b2_lex, b3, b4, frozen_result, spectre_result]
     colors = {
         "B1": "tab:gray",
         "B2": "tab:blue",
@@ -406,9 +483,12 @@ def _(ATTEMPT_BUDGET, b2_lex, b3, b4, np, plt, rename, spectre_result):
         "B4": "tab:green",
         "B5": "tab:red",
         "SPECTRE": "tab:purple",
+        "SPECTRE_FROZEN": "tab:brown",
     }
 
     def color_tag(name: str) -> str:
+        if name == "SPECTRE-frozen-context":
+            return "SPECTRE_FROZEN"
         return name.split("_")[0] if name.startswith("B") else "SPECTRE"
 
     _fig, _axes = plt.subplots(1, 2, figsize=(14, 4.5))
@@ -589,15 +669,22 @@ def _(SPECTRE_NAME, baselines, pd, rename):
     )
     df_cmp = pd.DataFrame(rows)
     _spectre_label = rename.get(spectre.name, spectre.name)
+    # The frozen-context row is an ablation of SPECTRE, not a baseline — give it
+    # its own light-purple fill, distinct from the green SPECTRE row and the
+    # plain baseline rows.
+    _frozen_label = rename.get("SPECTRE-frozen-context", "SPECTRE-frozen-context")
 
     def _row_style(row):
-        if row["Method"] == _spectre_label:
-            return ["background-color: #d5e8d4; font-weight: bold"] * len(row)
+        # if row["Method"] == _spectre_label:
+        #     return ["background-color: #d5e8d4; font-weight: bold"] * len(row)
+        # if row["Method"] == _frozen_label:
+        #     return ["background-color: #e8d5e8; font-style: italic"] * len(row)
         return [""] * len(row)
 
     # Styler as the cell's last expression → marimo renders it inline.
     df_cmp.style.apply(_row_style, axis=1).set_caption(
-        "Baselines vs. SPECTRE — mean ± std over 100 test episodes; Δ = baseline − SPECTRE (positive = SPECTRE is better)"
+        "Baselines + frozen-context ablation vs. SPECTRE — mean ± std over 100 "
+        "test episodes; Δ = row − SPECTRE (positive = SPECTRE is better)"
     ).set_table_styles(
         [
             {
@@ -658,8 +745,18 @@ def _(df_cmp, plt):
     for j in range(_n_cols):
         _tbl[_spectre_row, j].set_facecolor("#d5e8d4")
         _tbl[_spectre_row, j].set_text_props(fontweight="bold")
+    # The frozen-context ablation row (not a baseline) gets a distinct fill.
+    _frozen_rows = [
+        i
+        for i, _m in enumerate(df_cmp["Method"], start=1)
+        if "Frozen-Context" in str(_m)
+    ]
+    for i in _frozen_rows:
+        for j in range(_n_cols):
+            _tbl[i, j].set_facecolor("#e8d5e8")
+    _highlight = {_spectre_row, *_frozen_rows}
     for i in range(1, _n_rows):
-        if i % 2 == 0 and i != _spectre_row:
+        if i % 2 == 0 and i not in _highlight:
             for j in range(_n_cols):
                 _tbl[i, j].set_facecolor("#f5f5f5")
     # Resize figure height to match exact row count so there is no dead space.
@@ -673,13 +770,11 @@ def _(df_cmp, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## SPECTRE adaptive premium and oracle headroom
 
     Paired bootstrap of SPECTRE against B3 (static-historical) and B5 (oracle), using the same `_assert_aligned` machinery as the existing Group 3 analysis.
-    """
-    )
+    """)
     return
 
 
@@ -722,16 +817,135 @@ def _(b3, b5, eda, pd, spectre_result):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
+    ## Frozen-context ablation — paired diagnostics
+
+    Full vs frozen on the same checkpoint and the same 100 test episodes
+    (perfectly paired). Primary result: mean ± std attempts and the paired
+    bootstrap Δ; then how *similar* the two rollouts are (per-index
+    agreement, first-divergence) and where the frozen static ranker lands
+    relative to B3 / B4 (success@K).
+    """)
+    return
+
+
+@app.cell
+def _(eda, frozen_result, pd, spectre_result):
+    abl_delta = eda.bootstrap_mean_difference(
+        frozen_result.attempts, spectre_result.attempts
+    )
+    abl_wins, abl_ties, abl_losses = eda.win_tie_loss(spectre_result, frozen_result)
+    print(
+        f"paired Δ attempts (frozen − full): {abl_delta.point:+.3f}"
+        f"  [95% CI {abl_delta.ci_low:+.3f}, {abl_delta.ci_high:+.3f}]"
+        "  (positive = the context encoder Ψ saves attempts)"
+    )
+    print(
+        f"per-episode full vs frozen: {abl_wins} wins / {abl_ties} ties /"
+        f" {abl_losses} losses"
+    )
+    _abl_primary = pd.DataFrame(
+        [
+            {
+                "variant": _label,
+                "mean_attempts": float(_r.attempts.mean()),
+                "std_attempts": float(_r.attempts.std()),
+                # "censoring_rate": float(_r.censored.mean()),
+                "mean_wall_clock_s": float(_r.wall_clock.mean()),
+            }
+            for _label, _r in (
+                ("SPECTRE (full)", spectre_result),
+                ("SPECTRE-frozen-context", frozen_result),
+            )
+        ]
+    ).set_index("variant")
+    _abl_primary
+    return
+
+
+@app.cell
+def _(ATTEMPT_BUDGET, eda, frozen_traces, full_traces, plt):
+    _agreement = eda.per_index_agreement(
+        full_traces, frozen_traces, max_index=ATTEMPT_BUDGET
+    )
+    _rows = [(t, rate, n_co) for (t, rate, n_co) in _agreement if n_co > 0]
+    _ts = [t for t, _, _ in _rows]
+    _rates = [rate for _, rate, _ in _rows]
+    _nco = [n_co for _, _, n_co in _rows]
+
+    _divergence = eda.first_divergence_distribution(full_traces, frozen_traces)
+    _int_keys = sorted(k for k in _divergence if isinstance(k, int))
+    _has_never = "never" in _divergence
+    _labels = [str(k) for k in _int_keys] + (["never"] if _has_never else [])
+    _counts = [_divergence[k] for k in _int_keys] + (
+        [_divergence["never"]] if _has_never else []
+    )
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(14, 4.5))
+    _ax0 = _axes[0]
+    _ax0.plot(_ts, _rates, marker="o", color="tab:purple")
+    _ax0.set_xlabel("attempt index t")
+    _ax0.set_ylabel("P(full and frozen pick the same skeleton)")
+    _ax0.set_ylim(0, 1.05)
+    _ax0.set_title("Per-index choice agreement (t=1 ≡ 1.0 by construction)")
+    _ax0b = _ax0.twinx()
+    _ax0b.bar(_ts, _nco, alpha=0.15, color="tab:gray")
+    _ax0b.set_ylabel("# co-running episodes (bars)")
+    _ax0b.grid(False)
+
+    _axes[1].bar(_labels, _counts, color="tab:brown")
+    _axes[1].set_xlabel("first attempt index where the variants diverge")
+    _axes[1].set_ylabel("# test episodes")
+    _axes[1].set_title("First-divergence distribution (min possible = 2)")
+    plt.tight_layout()
+    plt.show()
+    return
+
+
+@app.cell
+def _(
+    ATTEMPT_BUDGET,
+    b3,
+    b4,
+    eda,
+    frozen_result,
+    np,
+    plt,
+    rename,
+    spectre_result,
+):
+    _ks = np.arange(1, ATTEMPT_BUDGET + 1)
+    _curves = [
+        ("B3_static_historical", b3, "tab:orange", "-"),
+        ("B4_adaptive_historical", b4, "tab:green", "-"),
+        ("SPECTRE-frozen-context", frozen_result, "tab:brown", "--"),
+        (spectre_result.name, spectre_result, "tab:purple", "-"),
+    ]
+    _fig, _ax = plt.subplots(figsize=(9, 5.5))
+    for _name, _r, _color, _ls in _curves:
+        _sk = eda.success_at_k(_r, k_max=ATTEMPT_BUDGET)
+        _ax.plot(
+            _ks, _sk, _ls, color=_color, linewidth=2, label=rename.get(_name, _name)
+        )
+    _ax.set_xlabel("attempt budget K")
+    _ax.set_ylabel("fraction of test episodes solved within ≤ K")
+    _ax.set_title("Success@K: frozen-context ablation vs B3 / B4 / SPECTRE")
+    _ax.legend()
+    plt.tight_layout()
+    plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Group 3 — adaptive premium Δ and headroom H
 
     Paired bootstrap (10,000 resamples) over test episodes. Because all five
     baselines share the same `problem_ids` ordering (enforced by
     `adaptive_premium` / `headroom` via `_assert_aligned`), the resampled
     indices apply identically to both arms.
-    """
-    )
+    """)
     return
 
 
@@ -780,15 +994,13 @@ def _(b2, b3, b4, b5, eda, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(r"""
     ## §6 Pass bar
 
     Primary conditions 1–5 must all hold. Condition 6 (headroom ≥ 2) is flagged
     but non-blocking. An interpretive caveat is printed when the disjoint-pool
     regime is detected (spec §5.1).
-    """
-    )
+    """)
     return
 
 
@@ -851,25 +1063,6 @@ def _(
     return
 
 
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(
-        r"""
-    ## Top 10 most successful plans historically (train)
-
-    Canonical skeleton keys ranked by raw success count over the **training**
-    split. Each entry is a ground operator sequence expressed in canonicalized
-    object names (`"{type}_{idx}"` per SPEC §4.1.4), so keys are directly
-    comparable across problems.
-
-    `p_hat` is the Laplace-smoothed success rate B3 uses to rank. High raw
-    successes with low `p_hat` means the plan shape is common but fails often;
-    the reverse means rare but reliable when it appears.
-    """
-    )
-    return
-
-
 @app.cell
 def _(eda, train):
     top10 = eda.top_successful_skeleton_keys(train, n=10, rank_by="successes")
@@ -880,98 +1073,6 @@ def _(eda, train):
         )
         print(eda.format_skeleton_key(s.key))
         print()
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(
-        r"""
-    ## Video evidence: top-1 plan executed on its successful test problems
-
-    For the most historically successful canonical plan shape (ranked by raw
-    success count over **train**), find every **test** episode where this key
-    appeared *and* succeeded, then re-run the refiner (same seed rule) and
-    record the execution as an MP4 per `tests/approaches/test_generalized_approach.py`.
-
-    Replay is deterministic because `env.reset(seed=problem_id)` reproduces
-    the same initial state, the plan generator is seeded with the same
-    `problem_id`, and the refiner uses the stored blake2b-derived refinement seed.
-    """
-    )
-    return
-
-
-@app.cell
-def _():
-    ## NO VIDEO SUPPORT FOR ROUTED TRANSPORT
-    # from alphatamp.approaches.spectre.config import CollectionConfig
-
-    # top1 = eda.top_successful_skeleton_keys(train, n=1)[0]
-    # print(
-    #     f"top-1 plan: successes={top1.successes}  appearances={top1.appearances}"
-    #     f"  p_hat={top1.p_hat:.3f}  length={len(top1.key)} ops"
-    # )
-    # print(eda.format_skeleton_key(top1.key))
-
-    # test_successes = eda.find_test_successes_for_key(top1.key, test)
-    # print(f"\n{len(test_successes)} test episodes succeeded on this plan shape:")
-    # df_succ = pd.DataFrame(
-    #     [
-    #         {
-    #             "problem_id": s.problem_id,
-    #             "skeleton_idx": s.skeleton_idx,
-    #             "refine_wall_s": s.refinement_wall_clock_s,
-    #         }
-    #         for s in test_successes
-    #     ]
-    # )
-    # df_succ
-    return
-
-
-@app.cell
-def _():
-    # # Load the collection config used to produce the test split — needed to
-    # # replay planner/refiner budgets exactly.
-    # cfg_hash = test.episodes[0].provenance.config_hash
-    # cfg = CollectionConfig.from_yaml(DATA_ROOT / "configs" / f"collection_{cfg_hash}.yaml")
-
-    # VIDEO_DIR = Path("../unit_test_videos") / f"spectre_top_plan_{ENV_VARIANT}"
-    # VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    # print(f"writing videos to: {VIDEO_DIR.resolve()}")
-
-    # rendered = []
-    # for s in test_successes:
-    #     name = f"top_plan_p{s.problem_id:05d}_s{s.skeleton_idx:02d}"
-    #     try:
-    #         out = eda.render_successful_refinement_video(
-    #             env_id=cfg.env_id,
-    #             model_name=cfg.model_name,
-    #             model_kwargs=dict(cfg.model_kwargs),
-    #             problem_id=s.problem_id,
-    #             skeleton_idx=s.skeleton_idx,
-    #             K_max=cfg.K_max,
-    #             heuristic_name=cfg.heuristic_name,
-    #             abstract_plan_timeout_s=cfg.abstract_plan_timeout_s,
-    #             refinement_timeout_s=cfg.refinement_timeout_s,
-    #             num_sampling_attempts_per_step=cfg.num_sampling_attempts_per_step,
-    #             max_trajectory_steps=cfg.max_trajectory_steps,
-    #             refinement_seed_rule=cfg.refinement_seed_rule,
-    #             video_dir=VIDEO_DIR,
-    #             video_name_prefix=name,
-    #         )
-    #         rendered.append((s.problem_id, s.skeleton_idx, out, out.stat().st_size))
-    #         print(f"  OK    problem={s.problem_id:>3d}  skel={s.skeleton_idx:>2d}  -> {out.name}")
-    #     except Exception as exc:  # noqa: BLE001
-    #         print(f"  FAIL  problem={s.problem_id:>3d}  skel={s.skeleton_idx:>2d}  {type(exc).__name__}: {exc}")
-
-    # pd.DataFrame(
-    #     [
-    #         {"problem_id": p, "skeleton_idx": s, "video": str(v.name), "bytes": b}
-    #         for p, s, v, b in rendered
-    #     ]
-    # )
     return
 
 
