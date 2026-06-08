@@ -1,120 +1,318 @@
-# SPECTRE: Related Literature Review
+# SPECTRE: Related Literature Review (v2)
 
-**Topic:** Adaptive skeleton reordering in Task-and-Motion Planning — Set Transformers, listwise ranking, failure-conditioned context encoders
+**Topic:** Learned test-time reordering for bilevel TAMP — failure-conditioned
+context encoding, set/permutation-invariant architectures, listwise (Plackett–Luce)
+ranking, and the problem framings adjacent to all three.
 
-*Generated 2026-04-27 via `/research-lit @SPECTRE_METHOD_SPEC.md`*
+*Rewritten 2026-06-08. Supersedes the 2026-04-27 version. The living docs
+(`proposal.md` / `decisions.md` / `notebook.md`) and the frozen
+`SPECTRE_WRITEUP_APR_2026.md` are the sources of truth for the method; this file
+positions the method against the literature.*
+
+> **How to read the table.** The **Tier** column is the context-budget signal.
+> *Core* = load-bearing for the method's positioning (keep always). *Supporting* =
+> cite when the relevant sub-claim is made. *Background* = one-line framing only.
+> *Conditional* = pull in only if a specific pivot/extension is taken.
+> *Frame* = a problem framing the current writeup omits (see §6); cite if that
+> framing is adopted.
 
 ---
 
-## Literature Table
+## 0. Corrections carried over from v1 (read first)
 
-| Paper | Venue | Method | Key Result | Relevance to SPECTRE |
+Three things in the prior version are inaccurate and have been fixed below. They
+are flagged here because they affect *which* citation is authoritative, not just
+wording.
+
+1. **The Plackett–Luce / ListMLE loss was attributed to the wrong author.** v1's
+   "Xia et al. 2019 [1909.06722]" is **Tian Xia, Shaodan Zhai, Shaojun Wang
+   (Wright State)** — a name collision. The primary source for the listwise PL
+   likelihood loss SPECTRE actually uses is **Fen Xia, Tie-Yan Liu, Jue Wang,
+   Wensheng Zhang, Hang Li, "Listwise Approach to Learning to Rank: Theory and
+   Algorithm," ICML 2008** (ListMLE), with **ListNet (Cao et al. 2007)** as the
+   origin of the listwise approach and **Plackett (1975) / Luce (1959)** as the
+   statistical origin of the PL model. Cite the 2008 paper as the loss's source.
+
+2. **PIGINet is not a pure operator/state-token encoder.** It tokenizes the plan
+   skeleton *together with the concrete initial state and goal*, fusing CLIP
+   image, text, and continuous-value embeddings. This sharpens — rather than
+   weakens — SPECTRE's positioning: SPECTRE deliberately excludes `x₀` and works
+   from symbolic structure alone, so PIGINet is the natural *`x₀`-conditioned*
+   static ranker that SPECTRE's future-work prior would generalize.
+
+3. **"Sung 2024 is closest in spirit to SPECTRE" overstates the link.** Effort
+   Allocation is a metareasoning MDP (DP_Rerun) that allocates a compute/time
+   budget across options under a deadline; it does not learn a representation
+   over failure *structure*. It is the budget/metareasoning neighbor, not the
+   representation-learning neighbor.
+
+A fourth, non-citation point that should shape the related-work emphasis is in §6.
+
+---
+
+## 1. Literature Table
+
+### Core — skeleton ranking / feasibility prediction (the baselines and direct line)
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
 |---|---|---|---|---|
-| **PIGINet** Yang et al. 2023 [2211.01576] | RSS 2023 | Transformer over skeleton token sequences predicts refinement feasibility; static pre-sort before refinement | 10–80% planning runtime reduction on kitchen TAMP | **Direct predecessor / baseline π.** Same token-sequence skeleton encoding; SPECTRE adds failure-conditioned context and listwise loss |
-| **LAZY / Policy-Guided Search** Khodeir et al. 2023 [2210.14055] | — | PDDLStream search queue reordered lazily using geometric motion samples + learned goal-directed policy | Speedups on 7-DOF manipulation; adapts during search | Adaptive skeleton-queue ordering — same problem framing; no context encoder or PL loss |
-| **Effort Allocation / Metareasoning** Sung et al. 2024 [2410.05828] | — | Models skeleton-selection as MDP; DP_Rerun algorithm allocates refinement budget across candidates | Near-MCTS quality with negligible overhead | **Closest in spirit to SPECTRE's adaptive loop.** DP approach vs. learned context encoder; no within-episode failure encoding |
-| **Learning to Search in TAMP** Khodeir et al. 2023 [2111.13144] | — | GNN heuristic over PDDLStream fact/object expansion ordering | Speedups over LAZY on real 7-DOF tasks | Coarser than skeleton-level ranking; learns a static search heuristic |
-| **Geometric TAMP Rank Function** Kim et al. 2021 [2203.04605] | IJRR | Learned rank function for geometric TAMP discrete search + learned sampler for motion level | Efficient bilevel planning with generalization | Earliest explicit learned skeleton ranker in TAMP |
-| **Anticipatory TAMP** Dhakal et al. 2024 [2407.13694] | — | Learned future-cost predictor guides plan selection beyond immediate feasibility | Gains in sim + real manipulation | Implicit adaptive skeleton preference, looks ahead rather than back at failures |
-| **Neural Feasibility Checking** Xu et al. 2022 [2203.10568] | — | CNN predicts kinematic feasibility of actions, replaces expensive motion checks | Reduced planning time in manipulation domains | Feasibility-prediction framing; image-level not skeleton-level |
-| **Integrated TAMP Survey** Garrett et al. 2021 [2010.01083] | AAAI 2021 | Survey of bilevel TAMP architectures: skeleton-then-refine, backtracking | Canonical reference for skeleton-refine loop | Background; defines the problem SPECTRE operates in |
-| **Set Transformer** Lee et al. 2019 [1810.00825] | ICML 2019 | SAB (set attention block) + PMA (pooling by multihead attention); permutation-invariant set encoding | O(nm) complexity via inducing points; universal approximator over sets | **Direct architecture for Ψ.** SPECTRE uses SAB×2 + PMA_{k=1} over ℱ_t |
-| **Set-Encoder Passage Re-Ranking** Deckers et al. 2024 [2404.06912] | — | Set Transformer applied to cross-encoder re-ranking to eliminate position bias | Consistent gains over standard cross-encoders on TREC | Shows Set Transformer generalizes to listwise ranking tasks beyond the original paper |
-| **Plackett-Luce LTR** Xia et al. 2019 [1909.06722] | — | ListMLE: PL probability over permutations as listwise ranking loss | Matches/surpasses pointwise/pairwise baselines on retrieval | **Theoretical basis for SPECTRE's ℒ** |
-| **LiPO: Listwise Preference Optimization** Liu et al. 2024 [2402.01878] | — | PL + other LTR objectives applied to LLM alignment over ranked response lists | Outperforms pairwise DPO for policy optimization | Demonstrates listwise > pointwise for argmax-aligned objectives |
-| **Rank Not Estimate** Ferber et al. 2023 [2310.19463] | NeurIPS 2023 | Proves A*/GBFS need only rank states correctly, not estimate cost; proposes ranking losses tailored to each | Validated on IPC planning benchmarks | **Theoretical grounding for PL over regression** in planning contexts |
-| **Learning to Rank for Planning Heuristics** (2016) [1608.01302] | IJCAI 2016 | Applies LTR to synthesize planning heuristics for classical planning | Earlier LTR + planning connection | Classical-planning predecessor to SPECTRE's approach |
-| **PL Partitioned Preference** Ma et al. 2021 [2006.05067] | AISTATS 2021 | PL estimation with only group-level (partition) labels; fast numerical integration | Orders of magnitude faster than Monte Carlo PL | Relevant when SUCC vs. FAIL partition is the only supervision signal |
-| **Algorithm Distillation** Laskin et al. 2023 [2210.14215] | ICLR 2023 | Causal transformer over episode history enables in-context RL improvement without gradient updates | Policy improves purely in-context across multi-task | **Analogous to Ψ:** amortizes history into context rather than per-episode re-optimization |
-| **Predicate Invention for Bilevel Planning** Silver et al. 2023 [2203.09634] | AAAI 2023 | Hill-climb over predicate grammars; objective aligned with bilevel planning efficiency | Generalizes to more objects, longer horizons | Same bilevel-planning substrate; shows surrogate-objective alignment matters |
-| **NSRTs** Chitnis et al. 2021 [2105.14074] | — | Neuro-symbolic relational transition models; symbolic planner outer loop + neural samplers inner loop | Generalizes to 60-action tasks with unseen objects | Same substrate group (Silver/Chitnis/Kaelbling); provides system context |
-| **Learning Symbolic Operators for TAMP** Silver et al. 2021 [2103.00589] | — | Bottom-up relational learning discovers PDDL-style operators from trajectory data | Outperforms GNN baselines across three robotic domains | Same substrate group; context on operator representations |
-| **Learning When to Quit** Sung et al. 2021 [2103.04374] | — | Meta-reasoning MDP for when to stop anytime motion planning | Generalizes across environment distributions | Related meta-reasoning framing; stopping vs. reordering |
-| **GNN Robot Manipulation** Lin et al. 2021 [2102.13177] | — | GNN policy over object graphs; permutation-invariant; generalizes over object counts | Generalizes from 20 demos across 3 manipulation tasks | GNN equivariance as alternative to SPECTRE's typed-local-id canonicalization |
-| **Neural-Guided Runtime Prediction** (2022) [2207.14422] | — | GNN predicts planner runtime from relational problem graph for planner selection | Speedups via planner routing | GNN-based skeleton/planner selection closely related to SPECTRE's scoring |
-| **Differentiable GPU-Parallelized TAMP** Shen et al. 2024 [2411.11833] | — | GPU-parallel evaluation of thousands of skeleton continuous solutions simultaneously | Sidesteps sequential selection by parallelizing refinement | Alternative to ranking: try all in parallel rather than select best |
+| **PIGINet** — Yang, Garrett, Lozano-Pérez, Kaelbling, Fox 2023 [2211.01576] | RSS 2023 | Core | Transformer over (skeleton, goal, `x₀`) with fused image/text/value tokens predicts refinement feasibility; static pre-sort | **Primary static baseline.** The `x₀`-conditioned feasibility ranker SPECTRE's future-work prior would subsume; SPECTRE's distinction is *adaptivity* + *no `x₀`* |
+| **LAZY / Policy-Guided Lazy Search** — Khodeir et al. 2023 [2210.14055] | — | Core | Reorders PDDLStream queue lazily from geometric samples + goal-directed policy; updates within search | **Closest *adaptive* prior work / B4 analog.** Uses frequency counts of co-failure, not a learned structural encoder |
+| **Geometric TAMP rank function (SAHS)** — Kim et al. 2018 / 2021 [2203.04605] | NeurIPS-WS 2018 → IJRR 2021 | Core | Learned score-space rank function for discrete TAMP search + learned sampler | **Earliest explicit learned skeleton ranker.** Score-space (2018) is the origin; IJRR (2021) the journal extension |
+| **Neural Feasibility Checking** — Xu et al. 2022 [2203.10568] | — | Supporting | NN predicts kinematic feasibility, replaces motion checks | Feasibility-prediction, action-level not skeleton-level |
+| **Learning Feasibility for TAMP (tabletop)** — Wells, Dantam, Shrivastava, Kavraki 2019 | IEEE RA-L 2019 | Supporting | Learns a feasibility classifier used as a *search-ordering heuristic* | **Foundational** learned-feasibility-as-ordering; predecessor to PIGINet/Xu |
+| **Deep Visual Heuristics** — Driess, Oguz, Ha, Toussaint 2020 | ICRA 2020 | Supporting | Learns feasibility of mixed-integer manipulation programs from images | Foundational learned feasibility heuristic; image-conditioned |
+| **Extended Tree Search for TAMP** — Ren, Chalvatzaki, Peters 2021 [2103.05456] | — | Supporting | Maintains an explicit skeleton space (top-k planner) and estimates each skeleton's *value* via MCTS-style search | **Search-based** alternative to learned ranking for the *same* skeleton-selection problem |
+| **Planning with Learned Object Importance** — Silver et al. 2021 [2009.05613, *verify*] | ICRA 2021 | Supporting | GNN predicts object relevance to prune large problem instances | Selection-by-relevance; complementary pruning signal |
+| **Anticipatory TAMP** — Dhakal et al. 2024 [2407.13694] | — | Supporting | Learned future-cost predictor guides plan selection beyond immediate feasibility | Looks *ahead*; SPECTRE looks *back* at failures — useful contrast |
+
+### Core — adaptive selection / metareasoning
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
+|---|---|---|---|---|
+| **Effort Allocation / Metareasoning** — Sung, Shperberg, Wang, Stone 2024 [2410.05828] | TRO (under review) | Supporting | MDP over option-refinement budget under a deadline; DP_Rerun ≈ MCTS quality, negligible overhead | Budget/metareasoning neighbor; **not** representation learning over failure structure |
+| **Learning to Search in TAMP with Streams** — Khodeir et al. 2023 [2111.13144] | — | Supporting | GNN heuristic over PDDLStream fact/object expansion order | Coarser than skeleton-level; static search heuristic |
+| **Differentiable GPU-Parallelized TAMP** — Shen et al. 2024 [2411.11833] | — | Supporting | Evaluates thousands of skeleton refinements in parallel on GPU | **Paradigm challenge:** if refinement parallelizes cheaply, *sequential reordering may be the wrong tool* (see §6) |
+
+### Core — architecture (set / permutation-invariant encoders)
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
+|---|---|---|---|---|
+| **Set Transformer** — Lee et al. 2019 [1810.00825] | ICML 2019 | Core | SAB + PMA; permutation-invariant set encoding via inducing points | **Direct architecture** for Ψ and for Φ's atom pooling |
+| **Deep Sets** — Zaheer et al. 2017 [1703.06114] | NeurIPS 2017 | Background | Characterizes permutation-invariant functions (sum-decomposition) | **Foundational** justification for why Ψ/atom-pooling *can* be invariant; the design choice (Set Transformer over Deep Sets, per `decisions.md` RT2D-fix-1) is precisely a Deep-Sets-vs-attention call |
+| **Set-Encoder passage re-ranking** — Deckers et al. 2024 [2404.06912] | — | Supporting | Set Transformer for listwise re-ranking; removes position bias | Direct precedent for Set-Transformer-based *listwise re-ranking* |
+
+### Core — loss (listwise ranking)
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
+|---|---|---|---|---|
+| **ListMLE** — Fen Xia, Liu, Wang, Zhang, Li 2008 | ICML 2008 | Core | Listwise PL likelihood loss; consistency/soundness analysis | **Primary source for SPECTRE's loss** |
+| **ListNet** — Cao, Qin, Liu, Tsai, Li 2007 | ICML 2007 | Background | Origin of the listwise approach (PL top-one probability) | Lineage of the listwise objective |
+| **Plackett–Luce model** — Plackett 1975 / Luce 1959 | Appl. Stat. / book | Background | The permutation/choice model underlying the loss | Statistical origin of `P(argmax ∈ SUCC)` |
+| **Rank, not estimate** — Ferber et al. 2023 [2310.19463] | NeurIPS 2023 | Core | Proves search heuristics need correct *ranking*, not calibrated cost; proposes ranking losses | **Theoretical grounding** for PL over regression/BCE in a planning loop |
+| **LiPO** — Tianqi Liu et al. 2024 [2402.01878] | — | Supporting | Listwise PL beats pairwise DPO for argmax-aligned LLM alignment | Listwise > pointwise/pairwise for argmax objectives, in another domain |
+| **PL with partitioned preference** — Ma et al. 2021 [2006.05067] | AISTATS 2021 | Conditional | Tractable PL estimation from group/partition labels | Relevant *only if* supervision collapses to a SUCC/FAIL partition rather than the current per-skeleton outcomes |
+| **LTR for planning heuristics** — Garrett et al. 2016 [1608.01302] | IJCAI 2016 | Supporting | Applies LTR to synthesize classical-planning heuristics | Classical-planning predecessor of the rank-the-search idea |
+
+### Supporting — amortized / in-context adaptation
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
+|---|---|---|---|---|
+| **Algorithm Distillation** — Laskin et al. 2023 [2210.14215] | ICLR 2023 | Supporting | Causal Transformer over episode history → in-context RL improvement, no gradient updates | Conceptual parallel for Ψ ("read the history, emit a better prior"); SPECTRE's Ψ is a *set* not sequence encoder |
+
+### Background — TAMP substrate and foundations
+
+| Paper | Venue | Tier | What it does | Relation to SPECTRE |
+|---|---|---|---|---|
+| **Integrated TAMP (survey)** — Garrett et al. 2021 [2010.01083] | AAAI 2021 | Background | Canonical survey of bilevel skeleton-then-refine TAMP | Defines the loop SPECTRE operates in |
+| **PDDLStream** — Garrett et al. 2020 [1802.08705] | ICAPS 2020 | Background | Integrates PDDL planners with blackbox samplers | Standard substrate; the queue LAZY reorders |
+| **STRIPS** — Fikes & Nilsson 1971 | AIJ 1971 | Background | Symbolic action representation (preconditions/effects) | Why intermediate skeleton states are redundant given `s₀ + a₁:L` (Φ design) |
+| **Predicate Invention for Bilevel Planning** — Silver et al. 2023 [2203.09634] | AAAI 2023 (v3 2025) | Background | Learns predicates by optimizing a surrogate aligned with planning efficiency | **Surrogate-objective alignment** precedent — the same discipline SPECTRE applies in choosing a rollout-aligned loss |
+| **NSRTs** — Chitnis et al. 2021 [2105.14074] | — | Background | Neuro-symbolic relational transition models for bilevel planning | System context for the operator/sampler substrate |
+| **SLAP** — Y. I. Liu, Li, Eysenbach, Silver 2025 [2511.01107] | — | Background | Discovers new options via RL shortcuts in the abstract graph | Same group/setting (deterministic, fully-observable); orthogonal to ranking |
+| **Sampling-based optimal motion planning (RRT\*/PRM\*)** — Karaman & Frazzoli 2011 [1105.1186] | IJRR 2011 | Background | Asymptotically optimal sampling-based motion planning | The continuous layer the refiner invokes |
+| **Collision-free path planning** — Lozano-Pérez & Wesley 1979 | CACM 1979 | Background | Configuration-space path planning among obstacles | Origin of the motion-planning half of TAMP |
+| **PRM** — Kavraki et al. 1996 | IEEE T-RA 1996 | Background | Probabilistic roadmaps | Classic motion-planning substrate |
+
+### Conditional / Frame
+
+| Paper | Venue | Tier | When to cite |
+|---|---|---|---|
+| **DAgger** — Ross, Gordon, Bagnell 2011 | AISTATS 2011 | Conditional | If an on-policy correction round is added (proposal §6 "DAgger round") |
+| **Retrospective Imitation** — Sun et al. 2018 [1804.00846] | — | Conditional | If on-policy *search* imitation specifically is used |
+| **Sequential design of experiments** — Chernoff 1959 | Ann. Math. Stat. 1959 | Frame | If the latent-inference framing (§6) is adopted — foundational |
+| **Active sequential hypothesis testing** — Naghshvar & Javidi 2013 | Ann. Statistics 2013 | Frame | Modern anchor for "which experiment next to identify the latent" |
+| **Best-arm identification / pure exploration** — Garivier & Kaufmann 2016 | COLT 2016 | Frame | If the selection problem is cast as fixed-confidence BAI over families |
+
+### Dropped from v1 (and why)
+
+| Paper | Reason |
+|---|---|
+| **SpeqNets** — Morris et al. 2022 [2203.13913] | Listed but never used in table or narrative; SPECTRE uses no GNN. Vestigial. |
+| **Neural-Guided Runtime Prediction** 2022 [2207.14422] | Planner-level routing, not skeleton-level; the GNN-selection point is already made. Redundant. |
+| **Optimization-based TAMP survey** — Zhao et al. 2024 [2404.02817] | Second survey; Garrett 2021 covers the needed background. Keep only if the optimization-as-TAMP angle becomes relevant. |
+| **GNN robot manipulation** — Lin et al. 2021 [2102.13177] | Demoted to optional: the equivariance-design contrast (GNN structure vs. typed-local-id canonicalization) needs at most one citation; Deep Sets + Set Transformer carry the architectural argument. Reinstate if the canonicalization-vs-GNN tradeoff is argued explicitly. |
+| **Learning When to Quit** — Sung et al. 2021 [2103.04374] | Subsumed by Effort Allocation 2024 (same author, same metareasoning theme). Keep only if *stopping* (vs. reordering) is discussed. |
+| **Learning Symbolic Operators** — Silver et al. 2021 [2103.00589] | Three substrate papers (this + NSRTs + Predicate Invention) overcount; NSRTs + Predicate Invention suffice for system context. |
 
 ---
 
-## Narrative Synthesis
+## 2. Skeleton ranking: the actual line of prior work
 
-### 1. The Skeleton Ranking Problem and Prior Approaches
+The bilevel decomposition (Garrett et al. 2021) makes skeleton ordering a secondary
+optimization once the symbolic planner enumerates a goal-achieving pool (typically
+via top-k/diverse planning). The learned-ranking line runs: learned *feasibility
+classifiers used as search-ordering heuristics* (Wells et al. 2019; Driess et al.
+2020) → learned *score-space rank functions* (Kim et al. 2018/2021) → *Transformer
+feasibility predictors* over the whole skeleton (PIGINet, 2023). All of these are
+**static**: each candidate is scored once, in isolation, before any refinement.
 
-The TAMP bilevel architecture (Garrett et al. 2021, [2010.01083]) separates symbolic skeleton generation from continuous parameter refinement. When the symbolic planner produces multiple candidates, which to attempt first becomes a secondary optimization problem. Early approaches relied on planner-internal cost heuristics; Kim et al. (2021, [2203.04605]) introduced the first explicitly *learned* rank function in geometric TAMP. PIGINet (Yang et al. 2023, [2211.01576]) is the current state of the art: a Transformer over the skeleton's (operator, state) token sequence predicts refinement feasibility, cutting planning time 10–80%. Its key limitation — directly motivating SPECTRE — is that PIGINet is a **static** ranker: it scores each skeleton once, in isolation, before any refinement is attempted. It cannot update its beliefs when it learns that skeleton 1 failed.
+Two threads break from static scoring. **Search-based selection** maintains an
+explicit skeleton space and estimates per-skeleton value online via tree search
+(Extended Tree Search, Ren et al. 2021) — adaptive, but not amortized across
+problems by a learned encoder. **Lazy/online reordering** (LAZY, Khodeir et al.
+2023) updates the queue from geometric samples as they arrive, using co-failure
+*frequency counts* that do not generalize across structurally similar skeletons.
+SPECTRE's claim sits exactly here: a learned encoder that generalizes failure
+structure across skeletons, rather than counting co-failures per canonical key.
 
-Khodeir et al.'s LAZY (2023, [2210.14055]) reorders the skeleton queue *lazily* using geometric motion samples as they arrive — the closest existing work to online adaptation. However, it has no learned context encoder and cannot generalize the failure signal across problem instances. Sung et al. (2024, [2410.05828]) formalize budget-aware skeleton selection as a metareasoning MDP (DP_Rerun), achieving near-MCTS quality. This is the closest prior approach in spirit to SPECTRE but frames adaptation via dynamic programming over time-cost estimates rather than a learned failure-history encoder. None of these methods use a permutation-invariant set encoder over the failure set ℱ_t, which is SPECTRE's core mechanism.
+## 3. Architecture: set encoders and permutation invariance
 
-### 2. Architecture: Set Transformer and Permutation Invariance
+Deep Sets (Zaheer et al. 2017) is the foundational result — any permutation-invariant
+function admits a sum-decomposition — and is the right citation for *why* Ψ and the
+atom pooling can be invariant at all. The Set Transformer (Lee et al. 2019) is the
+specific instantiation SPECTRE uses (SAB for equivariant mixing, PMA for invariant
+pooling). The RT2D-fix-1 decision to use Set-Transformer attention over Deep-Sets
+pooling for the `PassageWidth`×`ItemSize` relational join is a concrete Deep-Sets-vs-
+attention expressivity call, so both belong in the architecture story. Deckers et al.
+(2024) is the closest precedent for using this family specifically for *listwise
+re-ranking*.
 
-The Set Transformer (Lee et al. 2019, [1810.00825]) is the direct architectural foundation for SPECTRE's context encoder Ψ. Its SAB (Set Attention Block) achieves permutation-equivariant token mixing without positional embeddings, and PMA (Pooling by Multihead Attention) produces a permutation-invariant fixed-size output — exactly the requirements for encoding the unordered failure set ℱ_t. The original paper reduces complexity from O(n²) to O(nm) via ISAB; SPECTRE uses standard SAB because |ℱ_t| ≤ 20 makes quadratic cost trivial. Deckers et al. 2024 ([2404.06912]) show the same architecture applies to listwise re-ranking in IR, eliminating position bias — an analogous goal to SPECTRE's rollout-alignment objective.
+## 4. Loss: listwise Plackett–Luce, and why not pointwise
 
-For the skeleton encoder Φ, the key design question is equivariance over object identities. GNN-based approaches (Lin et al. 2021, [2102.13177]; Khodeir et al. 2023, [2111.13144]) achieve this via graph structure. SPECTRE instead uses typed-local-id canonicalization, which achieves the same equivariance via a preprocessing step and enables a simpler Transformer encoder — lower engineering cost with comparable expressivity, as the spec argues.
+SPECTRE's loss is the ListMLE/PL likelihood loss (**Fen Xia et al. 2008**; lineage
+ListNet, Cao et al. 2007; model Plackett 1975 / Luce 1959), specialized to
+`−log P(argmax over R picks a success)`. Three independent results support the
+listwise-over-pointwise choice that Attempt-2 (BCE) lacked: Ferber et al. (2023)
+prove that in search, heuristics need only *rank* correctly, not estimate cost —
+the cleanest theoretical argument for PL over regression/BCE in a planning loop;
+LiPO (Tianqi Liu et al. 2024) shows listwise PL beats pairwise DPO for
+argmax-aligned objectives; and the LTR-for-heuristics line (Garrett et al. 2016)
+is the in-domain precedent. Ma et al. (2021) is only relevant if supervision ever
+degrades to a SUCC/FAIL partition — the current pipeline has per-skeleton outcomes,
+so it is conditional, not core.
 
-### 3. Loss Function: Why Listwise Plackett-Luce Over Pointwise BCE
+## 5. Amortized adaptation
 
-The Plackett-Luce listwise loss (Xia et al. 2019, [1909.06722]) defines SPECTRE's training objective. Three papers from different communities converge on the same conclusion:
+Algorithm Distillation (Laskin et al. 2023) is the cleanest conceptual parallel for
+Ψ: a network that ingests interaction history and emits an improved policy with no
+test-time gradient step. The honest difference is that AD is a *sequence* model over
+RL episodes; Ψ is a *set* encoder over an unordered failure set, which is the
+theoretically correct inductive bias (failure order is uninformative). Treat this as
+an analogy that motivates the architecture, not as a result about TAMP.
 
-- **LiPO** (Liu et al. 2024, [2402.01878]) demonstrates for LLM alignment that listwise PL objectives consistently outperform pairwise DPO because PL directly optimizes the argmax-selection distribution.
-- **Rank Not Estimate** (Ferber et al. 2023, [2310.19463]) proves formally that in planning search, heuristics need to rank correctly, not estimate absolute cost — precisely the argument for PL over regression or BCE in SPECTRE's context.
-- **Ma et al. 2021** ([2006.05067]) show that when supervision is only at the partition level (successes vs. failures, not full orderings), the PL estimator remains tractable — directly applicable to SPECTRE's F-subset sampling where the SUCC/FAIL partition is the only label.
+## 6. The framing the writeup omits — and what the ablation implies
 
-This three-way convergence from information retrieval, classical planning theory, and LTR statistics provides strong justification for SPECTRE's loss choice that Attempt 2 (pointwise BCE) lacked.
+**Analysis, not established prior work.** The following is a reframing I am
+proposing for brainstorming; none of these papers address SPECTRE's problem
+directly.
 
-### 4. Amortized Adaptation via Context Encoders
+RT2D's generative story is a discrete latent `z = (BlockedColor, BlockedGrasp)`
+that gates which skeleton *family* refines. Under that story, **adaptive reordering
+from failures is posterior inference over `z`**: each failed skeleton is an
+observation that rules out families, and the optimal next pick is the one most
+likely to succeed under the current posterior — equivalently, the cheapest
+experiment that most reduces uncertainty about `z`. This is the language of
+**active sequential hypothesis testing / optimal experimental design** (Chernoff
+1959; Naghshvar & Javidi 2013) and **best-arm identification / pure exploration**
+(Garivier & Kaufmann 2016). The B4 baseline (Naive-Bayes log-odds over pairwise
+failure conditionals) is precisely the *explicit, tabular* Bayes version of this;
+SPECTRE's Ψ is an *amortized, learned* approximation to the same posterior.
 
-SPECTRE's core claim is that a learned module Ψ can amortize episode-level posterior updates over the failure set ℱ_t. Algorithm Distillation (Laskin et al. 2023, [2210.14215]) is the most direct conceptual parallel in the RL literature: a causal Transformer over an agent's episode history enables in-context policy improvement without any gradient update at test time — the same "read the history, produce a better prior" loop. The key difference is that SPECTRE's Ψ is a *set* encoder (permutation-invariant over ℱ_t) rather than a sequence encoder, which is theoretically more correct since the failure order carries no information.
+Why this matters for the project, concretely:
 
-### 5. Gaps and SPECTRE's Unique Contributions
+- **It explains the Ψ-ablation (notebook 2026-06-06).** Failure-conditioning buys
+  only ~1 attempt (~27% of the margin over B4); ~73% comes from the static Φ+σ
+  ranking. If `z` is low-dimensional and the marginal family-success prior is
+  already informative, the *static* posterior (the prior over `z` before any
+  failure) captures most of the achievable gain, and online updating adds little.
+  That is the expected behavior of an easy inference problem — not evidence that Ψ
+  is broken.
 
-No existing paper found combines: (a) failure-set context encoding via a permutation-invariant set encoder, (b) applied to TAMP skeleton reordering, (c) with a listwise Plackett-Luce loss. The closest combinations are:
+- **It reprioritizes the related-work emphasis.** Because the static representation
+  is doing most of the work, the *primary* baseline to beat is a strong **static**
+  ranker (PIGINet-class), not adaptive prior work (LAZY/Sung). The current draft
+  spends more positioning on adaptivity than the empirics justify. Lead with the
+  static-ranking line; treat adaptivity as the (smaller, real) increment.
 
-- **PIGINet + failure context** → would require adding Ψ, which PIGINet lacks
-- **LAZY + PL loss** → would require replacing its geometric heuristic with a trained encoder
-- **Algorithm Distillation + TAMP** → would require set-not-sequence encoding and skeleton-specific tokenization
+- **It surfaces a "right tool" question to settle before scaling.** Two cheap
+  probes would isolate whether SPECTRE is the right instrument: (i) report the
+  Bayes-optimal oracle that knows `z` and the family→`z` map — the gap between B4
+  and that oracle bounds *all* achievable adaptivity, and if it is small the
+  adaptive story has little headroom on RT2D by construction; (ii) an explicit
+  information-gain selector (pick the skeleton maximizing expected posterior
+  entropy reduction over families) as a *non-learned adaptive* baseline stronger
+  than B4 — if it matches SPECTRE's adaptive increment, the learned Ψ is buying
+  amortization/generalization, not better inference, which is a sharper and more
+  defensible claim. The GPU-parallel refinement paradigm (Shen et al. 2024) is the
+  other "right tool" pressure: if refinement parallelizes, the sequential ordering
+  objective weakens.
 
-SPECTRE's combination is genuinely novel. The on-policy correction concern (DAgger round, §8.3 of the spec) is a known gap in offline LTR approaches generally — Learning to Search via Retrospective Imitation ([1804.00846]) would be an appropriate citation if an on-policy round is added.
+This framing is offered as a lens for pivots, and as pre-emption for the obvious
+reviewer question ("isn't this amortized Bayesian inference over the latent?"). The
+strongest version of SPECTRE's contribution is probably *not* "failure context
+helps" (the ablation makes that the minor effect) but "a learned set-encoder over
+skeleton structure generalizes the success posterior across a combinatorial
+skeleton space where tabular conditioning cannot" — which is a representation claim,
+testable against the BAI/info-gain baselines above.
 
 ---
 
-## Recommended Citation Clusters
+## 7. Recommended citation clusters
 
 | Claim / Section | Papers |
 |---|---|
-| Problem setting (bilevel TAMP) | Garrett et al. 2021 [2010.01083] |
-| Skeleton ranker baselines | PIGINet [2211.01576], Kim et al. 2021 [2203.04605] |
-| Adaptive selection prior work | Sung et al. 2024 [2410.05828], LAZY [2210.14055] |
-| Architecture — set encoding | Lee et al. 2019 [1810.00825] |
-| Loss — Plackett-Luce | Xia et al. 2019 [1909.06722], Ferber et al. 2023 [2310.19463], Ma et al. 2021 [2006.05067] |
-| Amortized context / in-context adaptation | Laskin et al. 2023 [2210.14215] |
-| Substrate context | Silver et al. 2021 [2103.00589], Chitnis et al. 2021 [2105.14074], Silver et al. 2023 [2203.09634] |
+| Problem setting (bilevel TAMP) | Garrett et al. 2021 [2010.01083]; PDDLStream [1802.08705]; STRIPS 1971 |
+| Static skeleton ranking (baselines) | PIGINet [2211.01576]; Kim 2018/2021 [2203.04605]; Wells 2019; Driess 2020 |
+| Adaptive / search-based selection | LAZY [2210.14055]; Extended Tree Search [2103.05456]; Sung 2024 [2410.05828] |
+| Architecture (set encoding) | Lee 2019 [1810.00825]; Zaheer 2017 [1703.06114]; Deckers 2024 [2404.06912] |
+| Loss (listwise PL) | Fen Xia 2008 (ListMLE); Ferber 2023 [2310.19463]; LiPO [2402.01878] |
+| Amortized adaptation | Laskin 2023 [2210.14215] |
+| Latent-inference framing (if adopted) | Chernoff 1959; Naghshvar & Javidi 2013; Garivier & Kaufmann 2016 |
+| Substrate context | Predicate Invention [2203.09634]; NSRTs [2105.14074] |
+| "Right tool" pressure | Shen 2024 [2411.11833] |
 
 ---
 
-## Full Reference List
+## 8. Full reference list
 
-- [1608.01302] Learning to Rank for Synthesizing Planning Heuristics (IJCAI 2016) https://arxiv.org/abs/1608.01302
-- [1804.00846] Learning to Search via Retrospective Imitation (2018) https://arxiv.org/abs/1804.00846
-- [1810.00825] Set Transformer: A Framework for Attention-based Permutation-Invariant Neural Networks — Lee et al. (ICML 2019) https://arxiv.org/abs/1810.00825
-- [1909.06722] Plackett-Luce Model for Learning-to-Rank Task — Xia et al. (2019) https://arxiv.org/abs/1909.06722
-- [2006.05067] Learning-to-Rank with Partitioned Preference: Fast Estimation for the Plackett-Luce Model — Ma et al. (AISTATS 2021) https://arxiv.org/abs/2006.05067
+Verified via search (2026-06-08): PIGINet, Effort Allocation, ListMLE-vs-Tian-Xia
+identity, SLAP, Predicate Invention venue, Extended Tree Search, Wells/Driess
+existence, active-testing anchors. arXiv IDs marked *[verify]* were not
+re-confirmed and should be checked before use.
+
+- [1105.1186] Sampling-based Algorithms for Optimal Motion Planning — Karaman & Frazzoli (IJRR 2011) https://arxiv.org/abs/1105.1186
+- [1608.01302] Learning to Rank for Synthesizing Planning Heuristics — Garrett et al. (IJCAI 2016) https://arxiv.org/abs/1608.01302
+- [1703.06114] Deep Sets — Zaheer et al. (NeurIPS 2017) https://arxiv.org/abs/1703.06114
+- [1802.08705] PDDLStream: Integrating Symbolic Planners and Blackbox Samplers — Garrett et al. (ICAPS 2020) https://arxiv.org/abs/1802.08705
+- [1804.00846] Learning to Search via Retrospective Imitation — Sun et al. (2018) https://arxiv.org/abs/1804.00846
+- [1810.00825] Set Transformer — Lee et al. (ICML 2019) https://arxiv.org/abs/1810.00825
+- [2006.05067] Learning-to-Rank with Partitioned Preference (fast PL estimation) — Ma et al. (AISTATS 2021) https://arxiv.org/abs/2006.05067
+- [2009.05613] Planning with Learned Object Importance in Large Problem Instances using GNNs — Silver et al. (ICRA 2021) *[verify id]* https://arxiv.org/abs/2009.05613
 - [2010.01083] Integrated Task and Motion Planning — Garrett et al. (AAAI 2021) https://arxiv.org/abs/2010.01083
-- [2102.13177] Efficient and Interpretable Robot Manipulation with Graph Neural Networks — Lin et al. (2021) https://arxiv.org/abs/2102.13177
-- [2103.00589] Learning Symbolic Operators for Task and Motion Planning — Silver et al. (2021) https://arxiv.org/abs/2103.00589
-- [2103.04374] Learning When to Quit: Meta-Reasoning for Motion Planning — Sung et al. (2021) https://arxiv.org/abs/2103.04374
-- [2105.14074] Learning Neuro-Symbolic Relational Transition Models for Bilevel Planning — Chitnis et al. (2021) https://arxiv.org/abs/2105.14074
+- [2103.05456] Extended Tree Search for Robot Task and Motion Planning — Ren, Chalvatzaki, Peters (2021) https://arxiv.org/abs/2103.05456
+- [2105.14074] Learning Neuro-Symbolic Relational Transition Models for Bilevel Planning (NSRTs) — Chitnis et al. (2021) https://arxiv.org/abs/2105.14074
 - [2111.13144] Learning to Search in Task and Motion Planning with Streams — Khodeir et al. (2023) https://arxiv.org/abs/2111.13144
-- [2203.04605] Representation, Learning, and Planning Algorithms for Geometric TAMP — Kim et al. (IJRR 2021) https://arxiv.org/abs/2203.04605
-- [2203.09634] Predicate Invention for Bilevel Planning — Silver et al. (AAAI 2023) https://arxiv.org/abs/2203.09634
+- [2203.04605] Representation, Learning, and Planning Algorithms for Geometric TAMP (SAHS) — Kim et al. (IJRR 2021; origin: score-space, NeurIPS-WS 2018) https://arxiv.org/abs/2203.04605
+- [2203.09634] Predicate Invention for Bilevel Planning — Silver et al. (AAAI 2023; v3 2025) https://arxiv.org/abs/2203.09634
 - [2203.10568] Accelerating Integrated Task and Motion Planning with Neural Feasibility Checking — Xu et al. (2022) https://arxiv.org/abs/2203.10568
-- [2203.13913] SpeqNets: Sparsity-aware Permutation-equivariant Graph Networks — Morris et al. (2022) https://arxiv.org/abs/2203.13913
-- [2207.14422] Neural-Guided Runtime Prediction of Planners for Improved Motion and Task Planning with GNNs (2022) https://arxiv.org/abs/2207.14422
-- [2210.14055] Policy-Guided Lazy Search with Feedback for Task and Motion Planning — Khodeir et al. (2023) https://arxiv.org/abs/2210.14055
+- [2210.14055] Policy-Guided Lazy Search with Feedback for TAMP (LAZY) — Khodeir et al. (2023) https://arxiv.org/abs/2210.14055
 - [2210.14215] In-Context Reinforcement Learning with Algorithm Distillation — Laskin et al. (ICLR 2023) https://arxiv.org/abs/2210.14215
-- [2211.01576] Sequence-Based Plan Feasibility Prediction for Efficient Task and Motion Planning (PIGINet) — Yang et al. (RSS 2023) https://arxiv.org/abs/2211.01576
+- [2211.01576] Sequence-Based Plan Feasibility Prediction for Efficient TAMP (PIGINet) — Yang, Garrett, Lozano-Pérez, Kaelbling, Fox (RSS 2023) https://arxiv.org/abs/2211.01576
 - [2310.19463] Optimize Planning Heuristics to Rank, not to Estimate Cost-to-Goal — Ferber et al. (NeurIPS 2023) https://arxiv.org/abs/2310.19463
-- [2402.01878] LiPO: Listwise Preference Optimization through Learning-to-Rank — Liu et al. (2024) https://arxiv.org/abs/2402.01878
-- [2404.02817] A Survey of Optimization-based Task and Motion Planning: From Classical To Learning Approaches — Zhao et al. (2024) https://arxiv.org/abs/2404.02817
-- [2404.06912] Set-Encoder: Permutation-Invariant Inter-Passage Attention for Listwise Passage Re-Ranking — Deckers et al. (2024) https://arxiv.org/abs/2404.06912
+- [2402.01878] LiPO: Listwise Preference Optimization through Learning-to-Rank — T. Liu et al. (2024) https://arxiv.org/abs/2402.01878
+- [2404.06912] Set-Encoder: Permutation-Invariant Inter-Passage Attention for Listwise Re-Ranking — Deckers et al. (2024) https://arxiv.org/abs/2404.06912
 - [2407.13694] Anticipatory Task and Motion Planning — Dhakal et al. (2024) https://arxiv.org/abs/2407.13694
-- [2410.05828] Effort Allocation for Deadline-Aware Task and Motion Planning: A Metareasoning Approach — Sung et al. (2024) https://arxiv.org/abs/2410.05828
+- [2410.05828] Effort Allocation for Deadline-Aware TAMP: A Metareasoning Approach — Sung, Shperberg, Wang, Stone (2024) https://arxiv.org/abs/2410.05828
 - [2411.11833] Differentiable GPU-Parallelized Task and Motion Planning — Shen et al. (2024) https://arxiv.org/abs/2411.11833
+- [2511.01107] SLAP: Shortcut Learning for Abstract Planning — Y. I. Liu, Li, Eysenbach, Silver (2025) https://arxiv.org/abs/2511.01107
+- ListMLE: Listwise Approach to Learning to Rank — Theory and Algorithm — Fen Xia, Tie-Yan Liu, Jue Wang, Wensheng Zhang, Hang Li (ICML 2008)
+- ListNet: Learning to Rank — From Pairwise Approach to Listwise Approach — Cao, Qin, Liu, Tsai, Li (ICML 2007)
+- The Analysis of Permutations — Plackett (Applied Statistics, 1975); Individual Choice Behavior — Luce (1959)
+- Learning Feasibility for Task and Motion Planning in Tabletop Environments — Wells, Dantam, Shrivastava, Kavraki (IEEE RA-L 2019)
+- Deep Visual Heuristics: Learning Feasibility of Mixed-Integer Programs for Manipulation Planning — Driess, Oguz, Ha, Toussaint (ICRA 2020)
+- STRIPS: A New Approach to the Application of Theorem Proving to Problem Solving — Fikes & Nilsson (AIJ 1971)
+- An Algorithm for Planning Collision-Free Paths Among Polyhedral Obstacles — Lozano-Pérez & Wesley (CACM 1979)
+- Probabilistic Roadmaps for Path Planning in High-Dimensional Configuration Spaces — Kavraki, Švestka, Latombe, Overmars (IEEE T-RA 1996)
+- A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning (DAgger) — Ross, Gordon, Bagnell (AISTATS 2011)
+- Sequential Design of Experiments — Chernoff (Annals of Mathematical Statistics, 1959)
+- Active Sequential Hypothesis Testing — Naghshvar & Javidi (Annals of Statistics, 2013)
+- Optimal Best Arm Identification with Fixed Confidence — Garivier & Kaufmann (COLT 2016)
+
+### Name-collision warnings (kept here to prevent re-introduction)
+
+- **"Xia" (LTR):** Fen Xia (ICML 2008, ListMLE — *the* primary source) ≠ Tian Xia
+  (Wright State, arXiv 1909.06722 — a later non-linear PL preprint, not the origin).
+- **"Liu":** Tianqi Liu (Google, LiPO) ≠ Y. Isabel Liu (Princeton, SLAP).
+- **"Silver" / Predicate Invention:** arXiv 2203.09634 = AAAI 2023; the v3 revision
+  is dated 2025 — cite as 2023 (venue) unless you mean the revised arXiv.
