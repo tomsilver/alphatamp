@@ -32,10 +32,19 @@ develop = [
     "black",
     "docformatter",
     "isort",
+    "marimo",
     "mypy",
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
-    "pytest>=7.2.2"
+    "pytest>=7.2.2",
+    "wandb"
+]
+# Tote-and-Tray Decluttering benchmark (self-contained sub-project under
+# approaches/spectre/ttd/). Shapely is the authoritative 2D-geometry layer; the
+# version is pinned per TTD_SPEC_v1.3 §12.3 ("versions pinned Shapely/GEOS").
+# pybullet / scikit-learn / etc. are added by the later chunks that need them.
+ttd = [
+    "shapely>=2.0,<3",
 ]
 
 [tool.setuptools.packages.find]
@@ -64,7 +73,18 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*"]
+exclude = [
+    "venv/*",
+    ".venv/*",
+    "experiments/spectre/analyze_spectre\\.py$",
+    "experiments/spectre/compare_dd2d_methods\\.py$",
+    "experiments/spectre/precompute_dd2d_cache\\.py$",
+    # Vendored DD2D environment (migrated from the envsearch repo, see
+    # envs/dd2d/MIGRATION_DD2D.md). Excluded from strict mypy like lib/ vendoring;
+    # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
+    # spectre_convert.py) type-checked.
+    "src/alphatamp/approaches/spectre/envs/dd2d/(?!spectre_)",
+]
 
 [tool.pytest.ini_options]
 markers = [
@@ -80,5 +100,6 @@ kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learnin
 module = [
     "matplotlib.*",
     "sklearn.*",
+    "shapely.*",
 ]
 ignore_missing_imports = true

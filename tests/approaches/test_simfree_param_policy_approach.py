@@ -244,7 +244,7 @@ def test_dataset_collection_simfree_feasibility_approach():
     env.close()
 
 
-def test_save_datasets_simfree_feasibility_approach():
+def test_save_datasets_simfree_feasibility_approach(tmp_path):
     """Tests for saving datasets for the SimFreeParamPolicyApproach()."""
 
     # Test in a kinder environment.
@@ -335,8 +335,17 @@ def test_save_datasets_simfree_feasibility_approach():
     train_parameter_dataset = approach.get_parameter_dataset()
     assert train_parameter_dataset, "Did not find any parameters"
 
-    path = Path("tests/datasets/")
-    approach.save_datasets(path)
+    # Save to a per-test temp dir: writing into the tracked tests/datasets/
+    # fixtures would overwrite them with this run's rollout data (pickle
+    # output is byte-nondeterministic across processes) and couple the
+    # fixture-reading tests below to test execution order.
+    approach.save_datasets(tmp_path)
+    for filename in (
+        "parameter_dataset.pkl",
+        "abstract_plan_dataset.pkl",
+        "abstract_action_dataset.pkl",
+    ):
+        assert (tmp_path / filename).exists(), f"save_datasets did not write {filename}"
 
     # Eval.
     obs, _ = env.reset(seed=124)

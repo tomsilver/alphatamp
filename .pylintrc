@@ -10,11 +10,15 @@ extension-pkg-whitelist=numpy,pybullet
 ignore=CVS,venv,.venv
 
 # Add paths to the blacklist.
-ignore-paths=
+# Vendored DD2D env (migrated from envsearch, see envs/dd2d/MIGRATION_DD2D.md):
+# skip linting like lib/ vendoring. The negative lookahead keeps SPECTRE's own
+# adapter (spectre_operators.py / spectre_convert.py) linted.
+ignore-paths=.*/envs/dd2d/(?!spectre_).*
 
 # Add files or directories matching the regex patterns to the blacklist. The
 # regex matches against base names, not paths.
-ignore-patterns=
+# analyze_spectre.py is a marimo notebook (not standard source); skip linting it.
+ignore-patterns=analyze_spectre\.py$|compare_dd2d_methods\.py$|precompute_dd2d_cache\.py$
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().

@@ -1,0 +1,101 @@
+defaults:
+  - env: routedtransport2d_n3_v1
+  - _self_
+
+seed: 0
+data_root: "data/spectre"
+out_dir: "data/spectre/checkpoints"
+
+# Weights & Biases logging. Defaults to disabled so existing runs / CI are
+# unaffected; enable per-run with e.g. `wandb.mode=online wandb.group=...`.
+# The API key is read from the WANDB_API_KEY env var — never store it here.
+wandb:
+  mode: disabled            # disabled | online | offline
+  project: spectre-dd2d
+  entity: josephxu-lilliput
+  group: null               # e.g. dd2d_v2_prelim to bracket a seed sweep
+  name: null                # default: <env_variant>_seed<seed>
+  tags: []
+  notes: null
+  log_model: false          # upload best.pt as a run artifact at the end
+
+train:
+  # Optimizer + schedule (spec §8.4)
+  lr: 1e-4
+  weight_decay: 5e-4
+  beta1: 0.9
+  beta2: 0.999
+  batch_size: 16
+  epochs: 30
+  warmup_steps: 500
+  lr_min: 1e-5
+  grad_clip: 1.0
+
+  # Regularization
+  prior_dropout_p: 0.2
+  augment: true
+  # ``prior_type``: which BasePrior subclass to use for π(s).
+  #   zero (default): π ≡ 0 (the original baseline; also what every legacy
+  #     checkpoint was trained against).
+  #   heuristic: per-episode z-score of the negated pyperplan FF trajectory
+  #     cost (RT2D-only). Surfaces the same FF signal the new B2 baseline
+  #     uses into the model so σ has a warm start.
+  prior_type: "zero"
+  # Per-module dropout. Bump to 0.2 / 0.3 with stronger weight_decay to
+  # fight overfitting on the train→val rollout-attempts gap.
+  dropout_p: 0.1
+
+  # Architecture toggles
+  # 1-SAB Φ_s preserves atom-arg local-id signal that the 2-SAB variant
+  # smooths away — ablation runs c2_revert / e_augoff showed PassageWidth
+  # sensitivity Δ jumping from 0.0002 (2 SABs) → 0.1148 (1 SAB).
+  use_atom_sab2: false
+
+  # F3-B-(1) predicate-type-conditioned pooling: route static-tag atoms
+  # (PassageWidth/ItemSize/Connects on RT2D, see env_registry) through a
+  # dedicated SAB+PMA stream so they do not compete for attention with
+  # the larger fluent atom population. Default off; flip on per-run via
+  # `train.use_static_tag_pool=true` to enable for the F3-B run.
+  use_static_tag_pool: false
+
+  # F-sampling (spec §8.2 default rollout_aligned_mix)
+  f_sampling_mode: "rollout_aligned_mix"
+  f_sampling_mix_weights: [0.25, 0.25, 0.5]
+  f_sampling_log_normal_mu: 0.0
+  f_sampling_log_normal_sigma: 1.0
+
+  # F-subsample multiplier (spec §8.1 fix #5)
+  num_f_samples_per_epoch: 8
+  num_f_samples_per_val_episode: 4
+
+  # Reproducibility — vestigial: ALWAYS overridden by top-level cfg.seed
+  # in spectre_train.py:_build_training_config. The slurm wrapper passes
+  # ``seed=$SEED`` at the top level, which is what determines the actual
+  # training seed. Don't rely on this yaml value.
+  seed: 0
+
+  # Validation
+  auroc_t_max: 3
+
+  # DataLoader
+  num_workers: 0
+
+  # Early stopping (0 patience = disabled)
+  early_stop_patience: 10
+  early_stop_min_epochs: 5
+
+  # Per-epoch deployment-style rollout eval (mean attempts to first success
+  # on train + val via eda.spectre_evaluate). ~10s/epoch overhead. Required
+  # when checkpoint_metric == "val_rollout_attempts".
+  rollout_eval_each_epoch: true
+  rollout_attempt_budget: 20
+
+  # ``checkpoint_metric``: drives best.pt selection AND early stopping.
+  #   val_rollout_attempts (default): tracks the deployment metric the
+  #     EDA notebook reports. Lower is better; val_loss is the tiebreak.
+  #   val_loss: legacy — min PL loss with AUROC(3) as tiebreak.
+  checkpoint_metric: "val_rollout_attempts"
+
+hydra:
+  job:
+    chdir: false

@@ -1,0 +1,15 @@
+# PIGINet model/training/eval dependencies (Steps 6-8 of docs/piginet_dd2d_plan.md).
+# Kept SEPARATE from requirements-blocks.txt so the data-collection/refiner stack
+# (numpy/shapely/pybullet) stays torch-free. Install into the same repo .venv:
+#   .venv/bin/python -m pip install -r blocks_tamp/requirements-piginet.txt
+#
+# Verified on macOS arm64 (Apple M3), Python 3.13, numpy 2.5.0 (unchanged from
+# requirements-blocks.txt). torch 2.13 ships MPS-enabled cp313 arm64 wheels.
+# Gate: scripts/check_mps.py -> torch.backends.mps.is_available() is True and
+# frozen CLIP ViT-B/32 embeds a dummy image+text to finite 512-d vectors on MPS.
+torch==2.13.0
+torchvision==0.28.0        # pulled in by open_clip_torch; version must match torch
+open_clip_torch==3.3.0     # frozen CLIP ViT-B/32 text + image encoders (g_text, g_img)
+scikit-learn==1.9.0        # AUPRC / AUROC / balanced accuracy (secondary metrics)
+pandas==3.0.3              # result tables / per-problem CSVs
+wandb==0.28.0              # optional (--wandb) live training curves; auth via WANDB_API_KEY env

@@ -1,0 +1,23 @@
+defaults:
+  - env: dd2d_v2
+  - _self_
+
+# Source: DD2D raw_v2 JSON dataset (per-problem dirs of NNN.json records).
+# Relative to the repo root (hydra.job.chdir is false).
+raw_root: "src/alphatamp/approaches/spectre/envs/dd2d/data/dd2d/raw_v2"
+
+# Destination: standard SPECTRE data layout consumed by build_vocab / train.
+data_root: "data/spectre"
+
+# Which splits under raw_root to convert.
+splits:
+  - train
+  - val
+  - test
+
+# Re-write episodes that already exist on disk.
+overwrite: false
+
+hydra:
+  job:
+    chdir: false

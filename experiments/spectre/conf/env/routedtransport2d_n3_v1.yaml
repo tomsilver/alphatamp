@@ -1,0 +1,6 @@
+env_id: "kinder/RoutedTransport2D-n3-v0"
+env_variant: "routedtransport2d_n3_v1"
+model_name: "routedtransport2d"
+model_kwargs:
+  num_items: 3
+  variant: "v1"
