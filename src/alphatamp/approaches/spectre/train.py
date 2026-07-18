@@ -433,6 +433,57 @@ def _checkpoint_metric_tuple(
 
 
 # ---------------------------------------------------------------------------
+# wandb (optional; train() stays import-free and duck-types on .log/.summary)
+# ---------------------------------------------------------------------------
+
+
+def _flatten_for_wandb(log_record: dict[str, object]) -> dict[str, float]:
+    """Flatten the per-epoch ``log_record`` into slashed scalar wandb keys.
+
+    Nested ``{t: value}`` maps become ``.../{metric}_{t}`` and rollout summaries
+    become ``{split}_rollout/{field}``. ``None`` and ``NaN`` values are skipped so
+    wandb's per-step charts stay clean.
+    """
+    flat: dict[str, float] = {}
+
+    def _put(key: str, val: object) -> None:
+        if val is None or isinstance(val, bool):
+            if isinstance(val, bool):
+                flat[key] = float(val)
+            return
+        if isinstance(val, (int, float)) and not (
+            isinstance(val, float) and math.isnan(val)
+        ):
+            flat[key] = float(val)
+
+    _put("train/loss", log_record.get("train_loss"))
+    _put("val/loss", log_record.get("val_loss"))
+    _put("lr", log_record.get("lr"))
+    _put("global_step", log_record.get("global_step"))
+    for src, dst in (
+        ("auroc", "val/auroc"),
+        ("top1", "val/top1"),
+        ("per_t_count", "val/count"),
+        ("train_auroc", "train/auroc"),
+        ("train_top1", "train/top1"),
+        ("train_per_t_count", "train/count"),
+    ):
+        d = log_record.get(src)
+        if isinstance(d, dict):
+            for t, v in d.items():
+                _put(f"{dst}_{t}", v)
+    for src, dst in (
+        ("train_rollout", "train_rollout"),
+        ("val_rollout", "val_rollout"),
+    ):
+        d = log_record.get(src)
+        if isinstance(d, dict):
+            for k, v in d.items():
+                _put(f"{dst}/{k}", v)
+    return flat
+
+
+# ---------------------------------------------------------------------------
 # train()
 # ---------------------------------------------------------------------------
 
@@ -447,6 +498,7 @@ def train(
     prior: BasePrior | None = None,
     device: Optional[torch.device | str] = None,
     static_tag_predicates: list[str] | tuple[str, ...] | None = None,
+    wandb_run: object | None = None,
 ) -> Path:
     """Run a SPECTRE training session and return the path of ``best.pt``.
 
@@ -580,6 +632,7 @@ def train(
         )
 
     best_metric: tuple[float, float] = (float("inf"), float("inf"))
+    best_epoch = -1
     epochs_since_improve = 0
     best_path = out_dir / "best.pt"
     last_path = out_dir / "last.pt"
@@ -728,6 +781,7 @@ def train(
         is_better = cur_metric < best_metric
         if is_better:
             best_metric = cur_metric
+            best_epoch = epoch
             epochs_since_improve = 0
             torch.save(
                 {
@@ -745,6 +799,17 @@ def train(
         else:
             epochs_since_improve += 1
 
+        # Optional wandb logging — duck-typed on ``.log`` / ``.summary`` so
+        # train() never imports wandb and is a no-op when no run is passed.
+        if wandb_run is not None:
+            flat = _flatten_for_wandb(log_record)
+            flat["checkpoint/is_best"] = float(is_better)
+            flat["checkpoint/epochs_since_improve"] = float(epochs_since_improve)
+            wandb_run.log(flat, step=epoch)  # type: ignore[attr-defined]
+            if epoch == 0:
+                run_summary = wandb_run.summary  # type: ignore[attr-defined]
+                run_summary["random_phi_baseline"] = random_phi_baseline
+
         if (
             cfg.early_stop_patience > 0
             and epoch + 1 >= cfg.early_stop_min_epochs
@@ -755,6 +820,12 @@ def train(
                 f" {epochs_since_improve} epochs (patience={cfg.early_stop_patience})"
             )
             break
+
+    if wandb_run is not None:
+        summary = wandb_run.summary  # type: ignore[attr-defined]
+        summary["best/epoch"] = best_epoch
+        summary["best/checkpoint_metric"] = cfg.checkpoint_metric
+        summary["best/metric_value"] = list(best_metric)
 
     log_handle.close()
     return best_path

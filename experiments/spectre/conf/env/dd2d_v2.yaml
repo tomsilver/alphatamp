@@ -1,0 +1,10 @@
+# DD2D (Drawer Decluttering 2D) — SPECTRE env variant.
+#
+# The dataset is wired in via the JSON->EpisodeRecord converter
+# (experiments/spectre/dd2d_convert.py), not a live SesameModels env, so
+# env_id / model_name / model_kwargs are placeholders unused by the training
+# pipeline; only env_variant selects the on-disk data layout + policy tables.
+env_id: "dd2d/DrawerDeclutter2D-v0"
+env_variant: "dd2d_v2"
+model_name: "dd2d"
+model_kwargs: {}

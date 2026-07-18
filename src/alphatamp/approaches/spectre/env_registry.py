@@ -59,10 +59,17 @@ _RT2D_TYPE_AUG_POLICY: dict[str, bool] = {
     "size_level": False,
 }
 
+# DD2D has a single, fully-interchangeable object type (`item`): the target is
+# marked by the `target` predicate, not by identity, so within-type permutation
+# augmentation is correct and desirable. This entry is explicit for
+# documentation — an absent entry defaults every type to augmentable anyway.
+_DD2D_TYPE_AUG_POLICY: dict[str, bool] = {"item": True}
+
 _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     "routedtransport2d_n2_v1": _RT2D_TYPE_AUG_POLICY,
     "routedtransport2d_n3_v1": _RT2D_TYPE_AUG_POLICY,
     "routedtransport2d_n4_v1": _RT2D_TYPE_AUG_POLICY,
+    "dd2d_v2": _DD2D_TYPE_AUG_POLICY,
 }
 
 

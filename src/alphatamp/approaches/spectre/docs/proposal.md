@@ -1,5 +1,115 @@
 # SPECTRE — Living Proposal
 
+**2026-06-25 — Direction pivot.** The contribution is reframed from *adaptive
+test-time reordering* to a **representation question for plan-feasibility
+prediction** in fully-observable, deterministic bilevel TAMP. §0 below is the
+current framing; the prior adaptivity-first proposal (the original §1–§6) is
+retained byte-unchanged under **"Superseded framing (April 2026)"**. Rationale:
+[`decisions.md`](decisions.md) 2026-06-25.
+
+## Status & reading order
+
+- **Current** (source of truth): **§0** below, [`decisions.md`](decisions.md)
+  (newest entry 2026-06-25), [`notebook.md`](notebook.md) (newest entry
+  2026-06-25).
+- **Frozen / historical**: the original §1–§6 of this file (under "Superseded
+  framing (April 2026)"); the April writeup
+  [`archive/SPECTRE_WRITEUP_APR_2026.md`](archive/SPECTRE_WRITEUP_APR_2026.md)
+  (frozen 2026-06-25). Where the current framing disagrees with these, §0 and
+  `decisions.md` win.
+
+## §0 — Current direction (representation-first)
+
+> **Epistemic status.** The representation advantage stated here is a
+> **hypothesis with a falsifiable prediction**, *not* an established result. The
+> ~27% adaptivity finding (`notebook.md` 2026-06-06), the B6 lookahead-saturation
+> sweep (`notebook.md` 2026-06-11), and RT2D's construction are established;
+> the crossover below is conjecture to be tested.
+
+**The contribution.** A *representation question* for plan-feasibility prediction
+in bilevel TAMP: **what should a feasibility predictor represent skeletons and
+problems over?** The standard low-level predictor — PIGINet-style: predict from
+the concrete low-level initial state (multi-camera images + relational literals),
+scored once — may **not** be the most effective substrate. The hypothesis is that
+much of what determines refinement feasibility is relational structure that a
+**richer-than-pixels, cheaper-than-full-state** representation can capture more
+sample-efficiently and with weaker perception. Another representation of interest
+is the target representation; currently, most targets are binary labels (1 for
+successful refinement, 0 for failed refinement) but we hypothesize that a richer
+representation could deliver more bits of information per training label.
+
+**Design space (abstract-first is one point, not the thesis).** The current
+**leading candidate** is *abstract-first* — predict primarily from the abstract
+state + skeleton structure — but it is one point in a space that also includes
+learned latents, object-centric / graph features, intermediate
+symbolic-plus-coarse-geometric states, and invented predicates. Abstract-first
+may prove **too lossy**; we follow the experiments.
+
+**Falsifiable prediction (the crossover).** In the **low-data or weak-perception**
+regime, a well-chosen representation should **match or beat** a low-level
+(PIGINet-style) predictor on downstream planning efficiency; given **abundant
+data and strong perception**, the low-level predictor should **regain its edge**.
+
+**Efficiency, not access.** This is a sample-efficiency / perception-lightness
+claim, **not** an information-access claim: under full observability and
+determinism, *no* representation can beat an ideal low-level predictor on
+information grounds. The advantage sought exists only under realistic data /
+perception constraints.
+
+**Negative control.** Where feasibility hinges on fine continuous fit (e.g.,
+dense packing), any compressed representation is expected to **lose**; such
+domains bound the claim.
+
+**x₀ stance is open.** We are **not committed** to dropping or keeping the
+low-level state x₀. PIGINet's own ablation shows x₀ carries signal *in their
+kitchen problems*, which weakens the *universal* data-efficiency rationale for
+dropping it — but does not establish that x₀ must always be included. Whether
+dropping low-level state is a helpful abstraction is **domain-dependent**;
+experiment-driven (cf. the §6 "x₀-conditioned prior" item, now central rather
+than future-work).
+
+**Adaptivity is secondary.** Within-episode refinement failures carry free
+instance-specific signal, but our own analysis attributes only a **minority
+(~27%)** of the method's margin to this component; the static representation does
+the bulk (`notebook.md` 2026-06-06). The SPECTRE re-ranker is therefore a
+**secondary, composable** increment — orthogonal to, and combinable with,
+whichever representation wins.
+
+**Evaluation plan.** *Prefer* **pre-existing environments** — but only those that
+exhibit the properties we hypothesize make a relational/abstract representation
+stronger than a low-level predictor; **bespoke, hand-crafted environments remain
+in scope** where they more realistically expose that advantage. Candidate
+properties (an open, evolving list):
+
+1. Feasibility is governed by relational structure the abstraction captures.
+2. The low-level state is high-dimensional and distracting, or otherwise hard to
+   extract relational structure from (which the abstraction hands over for free).
+3. Perception is genuinely limited or costly in the domain.
+4. **Object-count / identity generalization** — feasibility structure recurs
+   across object identities and counts, so an identity-agnostic, compositional
+   relational abstraction generalizes from few problems where pixel features
+   don't.
+5. **Long horizon / large diverse pool** — long plans and many goal-reaching
+   skeletons make feasibility prediction non-trivial in the first place, and the
+   abstraction's compression advantage over raw perception grows with scene
+   complexity.
+
+Concretely, the planned sweep uses pre-existing homes — PIGINet's kitchens with
+progressively **degraded perception**, and **clutter/distractor** domains (e.g.,
+Khodeir et al.) augmented with a **low-level baseline** — over the grid of
+**perception-degradation × training-set size**. Primary metric:
+**time-to-first-success** in refinement attempts; secondary: **time-to-k**.
+See [`research_lit.md`](research_lit.md) for the candidate environments and the
+low-level (PIGINet-class) comparison.
+
+---
+
+## Superseded framing (April 2026)
+
+*Retained byte-unchanged as the record of the adaptivity-first direction. See §0
+above and `decisions.md` 2026-06-25 for what superseded it; nothing below has
+been rephrased.*
+
 **S**keleton-**P**ool **E**mbedding with **C**ontextual **T**ransformer for
 **RE**ordering: a learned adaptive re-ranker that reorders a TAMP skeleton pool
 *during* the refinement loop, conditioning on the skeletons that have already
@@ -42,6 +152,7 @@ SPECTRE is the candidate method; B1–B5 are the baselines (never the reverse):
 | B3 | static-historical (Laplace-smoothed success rates on canonical keys) | the static ranker to strictly beat |
 | B4 | adaptive-historical (Naive-Bayes log-odds over pairwise failure conditionals) | **headline comparison** — empirical lower bound on the adaptivity premium |
 | B5 | oracle | top anchor / headroom |
+| B6 | DP-on-counts (receding-horizon expectimax over B4's calibrated counts, depth `h`) | tests whether *lookahead* over the same count model beats B4's myopic greedy; `h=1` ≡ B4 (`decisions.md` 2026-06-08) |
 
 ## 2. Why RoutedTransport2D
 
@@ -188,7 +299,18 @@ rollout performance — they are diagnostics only; never optimize for them.
 - **x₀-conditioned prior.** A PIGINet-style feasibility predictor over the
   concrete initial state as an additional scorer input — a strict
   generalization of the current deliberately x₀-free setup (writeup, Future
-  work).
+  work). *(⚠️ 2026-06-25: now central, not future-work — the low-level vs.
+  abstract substrate question is the contribution; see §0.)*
+- **DD2D as the packing / negative-control testbed.** DD2D (Drawer Decluttering
+  2D) is wired in as env_variant `dd2d_v2` via a JSON→EpisodeRecord converter
+  (`envs/dd2d/spectre_convert.py`; `decisions.md` 2026-07-12), abstract-only for
+  now. Feasibility is a continuous packing problem, so abstract-first is expected
+  to *lose* — DD2D is the negative control that bounds the representation claim
+  (§0). The source JSON retains per-object poses/shapes/sizes, so DD2D is also the
+  natural home for the x₀-conditioned comparator above: the crossover prediction
+  is testable here once a low-level baseline is stood up. Label caveat: DD2D's
+  Day-1 labeler marks non-area-proven negatives as *marginal*, so no
+  label-dependent number until its negative certificate lands.
 - **DAgger round** — only if test-time gap appears that offline AUROC(t) does
   not predict.
 - **Deferred from the original spec:** cost-weighted PL (wall-clock metric),

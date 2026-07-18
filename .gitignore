@@ -220,6 +220,12 @@ data/spectre/checkpoints/
 data/spectre/configs/
 data/spectre/derived/
 
+# DD2D vendored-env artifacts (large, derived/input data — keep out of git; the
+# vendored env *source* under envs/dd2d/ stays tracked). data/ = raw_v2 dataset
+# (~2GB); out_dd2d/ = CLIP caches + PIGINet checkpoints (~4.7GB).
+src/alphatamp/approaches/spectre/envs/dd2d/data/
+src/alphatamp/approaches/spectre/envs/dd2d/out_dd2d/
+
 # Untracked analysis output from analyze_cluttered_storage.ipynb
 experiments/analyze_cluttered_storage.pkl
 
@@ -230,3 +236,6 @@ experiments/spectre/*.pdf
 
 # marimo notebook runtime cache (session/layout state for analyze_spectre.py)
 experiments/spectre/__marimo__/
+
+# Weights & Biases local run directory
+wandb/

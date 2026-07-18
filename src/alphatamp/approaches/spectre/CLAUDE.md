@@ -9,17 +9,35 @@ spectre-specific lives here and in the imported docs:
 
 ## What this is
 
-SPECTRE is a learned **adaptive skeleton re-ranker** for bilevel TAMP: given a
+**Direction pivot, 2026-06-25 (see [`docs/proposal.md`](docs/proposal.md) §0 and
+[`docs/decisions.md`](docs/decisions.md) 2026-06-25).** SPECTRE's contribution is
+now a **representation question** for plan-feasibility prediction in
+fully-observable, deterministic bilevel TAMP: *what should a feasibility
+predictor represent skeletons and problems over?* The hypothesis (falsifiable, not
+proven) is that a richer-than-pixels, cheaper-than-full-state representation
+predicts refinement feasibility more sample-efficiently and with weaker perception
+than a low-level (PIGINet-style) predictor over the concrete initial state — with
+a **crossover** in the low-data / weak-perception regime (efficiency, not
+information access). *Abstract-first* is the current leading candidate, one point
+in a design space (learned latents, object-centric/graph features, invented
+predicates, …). The **adaptive skeleton re-ranker** described below is now a
+**secondary, composable** increment, not the headline: our own ablation
+attributes only ~27% of the margin over B4 to failure-conditioning, the static
+representation the rest (`docs/notebook.md` 2026-06-06/2026-06-25).
+
+Mechanically, the SPECTRE re-ranker is a learned model for bilevel TAMP: given a
 pool of candidate skeletons and the set of skeletons that have already failed
 refinement, it picks the next skeleton to try. Candidate method = SPECTRE;
 baselines are B1–B5 (random, default order, static-historical,
 adaptive-historical, oracle) — never describe spectre-specific code or labels
-as a "baseline". Headline metric: mean time-to-first-success vs B4, mean ± std
+as a "baseline". Re-ranker metric: mean time-to-first-success vs B4, mean ± std
 over ≥ 3 seeds, evaluated uncensored at attempt budget 30 (= the candidate-pool
 cap, so the budget never binds; `decisions.md` 2026-06-07). Model selection
-(`val_rollout_attempts`) stays at its own budget 20. Primary evaluation env:
-RoutedTransport2D-n3-v1 (in-package); ClutteredStorage2D-b5/b7 and
-StickButton2D-b5 collections are historical.
+(`val_rollout_attempts`) stays at its own budget 20. RoutedTransport2D-n3-v1
+(in-package) is the bespoke env behind the re-ranker results; under the pivot,
+evaluation prefers **pre-existing environments meeting the representation-
+advantage property wishlist** (`docs/proposal.md` §0), with bespoke still in
+scope. ClutteredStorage2D-b5/b7 and StickButton2D-b5 collections are historical.
 
 ## Where everything lives
 
@@ -27,6 +45,7 @@ StickButton2D-b5 collections are historical.
 |---|---|
 | Package (model, dataset, collection, EDA) | `src/alphatamp/approaches/spectre/` — do not move; it IS `alphatamp.approaches.spectre` |
 | RT2D environment | `src/alphatamp/approaches/spectre/envs/routedtransport2d/`, registered via `env_registry.py` |
+| DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (env + raw_v2 dataset + `MIGRATION_DD2D.md`); `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter). Wired as env_variant `dd2d_v2`, **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
 | Docs (living proposal, ADR log, lab notebook, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | Hydra entry points + configs + SLURM launchers + analysis notebook | `experiments/spectre/` (configs under `experiments/spectre/conf/`) |
 | Tests | `tests/approaches/spectre/` (RT2D env tests under `envs/routedtransport2d/`) |
@@ -35,7 +54,8 @@ StickButton2D-b5 collections are historical.
 
 Spectre's Hydra configs are self-contained: `experiments/spectre/conf/`
 holds `spectre_collect.yaml`, `spectre_build_vocab.yaml`, `spectre_train.yaml`,
-the spectre-only env group (`env/{clutteredstorage2d_b5,routedtransport2d_n3_v1,stickbutton2d_b5}.yaml`),
+`dd2d_convert.yaml`, the spectre-only env group
+(`env/{clutteredstorage2d_b5,routedtransport2d_n3_v1,stickbutton2d_b5,dd2d_v2}.yaml`),
 and spectre's own `hydra/launcher/slurm.yaml` (8 cpus / 32 GB). The shared
 `experiments/conf/` tree belongs to other projects — never put spectre configs
 there.
@@ -50,6 +70,13 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    — or `bash experiments/spectre/collect_routedtransport2d_n3_v1.sh` (all
    three splits locally), or `sbatch experiments/spectre/spectre_collect.slurm …`
    / `bash experiments/spectre/submit_spectre_<env>.sh` on a cluster.
+   **DD2D (`env=dd2d_v2`) skips this stage:** it has no native SPECTRE env — run
+   `python experiments/spectre/dd2d_convert.py` instead to convert the migrated
+   `envs/dd2d/data/dd2d/raw_v2` JSON dataset into `data/spectre/raw/dd2d_v2/…`
+   episodes. To generate *fresh* DD2D data, run DD2D's own collector
+   (`python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect --out-root …`,
+   needs shapely + the planners) and re-run the converter pointed at its output.
+   Stages 2–4 below then work unchanged with `env=dd2d_v2`.
 2. **Vocab** (train split only, OOV-checks val/test):
    `python experiments/spectre/spectre_build_vocab.py env=routedtransport2d_n3_v1`
 3. **Sanity-check** the collection + one collated batch:

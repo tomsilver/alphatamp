@@ -31,6 +31,48 @@ from alphatamp.approaches.spectre.train import TrainingConfig, train
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
+def _maybe_init_wandb(
+    cfg: DictConfig, training_cfg: TrainingConfig, env_variant: str
+) -> object | None:
+    """Initialize a wandb run from ``cfg.wandb``, or return ``None``.
+
+    Returns ``None`` when wandb is disabled or the import fails (training then
+    proceeds without logging). The API key is read from ``WANDB_API_KEY``; it is
+    never taken from config. ``mode`` is one of ``disabled|online|offline``.
+    """
+    wcfg = cfg.get("wandb", None)
+    if wcfg is None or str(wcfg.get("mode", "disabled")) == "disabled":
+        return None
+    try:
+        import wandb  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        print("[wandb] not installed; continuing without logging.")
+        return None
+
+    seed = int(cfg.seed)
+    name = wcfg.get("name") or f"{env_variant}_seed{seed}"
+    raw_tags = OmegaConf.to_container(wcfg.get("tags", []), resolve=True) or []
+    tags = [str(t) for t in cast("list[Any]", raw_tags)]
+    run_config = {
+        **asdict(training_cfg),
+        "env_variant": env_variant,
+        "seed": seed,
+        "data_root": str(cfg.data_root),
+    }
+    run = wandb.init(
+        project=str(wcfg.get("project", "spectre")),
+        entity=wcfg.get("entity"),
+        group=wcfg.get("group"),
+        name=name,
+        tags=tags,
+        notes=wcfg.get("notes"),
+        mode=cast(Any, str(wcfg.get("mode"))),
+        config=run_config,
+    )
+    print(f"[wandb] logging to {run.url if hasattr(run, 'url') else run}")
+    return run
+
+
 def _build_training_config(cfg: DictConfig) -> TrainingConfig:
     raw = cast(dict[str, Any], OmegaConf.to_container(cfg.train, resolve=True))
     assert isinstance(raw, dict)
@@ -87,15 +129,29 @@ def main(cfg: DictConfig) -> None:
     if training_cfg.use_static_tag_pool:
         print(f"  static_tag_predicates={static_tag_predicates}")
 
-    best_path = train(
-        cfg=training_cfg,
-        train_dir=train_dir,
-        val_dir=val_dir,
-        vocab=vocab,
-        type_aug_policy=type_aug_policy,
-        out_dir=out_dir,
-        static_tag_predicates=static_tag_predicates,
-    )
+    wandb_run = _maybe_init_wandb(cfg, training_cfg, env_variant)
+    try:
+        best_path = train(
+            cfg=training_cfg,
+            train_dir=train_dir,
+            val_dir=val_dir,
+            vocab=vocab,
+            type_aug_policy=type_aug_policy,
+            out_dir=out_dir,
+            static_tag_predicates=static_tag_predicates,
+            wandb_run=wandb_run,
+        )
+        if wandb_run is not None and bool(cfg.wandb.get("log_model", False)):
+            import wandb  # pylint: disable=import-outside-toplevel
+
+            artifact = wandb.Artifact(
+                f"{env_variant}_seed{int(cfg.seed)}", type="model"
+            )
+            artifact.add_file(str(best_path))
+            wandb_run.log_artifact(artifact)  # type: ignore[attr-defined]
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()  # type: ignore[attr-defined]
     print(f"Wrote best checkpoint to {best_path}")
 
 

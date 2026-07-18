@@ -1,3 +1,8 @@
+> **STATUS: FROZEN 2026-06-25.** Reflects the April 2026 adaptive-reordering
+> framing. Superseded by the representation-first direction in
+> [`../proposal.md`](../proposal.md) §0 / [`../decisions.md`](../decisions.md)
+> 2026-06-25. Retained as historical record — **do not edit the body.**
+
 # Introduction
 
 One long-standing goal of robotics is to build agents that can solve

@@ -5,9 +5,20 @@ context encoding, set/permutation-invariant architectures, listwise (Plackett–
 ranking, and the problem framings adjacent to all three.
 
 *Rewritten 2026-06-08. Supersedes the 2026-04-27 version. The living docs
-(`proposal.md` / `decisions.md` / `notebook.md`) and the frozen
-`SPECTRE_WRITEUP_APR_2026.md` are the sources of truth for the method; this file
-positions the method against the literature.*
+(`proposal.md` / `decisions.md` / `notebook.md`) carry the foundational ideas
+for this method; this file positions the method against the literature.*
+
+> **2026-06-25 — positioning shift (see `proposal.md` §0 / `decisions.md`
+> 2026-06-25).** The project reframed from *learned test-time reordering* to a
+> **representation question** for plan-feasibility prediction: low-level
+> (PIGINet-style) vs. abstract-first / learned-latent / object-centric /
+> invented-predicate substrates, under realistic data/perception budgets.
+> Consequently **PIGINet is reframed as the low-level static feasibility
+> predictor we compare against** (not "adaptive prior work"), and adaptive
+> reordering is the secondary increment. The table/section text below still
+> carries the reordering-era emphasis where untouched; the representation lens is
+> added in §2 and the boundary/evaluation entries are updated. Edits here are
+> targeted, not a rewrite.
 
 > **How to read the table.** The **Tier** column is the context-budget signal.
 > *Core* = load-bearing for the method's positioning (keep always). *Supporting* =
@@ -56,8 +67,8 @@ A fourth, non-citation point that should shape the related-work emphasis is in �
 
 | Paper | Venue | Tier | What it does | Relation to SPECTRE |
 |---|---|---|---|---|
-| **PIGINet** — Yang, Garrett, Lozano-Pérez, Kaelbling, Fox 2023 [2211.01576] | RSS 2023 | Core | Transformer over (skeleton, goal, `x₀`) with fused image/text/value tokens predicts refinement feasibility; static pre-sort | **Primary static baseline.** The `x₀`-conditioned feasibility ranker SPECTRE's future-work prior would subsume; SPECTRE's distinction is *adaptivity* + *no `x₀`* |
-| **LAZY / Policy-Guided Lazy Search** — Khodeir et al. 2023 [2210.14055] | — | Core | Reorders PDDLStream queue lazily from geometric samples + goal-directed policy; updates within search | **Closest *adaptive* prior work / B4 analog.** Uses frequency counts of co-failure, not a learned structural encoder |
+| **PIGINet** — Yang, Garrett, Lozano-Pérez, Kaelbling, Fox 2023 [2211.01576] | RSS 2023 | Core | Transformer over (skeleton, goal, `x₀`) with fused CLIP image/text/value tokens predicts refinement feasibility; static pre-sort; trains on **150–600 problems** | **The low-level static feasibility predictor we compare against** (representation pivot, 2026-06-25). `x₀` = multi-camera images + relational literals over the concrete initial state. The crossover hypothesis: a richer-than-pixels / cheaper-than-full-state representation should match or beat it in the low-data / weak-perception regime, PIGINet regaining its edge with abundant data + strong perception. PIGINet's x₀-ablation (x₀ carries signal *in their kitchens*) is why our x₀ stance is open, not "drop x₀" |
+| **LAZY / Policy-Guided Lazy Search** — Khodeir et al. 2023 [2210.14055] | — | Core | Reorders PDDLStream queue lazily from geometric samples + goal-directed policy; updates within search; **kitchen rearrangement with clutter/distractors** | **Closest *adaptive* prior work / B4 analog.** Uses frequency counts of co-failure, not a learned structural encoder. **Evaluation candidate (2026-06-25):** its clutter/distractor 7-DoF domains are a pre-existing home for the representation sweep (augment with a low-level baseline) |
 | **Geometric TAMP rank function (SAHS)** — Kim et al. 2018 / 2021 [2203.04605] | NeurIPS-WS 2018 → IJRR 2021 | Core | Learned score-space rank function for discrete TAMP search + learned sampler | **Earliest explicit learned skeleton ranker.** Score-space (2018) is the origin; IJRR (2021) the journal extension |
 | **Neural Feasibility Checking** — Xu et al. 2022 [2203.10568] | — | Supporting | NN predicts kinematic feasibility, replaces motion checks | Feasibility-prediction, action-level not skeleton-level |
 | **Learning Feasibility for TAMP (tabletop)** — Wells, Dantam, Shrivastava, Kavraki 2019 | IEEE RA-L 2019 | Supporting | Learns a feasibility classifier used as a *search-ordering heuristic* | **Foundational** learned-feasibility-as-ordering; predecessor to PIGINet/Xu |
@@ -72,7 +83,6 @@ A fourth, non-citation point that should shape the related-work emphasis is in �
 |---|---|---|---|---|
 | **Effort Allocation / Metareasoning** — Sung, Shperberg, Wang, Stone 2024 [2410.05828] | TRO (under review) | Supporting | MDP over option-refinement budget under a deadline; DP_Rerun ≈ MCTS quality, negligible overhead | Budget/metareasoning neighbor; **not** representation learning over failure structure |
 | **Learning to Search in TAMP with Streams** — Khodeir et al. 2023 [2111.13144] | — | Supporting | GNN heuristic over PDDLStream fact/object expansion order | Coarser than skeleton-level; static search heuristic |
-| **Differentiable GPU-Parallelized TAMP** — Shen et al. 2024 [2411.11833] | — | Supporting | Evaluates thousands of skeleton refinements in parallel on GPU | **Paradigm challenge:** if refinement parallelizes cheaply, *sequential reordering may be the wrong tool* (see §6) |
 
 ### Core — architecture (set / permutation-invariant encoders)
 
@@ -110,6 +120,8 @@ A fourth, non-citation point that should shape the related-work emphasis is in �
 | **Predicate Invention for Bilevel Planning** — Silver et al. 2023 [2203.09634] | AAAI 2023 (v3 2025) | Background | Learns predicates by optimizing a surrogate aligned with planning efficiency | **Surrogate-objective alignment** precedent — the same discipline SPECTRE applies in choosing a rollout-aligned loss |
 | **NSRTs** — Chitnis et al. 2021 [2105.14074] | — | Background | Neuro-symbolic relational transition models for bilevel planning | System context for the operator/sampler substrate |
 | **SLAP** — Y. I. Liu, Li, Eysenbach, Silver 2025 [2511.01107] | — | Background | Discovers new options via RL shortcuts in the abstract graph | Same group/setting (deterministic, fully-observable); orthogonal to ranking |
+| **TAMPURA** — Curtis et al. 2024 [2403.10454] | — | Background | TAMP with uncertainty + risk awareness; reasons in belief space at task + controller level | **The partially-observable boundary — out of scope for our FO claim.** Explicitly notes the typical TAMP formulation assumes full observability + deterministic effects; TAMPURA relaxes exactly that. Marks where the representation-efficiency claim no longer applies on information grounds |
+| **KinDER** — *Physical Reasoning Benchmark for Robot Learning and Planning* 2026 [2604.25788] | RSS 2026 | Background | 25 procedurally-generated 2D/3D envs + 13 baselines; isolates five physical-reasoning axes: spatial relations, nonprehensile manipulation, tool use, combinatorial geometric constraints, dynamic constraints | Source of the kinder 2D envs (ClutteredStorage2D etc.). **Observability and determinism are *orthogonal* to its five axes** — KinDER varies physical-reasoning difficulty, not the FO/deterministic assumption SPECTRE works under; an env can be hard on a KinDER axis yet still FO+deterministic |
 | **Sampling-based optimal motion planning (RRT\*/PRM\*)** — Karaman & Frazzoli 2011 [1105.1186] | IJRR 2011 | Background | Asymptotically optimal sampling-based motion planning | The continuous layer the refiner invokes |
 | **Collision-free path planning** — Lozano-Pérez & Wesley 1979 | CACM 1979 | Background | Configuration-space path planning among obstacles | Origin of the motion-planning half of TAMP |
 | **PRM** — Kavraki et al. 1996 | IEEE T-RA 1996 | Background | Probabilistic roadmaps | Classic motion-planning substrate |
@@ -155,6 +167,25 @@ problems by a learned encoder. **Lazy/online reordering** (LAZY, Khodeir et al.
 *frequency counts* that do not generalize across structurally similar skeletons.
 SPECTRE's claim sits exactly here: a learned encoder that generalizes failure
 structure across skeletons, rather than counting co-failures per canonical key.
+
+**Representation lens (added 2026-06-25).** Under the current framing the line of
+prior work is read differently: the static feasibility predictors above differ
+not only in *being* static but in *what they represent the problem over*. PIGINet
+predicts from the **low-level** initial state (multi-camera images + relational
+literals); the open question is whether a **richer-than-pixels,
+cheaper-than-full-state** substrate — *abstract-first* (abstract state + skeleton
+structure; the current leading candidate but possibly too lossy), learned
+latents, object-centric / graph features, intermediate symbolic-plus-coarse-
+geometric states, or invented predicates — predicts refinement feasibility more
+sample-efficiently and with weaker perception. This is an **efficiency /
+perception-lightness** claim, not an information-access claim: under
+fully-observable, deterministic TAMP no representation beats an ideal low-level
+predictor on information grounds (cf. the FO information-ceiling, `decisions.md`
+2026-06-25). The abstraction-learning neighbor is **predicate invention** (Silver
+et al. 2023, [2203.09634]): it learns *which* relational predicates make planning
+efficient — the same "what to represent over" question, applied to abstraction
+construction rather than feasibility scoring. The negative control is dense
+packing / fine continuous fit, where compression is expected to lose.
 
 ## 3. Architecture: set encoders and permutation invariance
 
@@ -246,6 +277,16 @@ skeleton structure generalizes the success posterior across a combinatorial
 skeleton space where tabular conditioning cannot" — which is a representation claim,
 testable against the BAI/info-gain baselines above.
 
+**2026-06-25 update.** This section's own closing intuition is now the project's
+lead: the contribution is the **representation** claim, and the latent-inference /
+BAI / info-gain framing (which is about the *adaptive* increment) is demoted with
+it. The active comparison is therefore against the **low-level static predictor**
+(PIGINet-class), not against stronger adaptive baselines, and the falsifiable
+prediction is the perception × data **crossover**, not a tighter posterior. The
+latent-inference material above is retained as the record of the
+reordering-era analysis and as reviewer pre-emption. See `proposal.md` §0 /
+`decisions.md` 2026-06-25.
+
 ---
 
 ## 7. Recommended citation clusters
@@ -291,11 +332,12 @@ re-confirmed and should be checked before use.
 - [2211.01576] Sequence-Based Plan Feasibility Prediction for Efficient TAMP (PIGINet) — Yang, Garrett, Lozano-Pérez, Kaelbling, Fox (RSS 2023) https://arxiv.org/abs/2211.01576
 - [2310.19463] Optimize Planning Heuristics to Rank, not to Estimate Cost-to-Goal — Ferber et al. (NeurIPS 2023) https://arxiv.org/abs/2310.19463
 - [2402.01878] LiPO: Listwise Preference Optimization through Learning-to-Rank — T. Liu et al. (2024) https://arxiv.org/abs/2402.01878
+- [2403.10454] Task and Motion Planning with Uncertainty and Risk Awareness (TAMPURA) — Curtis et al. (2024) https://arxiv.org/abs/2403.10454
 - [2404.06912] Set-Encoder: Permutation-Invariant Inter-Passage Attention for Listwise Re-Ranking — Deckers et al. (2024) https://arxiv.org/abs/2404.06912
 - [2407.13694] Anticipatory Task and Motion Planning — Dhakal et al. (2024) https://arxiv.org/abs/2407.13694
 - [2410.05828] Effort Allocation for Deadline-Aware TAMP: A Metareasoning Approach — Sung, Shperberg, Wang, Stone (2024) https://arxiv.org/abs/2410.05828
-- [2411.11833] Differentiable GPU-Parallelized Task and Motion Planning — Shen et al. (2024) https://arxiv.org/abs/2411.11833
 - [2511.01107] SLAP: Shortcut Learning for Abstract Planning — Y. I. Liu, Li, Eysenbach, Silver (2025) https://arxiv.org/abs/2511.01107
+- [2604.25788] KinDER: A Physical Reasoning Benchmark for Robot Learning and Planning — Princeton Robot Planning and Learning group (RSS 2026) https://arxiv.org/abs/2604.25788
 - ListMLE: Listwise Approach to Learning to Rank — Theory and Algorithm — Fen Xia, Tie-Yan Liu, Jue Wang, Wensheng Zhang, Hang Li (ICML 2008)
 - ListNet: Learning to Rank — From Pairwise Approach to Listwise Approach — Cao, Qin, Liu, Tsai, Li (ICML 2007)
 - The Analysis of Permutations — Plackett (Applied Statistics, 1975); Individual Choice Behavior — Luce (1959)

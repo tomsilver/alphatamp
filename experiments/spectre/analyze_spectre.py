@@ -13,7 +13,8 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     # SPECTRE EDA
 
     Go/no-go diagnostic battery per `SPECTRE_EDA_SPEC.md`. Runs Group 1 sanity,
@@ -27,7 +28,8 @@ def _(mo):
     honest comparison. B3/B4 additionally fit `»` on the **train** split.
     Validation is intentionally untouched — reserved for SPECTRE's own
     hyperparameter selection later.
-    """)
+    """
+    )
     return
 
 
@@ -40,6 +42,7 @@ def _(mo):
     import pandas as pd
     import scienceplots
     import seaborn as sns
+    from scipy.stats import wilcoxon
 
     from alphatamp.approaches.spectre import eda
 
@@ -115,14 +118,17 @@ def _(mo):
         sns,
         test_dir,
         train_dir,
+        wilcoxon,
     )
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## 1. Load splits (train + test)
-    """)
+    """
+    )
     return
 
 
@@ -145,11 +151,13 @@ def _(eda, test_dir, train_dir):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Group 1 — episode sanity (on train)
 
     Per spec §1, Group 1 describes the training collection itself.
-    """)
+    """
+    )
     return
 
 
@@ -216,7 +224,8 @@ def _(ATTEMPT_BUDGET, eda, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## 3.5 Train↔test key-overlap diagnostic
 
     Interpretation context for Group 2 / Group 3:
@@ -225,7 +234,8 @@ def _(mo):
     - `≤ 0.1`: disjoint-pool regime, B3/B4 degenerate to default order,
       Δ≈0 is mechanical. SPECTRE's Φ/Ψ may still exploit structure the discrete
       baselines cannot (spec §5.1 caveat).
-    """)
+    """
+    )
     return
 
 
@@ -252,7 +262,8 @@ def _(eda, test, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Group 2 — baselines (all five on test)
 
     B1 random floor, B2 heuristic-aware order, B3 static-historical (fit on
@@ -266,7 +277,8 @@ def _(mo):
     closed-form lex order produced by the routedtransport2d enumerator is
     reported as `B2_default_order_lex` alongside it as a sanity row, but is not
     the baseline we compare against (it ignores the problem instance).
-    """)
+    """
+    )
     return
 
 
@@ -299,13 +311,146 @@ def _(ATTEMPT_BUDGET, eda, pd, test, train):
     return b2, b2_lex, b3, b4, b5, summary
 
 
+@app.cell
+def _(eda, np, plt, test, train):
+    # Solvability-at-cap: fraction of problems solvable within the first k
+    # planner-ordered candidates. Gates any eval-side pool capping — successes
+    # sit at every depth (test reaches ~1.0 only at k=30), so capping the
+    # candidate pool would censor real successes. This is why B6 runs at the full
+    # K=30 with no capping (decisions.md 2026-06-11).
+    _sol_train = eda.solvability_at_cap(train, k_max=train.k_max)
+    _sol_test = eda.solvability_at_cap(test, k_max=test.k_max)
+    _fig, _ax = plt.subplots(figsize=(7, 4))
+    _ax.plot(np.arange(1, len(_sol_train) + 1), _sol_train, "-o", ms=3, label="train")
+    _ax.plot(np.arange(1, len(_sol_test) + 1), _sol_test, "-s", ms=3, label="test")
+    _ax.set_xlabel("candidate cap k (first k planner-ordered skeletons)")
+    _ax.set_ylabel("fraction of problems solvable within first k")
+    _ax.set_title("Solvability vs candidate cap (RT2D-n3)")
+    _ax.set_ylim(0, 1.02)
+    _ax.legend()
+    plt.tight_layout()
+    plt.show()
+    print(
+        f"test solvable@15 = {_sol_test[14]:.2f}, @20 = {_sol_test[19]:.2f}, "
+        f"@30 = {_sol_test[-1]:.2f}  (capping below 30 censors successes)"
+    )
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
+    ## B6 — DP-on-counts (receding-horizon lookahead)
+
+    A new evaluation **baseline** (not SPECTRE): it reuses B4's calibrated count
+    model as its `q`-model and looks `h−1` steps ahead over the
+    cost-to-first-success Bellman recursion. By construction `h=1` reproduces B4
+    exactly; `h≥2` adds expectimax lookahead with a re-conditioning greedy leaf.
+
+    The search is **exact** (`m=None`): incremental Naive-Bayes scoring makes the
+    `O(K²)`-leaf expectimax tractable through `h=4` (h=2 ≈ 9s, h=3 ≈ 86s, h=4 ≈
+    minutes) at the full pool **K=30**, with no candidate capping (see the
+    solvability-at-cap figure above: successes sit at every planner depth, so
+    capping would censor real successes — `decisions.md` 2026-06-11). Set the
+    optional `m=12` only to push `h≥5`. Swept over `DP_HORIZONS` on the uncensored
+    budget (= pool cap 30).
+
+    **Read the paired stats, not the marginal means** (printed below): the
+    lookahead premium over B4 (= the `h=1` row) is small and saturating, against a
+    much larger gap to SPECTRE — i.e. lookahead on the count model is not the
+    missing ingredient. Extend `DP_HORIZONS` to `(1,2,3,4)` for the (slower) h=4
+    row.
+    """
+    )
+    return
+
+
+@app.cell
+def _(ATTEMPT_BUDGET, eda, np, pd, test, train, wilcoxon):
+    DP_HORIZONS = (1, 2, 3)  # add 4 for the ~minutes-long exact h=4 row
+    dp_sweep = {
+        _h: eda.dp_on_counts_baseline(
+            train,
+            test,
+            attempt_budget=ATTEMPT_BUDGET,
+            depth=_h,
+            objective="attempts",
+        )
+        for _h in DP_HORIZONS
+    }
+    b6_h1 = dp_sweep[1]
+    b6_h2 = dp_sweep[2]
+
+    dp_summary = pd.DataFrame(
+        [
+            {
+                "method": dp_sweep[_h].name,
+                "mean_attempts": float(dp_sweep[_h].attempts.mean()),
+                "sd_attempts": float(dp_sweep[_h].attempts.std()),
+                "mean_wall_clock_s": float(dp_sweep[_h].wall_clock.mean()),
+                "censoring_rate": float(dp_sweep[_h].censored.mean()),
+                "n_episodes": len(dp_sweep[_h].attempts),
+            }
+            for _h in DP_HORIZONS
+        ]
+    ).set_index("method")
+
+    # Paired per-problem stats: the h-sweep is over the SAME test problems, so
+    # report paired differences (Wilcoxon signed-rank + win/tie/loss), not just
+    # marginal means. Positive Δ ⇒ the deeper horizon used fewer attempts.
+    print("Paired per-problem lookahead premium (Δ = shallower − deeper attempts):")
+    for _lo, _hi in zip(DP_HORIZONS[:-1], DP_HORIZONS[1:]):
+        _a = dp_sweep[_lo].attempts
+        _b = dp_sweep[_hi].attempts
+        _d = _a - _b
+        _w = int((_d > 0).sum())
+        _t = int((_d == 0).sum())
+        _l = int((_d < 0).sum())
+        _p = wilcoxon(_a, _b).pvalue if np.any(_d != 0) else float("nan")
+        print(
+            f"  h{_lo}->h{_hi}: Δmean={_d.mean():+.3f}  "
+            f"win/tie/loss={_w}/{_t}/{_l}  wilcoxon p={_p:.3g}"
+        )
+
+    # Calibration diagnostic: extreme-q frequency along each test episode's B4
+    # rollout (|F| grows). The softmax posterior has no clip; this confirms q does
+    # not saturate to 0/1 in the conditioning regime B6 exploits.
+    _stats = eda._fit_adaptive(train)
+    _eps = 1e-3
+    _q_vals = []
+    for _ep_idx in eda._trainable_episodes(test):
+        _keys = test.skeleton_keys[_ep_idx]
+        _remaining = set(range(len(_keys)))
+        _failed: list = []
+        while _remaining:
+            for _idx in _remaining:
+                _q_vals.append(eda._adaptive_q(_stats, _keys[_idx], _failed))
+            _best = max(
+                _remaining,
+                key=lambda i: (eda._adaptive_score(_stats, _keys[i], _failed), -i),
+            )
+            _failed.append(_keys[_best])
+            _remaining.discard(_best)
+    _q_arr = np.array(_q_vals)
+    _extreme = float(((_q_arr < _eps) | (_q_arr > 1 - _eps)).mean())
+    print(
+        f"DP-on-counts q calibration: extreme-q (<{_eps} or >{1 - _eps}) "
+        f"fraction = {_extreme:.4f} over {_q_arr.size} (candidate, F) states"
+    )
+    dp_summary
+    return (b6_h2,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
     ## SPECTRE — candidate method
 
     SPECTRE is the trained ranker we want to compare *against* B1–B5 (it is **not** a baseline). Loads `SPECTRE_CHECKPOINT_PATH`, runs the same per-episode attempt loop on test, and appends a row to the summary table above. Reuses `BaselineResult` only because its per-episode (attempts, wall_clock, censored, problem_ids) schema is generic.
-    """)
+    """
+    )
     return
 
 
@@ -373,7 +518,8 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Frozen-context (Ψ) ablation — is the context encoder load-bearing?
 
     De-risking ablation: does SPECTRE's strength come from the skeleton encoder
@@ -394,7 +540,8 @@ def _(mo):
     method/decision notes: `docs/notebook.md` (2026-06-06 entry),
     `docs/decisions.md`, and the `spectre_ablate_context.py` runner (whose
     numbers these cells reproduce).
-    """)
+    """
+    )
     return
 
 
@@ -454,6 +601,9 @@ def _(SPECTRE_NAME):
         "B2_default_order": "Abstract Plan Generator",
         "B3_static_historical": "Static Historical Baseline",
         "B4_adaptive_historical": "Adaptive Historical Baseline",
+        "B6_dp_h1_attempts": "DP-on-counts (h=1 ≡ B4)",
+        "B6_dp_h2_attempts": "DP-on-counts (h=2)",
+        "B6_dp_h3_attempts": "DP-on-counts (h=3)",
         "SPECTRE-frozen-context": "Frozen-Context Ablation (Static Ranker)",
         SPECTRE_NAME: SPECTRE_NAME,
     }
@@ -466,22 +616,25 @@ def _(
     b2_lex,
     b3,
     b4,
+    b6_h2,
     frozen_result,
     np,
     plt,
     rename,
     spectre_result,
 ):
-    # B2-B4 baselines, then the frozen-context ablation, then full SPECTRE. The
-    # frozen variant is an ablation of SPECTRE, NOT a baseline (baselines are
-    # B1-B5); it gets its own color so it never reads as full SPECTRE's purple.
-    baselines = [b2_lex, b3, b4, frozen_result, spectre_result]
+    # B2-B4 baselines, then DP-on-counts (B6, h=2 representative), then the
+    # frozen-context ablation, then full SPECTRE. The frozen variant is an
+    # ablation of SPECTRE, NOT a baseline (baselines are B1-B6); it gets its own
+    # color so it never reads as full SPECTRE's purple.
+    baselines = [b2_lex, b3, b4, b6_h2, frozen_result, spectre_result]
     colors = {
         "B1": "tab:gray",
         "B2": "tab:blue",
         "B3": "tab:orange",
         "B4": "tab:green",
         "B5": "tab:red",
+        "B6": "tab:olive",
         "SPECTRE": "tab:purple",
         "SPECTRE_FROZEN": "tab:brown",
     }
@@ -770,11 +923,13 @@ def _(df_cmp, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## SPECTRE adaptive premium and oracle headroom
 
     Paired bootstrap of SPECTRE against B3 (static-historical) and B5 (oracle), using the same `_assert_aligned` machinery as the existing Group 3 analysis.
-    """)
+    """
+    )
     return
 
 
@@ -817,7 +972,8 @@ def _(b3, b5, eda, pd, spectre_result):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Frozen-context ablation — paired diagnostics
 
     Full vs frozen on the same checkpoint and the same 100 test episodes
@@ -825,7 +981,8 @@ def _(mo):
     bootstrap Δ; then how *similar* the two rollouts are (per-index
     agreement, first-divergence) and where the frozen static ranker lands
     relative to B3 / B4 (success@K).
-    """)
+    """
+    )
     return
 
 
@@ -938,14 +1095,16 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Group 3 — adaptive premium Δ and headroom H
 
     Paired bootstrap (10,000 resamples) over test episodes. Because all five
     baselines share the same `problem_ids` ordering (enforced by
     `adaptive_premium` / `headroom` via `_assert_aligned`), the resampled
     indices apply identically to both arms.
-    """)
+    """
+    )
     return
 
 
@@ -994,13 +1153,15 @@ def _(b2, b3, b4, b5, eda, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## §6 Pass bar
 
     Primary conditions 1–5 must all hold. Condition 6 (headroom ≥ 2) is flagged
     but non-blocking. An interpretive caveat is printed when the disjoint-pool
     regime is detected (spec §5.1).
-    """)
+    """
+    )
     return
 
 

@@ -1,0 +1,22 @@
+# blocks_tamp dependencies (pinned to the versions in the repo .venv).
+# Recreate the environment with:
+#   python3 -m venv .venv
+#   .venv/bin/python -m pip install -r blocks_tamp/requirements-blocks.txt
+#
+# Symbolic diverse planning (FORBID-SEARCH / top-k):
+unified-planning==1.3.0    # modelling + PDDL reader
+up-symk==1.4.2             # SymK engine: native top-k diverse planning (preferred)
+pyperplan==2.1             # pure-Python STRIPS; BFS-diverse fallback when SymK is absent
+#
+# Geometry refinement is pure-numpy (no extra dep). Rendering confirmation:
+pybullet==3.2.7            # real 3-D scene + headless segmented rendering (preferred)
+# numpy / imageio: numpy-2D render fallback, PNG export, and episode-video frames
+numpy==2.5.0
+imageio==2.37.3
+imageio-ffmpeg==0.6.0      # mp4 episode videos (bundles ffmpeg); without it videos fall back to gif
+matplotlib==3.11.0         # sweep heatmap + plots (blocks_tamp/sweep.py); E1 top-down render/video
+marimo==0.23.13            # reactive notebook for the DD2D EDA (blocks_tamp/dd2d/eda_notebook.py)
+#
+# E1 (capacitated loading) 2D world model. HARD dependency of blocks_tamp.e1 (no
+# pure-Python fallback); 2.x ships GEOS-bundled wheels so no system GEOS is needed.
+shapely==2.0.7             # polygon collision + bottom-left-fill placement (blocks_tamp/e1)

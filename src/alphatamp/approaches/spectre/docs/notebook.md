@@ -18,6 +18,129 @@ Format:
 
 ---
 
+## 2026-07-13 — First SPECTRE training run on DD2D (3 seeds) + wandb logging
+
+- What: first real SPECTRE train on `dd2d_v2` (abstract-only converter data),
+  3 seeds × ≤30 epochs (early-stop patience 8; seeds stopped at 12/19/10 epochs),
+  lr 3e-4, batch 32, wd 5e-4, dropout 0.1, `prior_type=zero`, augment on,
+  `checkpoint_metric=val_rollout_attempts` at budget 30. Logged to wandb
+  (`josephxu-lilliput/spectre-dd2d`, group `dd2d_v2_prelim`) via the new optional
+  `wandb_run` hook in `train.py`. Best checkpoint = min val rollout-attempts.
+- Result (best ckpt per seed; val split, uncensored-ish budget 30):
+  **SPECTRE val mean-attempts 13.56 ± 0.53** (seeds 13.19 / 13.18 / 14.32),
+  **AUROC(0) 0.557 ± 0.035, AUROC(3) 0.554 ± 0.015**, top-1 hit ≈0.19/0.17,
+  censoring ≈0.33, val−train attempts gap **−0.50** (no overfitting). Baseline
+  brackets on the same val/budget-30: **B1 random 25.31**, **B2 default-order
+  13.43**, **B3 static-hist 16.48**, **B4 adaptive-hist 15.44**, **B5 oracle 1.00**.
+- Takeaway / next: **negative-control confirmed.** SPECTRE ≈ B2 (ties the trivial
+  shortest-plan-first planner order, 13.56 vs 13.43) and beats the historical
+  rankers B3/B4 (which actively mislead here — DD2D feasibility is per-problem
+  geometric, so canonical-key history doesn't transfer). But AUROC ≈ 0.55 is
+  barely above chance and **AUROC(3) − AUROC(0) ≈ −0.003 fails the §5 Ψ gate
+  (≥0.05)** — abstract-first is near-blind because dropping poses/sizes removes
+  exactly the packing signal feasibility depends on. This is the predicted
+  outcome for the packing / negative-control domain (`proposal.md` §0/§6). Weak
+  top-1 (0.19 vs 0.11 pool base rate) shows a little residual signal, not
+  feasibility learning. Next: stand up the x₀-conditioned / low-level (PIGINet-
+  class) comparator so DD2D can actually test the crossover prediction. Label
+  caveat still applies — negatives are *marginal*, so these are diagnostic, not
+  publishable, numbers.
+
+---
+
+## 2026-07-12 — DD2D wired into SPECTRE via a JSON→EpisodeRecord converter
+
+- What: migrated the **DD2D** (Drawer Decluttering 2D) environment + its
+  already-collected PIGINet-style dataset (`envs/dd2d/data/dd2d/raw_v2`) into the
+  SPECTRE pipeline. Chose a **converter** (`envs/dd2d/spectre_convert.py`, driven
+  by `experiments/spectre/dd2d_convert.py`) over a native SesameModels env: each
+  DD2D problem dir (200 `NNN.json` skeleton records over shared objects/init/goal)
+  is already one SPECTRE episode. New drawer STRIPS substrate in
+  `envs/dd2d/spectre_operators.py` (type `item`; 6 preds; `pick`/`place-buffer`/
+  `retrieve`). `at-pose`/geometry dropped (abstract-only, SPECTRE stays x₀-free).
+- Result: converted **669 problems** (train 425 / val 120 / test 124), 0 failures;
+  every skeleton reconstructs under STRIPS with preconditions satisfied. Pool
+  size constant at **200**; **overall skeleton success rate ≈ 0.11** (train 0.108 /
+  val 0.122 / test 0.106) with per-problem feasible counts highly variable; every
+  persisted episode has ≥1 feasible skeleton (0 filtered by the dataset loader).
+  Vocab (train-only): operators=3, predicates=6, types=1; val/test OOV-clean;
+  `max_skeleton_length=9`, `max_pool_size=200`. Pipeline check + a 1-epoch train
+  run succeed end-to-end: **AUROC(0)=0.596** (passes the >0.55 "Φ not broken"
+  gate), **AUROC(3)=0.575** (i.e. failure-conditioning does *not* help — Ψ below
+  the prior on this domain), val rollout attempts ≈ 13.2±8.4 at budget 20.
+- Takeaway / next: DD2D is the geometric packing / **negative-control** home for
+  the representation question — abstract-first drops exactly the continuous
+  packing signal feasibility hinges on, and the epoch-0 AUROC(3)<AUROC(0) is the
+  expected fingerprint of a too-lossy abstraction, not a wiring bug. Numbers are
+  **not** research-grade yet: DD2D's Day-1 labeler marks non-area-proven negatives
+  as *marginal*, not proven-infeasible (`MIGRATION_DD2D.md` §4), so no
+  label-dependent claim until the arrangement-complete negative certificate lands.
+  Next: multi-seed train; stand up the low-level/x₀-conditioned comparator that
+  makes DD2D a real test of the crossover prediction.
+
+---
+
+## 2026-06-25 — Reinterpretation of the Ψ-ablation + direction pivot
+
+- What: no new training run — a reinterpretation of two existing results under a
+  fully-observable (FO) information-ceiling lens, and the pivot it motivates.
+  Inputs: the 2026-06-06 frozen-context (Ψ) ablation (failure-conditioning ≈ 27%
+  of the margin over B4; static Φ+σ ≈ 73%) and the 2026-06-11 B6 sweep (lookahead
+  premium small/fragile/saturated, +0.47 h1→h3 n.s. at p=0.23). Structural point:
+  in FO+deterministic TAMP every skeleton's outcome is a deterministic function
+  of x₀, so within-episode failures add no information beyond x₀ at the
+  predictor's ceiling — which *bounds* the adaptive component and explains why
+  both the Ψ-ablation and the B6 sweep find adaptivity small.
+- Result (interpretation, not a new number): the static *representation*, not the
+  failure-conditioning, carries SPECTRE's margin. This reframes the contribution
+  from "failure context helps" to a **representation question** for
+  plan-feasibility prediction: what substrate (low-level/PIGINet-style vs.
+  abstract-first vs. learned-latent/object-centric/invented-predicate) predicts
+  refinement feasibility most sample-efficiently and with weakest perception.
+  Established: the 27% and B6 numbers above. **Hypothesis (to test):** a
+  crossover — a well-chosen representation matches/beats a low-level predictor in
+  the low-data/weak-perception regime, losing its edge with abundant data +
+  strong perception (efficiency, not access; negative control = dense packing).
+- Takeaway / next: two forward experiments. (1) **Perception × training-size
+  crossover sweep** on pre-existing homes (PIGINet kitchens with degraded
+  perception; Khodeir clutter/distractor) with a low-level (PIGINet-class)
+  baseline — metric time-to-first-success (secondary time-to-k) — to test the
+  crossover. (2) Cheap **"Measurement B" probe** on a Khodeir domain: are residual
+  refinement failures predictable from *earlier-in-episode* failures (controlling
+  for plan-prefix logic, so we are not just re-reading deterministic prefix
+  implications)? This bounds whether any adaptive headroom survives on natural
+  (non-bespoke) domains, complementing the FO information-ceiling argument. Full
+  rationale: `decisions.md` 2026-06-25; current framing: `proposal.md` §0.
+
+---
+
+## 2026-06-11 — B6 DP-on-counts exact h-sweep (RT2D-n3, K=30, uncensored)
+
+- What: exact (unpruned) receding-horizon sweep of the B6 DP-on-counts baseline,
+  `h ∈ {1,2,3,4}`, on the 100 RT2D-n3 test problems at the full pool K=30, budget
+  30. B6 reuses B4's calibrated NB count model as its `q`-model; `h=1` is B4 by
+  construction. Made tractable by **incremental NB scoring** (leaf `O(K³)→O(K²)`):
+  h=2 93 s→9 s, h=3 740 s→86 s, h=4 intractable→~10 min, all reproducing the exact
+  attempt counts; `h=1 == B4` bitwise. Also added `solvability_at_cap` (gates any
+  pool capping). Driver: `experiments/spectre/analyze_spectre.py` /
+  `eda.dp_on_counts_baseline`.
+- Result: mean attempts 9.62 (h1=B4) → 9.46 (h2) → 9.15 (h3) → 9.14 (h4). **Paired
+  per-problem** (Δ = shallower − deeper, win/tie/loss = deeper strictly fewer /
+  tie / more): h1→h2 Δ+0.16, 9/56/35, p=0.018; h2→h3 Δ+0.31, 10/87/3, p=0.057;
+  h3→h4 Δ+0.01, 2/95/3, p=0.89; h1→h3 Δ+0.47, 10/62/28, **p=0.23 (n.s.)**.
+  Solvability-at-cap: test successes sit at every planner depth (solvable@15≈0.46,
+  @20≈0.60, ~1.0 only at k=30) — capping the candidate pool would censor real
+  successes, so B6 runs uncapped at K=30.
+- Takeaway / next: the lookahead premium is **small, fragile, and saturated** —
+  the +0.47 mean gain (h1→h3) is not significant (Wilcoxon p=0.23) and comes from
+  a few large wins offset by more small regressions (the DP optimizes an imperfect
+  count model, so its "smarter" early picks sometimes lose on realized outcomes);
+  h4 adds nothing over h3 (p=0.89). Against the ~3.5–4 attempt gap from B6 to
+  SPECTRE, **lookahead on the count model is not the missing ingredient** —
+  SPECTRE's relational features, not deeper search over counts, are what close the
+  gap. Pruning (`m`) and exact full-horizon DP remain available but unmotivated
+  here.
+
 ## 2026-06-06 — Frozen-context (Ψ) ablation on RT2D-n3
 
 - What: inference-time ablation of the context encoder — at every rollout

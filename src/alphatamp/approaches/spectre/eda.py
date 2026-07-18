@@ -33,10 +33,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Sequence
+from typing import TYPE_CHECKING, Hashable, Literal, Sequence, cast
 
 import numpy as np
 
+from alphatamp.approaches.spectre import dp_on_counts
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.schema import EpisodeRecord
@@ -49,6 +50,10 @@ if TYPE_CHECKING:
     from alphatamp.approaches.spectre.vocab import Vocab
 
 SkeletonKey = tuple[tuple[str, tuple[str, ...]], ...]
+# Cache key for the DP-on-counts (B6) score/q closures: (candidate key, failed
+# tuple in insertion order). Episode-independent, so shared across the whole
+# sweep. Insertion order (not sorted) matches B4's NB log-sum bitwise.
+_DPCacheKey = tuple[SkeletonKey, tuple[Hashable, ...]]
 
 
 # ---------------------------------------------------------------------------
@@ -937,6 +942,110 @@ def _fit_adaptive(train: LoadedSplit) -> _AdaptiveStats:
     return stats
 
 
+def _adaptive_score(
+    stats: _AdaptiveStats, k: SkeletonKey, failed_keys: Sequence[SkeletonKey]
+) -> float:
+    """B4's Naive-Bayes log-score that ``k`` *succeeds* given failed ``F``.
+
+        S_succ(k, F) = log p̂(k) + Σ_{k' ∈ F} log[p̂(k|k' failed) / p̂(k)]
+
+    Missing ``p̂(k|k' failed)`` entries contribute 0 (no update) per the
+    "log-ratio = 0 for unseen pairs" contract. This is the single source of
+    truth for the B4 ranking; both ``adaptive_historical_baseline`` (B4) and
+    the DP-on-counts baseline (B6) call it so their selections agree exactly.
+    """
+    p_marginal = stats.marginals.p_hat(k)
+    score = float(np.log(p_marginal))
+    for k_prime in failed_keys:
+        cond = stats.p_hat_cond(k, k_prime)
+        if cond is None:
+            continue  # no update; log-ratio := 0
+        score += float(np.log(cond / p_marginal))
+    return score
+
+
+def _adaptive_fail_score(
+    stats: _AdaptiveStats, k: SkeletonKey, failed_keys: Sequence[SkeletonKey]
+) -> float:
+    """Complement of :func:`_adaptive_score`: log-score that ``k`` *fails*.
+
+        S_fail(k, F) = log(1−p̂(k)) + Σ_{k'∈F} log[(1−p̂(k|k')) / (1−p̂(k))]
+
+    Unseen pairs contribute 0, mirroring ``_adaptive_score``. Laplace
+    smoothing keeps ``p̂`` and ``p̂(k|k')`` in ``(0, 1)``, so the complement
+    logs are always defined.
+    """
+    fail_marginal = 1.0 - stats.marginals.p_hat(k)
+    score = float(np.log(fail_marginal))
+    for k_prime in failed_keys:
+        cond = stats.p_hat_cond(k, k_prime)
+        if cond is None:
+            continue  # no update; log-ratio := 0
+        score += float(np.log((1.0 - cond) / fail_marginal))
+    return score
+
+
+def _adaptive_q(
+    stats: _AdaptiveStats, k: SkeletonKey, failed_keys: Sequence[SkeletonKey]
+) -> float:
+    """Calibrated two-class NB posterior ``P(k fails | F) ∈ (0, 1)``.
+
+        q(k, F) = σ(S_fail − S_succ) = exp(S_fail) / (exp(S_succ) + exp(S_fail))
+
+    Used by the DP-on-counts baseline (B6) as its ``q``-model. This is the
+    *normalized* posterior — unlike ``exp(S_succ)`` alone, which is an
+    unnormalized NB score that exceeds 1 for ``|F| ≥ 2`` and would force a
+    clipped ``q = 0`` exactly when conditioning is most informative. B4's
+    ranking still uses the raw ``S_succ`` (see :func:`_adaptive_score`), so
+    this normalization does not affect B4 or the B6 ``h=1`` selection.
+    """
+    delta = _adaptive_fail_score(stats, k, failed_keys) - _adaptive_score(
+        stats, k, failed_keys
+    )
+    # Numerically stable logistic of ``delta``.
+    if delta >= 0.0:
+        return float(1.0 / (1.0 + np.exp(-delta)))
+    exp_delta = float(np.exp(delta))
+    return exp_delta / (1.0 + exp_delta)
+
+
+@dataclass(frozen=True)
+class _RefineCosts:
+    """Mean per-canonical-key refinement wall-clock fit on training data."""
+
+    mean_by_key: dict[SkeletonKey, float] = field(default_factory=dict)
+    global_mean: float = 1.0
+
+    def cost(self, key: SkeletonKey) -> float:
+        """Mean refine time for ``key``; the global mean for OOV keys."""
+        return self.mean_by_key.get(key, self.global_mean)
+
+
+def _fit_refine_costs(train: LoadedSplit) -> _RefineCosts:
+    """Aggregate mean ``refinement_wall_clock_s`` per canonical key on train.
+
+    Mirrors :func:`_fit_marginals`. Per-skeleton refine times are logged on
+    ``OutcomeRecord`` but never pre-aggregated by canonical key; B6's ``time``
+    objective needs ``c(σ) =`` mean refine time per key, so we aggregate here.
+    Keys unseen in train fall back to the global mean.
+    """
+    sums: dict[SkeletonKey, float] = {}
+    counts: dict[SkeletonKey, int] = {}
+    total = 0.0
+    n = 0
+    for ep_idx, ep in enumerate(train.episodes):
+        keys = train.skeleton_keys[ep_idx]
+        for pool_idx, key in enumerate(keys):
+            t = float(ep.outcomes[pool_idx].refinement_wall_clock_s)
+            sums[key] = sums.get(key, 0.0) + t
+            counts[key] = counts.get(key, 0) + 1
+            total += t
+            n += 1
+    global_mean = total / n if n else 1.0
+    mean_by_key = {key: total_t / counts[key] for key, total_t in sums.items()}
+    return _RefineCosts(mean_by_key=mean_by_key, global_mean=global_mean)
+
+
 def adaptive_historical_baseline(
     train: LoadedSplit,
     test: LoadedSplit,
@@ -950,7 +1059,8 @@ def adaptive_historical_baseline(
 
     Missing ``p̂(k|k' failed)`` entries contribute 0 (i.e. no update) per
     the plan's "log-ratio = 0 for unseen pairs" contract. Ties are broken
-    by the skeleton's original pool index.
+    by the skeleton's original pool index. The per-candidate score is
+    computed by :func:`_adaptive_score` (shared with B6).
     """
     stats = _fit_adaptive(train)
     trainable = _trainable_episodes(test)
@@ -971,14 +1081,7 @@ def adaptive_historical_baseline(
             best_score = -np.inf
             best_idx = min(remaining)  # tie-break fallback
             for idx in remaining:
-                k = keys[idx]
-                p_marginal = stats.marginals.p_hat(k)
-                score = float(np.log(p_marginal))
-                for k_prime in failed_keys:
-                    cond = stats.p_hat_cond(k, k_prime)
-                    if cond is None:
-                        continue  # no update; log-ratio := 0
-                    score += float(np.log(cond / p_marginal))
+                score = _adaptive_score(stats, keys[idx], failed_keys)
                 if (score > best_score) or (score == best_score and idx < best_idx):
                     best_score = score
                     best_idx = idx
@@ -1003,6 +1106,215 @@ def adaptive_historical_baseline(
         censored=censored,
         problem_ids=problem_ids,
     )
+
+
+def _build_dp_model(
+    stats: _AdaptiveStats,
+    keys: Sequence[SkeletonKey],
+    objective: str,
+    refine_costs: _RefineCosts | None,
+    score_cache: dict[_DPCacheKey, float],
+    q_cache: dict[_DPCacheKey, float],
+    delta_cache: (
+        dict[tuple[SkeletonKey, SkeletonKey], tuple[float, float] | None] | None
+    ) = None,
+) -> dp_on_counts.DPModel:
+    """Wrap the fitted B4 estimator as a :class:`dp_on_counts.DPModel`.
+
+    Supplies both the recompute closures (``score_of``/``q_of``) and the
+    **incremental** NB primitives (``log_succ``/``log_fail``/``delta``) the
+    search prefers — the latter extend ``S_succ``/``S_fail`` by one pairwise term
+    per failure edge (``O(K)``) rather than recomputing the ``Σ_{k'∈F}`` at every
+    node, turning the ``O(K³)`` leaf into ``O(K²)``. All logs use ``np.log`` so
+    the incremental ``S_succ`` matches :func:`_adaptive_score` bitwise — the
+    ``h=1 ≡ B4`` identity is preserved.
+
+    ``score_cache`` / ``q_cache`` / ``delta_cache`` are keyed on canonical keys
+    (and, for score/q, the ``failed`` tuple **in insertion order, not sorted**):
+    all episode-independent (pure training statistics), so the caller shares them
+    across every episode and ``h`` in a sweep. Insertion order is what makes the
+    NB log-sum reproduce B4 bitwise (near-tie scores otherwise break
+    differently).
+    """
+
+    def score_of(idx: int, failed: tuple[Hashable, ...]) -> float:
+        ck = (keys[idx], failed)
+        cached = score_cache.get(ck)
+        if cached is None:
+            fk = cast("tuple[SkeletonKey, ...]", failed)
+            cached = _adaptive_score(stats, keys[idx], fk)
+            score_cache[ck] = cached
+        return cached
+
+    def q_of(idx: int, failed: tuple[Hashable, ...]) -> float:
+        ck = (keys[idx], failed)
+        cached = q_cache.get(ck)
+        if cached is None:
+            fk = cast("tuple[SkeletonKey, ...]", failed)
+            cached = _adaptive_q(stats, keys[idx], fk)
+            q_cache[ck] = cached
+        return cached
+
+    if objective == "time":
+        assert refine_costs is not None
+
+        def c_of(idx: int) -> float:
+            return refine_costs.cost(keys[idx])
+
+    else:
+
+        def c_of(idx: int) -> float:  # pylint: disable=unused-argument
+            return 1.0  # attempts: unit cost (idx unused)
+
+    log_succ = [float(np.log(stats.marginals.p_hat(k))) for k in keys]
+    log_fail = [float(np.log(1.0 - stats.marginals.p_hat(k))) for k in keys]
+    dcache: dict[tuple[SkeletonKey, SkeletonKey], tuple[float, float] | None] = (
+        delta_cache if delta_cache is not None else {}
+    )
+
+    def delta(idx: int, k_prime: Hashable) -> tuple[float, float] | None:
+        k = keys[idx]
+        kp = cast("SkeletonKey", k_prime)
+        ck = (k, kp)
+        if ck in dcache:
+            return dcache[ck]
+        p = stats.marginals.p_hat(k)
+        cond = stats.p_hat_cond(k, kp)
+        res: tuple[float, float] | None
+        if cond is None:
+            res = None
+        else:
+            res = (
+                float(np.log(cond / p)),
+                float(np.log((1.0 - cond) / (1.0 - p))),
+            )
+        dcache[ck] = res
+        return res
+
+    return dp_on_counts.DPModel(
+        key_of=list(keys),
+        q_of=q_of,
+        c_of=c_of,
+        objective=objective,
+        score_of=score_of,
+        log_succ=log_succ,
+        log_fail=log_fail,
+        delta=delta,
+    )
+
+
+def dp_on_counts_baseline(
+    train: LoadedSplit,
+    test: LoadedSplit,
+    attempt_budget: int = 30,
+    *,
+    depth: int = 2,
+    objective: Literal["attempts", "time"] = "attempts",
+    m: int | None = None,
+) -> BaselineResult:
+    """B6. Receding-horizon expectimax skeleton selection over B4's counts.
+
+    A drop-in selection-policy baseline (not SPECTRE): it reuses B4's
+    Naive-Bayes count estimator as a calibrated ``q``-model
+    (:func:`_adaptive_q`) and looks ``depth − 1`` steps ahead over the
+    cost-to-first-success Bellman recursion (see :mod:`dp_on_counts`). At
+    ``depth=1`` with ``objective="attempts"`` it reproduces B4 exactly.
+
+    ``objective="attempts"`` uses ``c(σ) ≡ 1``; ``objective="time"`` uses the
+    mean per-canonical-key refinement wall-clock fit on ``train``.
+
+    ``m`` is the optional **top-m lookahead pruning width** (default ``None`` ⇒
+    exact). Incremental NB scoring (``O(K²)`` leaf) keeps the *exact* search
+    tractable through ``h=4`` on RT2D-n3 (h=4 ≈ minutes), so the default is exact
+    — no pruning, no accuracy loss. Set ``m`` (e.g. 12) only to push deeper
+    horizons: the backup then expands only the ``m`` best candidates by greedy
+    index at each internal node, cutting per-decision cost from
+    ``O(K^{h−1}·K²)`` to ``O(m^{h−1}·K²)``. The root decision is never pruned
+    (it ranges over the full pool) and ``h=1`` is unaffected, so ``m`` never
+    changes the ``h=1 ≡ B4`` identity. The q-model is always fit on the full
+    ``train`` pools — no candidate capping (pool successes sit at every planner
+    depth, so capping would censor real successes; ``docs/decisions.md``
+    2026-06-11).
+
+    ``attempt_budget`` defaults to **30** — the RT2D-n3 candidate-pool cap, the
+    uncensored evaluation standard (``docs/decisions.md`` 2026-06-07) — so a
+    direct caller does not silently reintroduce censoring. Model selection's
+    ``val_rollout_attempts`` budget (20) is a separate knob.
+    """
+    if depth < 1:
+        raise ValueError(f"depth must be >= 1, got {depth}")
+    if m is not None and m < 1:
+        raise ValueError(f"m must be >= 1 or None, got {m}")
+    stats = _fit_adaptive(train)
+    refine_costs = _fit_refine_costs(train) if objective == "time" else None
+    score_cache: dict[_DPCacheKey, float] = {}
+    q_cache: dict[_DPCacheKey, float] = {}
+    delta_cache: dict[tuple[SkeletonKey, SkeletonKey], tuple[float, float] | None] = {}
+
+    trainable = _trainable_episodes(test)
+    attempts = np.zeros(len(trainable), dtype=float)
+    wall_clock = np.zeros(len(trainable), dtype=float)
+    censored = np.zeros(len(trainable), dtype=bool)
+    problem_ids = np.zeros(len(trainable), dtype=np.int64)
+    for out_idx, ep_idx in enumerate(trainable):
+        ep = test.episodes[ep_idx]
+        keys = test.skeleton_keys[ep_idx]
+        model = _build_dp_model(
+            stats, keys, objective, refine_costs, score_cache, q_cache, delta_cache
+        )
+        remaining = set(range(len(keys)))
+        failed_keys: tuple[SkeletonKey, ...] = ()
+        steps = 0
+        wall = 0.0
+        attempts_i: float = attempt_budget + 1
+        censored_i = True
+        while remaining and steps < attempt_budget:
+            chosen = dp_on_counts.select(model, remaining, failed_keys, depth, m=m)
+            steps += 1
+            outcome = ep.outcomes[chosen]
+            wall += outcome.refinement_wall_clock_s
+            if outcome.outcome == "success":
+                attempts_i = steps
+                censored_i = False
+                break
+            failed_keys = failed_keys + (keys[chosen],)
+            remaining.remove(chosen)
+        attempts[out_idx] = attempts_i
+        wall_clock[out_idx] = wall
+        censored[out_idx] = censored_i
+        problem_ids[out_idx] = ep.provenance.problem_id
+    return BaselineResult(
+        name=f"B6_dp_h{depth}_{objective}",
+        attempts=attempts,
+        wall_clock=wall_clock,
+        censored=censored,
+        problem_ids=problem_ids,
+    )
+
+
+def solvability_at_cap(split: LoadedSplit, k_max: int = 30) -> np.ndarray:
+    """Fraction of episodes solvable within the first ``k`` planner-ordered candidates,
+    for ``k = 1 … k_max``.
+
+    "Solvable within the first ``k``" means pool indices ``0 … k-1`` contain at
+    least one ``success`` outcome. Pure over logged ``ep.outcomes`` — no
+    refinement is run. ``result[j]`` is the fraction for ``k = j + 1``; the
+    series is non-decreasing in ``k`` and ``result[k_max-1]`` equals the
+    fraction of episodes with any success (when ``k_max`` ≥ every pool size).
+
+    Used to decide how deep refinement successes sit in planner order — the gate
+    for any eval-side pool capping (capping below the depth where solvability
+    saturates would censor real successes; see ``docs/decisions.md``).
+    """
+    n = len(split.episodes)
+    counts = np.zeros(k_max, dtype=float)
+    for ep in split.episodes:
+        first = next(
+            (i for i, o in enumerate(ep.outcomes) if o.outcome == "success"), None
+        )
+        if first is not None and first < k_max:
+            counts[first:] += 1.0  # solvable for every k ≥ first + 1
+    return counts / n if n else counts
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +1493,140 @@ def spectre_evaluate_traced(
                 finished = True
                 break
             _inference.record_failure(state, idx)
+        if not finished:
+            attempts[out_idx] = attempt_budget + 1
+            censored[out_idx] = True
+        wall_clock[out_idx] = wall
+        problem_ids[out_idx] = ep.provenance.problem_id
+        traces.append(trace)
+
+    result = BaselineResult(
+        name=name,
+        attempts=attempts,
+        wall_clock=wall_clock,
+        censored=censored,
+        problem_ids=problem_ids,
+    )
+    return result, traces
+
+
+def spectre_evaluate_length_only_context(
+    test: LoadedSplit,
+    model: SpectreModel,
+    vocab: Vocab,
+    attempt_budget: int = 200,
+    prior: BasePrior | None = None,
+    device: torch.device | str = "cpu",
+    name: str = "SPECTRE-lenctx",
+    seed: int = 0,
+    scramble: bool = True,
+) -> tuple[BaselineResult, list[list[ChoiceStep]]]:
+    """T1 length-only-context intervention (``spectre_piginet…_v2.md`` §T1).
+
+    Reruns the SPECTRE-adaptive rollout, but every failed skeleton in the
+    **failure context** fed to Ψ is replaced by a uniformly random *other* pool
+    skeleton of the **same plan length** — i.e. correct length, random object
+    identity, and (because it is a real pooled skeleton) an automatically
+    consistent ``s_L``. Selection masking still uses the *real* attempted
+    skeletons; only the context is scrambled. If mean rollout-FP is unchanged vs
+    SPECTRE-adaptive, Ψ ignores failed-skeleton identity and uses only size /
+    length (hypothesis H2); a drop means identity carries signal.
+
+    ``scramble=False`` makes each surrogate the failure itself, so the context
+    equals the real failed set and this reproduces
+    :func:`spectre_evaluate`/``_traced`` exactly — a regression guard.
+
+    Loop, episode order (``_trainable_episodes``), and the ``attempt_budget + 1``
+    censoring convention match :func:`spectre_evaluate_traced`; the per-episode
+    surrogate RNG is seeded from ``(seed, problem_id)`` for reproducibility.
+    Returns a ``BaselineResult`` plus the realized ``ChoiceStep`` trace per
+    trainable episode.
+    """
+    # pylint: disable=import-outside-toplevel
+    import torch as _torch
+
+    from alphatamp.approaches.spectre import inference as _inference
+    from alphatamp.approaches.spectre.priors import ZeroPrior
+
+    if prior is None:
+        prior = ZeroPrior()
+
+    trainable = _trainable_episodes(test)
+    attempts = np.zeros(len(trainable), dtype=float)
+    wall_clock = np.zeros(len(trainable), dtype=float)
+    censored = np.zeros(len(trainable), dtype=bool)
+    problem_ids = np.zeros(len(trainable), dtype=np.int64)
+    traces: list[list[ChoiceStep]] = []
+
+    for out_idx, ep_idx in enumerate(trainable):
+        ep = test.episodes[ep_idx]
+        state = _inference.init_inference_state(
+            model, ep, vocab, prior=prior, device=device
+        )
+        lengths = [len(skel.operator_seq) for skel in ep.skeleton_pool]
+        by_len: dict[int, list[int]] = {}
+        for j, length in enumerate(lengths):
+            by_len.setdefault(length, []).append(j)
+        rng = np.random.default_rng([int(seed), int(ep.provenance.problem_id)])
+
+        context_indices: list[int] = []
+        steps = 0
+        wall = 0.0
+        finished = False
+        trace: list[ChoiceStep] = []
+        while steps < attempt_budget:
+            if not bool(state.pool_mask.any().item()):
+                attempts[out_idx] = attempt_budget + 1
+                censored[out_idx] = True
+                finished = True
+                break
+            # Context built from surrogate indices (not state.fail_indices);
+            # empty context routes to c_0 exactly like select_next_skeleton.
+            device_t = state.e_S.device
+            if context_indices:
+                f_emb = state.e_S[context_indices].unsqueeze(0)
+                f_mask = _torch.ones(
+                    1, len(context_indices), dtype=_torch.bool, device=device_t
+                )
+            else:
+                f_emb = _torch.zeros(
+                    1, 1, state.e_S.size(-1), device=device_t, dtype=state.e_S.dtype
+                )
+                f_mask = _torch.zeros(1, 1, dtype=_torch.bool, device=device_t)
+            with _torch.no_grad():
+                c = model.encode_context(f_emb, f_mask)
+                logits = model.score(
+                    state.e_S.unsqueeze(0),
+                    c,
+                    state.priors.unsqueeze(0),
+                    prior_dropout=False,
+                )
+                neg_inf = _torch.tensor(
+                    -float("inf"), dtype=logits.dtype, device=device_t
+                )
+                logits = _torch.where(state.pool_mask.unsqueeze(0), logits, neg_inf)
+                idx = int(logits.argmax(dim=-1).item())
+
+            outcome = ep.outcomes[idx]
+            steps += 1
+            wall += outcome.refinement_wall_clock_s
+            trace.append(ChoiceStep(step=steps, idx=idx, outcome=outcome.outcome))
+            if outcome.outcome == "success":
+                attempts[out_idx] = steps
+                censored[out_idx] = False
+                finished = True
+                break
+            # Surrogate context entry: a same-length pool skeleton != idx.
+            if scramble:
+                alts = [j for j in by_len[lengths[idx]] if j != idx]
+                surrogate = int(rng.choice(alts)) if alts else idx
+            else:
+                surrogate = idx
+            context_indices.append(surrogate)
+            # Mask the REAL attempted skeleton out of the selectable pool.
+            new_mask = state.pool_mask.clone()
+            new_mask[idx] = False
+            state.pool_mask = new_mask
         if not finished:
             attempts[out_idx] = attempt_budget + 1
             censored[out_idx] = True
