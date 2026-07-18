@@ -36,9 +36,9 @@ def _maybe_init_wandb(
 ) -> object | None:
     """Initialize a wandb run from ``cfg.wandb``, or return ``None``.
 
-    Returns ``None`` when wandb is disabled or the import fails (training then
-    proceeds without logging). The API key is read from ``WANDB_API_KEY``; it is
-    never taken from config. ``mode`` is one of ``disabled|online|offline``.
+    Returns ``None`` when wandb is disabled or the import fails (training then proceeds
+    without logging). The API key is read from ``WANDB_API_KEY``; it is never taken from
+    config. ``mode`` is one of ``disabled|online|offline``.
     """
     wcfg = cfg.get("wandb", None)
     if wcfg is None or str(wcfg.get("mode", "disabled")) == "disabled":

@@ -38,8 +38,7 @@ def _():
         "gbf-dist": "#f58518",
     }
 
-    mo.md(
-        r"""
+    mo.md(r"""
         # DD2D — does the *kind* of heuristic reorder toward the feasible plan?
 
         Five enumeration arms on the same subset-requiring problems, compared on **first-feasible
@@ -55,8 +54,7 @@ def _():
 
         If the *symbolic* heuristics (hFF) don't help but the *geometric* prior does, the useful
         signal is geometric — what PIGINet learns.
-        """
-    )
+        """)
     return ARM_COLOR, ARM_ORDER, mo
 
 

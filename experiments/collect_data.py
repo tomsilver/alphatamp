@@ -92,7 +92,6 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
 @hydra.main(config_path="conf", config_name="collect_data_config", version_base=None)
 def main(cfg: DictConfig):
     """Collect training data for a single seed."""
-
     seed = int(cfg.seed)
     num_steps = int(cfg.num_steps)
     max_resamples = int(cfg.max_resamples)

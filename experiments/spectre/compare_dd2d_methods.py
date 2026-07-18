@@ -13,25 +13,24 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    # DD2D — SPECTRE vs PIGINet vs Pure Planning (astar-dist) (held-out test rollout FPs)
+    mo.md(r"""# DD2D — SPECTRE vs PIGINet vs Pure Planning (astar-dist) (held-out test
+          rollout FPs)
 
-    Compares three plan-feasibility methods on the **held-out DD2D test split**
-    by **rollout false-positives (FP)** —
-    the number of failed refinement attempts before the first success.
+          Compares three plan-feasibility methods on the **held-out DD2D test split**
+          by **rollout false-positives (FP)** —
+          the number of failed refinement attempts before the first success.
 
-    **Methods.**
+          **Methods.**
 
-    - **astar-dist** —  the non-learned baseline.
-    - **PIGINet** — low-level predictor (CLIP + transformer over
-      object image features + literals). Static one-shot ranking.
-    - **SPECTRE-adaptive** — the trained SPECTRE re-ranker in its deployment mode:
-      re-ranks the pool after every failure.
-    - **SPECTRE-static** — SPECTRE ranked once at the empty failure context; the
-      strict same-policy comparator to PIGINet.
-    """
-    )
+          - **astar-dist** —  the non-learned baseline.
+          - **PIGINet** — low-level predictor (CLIP + transformer over
+            object image features + literals). Static one-shot ranking.
+          - **SPECTRE-adaptive** — the trained SPECTRE re-ranker in its deployment mode:
+            re-ranks the pool after every failure.
+          - **SPECTRE-static** — SPECTRE ranked once at the empty failure context; the
+            strict same-policy comparator to PIGINet.
+          """
+             )
     return
 
 
@@ -95,15 +94,13 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 1 · Load cached per-problem FP
+    mo.md(\
+          r"""## 1 · Load cached per-problem FP
 
-    Reads the precomputed raw scores and derives one rollout-FP per (method,
-    problem) from
-    `data/spectre/derived/dd2d_v2/compare_cache/`.
-    """
-    )
+          Reads the precomputed raw scores and derives one rollout-FP per (method,
+          problem) from `data/spectre/derived/dd2d_v2/compare_cache/`.
+          """
+             )
     return
 
 
@@ -116,13 +113,12 @@ def _(CACHE_DIR, dd2d_compare, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 2 · Summary table 
+    mo.md(\
+          r"""## 2 · Summary table
 
-    Mean ± std (across problems) FP per method per stratum.
-    """
-    )
+          Mean ± std (across problems) FP per method per stratum.
+          """
+             )
     return
 
 
@@ -156,13 +152,12 @@ def _(METHODS, STRATA, df, np, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 3 · Mean FP per stratum (± std-dev error bars)
+    mo.md(\
+          r"""## 3 · Mean FP per stratum (± std-dev error bars)
 
-    Lower is better. Error bars are the across-problem std-dev, clipped at 0.
-    """
-    )
+          Lower is better. Error bars are the across-problem std-dev, clipped at 0.
+          """
+             )
     return
 
 
@@ -252,14 +247,13 @@ def _(COLORS, METHODS, STRATA, df, np, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 4 · Survival curves
+    mo.md(\
+          r"""## 4 · Survival curves
 
-    Fraction of problems solved within ≤ k failed attempts (higher & further-left
-    is better).
-    """
-    )
+          Fraction of problems solved within ≤ k failed attempts (higher & further-left
+          is better).
+          """
+             )
     return
 
 
@@ -350,8 +344,8 @@ def _(COLORS, METHODS, STRATA, df, np, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(\
+          r"""
     ## 5 · T0 — Length-R² (does plan length alone explain each ranking?)
 
     Test **T0** from `docs/spectre_piginet_hypotheses_and_tests_v2.md`, run for **all
@@ -376,8 +370,7 @@ def _(mo):
     `c₀`), so its one-shot row mirrors static. Its deployed behaviour is shown
     separately as a **realized-order length ladder** (does it climb to longer plans
     as it fails?).
-    """
-    )
+    """)
     return
 
 
@@ -451,8 +444,8 @@ def _(STRATA, fit_df, np, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
+    mo.md(\
+          r"""
     ### Learned length curve
 
     Mean within-episode attempt-position (0 = tried first … 1 = tried last) of each
@@ -460,8 +453,7 @@ def _(mo):
     monotone short-first; PIGINet is ~flat (it discriminates *within* length, not by
     it); SPECTRE-static is a non-monotone length lookup (front-loads 1- and
     3-blocker plans, buries 2-blocker plans).
-    """
-    )
+    """)
     return
 
 
@@ -519,15 +511,15 @@ def _(COLORS, fit_df, np, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ### SPECTRE-adaptive — realized-order length ladder
+    mo.md(\
+          r"""### SPECTRE-adaptive — realized-order length ladder
 
-    Over the sequence it *actually attempts* (until first success), does adaptive
-    climb to longer plans as it fails? Positive `spearman(position, length)` ⇒ a
-    length-escalation ladder. (Reads the cached `order` trace; averaged over seeds.)
-    """
-    )
+          Over the sequence it *actually attempts* (until first success), does adaptive
+          climb to longer plans as it fails? Positive `spearman(position, length)` ⇒ a
+          length-escalation ladder. (Reads the cached `order` trace; averaged over
+          seeds.)
+          """
+             )
     return
 
 
@@ -555,52 +547,51 @@ def _(STRATA, ladder_df, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ### Takeaway (T0)
+    mo.md(\
+          r"""### Takeaway (T0)
 
-    - **SPECTRE-static is, mechanically, a learned plan-length lookup** (η² ≈ 1.00,
-      within-length ≈ 0): it ranks by *how many* blockers a plan stages and is blind
-      to *which* same-size subset is correct. Its s3 win over astar-dist is a length
-      re-ordering (3-blocker plans above 2-blocker plans), not subset knowledge — and
-      by the elimination argument, length was the only signal it *could* use.
-    - The learned length curve is **non-monotone** (front-load m1/m3, bury m2), not a
-      simple "prefer longer" — a mild surprise worth a follow-up, but still 100%
-      length.
-    - **PIGINet is the structural opposite** (~79% within-length variance): it uses
-      geometry to rank same-length plans. So SPECTRE's headline win means "a length
-      prior beat PIGINet's geometry on this stratum mix," not "SPECTRE discriminates
-      subsets better" (it cannot at all).
-    - **Adaptive t=0 ≡ static**; its only lever is the realized-order re-ranking above.
+          - **SPECTRE-static is, mechanically, a learned plan-length lookup** (η² ≈ 1.00,
+            within-length ≈ 0): it ranks by *how many* blockers a plan stages and is blind
+            to *which* same-size subset is correct. Its s3 win over astar-dist is a length
+            re-ordering (3-blocker plans above 2-blocker plans), not subset knowledge — and
+            by the elimination argument, length was the only signal it *could* use.
+          - The learned length curve is **non-monotone** (front-load m1/m3, bury m2), not a
+            simple "prefer longer" — a mild surprise worth a follow-up, but still 100%
+            length.
+          - **PIGINet is the structural opposite** (~79% within-length variance): it uses
+            geometry to rank same-length plans. So SPECTRE's headline win means "a length
+            prior beat PIGINet's geometry on this stratum mix," not "SPECTRE discriminates
+            subsets better" (it cannot at all).
+          - **Adaptive t=0 ≡ static**; its only lever is the realized-order re-ranking above.
 
-    This motivates the v2.1 typed-evidence design: breaking the same-length symmetry
-    needs diagnostic signal the current abstract `[s0, ops, sL]` representation does
-    not carry.
-    """
-    )
+          This motivates the v2.1 typed-evidence design: breaking the same-length symmetry
+          needs diagnostic signal the current abstract `[s0, ops, sL]` representation does
+          not carry.
+          """
+             )
     return
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 6 · T1 — length-only-context intervention (does c_t use identity?)
+    mo.md(\
+          r"""## 6 · T1 — length-only-context intervention (does c_t use identity?)
 
-    Test **T1** (length-only variant) from
-    `docs/spectre_piginet_hypotheses_and_tests_v2.md`. Rerun the SPECTRE-adaptive
-    rollout, but replace every failed skeleton in the failure context Ψ sees with a
-    **random *other* pool skeleton of the same plan length** — correct length,
-    random object identity, consistent `s_L` (it is a real pooled skeleton). The
-    selection still masks the *real* attempted skeletons; only the context is
-    scrambled (`eda.spectre_evaluate_length_only_context`, averaged over 3 seeds × 3
-    surrogate draws in `spectre_lenctx/`).
+          Test **T1** (length-only variant) from
+          `docs/spectre_piginet_hypotheses_and_tests_v2.md`. Rerun the SPECTRE-adaptive
+          rollout, but replace every failed skeleton in the failure context Ψ sees with
+          a **random *other* pool skeleton of the same plan length** — correct length,
+          random object identity, consistent `s_L` (it is a real pooled skeleton). The
+          selection still masks the *real* attempted skeletons; only the context is
+          scrambled (`eda.spectre_evaluate_length_only_context`, averaged over 3 seeds ×
+          3 surrogate draws in `spectre_lenctx/`).
 
-    **If mean rollout-FP is unchanged ⇒ Ψ ignores which objects failed and uses only
-    size/length (H2).** A drop ⇒ identity carries signal → escalate to the full T1
-    suite. (Regression guard: `scramble=False` reproduces SPECTRE-adaptive bitwise.)
-    """
-    )
+          **If mean rollout-FP is unchanged ⇒ Ψ ignores which objects failed and uses
+          only size/length (H2).** A drop ⇒ identity carries signal → escalate to the
+          full T1 suite. (Regression guard: `scramble=False` reproduces SPECTRE-adaptive
+          bitwise.)
+          """
+             )
     return
 
 
@@ -700,25 +691,25 @@ def _(t1_df):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ### Takeaway (T1)
+    mo.md(\
+          r"""### Takeaway (T1)
 
-    Scrambling the *identity* of every failed skeleton to a random same-length plan
-    leaves SPECTRE-adaptive's rollout-FP **unchanged** (Δ ≈ 0, CI includes 0 in every
-    stratum). The context embedding `c_t` does shift a hair under scrambling
-    (‖Δc‖ ~ 5e-3 on the d=64 vector), but never enough to change a selection — so the
-    context module Ψ carries only a *whisper* of identity and is, functionally,
-    **size/length-only**. This confirms **H2**: the adaptive gains (concentrated on
-    s0/s1) are length-regime escalation, not failed-subset identification.
+          Scrambling the *identity* of every failed skeleton to a random same-length
+          plan leaves SPECTRE-adaptive's rollout-FP **unchanged** (Δ ≈ 0, CI includes 0
+          in every stratum). The context embedding `c_t` does shift a hair under
+          scrambling (‖Δc‖ ~ 5e-3 on the d=64 vector), but never enough to change a
+          selection — so the context module Ψ carries only a *whisper* of identity and
+          is, functionally, **size/length-only**. This confirms **H2**: the adaptive
+          gains (concentrated on s0/s1) are length-regime escalation, not failed-subset
+          identification.
 
-    Combined with T0 (SPECTRE-static ≈ a pure length ranking, η²≈1.0), SPECTRE on
-    DD2D uses **length and nothing identity-specific** — neither in the static ranker
-    nor in the adaptive context. Breaking the same-length symmetry (telling *which*
-    same-size subset is right) needs diagnostic evidence the abstract representation
-    does not carry — the v2.1 typed-evidence motivation.
-    """
-    )
+          Combined with T0 (SPECTRE-static ≈ a pure length ranking, η²≈1.0), SPECTRE on
+          DD2D uses **length and nothing identity-specific** — neither in the static
+          ranker nor in the adaptive context. Breaking the same-length symmetry (telling
+          *which* same-size subset is right) needs diagnostic evidence the abstract
+          representation does not carry — the v2.1 typed-evidence motivation.
+          """
+             )
     return
 
 

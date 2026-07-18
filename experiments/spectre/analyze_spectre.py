@@ -13,23 +13,21 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    # SPECTRE EDA
+    mo.md(r"""# SPECTRE EDA
 
-    Go/no-go diagnostic battery per `SPECTRE_EDA_SPEC.md`. Runs Group 1 sanity,
-    train↔test key-overlap diagnostic, Group 2 five baselines, Group 3 scalars
-    with bootstrap CIs, and the §6 pass bar.
+          Go/no-go diagnostic battery per `SPECTRE_EDA_SPEC.md`. Runs Group 1 sanity,
+          train↔test key-overlap diagnostic, Group 2 five baselines, Group 3 scalars
+          with bootstrap CIs, and the §6 pass bar.
 
-    All heavy lifting lives in `alphatamp.approaches.spectre.eda`; this notebook
-    is a thin presentation layer.
+          All heavy lifting lives in `alphatamp.approaches.spectre.eda`; this notebook
+          is a thin presentation layer.
 
-    **Eval-split convention.** Baselines B1–B5 evaluate on the **test** split for
-    honest comparison. B3/B4 additionally fit `»` on the **train** split.
-    Validation is intentionally untouched — reserved for SPECTRE's own
-    hyperparameter selection later.
-    """
-    )
+          **Eval-split convention.** Baselines B1–B5 evaluate on the **test** split for
+          honest comparison. B3/B4 additionally fit `»` on the **train** split.
+          Validation is intentionally untouched — reserved for SPECTRE's own
+          hyperparameter selection later.
+          """
+             )
     return
 
 
@@ -124,11 +122,12 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 1. Load splits (train + test)
-    """
-    )
+    mo.md(\
+          r"""## 1.
+
+          Load splits (train + test)
+          """
+             )
     return
 
 
@@ -151,13 +150,12 @@ def _(eda, test_dir, train_dir):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## Group 1 — episode sanity (on train)
+    mo.md(\
+          r"""## Group 1 — episode sanity (on train)
 
-    Per spec §1, Group 1 describes the training collection itself.
-    """
-    )
+          Per spec §1, Group 1 describes the training collection itself.
+          """
+             )
     return
 
 
@@ -224,18 +222,17 @@ def _(ATTEMPT_BUDGET, eda, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## 3.5 Train↔test key-overlap diagnostic
+    mo.md(\
+          r"""## 3.5 Train↔test key-overlap diagnostic
 
-    Interpretation context for Group 2 / Group 3:
+          Interpretation context for Group 2 / Group 3:
 
-    - `test_keys_seen_fraction ≥ 0.8`: overlapping-pool regime, B3/B4 carry signal.
-    - `≤ 0.1`: disjoint-pool regime, B3/B4 degenerate to default order,
-      Δ≈0 is mechanical. SPECTRE's Φ/Ψ may still exploit structure the discrete
-      baselines cannot (spec §5.1 caveat).
-    """
-    )
+          - `test_keys_seen_fraction ≥ 0.8`: overlapping-pool regime, B3/B4 carry signal.
+          - `≤ 0.1`: disjoint-pool regime, B3/B4 degenerate to default order,
+            Δ≈0 is mechanical. SPECTRE's Φ/Ψ may still exploit structure the discrete
+            baselines cannot (spec §5.1 caveat).
+          """
+             )
     return
 
 
@@ -262,23 +259,22 @@ def _(eda, test, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## Group 2 — baselines (all five on test)
+    mo.md(\
+          r"""## Group 2 — baselines (all five on test)
 
-    B1 random floor, B2 heuristic-aware order, B3 static-historical (fit on
-    train), B4 adaptive-historical (fit on train), B5 oracle. All five evaluate
-    on the test split. Trainable subset (`n_succ >= 1`) is applied before
-    aggregating.
+          B1 random floor, B2 heuristic-aware order, B3 static-historical (fit on
+          train), B4 adaptive-historical (fit on train), B5 oracle. All five evaluate on
+          the test split. Trainable subset (`n_succ >= 1`) is applied before
+          aggregating.
 
-    **B2 note.** B2 ranks each problem's stored skeleton pool by the FF
-    heuristic's cumulative score along each skeleton's STRIPS trajectory — the
-    same heuristic an A*-based abstract-plan generator would consult. The
-    closed-form lex order produced by the routedtransport2d enumerator is
-    reported as `B2_default_order_lex` alongside it as a sanity row, but is not
-    the baseline we compare against (it ignores the problem instance).
-    """
-    )
+          **B2 note.** B2 ranks each problem's stored skeleton pool by the FF
+          heuristic's cumulative score along each skeleton's STRIPS trajectory — the
+          same heuristic an A*-based abstract-plan generator would consult. The closed-
+          form lex order produced by the routedtransport2d enumerator is reported as
+          `B2_default_order_lex` alongside it as a sanity row, but is not the baseline
+          we compare against (it ignores the problem instance).
+          """
+             )
     return
 
 
@@ -339,30 +335,29 @@ def _(eda, np, plt, test, train):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## B6 — DP-on-counts (receding-horizon lookahead)
+    mo.md(\
+          r"""## B6 — DP-on-counts (receding-horizon lookahead)
 
-    A new evaluation **baseline** (not SPECTRE): it reuses B4's calibrated count
-    model as its `q`-model and looks `h−1` steps ahead over the
-    cost-to-first-success Bellman recursion. By construction `h=1` reproduces B4
-    exactly; `h≥2` adds expectimax lookahead with a re-conditioning greedy leaf.
+          A new evaluation **baseline** (not SPECTRE): it reuses B4's calibrated count
+          model as its `q`-model and looks `h−1` steps ahead over the
+          cost-to-first-success Bellman recursion. By construction `h=1` reproduces B4
+          exactly; `h≥2` adds expectimax lookahead with a re-conditioning greedy leaf.
 
-    The search is **exact** (`m=None`): incremental Naive-Bayes scoring makes the
-    `O(K²)`-leaf expectimax tractable through `h=4` (h=2 ≈ 9s, h=3 ≈ 86s, h=4 ≈
-    minutes) at the full pool **K=30**, with no candidate capping (see the
-    solvability-at-cap figure above: successes sit at every planner depth, so
-    capping would censor real successes — `decisions.md` 2026-06-11). Set the
-    optional `m=12` only to push `h≥5`. Swept over `DP_HORIZONS` on the uncensored
-    budget (= pool cap 30).
+          The search is **exact** (`m=None`): incremental Naive-Bayes scoring makes the
+          `O(K²)`-leaf expectimax tractable through `h=4` (h=2 ≈ 9s, h=3 ≈ 86s, h=4 ≈
+          minutes) at the full pool **K=30**, with no candidate capping (see the
+          solvability-at-cap figure above: successes sit at every planner depth, so
+          capping would censor real successes — `decisions.md` 2026-06-11). Set the
+          optional `m=12` only to push `h≥5`. Swept over `DP_HORIZONS` on the uncensored
+          budget (= pool cap 30).
 
-    **Read the paired stats, not the marginal means** (printed below): the
-    lookahead premium over B4 (= the `h=1` row) is small and saturating, against a
-    much larger gap to SPECTRE — i.e. lookahead on the count model is not the
-    missing ingredient. Extend `DP_HORIZONS` to `(1,2,3,4)` for the (slower) h=4
-    row.
-    """
-    )
+          **Read the paired stats, not the marginal means** (printed below): the
+          lookahead premium over B4 (= the `h=1` row) is small and saturating, against a
+          much larger gap to SPECTRE — i.e. lookahead on the count model is not the
+          missing ingredient. Extend `DP_HORIZONS` to `(1,2,3,4)` for the (slower) h=4
+          row.
+          """
+             )
     return
 
 
@@ -444,13 +439,16 @@ def _(ATTEMPT_BUDGET, eda, np, pd, test, train, wilcoxon):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## SPECTRE — candidate method
+    mo.md(\
+          r"""## SPECTRE — candidate method
 
-    SPECTRE is the trained ranker we want to compare *against* B1–B5 (it is **not** a baseline). Loads `SPECTRE_CHECKPOINT_PATH`, runs the same per-episode attempt loop on test, and appends a row to the summary table above. Reuses `BaselineResult` only because its per-episode (attempts, wall_clock, censored, problem_ids) schema is generic.
-    """
-    )
+          SPECTRE is the trained ranker we want to compare *against* B1–B5 (it is
+          **not** a baseline). Loads `SPECTRE_CHECKPOINT_PATH`, runs the same per-
+          episode attempt loop on test, and appends a row to the summary table above.
+          Reuses `BaselineResult` only because its per-episode (attempts, wall_clock,
+          censored, problem_ids) schema is generic.
+          """
+             )
     return
 
 
@@ -518,30 +516,29 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## Frozen-context (Ψ) ablation — is the context encoder load-bearing?
+    mo.md(\
+          r"""## Frozen-context (Ψ) ablation — is the context encoder load-bearing?
 
-    De-risking ablation: does SPECTRE's strength come from the skeleton encoder
-    Φ, or from the failure-conditioning context encoder Ψ? We compare the full
-    pipeline against a **frozen-context** variant that, at every rollout step,
-    pins the scorer's context vector to the learned empty-set vector `c₀`
-    regardless of the actual failure set — removing the adaptive element. With a
-    fixed context the per-skeleton scores never change, so the frozen variant is
-    exactly a **learned static ranker**; the full-vs-frozen gap is SPECTRE's own
-    analogue of the B3−B4 adaptive premium.
+          De-risking ablation: does SPECTRE's strength come from the skeleton encoder
+          Φ, or from the failure-conditioning context encoder Ψ? We compare the full
+          pipeline against a **frozen-context** variant that, at every rollout step,
+          pins the scorer's context vector to the learned empty-set vector `c₀`
+          regardless of the actual failure set — removing the adaptive element. With a
+          fixed context the per-skeleton scores never change, so the frozen variant is
+          exactly a **learned static ranker**; the full-vs-frozen gap is SPECTRE's own
+          analogue of the B3−B4 adaptive premium.
 
-    Both variants share the checkpoint and the deterministic rollout, so the
-    comparison is perfectly paired per episode. At attempt 1 the failure set is
-    empty and the full variant *also* uses `c₀`, so the two always agree on the
-    first pick — divergence can only begin at attempt 2.
+          Both variants share the checkpoint and the deterministic rollout, so the
+          comparison is perfectly paired per episode. At attempt 1 the failure set is
+          empty and the full variant *also* uses `c₀`, so the two always agree on the
+          first pick — divergence can only begin at attempt 2.
 
-    Inference-time freeze only (no retraining). Implementation +
-    method/decision notes: `docs/notebook.md` (2026-06-06 entry),
-    `docs/decisions.md`, and the `spectre_ablate_context.py` runner (whose
-    numbers these cells reproduce).
-    """
-    )
+          Inference-time freeze only (no retraining). Implementation +
+          method/decision notes: `docs/notebook.md` (2026-06-06 entry),
+          `docs/decisions.md`, and the `spectre_ablate_context.py` runner (whose
+          numbers these cells reproduce).
+          """
+             )
     return
 
 
@@ -923,13 +920,13 @@ def _(df_cmp, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## SPECTRE adaptive premium and oracle headroom
+    mo.md(\
+          r"""## SPECTRE adaptive premium and oracle headroom
 
-    Paired bootstrap of SPECTRE against B3 (static-historical) and B5 (oracle), using the same `_assert_aligned` machinery as the existing Group 3 analysis.
-    """
-    )
+          Paired bootstrap of SPECTRE against B3 (static-historical) and B5 (oracle),
+          using the same `_assert_aligned` machinery as the existing Group 3 analysis.
+          """
+             )
     return
 
 
@@ -972,17 +969,16 @@ def _(b3, b5, eda, pd, spectre_result):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## Frozen-context ablation — paired diagnostics
+    mo.md(\
+          r"""## Frozen-context ablation — paired diagnostics
 
-    Full vs frozen on the same checkpoint and the same 100 test episodes
-    (perfectly paired). Primary result: mean ± std attempts and the paired
-    bootstrap Δ; then how *similar* the two rollouts are (per-index
-    agreement, first-divergence) and where the frozen static ranker lands
-    relative to B3 / B4 (success@K).
-    """
-    )
+          Full vs frozen on the same checkpoint and the same 100 test episodes
+          (perfectly paired). Primary result: mean ± std attempts and the paired
+          bootstrap Δ; then how *similar* the two rollouts are (per-index agreement,
+          first-divergence) and where the frozen static ranker lands relative to B3 / B4
+          (success@K).
+          """
+             )
     return
 
 
@@ -1095,16 +1091,15 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## Group 3 — adaptive premium Δ and headroom H
+    mo.md(\
+          r"""## Group 3 — adaptive premium Δ and headroom H
 
-    Paired bootstrap (10,000 resamples) over test episodes. Because all five
-    baselines share the same `problem_ids` ordering (enforced by
-    `adaptive_premium` / `headroom` via `_assert_aligned`), the resampled
-    indices apply identically to both arms.
-    """
-    )
+          Paired bootstrap (10,000 resamples) over test episodes. Because all five
+          baselines share the same `problem_ids` ordering (enforced by
+          `adaptive_premium` / `headroom` via `_assert_aligned`), the resampled indices
+          apply identically to both arms.
+          """
+             )
     return
 
 
@@ -1153,15 +1148,14 @@ def _(b2, b3, b4, b5, eda, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-    ## §6 Pass bar
+    mo.md(\
+          r"""## §6 Pass bar
 
-    Primary conditions 1–5 must all hold. Condition 6 (headroom ≥ 2) is flagged
-    but non-blocking. An interpretive caveat is printed when the disjoint-pool
-    regime is detected (spec §5.1).
-    """
-    )
+          Primary conditions 1–5 must all hold. Condition 6 (headroom ≥ 2) is flagged
+          but non-blocking. An interpretive caveat is printed when the disjoint-pool
+          regime is detected (spec §5.1).
+          """
+             )
     return
 
 

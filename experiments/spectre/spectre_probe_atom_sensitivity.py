@@ -134,9 +134,9 @@ def _swap_local_id_for_predicate(
 def _shuffle_atom_rows(batch: SpectreBatch, rng: np.random.Generator) -> SpectreBatch:
     """Permutation-invariance control: shuffle the atom row order for each example.
 
-    The atom-pool inside Φ is a Set Transformer; shuffling the row order of
-    the input atom tokens must leave ``e(s)`` unchanged up to numerical
-    noise. Δ here is the floating-point noise floor.
+    The atom-pool inside Φ is a Set Transformer; shuffling the row order of the input
+    atom tokens must leave ``e(s)`` unchanged up to numerical noise. Δ here is the
+    floating-point noise floor.
     """
     new = _clone_batch(batch)
     bsz, m0 = batch.s0_pred_ids.shape
@@ -154,10 +154,9 @@ def _scramble_predicates(
 ) -> SpectreBatch:
     """Saturation control: replace every real atom's predicate with a random one.
 
-    Reports the magnitude of Δe(s) when s₀ is destroyed, giving a "max
-    sensitivity" reference. PassageWidth-flip Δ as a fraction of this Δ
-    indicates how much of the model's static-atom-reading capacity is
-    targeted at width/size.
+    Reports the magnitude of Δe(s) when s₀ is destroyed, giving a "max sensitivity"
+    reference. PassageWidth-flip Δ as a fraction of this Δ indicates how much of the
+    model's static-atom-reading capacity is targeted at width/size.
     """
     new = _clone_batch(batch)
     bsz, m0 = batch.s0_pred_ids.shape
@@ -371,8 +370,7 @@ def _mutate_passage_width_subset(
     """Clone ``batch``; swap width_level on PassageWidth atoms whose passage arg
     ``(type_id, local_id)`` is in ``target_passages``.
 
-    Touches only
-    example ``b``; other examples in the batch are aliased.
+    Touches only example ``b``; other examples in the batch are aliased.
     """
     new = _clone_batch(batch)
     pred_match = (new.s0_pred_ids[b] == pw_idx) & new.s0_atom_mask[b]
@@ -399,9 +397,8 @@ def _encode_single_skeleton(
 ) -> torch.Tensor:
     """Encode one skeleton (example ``b``, slot ``j``) using ``batch``'s s_0.
 
-    Returns shape ``(D,)``. Uses B=1 K=1 slices so a per-skeleton-mutated
-    s_0 can be passed in via the batch object without altering other
-    examples' encodings.
+    Returns shape ``(D,)``. Uses B=1 K=1 slices so a per-skeleton-mutated s_0 can be
+    passed in via the batch object without altering other examples' encodings.
     """
     e = model.encode_pool(
         batch.r_op_ids[b : b + 1, j : j + 1],
@@ -450,13 +447,12 @@ def _probe_d3_binding_specificity(
 ) -> tuple[ProbeRow, ProbeRow, D3Summary]:
     """D.3: per-skeleton, mutate PassageWidth on USED vs UNUSED passages.
 
-    For each skeleton in the val pool, identify the passages it uses as
-    operator args, partition the s_0 PassageWidth atoms into a "used" set
-    and "unused" set, flip ``width_level`` on each set independently, and
-    compute ``‖e' − e‖ / ‖e‖`` per skeleton. Returns the per-skeleton
-    distributions of Δ_used and Δ_unused as ``ProbeRow``s plus a
-    :class:`D3Summary` with multiple aggregates of the per-skeleton ratio
-    so the caller can reason about typical-vs-tail behavior.
+    For each skeleton in the val pool, identify the passages it uses as operator args,
+    partition the s_0 PassageWidth atoms into a "used" set and "unused" set, flip
+    ``width_level`` on each set independently, and compute ``‖e' − e‖ / ‖e‖`` per
+    skeleton. Returns the per-skeleton distributions of Δ_used and Δ_unused as
+    ``ProbeRow``s plus a :class:`D3Summary` with multiple aggregates of the per-skeleton
+    ratio so the caller can reason about typical-vs-tail behavior.
     """
     loader = DataLoader(
         val_dataset,

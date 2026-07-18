@@ -21,15 +21,13 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
 
-    mo.md(
-        r"""
+    mo.md(r"""
         # DD2D difficulty EDA on Pure Planning Baseline
 
         How hard is DD2D for a pure planning baseline?
         Stratified by `min_feasible_subset` ∈ {1, 2, 3} — the minimal number of blockers that *must*
         be moved to clear the target.
-        """
-    )
+        """)
     return (mo,)
 
 

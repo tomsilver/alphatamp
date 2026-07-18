@@ -225,12 +225,12 @@ def cache_spectre(force: bool, device: str) -> None:
 def cache_lenctx(force: bool, device: str, repeats: int = 3) -> None:
     """T1 length-only-context intervention: adaptive rollout with identity-
 
-    scrambled (same-length, random-id) failure contexts. Per seed, run the
-    intervention ``repeats`` times with distinct surrogate RNGs and cache the
-    per-problem FP averaged over repeats (damps Monte-Carlo noise). Layout
-    mirrors ``spectre_adaptive``: ``spectre_lenctx/seed_<s>/<pid>.json
-    {problem_id, stratum, fp, order}`` (``order`` from the first repeat). If this
-    matches ``spectre_adaptive`` FP, Ψ ignores failed-skeleton identity (H2).
+    scrambled (same-length, random-id) failure contexts. Per seed, run the intervention
+    ``repeats`` times with distinct surrogate RNGs and cache the per-problem FP averaged
+    over repeats (damps Monte-Carlo noise). Layout mirrors ``spectre_adaptive``:
+    ``spectre_lenctx/seed_<s>/<pid>.json {problem_id, stratum, fp, order}`` (``order``
+    from the first repeat). If this matches ``spectre_adaptive`` FP, Ψ ignores failed-
+    skeleton identity (H2).
     """
     vocab = Vocab.from_json(VOCAB_PATH)
     test = eda.load_split_episodes(SPECTRE_TEST)

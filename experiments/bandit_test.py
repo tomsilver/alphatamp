@@ -98,8 +98,8 @@ WIDE_SUCCESS_THRESHOLD = 0.05  # threshold after Widen is applied
 
 
 class OneDimBanditEnv(gym.Env):  # type: ignore[type-arg]
-    """A 1-D bandit: the robot starts at a random position
-    and must reach a hidden target.
+    """A 1-D bandit: the robot starts at a random position and must reach a hidden
+    target.
 
     Observation: [robot_pos, is_solved, is_widened]  — shape (3,)
     Action:      [displacement, widen_flag]           — shape (2,)
@@ -287,7 +287,6 @@ def _goal_deriver(_: ObjectCentricState) -> RelationalAbstractGoal:
 
 def build_bandit_env_models(env: OneDimBanditEnv) -> SimulatorFreeSesameModels:
     """Build minimal SimulatorFreeSesameModels for the bandit environment."""
-
     # Reach(?r) — pre={}, add={AtGoal(?r)}, del={}
     reach_op = LiftedOperator(
         name="Reach",
@@ -395,7 +394,6 @@ def main(
         param_loss           — per-fit sklearn loss values
         exhaustion_counts    — cumulative resample exhaustion count at each log point
     """
-
     # Build env
     env = OneDimBanditEnv(hidden_target=hidden_target, execution_noise_std=noise_std)
     obs, _ = env.reset(seed=seed)

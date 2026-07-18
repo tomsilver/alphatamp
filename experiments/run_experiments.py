@@ -1,10 +1,11 @@
-"""Run a single experiment or Hydra multirun sweep. This module instantiates a benchmark
-and apporach, then executes planning and gets metrics.
+"""Run a single experiment or Hydra multirun sweep.
 
-To run: Run "python experiments/run_experiments.py"
-from the alphatamp root directory (alphatamp/)
-Note: If you're failing, try running "uv pip install -e ."
-before the line above.
+This module instantiates a benchmark and apporach, then executes planning and gets
+metrics.
+
+To run: Run "python experiments/run_experiments.py" from the alphatamp root directory
+(alphatamp/) Note: If you're failing, try running "uv pip install -e ." before the line
+above.
 """
 
 import os
@@ -21,7 +22,6 @@ from omegaconf import DictConfig
 @hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     """Entrypoint called by Hydra."""
-
     # Get seed
     seed = int(cfg.seed)
 
