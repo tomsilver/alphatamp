@@ -64,7 +64,7 @@ class AbstractOverlayWrapper(gym.Wrapper):  # type: ignore[type-arg]
         self._current_param_label = "Params: " + label
 
     def render(self) -> Any:
-        frame: list | None = self.env.render()
+        frame: Any = self.env.render()
         if frame is None:
             return frame
         img = Image.fromarray(np.asarray(frame, dtype=np.uint8))
