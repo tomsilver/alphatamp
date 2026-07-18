@@ -9,10 +9,10 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
-   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
-   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
-   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=relational-structs",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=prpl-utils",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=prpl-llm-utils",
+   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=toms-geoms-2d",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=relational-structs",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
    "scikit-learn",
@@ -24,7 +24,7 @@ dependencies = [
    "kinder-bilevel-planning",
    "bilevel-planning",
    "kinder-models",
-   "kindergarden[kinematic2d]==0.0.8",
+   "kindergarden==0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +36,11 @@ develop = [
     "mypy",
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
-    "pytest>=7.2.2",
+    # pytest capped <8: pytest-pylint (latest 0.21.0) uses the `path` collect
+    # hook removed in pytest 8.0, so `pytest . --pylint` (run_ci_checks.sh)
+    # INTERNALERRORs on pytest>=8. Lift when pytest-pylint ships a pytest-8+
+    # compatible release. See docs/spectre/decisions.md 2026-07-18.
+    "pytest>=7.2.2,<8",
     "wandb"
 ]
 # Tote-and-Tray Decluttering benchmark (self-contained sub-project under
@@ -61,7 +65,7 @@ target-version = ["py311"]
 py_version = 311
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*"]
+skip_glob = ["venv/*", ".venv/*", "kb/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -84,17 +88,23 @@ exclude = [
     # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
     # spectre_convert.py) type-checked.
     "src/alphatamp/approaches/spectre/envs/dd2d/(?!spectre_)",
+    # Untracked sibling reference checkout (see .gitignore /kb/). Not part of
+    # alphatamp; excluded from repo-wide `mypy .`.
+    "^kb/",
 ]
 
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+# `kb` = untracked sibling reference checkout (see .gitignore /kb/); keep the
+# pytest defaults and add it so `pytest . --pylint` never collects/lints it.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb"]
 
 [tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning" }
-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git", subdirectory = "bilevel-planning" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-models" }
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }
+bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git", subdirectory = "bilevel-planning", rev = "e215d1fc5fe01fa11d3a77a13551c5312594289c" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-models", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }
 
 [[tool.mypy.overrides]]
 module = [

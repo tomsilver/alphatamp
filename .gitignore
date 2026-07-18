@@ -239,3 +239,9 @@ experiments/spectre/__marimo__/
 
 # Weights & Biases local run directory
 wandb/
+
+# Untracked sibling reference checkout of kinder-baselines & related repos
+# (a local "knowledge base"; has its own .git). Kept out of git and excluded
+# from repo-wide CI tooling (autoformat/mypy/pylint/pytest) — see run_autoformat.sh,
+# [tool.mypy]/[tool.isort]/[tool.pytest] in pyproject.toml, and .pylintrc.
+/kb/

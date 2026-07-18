@@ -60,6 +60,35 @@ and spectre's own `hydra/launcher/slurm.yaml` (8 cpus / 32 GB). The shared
 `experiments/conf/` tree belongs to other projects — never put spectre configs
 there.
 
+## Compute resources (dev workstation)
+
+Primary dev/training box as of 2026-07-18 (replaces the earlier MacBook M3 Pro /
+MPS setup; the SLURM launchers below remain for cluster runs):
+
+- **GPU — NVIDIA RTX 5090, 32 GB VRAM, Blackwell (sm_120).** Driver 595.71,
+  CUDA 13.2 runtime; driver-only, no `nvcc`/CUDA toolkit (fine for prebuilt
+  wheels). Single GPU → one training run at a time; multi-seed sweeps run
+  sequentially or share the card. Training goes on CUDA — unlike the old
+  CPU/MPS box, so watch for code that hard-codes `cpu`/`mps` or mixes devices.
+- **PyTorch must be the cu130 build** (`torch==2.13.0+cu130`), installed with
+  `uv pip install torch --index-url https://download.pytorch.org/whl/cu130`
+  **before** `uv pip install -e ".[develop,ttd]"`. cu130 is the
+  actively-maintained line with native sm_120 support and matches the CUDA 13.2
+  driver. `pyproject.toml` keeps `torch` unpinned (shared with SLURM / other
+  machines), so the cu130 index is applied at install time, not baked in — if an
+  editable reinstall ever pulls a PyPI-default torch, re-run the cu130 install
+  and re-verify with a real device op (`(x@x)` on `cuda`), not just
+  `torch.cuda.is_available()`.
+- **CPU — AMD Ryzen 9 9950X, 16 cores / 32 threads** (~5.75 GHz boost). Local
+  data collection / worker-parallel stages (`spectre_collect.py`, EDA) can use
+  far more workers than the SLURM launcher's 8 cpus / 32 GB.
+- **RAM ~64 GB** (59 GiB usable) + 14 GiB swap. **Disk ~1.2 TB free** on `/` for
+  datasets/checkpoints under `data/spectre/`.
+- **OS/toolchain:** Ubuntu 26.04 LTS, Python 3.11 venv (`.venv`, uv-managed),
+  uv 0.11.29. Substrate dep pins were modernized on 2026-07-18
+  (`decisions.md` that date) to resolve on a fresh machine — kindergarden 0.2.0,
+  prpl-mono `e215d1fc`, kinder-baselines `4c731dc8`.
+
 ## Pipeline & how to run
 
 Always `source .venv/bin/activate` first; run from the repo root. Stages in

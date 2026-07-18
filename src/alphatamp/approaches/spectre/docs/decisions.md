@@ -6,6 +6,86 @@ not, and why.
 
 ---
 
+## 2026-07-18 — Modernize + pin the substrate deps so a fresh machine resolves
+
+**Context.** Development moved from a MacBook M3 Pro (CPU/MPS) to a new Ubuntu
+26.04 workstation (RTX 5090, Ryzen 9 9950X, 64 GB) for GPU training. A fresh
+`uv pip install -e ".[develop,ttd]"` on the new box **failed to resolve** — the
+root `pyproject.toml` pinned `kindergarden[kinematic2d]==0.0.8` but left the
+`kinder-baselines` and `bilevel-planning` git sources **unpinned** (no `rev=`).
+Both pins were introduced together on 2026-03-22 (`62d3784`) when compatible, but
+upstream then drifted: kinder-baselines bumped to `kindergarden>=0.1.0`
+(2026-04-29) and later `bilevel-planning>=0.1.4`, and **dropped the
+`kinematic2d` extra** entirely (kindergarden 0.2.0 has no such extra). With no
+lockfile, a fresh resolve pulls the drifted HEAD and conflicts; the MacBook only
+still works because its venv was resolved months ago and cached — never
+re-resolved. User chose "modernize + pin" over reproducing the MacBook's exact
+(unpinnable, un-frozen) set or pinning to the ~4-month-old compatible commit.
+
+**Decisions.**
+
+(a) **Bump the whole prpl-mono substrate to one coherent commit `e215d1fc`**
+(was `df145d5c` for `relational_structs`/`prpl_utils`/`prpl_llm_utils`/
+`tomsgeoms2d`; `bilevel-planning` was previously an *unpinned* prpl-mono source).
+prpl-mono is one monorepo — mixing commits across its subpackages is what causes
+API breakage — so all five move together. `e215d1fc` provides
+`bilevel-planning==0.1.4` (satisfies kinder-baselines HEAD). Added an explicit
+`rev=` to the `bilevel-planning` source so it can no longer drift against the
+pinned `relational_structs`.
+
+(b) **Bump `kindergarden` 0.0.8 → 0.2.0 and drop the `[kinematic2d]` extra.**
+The extra no longer exists (kinder-baselines PR #77 "drop dead kindergarden
+extras"); kinder packages now depend on bare `kindergarden>=0.1.0`. `pymunk` (the
+kinematic2d substrate) is already a direct alphatamp dep, so dropping the extra
+loses nothing.
+
+(c) **Pin both kinder-baselines sources to HEAD `4c731dc8`** (was unpinned) —
+`kinder-bilevel-planning` and `kinder-models`, for reproducibility.
+
+**Consequences.** Fresh resolve succeeds; **all spectre tests pass** (254 incl.
+slow), spectre mypy clean, spectre pylint 10.00/10 — i.e. the substrate bump did
+not break spectre. torch is the cu130 build (`2.13.0+cu130`, see the spectre
+`CLAUDE.md` compute-resources note), GPU-verified on the RTX 5090 (sm_120). The
+`pyproject.toml` `torch` requirement is left **unpinned** on purpose (the cu130
+index is applied at install time, not baked in, so SLURM/other machines are
+unaffected). **Reproducibility caveat:** prior spectre results/checkpoints were
+produced on the older MacBook substrate (kindergarden 0.0.8 / prpl-mono
+`df145d5c`); numbers regenerated on this box use the newer substrate, so
+re-verify before comparing across the boundary.
+
+**Follow-up (2026-07-18) — restore `run_ci_checks.sh`.** Two further repo-wide
+fixes (not spectre-specific) so the CI script runs on a fresh machine:
+(1) **capped `pytest>=7.2.2,<8`** in the `develop` extra — the fresh resolve pulls
+`pytest 9.1.1`, but the latest `pytest-pylint` (0.21.0) uses the `path` collect
+hook removed in pytest 8.0, INTERNALERRORing `pytest . --pylint`; `<8` (→ 7.4.4)
+is the working bound (the upstream kinder-baselines `<9.1` cap is *not* enough).
+(2) **excluded the untracked `kb/` sibling checkout** (a local knowledge-base clone
+of kinder-baselines & friends, with its own `.git`) from git and every CI tool —
+`.gitignore /kb/`, `run_autoformat.sh` docformatter `--exclude`, `[tool.isort]
+skip_glob`, `[tool.mypy] exclude ^kb/`, `[tool.pytest] norecursedirs`, `.pylintrc
+ignore` — mirroring how `.venv/`/`archive/`/vendored-dd2d are handled; otherwise
+`black .`/`isort .`/`mypy .`/`pytest . --pylint` descend into it. After these,
+autoformat + pylint (217 pass) are clean and spectre stays fully green.
+
+**Sibling-project failures surfaced by the modern toolchain/CUDA (NOT spectre) —
+resolved least-invasively to get full CI green (user call: skip, don't deep-fix
+other projects' internals):** (1) the **pre-existing** `mypy` error in
+`experiments/collect_data.py:67` — `render()`'s return type widened under newer
+gymnasium/mypy — fixed by annotating the local `frame: Any` (matches the method's
+own `-> Any`). (2) 4 `simfree_param_policy` tests raise a `cuda:0`-vs-`cpu`
+mismatch on a GPU box (pass CPU-only) — marked `skipif(torch.cuda.is_available())`
+via a shared `_SKIP_ON_CUDA` marker; the real fix is to thread a device through
+that approach. (3) `practice_makes_perfect` fails **device-independently** (CPU
+too) with `AbstractPlanGenerationError` under the new substrate — marked
+`xfail(strict=False)` with that reason; needs a genuine sibling-project fix, not a
+skip. **Autoformat churn:** the newer `docformatter` rewraps ~8 tracked docstrings
+(committed so the tree stays autoformat-clean; re-verified idempotent). After all
+this, `./run_ci_checks.sh` is green end-to-end (mypy 0 / pylint 217 pass / pytest
+269 pass, 11 skipped, 1 xfailed) and spectre itself is untouched by these
+sibling-only changes.
+
+---
+
 ## 2026-07-12 — DD2D integration: JSON→EpisodeRecord converter, not a native env
 
 **Context.** DD2D (Drawer Decluttering 2D) was migrated in-package under
