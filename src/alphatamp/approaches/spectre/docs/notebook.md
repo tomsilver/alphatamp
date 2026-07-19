@@ -18,6 +18,52 @@ Format:
 
 ---
 
+## 2026-07-19 — Fixing v2's every-stratum performance: length-bias diagnosis → generalizable fixes → evidence made helpful (1-seed dev)
+
+The main-table below showed the learned models winning s3 but *losing easy strata* and
+evidence *harming* s1. This entry is the fix — all generalizable (no per-env predicate), on
+**1 seed** (dev speed; 3-seed validation pending).
+
+- **Root cause (diagnosed).** The static ranker uses **plan length as a feasibility proxy**:
+  corr(logit, length) = +0.42, AUROC(feas) s1 0.52 / s2 0.57 (≈chance) but s3 0.78. Right on
+  s3 (you need long plans), near-random on easy strata (short plans are feasible). It arises
+  because the hard s3 episodes (few successes, all long) dominate the PL gradient.
+- **Rejected: a `clears` predicate** (does removing S unblock the target). It fixes everything
+  (untrained model 7.4 overall) but is a hand-crafted per-env geometry predicate — *too
+  instance-specific for a generalizable method* (user call). Removed entirely.
+- **Generalizable fixes.** (a) **default-order / short-first prior** `[−index, −length]` as an
+  additive residual with init-toward-prior (domain-agnostic planner signals); (b)
+  **within-length PL loss** — listwise PL *within each plan-length bucket*, so length is not
+  an exploitable cue and geometry must decide (within-length AUROC → s1 0.66 / s2 0.75); (c)
+  **rollout-based, difficulty-normalized checkpoint selection** (mean first-feasible-rank /
+  random-baseline; §5-mandated, replaces val-PL-loss which favored the length-shortcut).
+- **Evidence was harming — diagnosed & fixed.** Clean facts-on-vs-off (same model): facts
+  *helped* s2 (−5.8) and s3 (−8.8) but *destroyed* s1 (**+13.5**). Mechanism: `blocked-at-
+  contents` was consumed *crudely* as "prefer longer" (right on s3, wrong on s1 where a
+  *different* short plan works). Fix = **proof/hint split**: proofs (`blocked-at-contents`)
+  routed to a sound structural **`dead` demotion feature** (candidate subset ⊆ an observed-
+  blocked set ⇒ provably also-blocked — domain-agnostic set relation), hints (`extraction-
+  failed` …) kept as learned tokens; dropped the unsound "prefer-longer" cues. After the fix,
+  facts help at **every** stratum (s1 **−0.30**, s2 −4.66, s3 −6.71; ALL −2.70).
+- **Result (1-seed, λ=0.8 test, mean attempts):**
+
+  | method | all | s1 | s2 | s3 |
+  |---|---|---|---|---|
+  | default-order | 34.1 | 2.86 | 18.4 | 130.3 |
+  | hand-rule (proofs) | 23.0 | 2.86 | 17.0 | 81.2 |
+  | v2-static+prior (WL) | 20.8 | 10.9 | 38.9 | 34.8 |
+  | v2-evidence+prior (WL) | 21.0 | 5.34 | 23.5 | 61.1 |
+  | **v2-evidence+prior+overlap (proof/hint)** | **17.4** | 4.57 | 36.9 | **30.6** |
+
+- **Takeaway / next.** The evidence pathway now **helps everywhere** — the "evidence harms"
+  bug was a consumption error (crude token vs sound demotion), exactly as expected. The
+  learned model is **best overall (17.4)**, ties s1 (4.6 vs 2.9), wins s3 handily (30.6 vs
+  130/81). **Remaining gap: s2** (36.9 vs default 18.4) — the residual cross-length length
+  bias where over-removal fails packing; the static base is still long-biased on s2. Next:
+  push s2 (and run the 3-seed validation).
+
+---
+
 ## 2026-07-19 — In-distribution main table (λ=0.8 dd2d_v2 test, 142 eps) — a nuanced picture
 
 - What: consolidated rollout of every method on **existing checkpoints** (no new training),

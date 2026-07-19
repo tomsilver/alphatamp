@@ -58,12 +58,23 @@ def sample_context(
 def _fact_arrays(
     episode: EpisodeRecord, context_f: frozenset[int], tags: dict[str, int]
 ) -> tuple[list[int], list[int], list[list[int]]]:
-    """Tensorize the typed facts of the failed skeletons in ``context_f`` to tag-bound
-    ids."""
+    """Tensorize the **hint**-tier facts of the failed skeletons in ``context_f`` to
+    tag-bound ids.
+
+    Proof-tier facts (blocked-at-contents / pack-impossible) are routed to the sound
+    ``overlap`` demotion feature instead of the learned tokens, so the ranker consumes
+    them as the precise proof-demotion rule rather than the crude "prefer longer" a
+    token invites.
+    """
+    from alphatamp.approaches.spectre.facts import TIER_IDS
+
+    hint = TIER_IDS["hint"]
     type_ids: list[int] = []
     tier_ids: list[int] = []
     arg_tags: list[list[int]] = []
     for fr in gather_context_facts(episode, sorted(context_f)):
+        if fr.tier_id != hint:
+            continue  # proofs handled structurally (overlap), not as tokens
         ats = [tags[a] for a in fr.args if a in tags][:MAX_FACT_ARGS]
         type_ids.append(fr.type_id)
         tier_ids.append(fr.tier_id)
@@ -115,6 +126,10 @@ class _V2Example:
     fact_type_ids: list  # int per fact
     fact_tier_ids: list  # int per fact
     fact_arg_tags: list  # list[list[int]] per fact (object tags, capped)
+    prior: list  # [−index/K, −len/max_len] per candidate (a-priori default-order prior)
+    overlap: (
+        list  # [subset⊆blocked (sound demotion), jaccard-with-failed] per candidate
+    )
 
 
 def _target_name(episode: EpisodeRecord) -> Optional[str]:
@@ -184,6 +199,8 @@ def build_v2_example(
     # candidates: operator-schema ids + arg tags (by canonical object name).
     op_ids, arg_tags = [], []
     success: list[Optional[bool]] = []
+    removals: list[int] = []  # staged (place-buffer) count per candidate = plan length
+    cand_subsets: list[frozenset] = []  # staged item names per candidate
     for skel, out in zip(canon.skeleton_pool, canon.outcomes):
         ops, ats = [], []
         for op in skel.operator_seq:
@@ -191,6 +208,14 @@ def build_v2_example(
             ats.append([tags.get(a.name, 0) for a in op.parameters])
         op_ids.append(ops)
         arg_tags.append(ats)
+        removals.append(sum(1 for op in skel.operator_seq if op.name == "place-buffer"))
+        cand_subsets.append(
+            frozenset(
+                op.parameters[0].name
+                for op in skel.operator_seq
+                if op.name == "place-buffer"
+            )
+        )
         s: Optional[bool] = out.outcome == "success"
         if exclude_marginal and out.outcome == "fail":
             meta = out.refiner_metadata or {}
@@ -233,6 +258,34 @@ def build_v2_example(
     else:
         ftype, ftier, farg = _fact_arrays(canon, ctx, tags)
 
+    # a-priori default-order / short-first prior per candidate (higher = tried sooner).
+    k = len(op_ids)
+    max_rm = max(removals) if removals else 1
+    prior = [[-(i / max(k - 1, 1)), -(removals[i] / max(max_rm, 1))] for i in range(k)]
+
+    # structural evidence features: relate each candidate's action-set to the OBSERVED failed
+    # sets in F (zeroed under evidence dropout / empty context). blocked = failed subsets with
+    # a blocked-at-contents fact; a candidate ⊆ a blocked set is provably also-blocked (sound
+    # proof-demotion). Jaccard-with-failed is a mild similarity hint.
+    overlap: list[list[float]] = [[0.0, 0.0] for _ in range(k)]
+    if ctx and not hide:
+        blocked = [
+            cand_subsets[f]
+            for f in ctx
+            if (canon.outcomes[f].post_mortem is not None)
+            and any(
+                fc.fact_type == "blocked-at-contents"
+                for fc in canon.outcomes[f].post_mortem.facts  # type: ignore[union-attr]
+            )
+        ]
+        failed = [cand_subsets[f] for f in ctx]
+        for i, ci in enumerate(cand_subsets):
+            dead = 1.0 if any(ci <= bf for bf in blocked) else 0.0
+            jac = max(
+                (len(ci & ff) / max(len(ci | ff), 1) for ff in failed), default=0.0
+            )
+            overlap[i] = [dead, float(jac)]
+
     return _V2Example(
         obj_tags,
         obj_boundary,
@@ -248,6 +301,8 @@ def build_v2_example(
         ftype,
         ftier,
         farg,
+        prior,
+        overlap,
     )
 
 
@@ -282,6 +337,8 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     cand_step_mask = np.zeros((b, k, ell), bool)
     pool_mask = np.zeros((b, k), bool)
     avail = np.zeros((b, k), bool)
+    cand_prior = np.zeros((b, k, 2), np.float32)
+    cand_overlap = np.zeros((b, k, 2), np.float32)
     success = np.zeros((b, k), bool)
     aux_nec = np.full((b, n), -1.0, np.float32)
     aux_rel = np.full((b, n), -1.0, np.float32)
@@ -306,6 +363,8 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         for ki, (ops, ats, s) in enumerate(zip(e.op_ids, e.arg_tags, e.success)):
             pool_mask[bi, ki] = True
             avail[bi, ki] = bool(e.avail[ki]) if ki < len(e.avail) else True
+            cand_prior[bi, ki] = e.prior[ki]
+            cand_overlap[bi, ki] = e.overlap[ki]
             success[bi, ki] = bool(s) if s is not None else False
             for li, (oid, at) in enumerate(zip(ops, ats)):
                 cand_op_ids[bi, ki, li] = oid
@@ -338,6 +397,8 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         aux_necessary=t(aux_nec),
         aux_relevant=t(aux_rel),
         avail_mask=t(avail),
+        cand_prior=t(cand_prior),
+        cand_overlap=t(cand_overlap),
         fact_type_ids=t(fact_type) if fmax else None,
         fact_tier_ids=t(fact_tier) if fmax else None,
         fact_arg_tags=t(fact_arg) if fmax else None,

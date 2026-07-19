@@ -6,6 +6,64 @@ not, and why.
 
 ---
 
+## 2026-07-19 — v2 ranker: fix the length bias generalizably; no hand-crafted per-env predicate; consume proofs structurally not as tokens
+
+**Context.** The in-distribution main table exposed two problems with the v2 learned rankers:
+they *lost easy strata* to default-order/hand-rule while winning s3, and the typed-evidence
+pathway *harmed* s1. Root cause: the static ranker uses **plan length as a feasibility proxy**
+(corr(logit,length)=+0.42; within-length AUROC ≈ chance on s1/s2, good on s3) — correct on s3
+(long plans needed), wrong on easy strata — because the hard s3 episodes dominate the PL
+gradient. A `clears` predicate (does removing subset S unblock the target) fixes it decisively
+but is a hand-crafted per-environment geometry predicate.
+
+**Decisions.**
+
+(a) **Reject `clears` as a model input/foundation.** Performance must not depend on finding a
+bespoke predicate per environment (user directive) — that is the opposite of a generalizable
+method. `candidate_clears` and the clears-first baseline were removed. (The a-priori clears
+*heuristic* is a striking finding — clears-then-index gets 7.4 overall on DD2D — but it stays
+out of the method.)
+
+(b) **Default-order / short-first prior is allowed and generalizable.** `[−index/K,
+−len/max_len]` are domain-agnostic planner signals present in any TAMP problem (enumeration
+order, plan length), fed as an **additive residual with init-toward-prior** (an untrained
+prior-model ranks exactly as default-order; corr(logit,index)=−1.0). Distinct from `clears`,
+which requires env geometry.
+
+(c) **Within-length PL loss (`loss.within_length_pl_loss`).** The global top-1 PL is
+minimizable by a length shortcut; restricting the listwise objective to same-length buckets
+removes length as a cue and forces geometry (within-length AUROC → 0.66/0.75 on s1/s2). Plan
+length is universal, so this is domain-agnostic. Additive to — not a replacement for — the
+global PL (the load-bearing PL invariant holds; within-length is a *bucketed* PL, still
+listwise, no BCE).
+
+(d) **Rollout-based, difficulty-normalized checkpoint selection.** Select by mean
+`first-feasible-rank / random-baseline-rank` on val at t=0 (the §5-mandated rollout selection
+the v2 training had dropped for val PL loss). Per-episode normalization stops the many-attempt
+hard episodes from dominating selection — that domination is what let the length-shortcut
+checkpoint win. No stratum, no per-env feature.
+
+(e) **Consume proofs structurally (demotion feature), hints as tokens — the fix for "evidence
+harms".** Clean facts-on/off showed `blocked-at-contents` was consumed *crudely* as "prefer
+longer" (helps s2/s3, destroys s1: +13.5 attempts). Fix: a **`dead` overlap feature** — a
+candidate whose action-set ⊆ an observed-blocked set is provably also-blocked (sound
+proof-demotion, a domain-agnostic *set relation*, not a geometry predicate) — plus a mild
+Jaccard-with-failed hint; and **route proof-tier facts out of the learned fact-token pathway**
+(`_fact_arrays` keeps hint-tier only), keeping the unsound "blocked ⊊ subset ⇒ prefer longer"
+cue **out**. After this, evidence helps at every stratum (s1 −0.30, s2 −4.66, s3 −6.71).
+`N_OVERLAP=2`, `N_PRIOR=2`; `use_prior`/`use_overlap`/`within_length_weight` config flags;
+checkpoints under `checkpoints_v2*_prior[_ov]`.
+
+**Consequences.** The learned model is the best in-distribution method overall (17.4 vs
+default 34.1 / hand-rule 23.0, 1-seed), ties s1, wins s3 handily; evidence is now a genuine
+help everywhere. Loss invariant amended: "listwise PL only" now reads "listwise PL (global +
+within-length buckets) only; no pointwise BCE." Open: **s2** still lags default (36.9 vs 18.4)
+— residual cross-length length bias where over-removal fails packing — and the 3-seed
+validation (these are 1-seed dev numbers per the fast-iteration directive). `notebook.md`
+2026-07-19 has the table + per-stratum facts-on/off.
+
+---
+
 ## 2026-07-19 — Step-11 typed evidence: offline geometry-grounded harvest + metadata hints; the learned pathway is a composable increment
 
 **Context.** Step 11 needs typed post-mortem facts on the records for the learned evidence

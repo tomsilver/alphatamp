@@ -6,7 +6,10 @@ import math
 
 import torch
 
-from alphatamp.approaches.spectre.loss import plackett_luce_loss
+from alphatamp.approaches.spectre.loss import (
+    plackett_luce_loss,
+    within_length_pl_loss,
+)
 
 
 def test_pl_loss_zero_when_logit_concentrated_on_success() -> None:
@@ -56,3 +59,32 @@ def test_pl_loss_batched_mean() -> None:
     pool = torch.tensor([[True, True, True], [True, True, True]])
     loss = plackett_luce_loss(logits, succ, pool)
     assert float(loss) < 1e-3
+
+
+def test_within_length_only_penalizes_within_bucket() -> None:
+    """A success ranked below an infeasible of the SAME length is penalized; a success
+    ranked below an infeasible of a DIFFERENT length is not (length carries no info)."""
+    # buckets by length key: candidates 0,1 length=1.0 ; candidates 2,3 length=2.0
+    length_key = torch.tensor([[1.0, 1.0, 2.0, 2.0]])
+    pool = torch.tensor([[True, True, True, True]])
+    # within bucket-1: success at idx0 ranked BELOW infeasible idx1 -> penalized.
+    logits_bad = torch.tensor([[0.0, 5.0, 0.0, 0.0]])
+    succ = torch.tensor([[True, False, False, False]])
+    bad = within_length_pl_loss(logits_bad, succ, pool, length_key)
+    # within bucket-1: success idx0 ranked ABOVE infeasible idx1 -> ~0.
+    logits_good = torch.tensor([[5.0, 0.0, 0.0, 0.0]])
+    good = within_length_pl_loss(logits_good, succ, pool, length_key)
+    assert float(good) < float(bad)
+    assert float(good) < 1e-2
+
+
+def test_within_length_ignores_cross_bucket_ordering() -> None:
+    """A long infeasible ranked above a short success does NOT add within-length loss
+    (that is the cross-length signal the global PL handles)."""
+    length_key = torch.tensor([[1.0, 2.0]])  # different lengths
+    pool = torch.tensor([[True, True]])
+    succ = torch.tensor([[True, False]])  # success is the short one
+    # the long infeasible (idx1) is ranked far above the short success (idx0)...
+    logits = torch.tensor([[0.0, 9.0]])
+    # ...but they are in different buckets, each of size 1 -> no within-length term.
+    assert float(within_length_pl_loss(logits, succ, pool, length_key)) == 0.0

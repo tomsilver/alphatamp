@@ -28,8 +28,16 @@ from alphatamp.approaches.spectre.dataset_v2 import (
 )
 from alphatamp.approaches.spectre.evidence import scramble_gauge
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.loss import plackett_luce_loss
-from alphatamp.approaches.spectre.model_v2 import SpectreV2Batch, SpectreV2Model
+from alphatamp.approaches.spectre.loss import (
+    plackett_luce_loss,
+    within_length_pl_loss,
+)
+from alphatamp.approaches.spectre.model_v2 import (
+    N_OVERLAP,
+    N_PRIOR,
+    SpectreV2Batch,
+    SpectreV2Model,
+)
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
@@ -65,6 +73,54 @@ def _build_gauge_batch(
     return collate_v2(exs, max_arity=vocab.max_operator_arity)
 
 
+def _load_val_episodes(val_dir: Path) -> list:
+    eps = []
+    for p in list_episodes(val_dir):
+        ep = load_episode(p)
+        if ep.scene_geometry is not None and ep.summary.num_success >= 1:
+            eps.append(ep)
+    return eps
+
+
+@torch.no_grad()
+def _val_relative_rank(model, val_episodes, vocab, device, max_tags) -> float:
+    """Rollout-aligned, difficulty-normalized checkpoint metric (proposal §5): mean over
+    val of ``(first-feasible-rank / random-baseline-rank)`` in the static t=0 ranking.
+
+    For the static pathway the t=0 order *is* the deployed rollout order, so first-
+    feasible- rank == rollout attempts. Normalizing each episode by its random baseline
+    ``(K+1)/(S+1)`` keeps the many-attempt hard episodes from dominating selection the
+    way raw mean-rank and val PL loss do (which is what let the length-shortcut
+    checkpoint win). Domain-agnostic — no stratum, no per-env predicate. Lower is
+    better.
+    """
+    model.eval()
+    scores = []
+    for ep in val_episodes:
+        ex = build_v2_example(
+            ep,
+            vocab,
+            rng=None,
+            max_tags=max_tags,
+            evidence=True,
+            context_f=frozenset(),
+            hide_facts=True,
+            augment_tags=False,
+        )
+        batch = collate_v2([ex], max_arity=vocab.max_operator_arity).to(device)
+        logits, _ = model(batch)
+        lg = logits[0].detach().cpu().numpy()
+        valid = [i for i, o in enumerate(ep.outcomes) if o.outcome != "error"]
+        feas = np.array([ep.outcomes[i].outcome == "success" for i in valid])
+        if not feas.any():
+            continue
+        order = np.argsort(-lg[valid])
+        rank = int(np.argmax(feas[order])) + 1
+        baseline = (len(valid) + 1) / (int(feas.sum()) + 1)
+        scores.append(rank / baseline)
+    return float(np.mean(scores)) if scores else float("inf")
+
+
 @dataclass
 class TrainV2Config:
     epochs: int = 30
@@ -81,6 +137,11 @@ class TrainV2Config:
     evidence: bool = (
         False  # Step 11: train the typed-evidence pathway (F-context sampling)
     )
+    use_prior: bool = (
+        False  # fold in the a-priori default-order prior (init-toward-prior)
+    )
+    within_length_weight: float = 1.0  # within-length PL (kills the length shortcut)
+    use_overlap: bool = False  # structural evidence features (subset⊆blocked etc.)
 
 
 def _aux_loss(aux_logits, aux_nec, aux_rel, obj_mask) -> torch.Tensor:
@@ -102,7 +163,9 @@ def _pl_over_batch(logits, success_mask, pool_mask) -> torch.Tensor:
     return plackett_luce_loss(logits[rows], success_mask[rows], pool_mask[rows])
 
 
-def _run_epoch(model, loader, device, aux_weight: float, opt=None) -> float:
+def _run_epoch(
+    model, loader, device, aux_weight: float, wl_weight: float = 0.0, opt=None
+) -> float:
     train = opt is not None
     model.train(train)
     total, n = 0.0, 0
@@ -115,6 +178,13 @@ def _run_epoch(model, loader, device, aux_weight: float, opt=None) -> float:
                 loss = loss + aux_weight * _aux_loss(
                     aux, batch.aux_necessary, batch.aux_relevant, batch.obj_mask
                 )
+                if wl_weight and batch.cand_prior is not None:
+                    loss = loss + wl_weight * within_length_pl_loss(
+                        logits,
+                        batch.success_mask,
+                        batch.pool_mask,
+                        batch.cand_prior[:, :, 1],
+                    )
         if train:
             opt.zero_grad()
             loss.backward()  # type: ignore[no-untyped-call]
@@ -163,6 +233,8 @@ def train_v2(
         n_ops=n_ops,
         max_arity=vocab.max_operator_arity,
         max_tags=cfg.max_tags,
+        n_overlap_feats=(N_OVERLAP if cfg.use_overlap else 0),
+        n_prior_feats=(N_PRIOR if cfg.use_prior else 0),
         dropout_p=cfg.dropout_p,
     ).to(device)
     opt = torch.optim.AdamW(
@@ -177,14 +249,15 @@ def train_v2(
 
     gauge_batch = _build_gauge_batch(val_dir, vocab, cfg) if cfg.evidence else None
     gauge_rng = np.random.default_rng(cfg.seed)
+    val_episodes = _load_val_episodes(val_dir)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    best_val = float("inf")
+    best_metric = float("inf")  # rollout-aligned relative-rank (proposal §5)
     log = []
     print(
         f"[train_v2] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} batch={cfg.batch_size} "
-        f"evidence={cfg.evidence}",
+        f"evidence={cfg.evidence} selection=relrank",
         flush=True,
     )
     t_start = time.time()
@@ -192,25 +265,34 @@ def train_v2(
         for grp in opt.param_groups:
             grp["lr"] = cfg.lr * lr_at(epoch)
         train_ds.set_epoch(epoch)
-        tr = _run_epoch(model, train_loader, device, cfg.aux_weight, opt)
-        va = _run_epoch(model, val_loader, device, cfg.aux_weight, None)
+        tr = _run_epoch(
+            model, train_loader, device, cfg.aux_weight, cfg.within_length_weight, opt
+        )
+        va = _run_epoch(model, val_loader, device, cfg.aux_weight, 0.0, None)
+        relrank = _val_relative_rank(model, val_episodes, vocab, device, cfg.max_tags)
         gauge = (
             scramble_gauge(model, gauge_batch, device, gauge_rng)
             if gauge_batch is not None
             else 0.0
         )
         log.append(
-            {"epoch": epoch, "train_loss": tr, "val_loss": va, "scramble_gauge": gauge}
+            {
+                "epoch": epoch,
+                "train_loss": tr,
+                "val_loss": va,
+                "val_relrank": relrank,
+                "scramble_gauge": gauge,
+            }
         )
-        improved = va < best_val
+        improved = relrank < best_metric
         if improved:
-            best_val = va
+            best_metric = relrank
             torch.save(
                 {"state_dict": model.state_dict(), "cfg": asdict(cfg), "n_ops": n_ops},
                 out_dir / "best.pt",
             )
         # Periodic heartbeat so a long run is never mistaken for a hang: every 5 epochs,
-        # plus the first and last, with train/val loss, best-so-far, scramble gauge, ETA.
+        # plus the first and last, with losses, the selection metric, gauge, ETA.
         if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
             elapsed = time.time() - t_start
             per_epoch = elapsed / (epoch + 1)
@@ -218,15 +300,15 @@ def train_v2(
             gauge_str = f" gauge={gauge:.3f}" if cfg.evidence else ""
             print(
                 f"[train_v2] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
-                f"train={tr:.4f} val={va:.4f} best={best_val:.4f}"
-                f"{' *' if improved else ''}{gauge_str} | "
+                f"train={tr:.4f} val={va:.4f} relrank={relrank:.3f} "
+                f"best={best_metric:.3f}{' *' if improved else ''}{gauge_str} | "
                 f"{per_epoch:.1f}s/ep ETA {eta / 60:.1f}m",
                 flush=True,
             )
     (out_dir / "log.jsonl").write_text("\n".join(json.dumps(r) for r in log))
     final_gauge = log[-1]["scramble_gauge"] if log else 0.0
     return {
-        "best_val_loss": best_val,
+        "best_relrank": best_metric,
         "epochs": len(log),
         "n_train": len(train_ds),
         "final_scramble_gauge": final_gauge,
@@ -242,11 +324,27 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--evidence", action="store_true", help="train the Step-11 pathway")
+    ap.add_argument(
+        "--use-prior", action="store_true", help="fold in default-order prior"
+    )
+    ap.add_argument(
+        "--use-overlap", action="store_true", help="structural evidence features"
+    )
     a = ap.parse_args(argv)
     root = Path(a.data_root)
     vocab = Vocab.from_json(root / "derived" / a.env / "train_vocab.json")
-    cfg = TrainV2Config(epochs=a.epochs, seed=a.seed, evidence=a.evidence)
+    cfg = TrainV2Config(
+        epochs=a.epochs,
+        seed=a.seed,
+        evidence=a.evidence,
+        use_prior=a.use_prior,
+        use_overlap=a.use_overlap,
+    )
     sub = "checkpoints_v2_evidence" if a.evidence else "checkpoints_v2"
+    if a.use_prior:
+        sub += "_prior"
+    if a.use_overlap:
+        sub += "_ov"
     out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v2(
         cfg,

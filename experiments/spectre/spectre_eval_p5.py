@@ -77,14 +77,19 @@ def _action_sets(ep) -> list[set]:
 
 
 def _load_model(ckpt_path: Path, vocab: Vocab, device: str) -> SpectreV2Model:
+    from alphatamp.approaches.spectre.model_v2 import N_OVERLAP, N_PRIOR
+
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    cfg = ckpt["cfg"]
     model = SpectreV2Model(
         n_ops=ckpt["n_ops"],
         max_arity=vocab.max_operator_arity,
-        max_tags=ckpt["cfg"]["max_tags"],
-        dropout_p=ckpt["cfg"]["dropout_p"],
+        max_tags=cfg["max_tags"],
+        n_overlap_feats=(N_OVERLAP if cfg.get("use_overlap") else 0),
+        n_prior_feats=(N_PRIOR if cfg.get("use_prior") else 0),
+        dropout_p=cfg["dropout_p"],
     ).to(device)
-    model.load_state_dict(ckpt["state_dict"])
+    model.load_state_dict(ckpt["state_dict"], strict=False)
     model.eval()
     return model
 

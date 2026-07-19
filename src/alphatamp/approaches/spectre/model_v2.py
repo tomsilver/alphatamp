@@ -27,7 +27,7 @@ rollout / PL-loss machinery is reused unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, cast
 
 import torch
 from torch import Tensor, nn
@@ -55,6 +55,17 @@ DROPOUT = 0.1
 # typed-evidence (Step 11) dims
 MAX_FACT_ARGS = 12  # cap on a fact's argument list (mean-pooled); larger sets truncate
 D_FACT_TIER = 8
+
+# a-priori per-candidate prior features: [−index/K, −len/max_len] (default-order /
+# short-first) — domain-agnostic planner signals available in any TAMP problem. Column 0 is
+# the additive default-order residual anchor the geometry head only has to correct.
+N_PRIOR = 2
+
+# structural evidence features relating each candidate's action-set to the OBSERVED failed
+# sets (Step 11 fix): [subset⊆blocked (sound proof-demotion — provably also-blocked),
+# max-Jaccard-with-failed (hint)]. Domain-agnostic set relations. The unsound "blocked⊊subset
+# ⇒ prefer longer" cue is deliberately excluded — it helps s3 but misleads easy strata.
+N_OVERLAP = 2
 
 
 @dataclass
@@ -86,6 +97,13 @@ class SpectreV2Batch:
     fact_arg_tags: Optional[Tensor] = None  # (B, F, MAX_FACT_ARGS) long — 0 = pad
     fact_mask: Optional[Tensor] = None  # (B, F) bool — real fact
     avail_mask: Optional[Tensor] = None  # (B, K) bool — candidate not yet tried (∉ F)
+    # a-priori planner prior: [−index/K, −len/max_len] per candidate (default-order /
+    # short-first). Known before any refinement — the scorer treats geometry as a residual
+    # correction on this prior (init-toward-prior); ``None`` disables it.
+    cand_prior: Optional[Tensor] = None  # (B, K, N_PRIOR) float
+    # structural evidence features per candidate vs the observed failed sets (Step 11 fix);
+    # 0 when no facts / static path. Lets the ranker use proofs by set-containment.
+    cand_overlap: Optional[Tensor] = None  # (B, K, N_OVERLAP) float
 
     def to(self, device) -> "SpectreV2Batch":
         return SpectreV2Batch(
@@ -229,19 +247,37 @@ class CrossAttentionScorer(nn.Module):
     attended vector is concatenated with the candidate embedding and any overlap
     features → one logit."""
 
-    def __init__(self, n_overlap_feats: int = 0, dropout_p: float = DROPOUT) -> None:
+    def __init__(
+        self,
+        n_overlap_feats: int = 0,
+        n_prior_feats: int = 0,
+        dropout_p: float = DROPOUT,
+    ) -> None:
         super().__init__()
         self.attn = nn.MultiheadAttention(
             D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
         )
         self.glob_proj = nn.Linear(D_GLOBAL_IN, D_MODEL)
         self.head = nn.Sequential(
-            nn.Linear(2 * D_MODEL + n_overlap_feats, FFN_DIM),
+            nn.Linear(2 * D_MODEL + n_overlap_feats + n_prior_feats, FFN_DIM),
             nn.GELU(),
             nn.Dropout(dropout_p),
             nn.Linear(FFN_DIM, 1),
         )
         self.n_overlap_feats = n_overlap_feats
+        self.n_prior_feats = n_prior_feats
+        if n_prior_feats:
+            # Additive default-order residual: the geometry head is init-to-zero, and the
+            # prior gate is init to trust the default-order column, so an untrained scorer
+            # ranks ≈ default-order and the head only learns the correction (init-toward-prior).
+            self.prior_gate = nn.Linear(n_prior_feats, 1)
+            head_out = cast(nn.Linear, self.head[-1])
+            nn.init.zeros_(head_out.weight)
+            nn.init.zeros_(head_out.bias)
+            nn.init.zeros_(self.prior_gate.bias)
+            with torch.no_grad():
+                self.prior_gate.weight.zero_()
+                self.prior_gate.weight[0, 0] = 3.0  # −index (default order)
 
     def forward(
         self,
@@ -252,6 +288,7 @@ class CrossAttentionScorer(nn.Module):
         overlap: Tensor | None = None,  # (B, K, n_overlap_feats)
         fact_tok: Tensor | None = None,  # (B, F, D)
         fact_mask: Tensor | None = None,  # (B, F)
+        prior: Tensor | None = None,  # (B, K, n_prior_feats)
     ) -> Tensor:
         b, k, _ = cand_emb.shape
         glob = self.glob_proj(glob_feats).unsqueeze(1)  # (B, 1, D)
@@ -274,7 +311,15 @@ class CrossAttentionScorer(nn.Module):
                 if overlap is not None
                 else cand_emb.new_zeros(b, k, self.n_overlap_feats)
             )
-        return self.head(torch.cat(parts, dim=-1)).squeeze(-1)  # (B, K)
+        pr = (
+            prior if prior is not None else cand_emb.new_zeros(b, k, self.n_prior_feats)
+        )
+        if self.n_prior_feats:
+            parts.append(pr)
+        logit = self.head(torch.cat(parts, dim=-1)).squeeze(-1)  # (B, K)
+        if self.n_prior_feats:
+            logit = logit + self.prior_gate(pr).squeeze(-1)  # default-order anchor
+        return logit
 
 
 class AuxHead(nn.Module):
@@ -297,14 +342,17 @@ class SpectreV2Model(nn.Module):
         max_arity: int,
         max_tags: int = MAX_TAGS_DEFAULT,
         n_overlap_feats: int = 0,
+        n_prior_feats: int = 0,
         dropout_p: float = DROPOUT,
     ) -> None:
         super().__init__()
         self.scene = SceneEncoder(max_tags, dropout_p)
         self.cands = CandidateEncoder(n_ops, max_tags, max_arity, dropout_p)
         self.facts = FactEncoder(max_tags, dropout_p)
-        self.scorer = CrossAttentionScorer(n_overlap_feats, dropout_p)
+        self.scorer = CrossAttentionScorer(n_overlap_feats, n_prior_feats, dropout_p)
         self.aux = AuxHead()
+        self.n_prior_feats = n_prior_feats
+        self.n_overlap_feats = n_overlap_feats
 
     def forward(self, batch: SpectreV2Batch, overlap: Tensor | None = None):
         scene_tok = self.scene(batch)  # (B, N, D)
@@ -317,6 +365,9 @@ class SpectreV2Model(nn.Module):
                 batch.fact_arg_tags,
                 batch.fact_mask,
             )  # (B, F, D)
+        prior = batch.cand_prior if self.n_prior_feats else None
+        if overlap is None and self.n_overlap_feats:
+            overlap = batch.cand_overlap
         logits = self.scorer(
             cand_emb,
             scene_tok,
@@ -325,6 +376,7 @@ class SpectreV2Model(nn.Module):
             overlap,
             fact_tok,
             batch.fact_mask,
+            prior,
         )  # (B, K)
         avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
         logits = logits.masked_fill(~avail, float("-inf"))
