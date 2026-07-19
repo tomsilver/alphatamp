@@ -18,6 +18,51 @@ Format:
 
 ---
 
+## 2026-07-19 — In-distribution main table (λ=0.8 dd2d_v2 test, 142 eps) — a nuanced picture
+
+- What: consolidated rollout of every method on **existing checkpoints** (no new training),
+  mean **attempts** to first success (uncensored, budget = pool cap), per stratum; learned
+  models averaged over 3 checksum-distinct seeds (`spectre_main_table.py`). Strata counts
+  s0/s1/s2/s3 = 32/44/35/31. *Wall-clock omitted:* converted DD2D carries no refiner timings
+  (`refinement_wall_clock_s=0`); wall-clock is a native-collection metric (RT2D).
+
+  | method | all | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | oracle | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+  | random | 25.73 | 12.10 | 12.82 | 31.07 | 52.08 |
+  | default-order | 34.11 | 1.00 | 2.86 | 18.43 | **130.32** |
+  | slack-order | 54.69 | 1.00 | 14.89 | 72.89 | 146.06 |
+  | LAZY(β=1.0) | 34.16 | 1.00 | 2.86 | 18.60 | 130.39 |
+  | hand-rule(proofs) | **23.03** | 1.00 | 2.86 | 17.03 | 81.16 |
+  | v2-static | 26.65 | 1.00 | 7.58 | 56.03 | 47.01 |
+  | v2-evidence | 27.32 | 1.00 | 26.64 | 44.24 | **36.37** |
+
+- Findings (the table earns its keep by surfacing these):
+  1. **s3 is the learned models' domain.** v2-evidence 36.4 / v2-static 47.0 vs hand-rule 81 /
+     default·LAZY 130 / slack 146. The geometry-aware representation's advantage is concentrated
+     exactly where the cheap heuristics collapse.
+  2. **Default-order is a strong prior on easy strata** (s0 1.0, s1 2.86, s2 18.4) — short-plans-
+     first wins when short plans are feasible. The learned models **underperform default on
+     s1/s2** (v2-static s2 56 vs default 18). This is the pre-registered **P2 caveat** ("the
+     distance/default prior may stay champion on easy strata → fold it in as a feature").
+  3. **Hand-rule (proof-demotion) is the best method OVERALL (23.03)** — a zero-parameter sound
+     baseline: it matches default on easy strata and cuts s3 130→81. The "most dangerous
+     baseline" the plan warned about, confirmed.
+  4. **Typed evidence is non-uniform** — it helps on strata≥2 (P5: +6 FP) but **HURTS badly on
+     s1** (isolated: facts-on 34.9 vs facts-off 11.1 FP, **+23.8**). Accumulated failure facts
+     mislead the model on easy problems where many plans succeed and the tried-and-failed ones
+     are near-random. This drags v2-evidence's overall (27.3) above v2-static (26.7).
+  5. **LAZY(β=1.0) ≈ default** (34.16 vs 34.11) — untyped action-overlap conditioning barely
+     moves the needle on DD2D, which is why the typed pathway's strata≥2 win over LAZY (P5) is
+     the meaningful adaptive comparison, not a strawman.
+- Takeaway / next: the learned representation's win is real but **stratum-concentrated (s3)**;
+  the default prior + proof-demotion own the easy strata. Two concrete follow-ups fall out:
+  (a) **fold the default/distance prior into the model as a feature** (P2 caveat); (b) **gate
+  typed evidence by confidence/stratum** so it stops hurting easy problems. PIGINet (the P2
+  low-level comparator) remains deferred.
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 11: learned typed-evidence pathway — P5 PASS
 
 - What: built the typed-evidence pathway (offline geometry-grounded harvest → fact tokens in
