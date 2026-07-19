@@ -30,6 +30,7 @@ import os
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import asdict, dataclass, field
 
 from ..record import PIGINetExample
@@ -522,8 +523,19 @@ def collect_split(
                 seed, stratum = task
                 absorb(_collect_task((seed, stratum, config, split_dir)))
         else:
+            # Tail-drain observability + robustness (opaque-hang hardening):
+            #  - wake every ``progress_every`` s even if nothing completed, so a
+            #    long drain of over-prefetched slow tasks is never silent;
+            #  - flag any single task running past a generous soft-timeout (still
+            #    bounded by the refiner's time_budget/k — informational, never
+            #    cancelled), so "is it stuck?" is answerable from the log;
+            #  - survive an abnormally-killed worker (OOM / shapely segfault):
+            #    a BrokenProcessPool would otherwise abort the whole (multi-hour)
+            #    run instead of degrading to the seeds already on disk.
+            soft_timeout_s = max(300.0, 5.0 * (config.time_budget or 20.0))
             with ProcessPoolExecutor(max_workers=workers) as pool:
                 inflight: dict = {}
+                warned: set = set()  # futures already flagged slow (flag once)
 
                 def submit_next() -> bool:
                     task = next_task()
@@ -531,17 +543,73 @@ def collect_split(
                         return False
                     seed, stratum = task
                     fut = pool.submit(_collect_task, (seed, stratum, config, split_dir))
-                    inflight[fut] = (seed, stratum)
+                    inflight[fut] = (seed, stratum, time.time())
                     return True
 
                 for _ in range(workers * 2):
                     if not submit_next():
                         break
-                while inflight:
-                    done, _pending = wait(inflight, return_when=FIRST_COMPLETED)
+                broken = False
+                while inflight and not broken:
+                    done, _pending = wait(
+                        inflight, return_when=FIRST_COMPLETED, timeout=progress_every
+                    )
+                    if not done:  # heartbeat: nothing finished this interval
+                        now = time.time()
+                        for fut, (seed, stratum, t_sub) in list(inflight.items()):
+                            age = now - t_sub
+                            if age >= soft_timeout_s and fut not in warned:
+                                warned.add(fut)
+                                print(
+                                    f"  [{split_name}] SLOW seed={seed} s{stratum} "
+                                    f"running {age:.0f}s (>{soft_timeout_s:.0f}s); still "
+                                    f"bounded by refiner time_budget/k, not cancelled",
+                                    flush=True,
+                                )
+                        if progress:
+                            oldest = max(now - t for _, _, t in inflight.values())
+                            print(
+                                f"  [{split_name}] {_fmt_hms(now - t0)} | draining "
+                                f"{len(inflight)} in-flight, none completed in "
+                                f"{progress_every:.0f}s | oldest {oldest:.0f}s",
+                                flush=True,
+                            )
+                            last_print[0] = now
+                        continue
                     for fut in done:
-                        inflight.pop(fut)
-                        absorb(fut.result())
+                        seed, stratum, _t_sub = inflight.pop(fut)
+                        try:
+                            res = fut.result()
+                        except BrokenProcessPool as e:
+                            # Pool is dead: this seed + every other in-flight seed
+                            # are lost. Log, record synthetic drops so the manifest
+                            # reflects them, and finalize the split (--resume picks
+                            # up the rest) rather than crashing the whole run.
+                            print(
+                                f"  [{split_name}] WORKER DIED seed={seed} s{stratum} "
+                                f"({type(e).__name__}); finalizing split with "
+                                f"{sum(v['kept'] for v in st_state.values())} kept so "
+                                f"far, {len(inflight)} in-flight seeds abandoned "
+                                f"(re-run with --resume to continue)",
+                                flush=True,
+                            )
+                            for lost_seed, lost_stratum, _ in [
+                                (seed, stratum, _t_sub)
+                            ] + list(inflight.values()):
+                                absorb(
+                                    ProblemResult(
+                                        problem_id=f"dd2d_s{lost_seed}_st{lost_stratum}",
+                                        seed=lost_seed,
+                                        stratum=lost_stratum,
+                                        n_items=_sample_n_items(lost_seed),
+                                        kept=False,
+                                        reason=f"error:{type(e).__name__}",
+                                    )
+                                )
+                            inflight.clear()
+                            broken = True
+                            break
+                        absorb(res)
                         submit_next()
     finally:
         log_f.close()
