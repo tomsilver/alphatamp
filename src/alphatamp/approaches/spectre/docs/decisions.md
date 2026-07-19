@@ -6,6 +6,72 @@ not, and why.
 
 ---
 
+## 2026-07-18 — DD2D arrangement-complete negative packing certificate (v2.2.1 Task 0)
+
+**Context.** v2.2.1 makes completing the arrangement-complete negative certificate the
+**blocking Task 0**: until packing-infeasibility can be *proven* (not left provisional
+`marginal(budget)`), no label-dependent DD2D number is trustworthy. The spec is
+`dd2d_spec.md` §8.4 + P16/P19. The repo already contained an NFP/IFP/nesting packing
+substrate (`ttd/ttd_core/`), but the user directed that **ttd is scrapped** (still in the
+tree only because it hasn't been removed) and must not be reused.
+
+**Decisions.**
+
+(a) **Build the certificate from scratch on Shapely** (`envs/dd2d/dd2d/certificate.py`),
+not on `ttd_core`. Rejected reusing `ttd_core.nesting`: user call, and independently its
+`INFEASIBLE` is discretization-relative (fixed 1°/5° grid, not the Lipschitz grid) and its
+`packs()` folds `TIMEOUT` into `False` — unsound as a proof.
+
+(b) **Exact convex decomposition via `shapely.constrained_delaunay_triangles`** (Shapely
+2.1+). Each triangle ⊆ the shape and the triangles exactly cover it → exact NFP for the 3
+**concave** families (`banana`/`shoe`/`dumbbell`). Rejected the plain-Delaunay-of-vertices
+fallback (what sank ttd's concave path): it need not respect a reflex boundary → NFP wrong
+→ possible false infeasible. `convex_parts` verifies exact cover and refuses (→ marginal)
+otherwise.
+
+(c) **All placement orders, not a fixed order.** A single fixed-order sequential DFS is
+**not** sound: the first item's free region is the whole IFP, whose only vertices are the
+container corners, so interior-only packings are unreachable → false infeasible.
+Soundness argument used instead: bottom-left-compact any packing; the most-bottom-left
+item is pinned into a container corner (an IFP vertex) and inductively each item in BL
+order lands on a free-region vertex — so the BL order (∈ all orders) reaches it. We only
+attempt the full all-orders exhaustion for `|S| ≤ MAX_ORDER_ITEMS = 5`; larger subsets no
+area bound settles fall to `marginal`, never a partial-search `infeasible`.
+
+(d) **Remove the Brunn–Minkowski area term; keep H1 on exact deflated areas.** A
+`Σ(√Aᵢ − (δ/2)√π)²` bound was added then removed: for fixed original area the disk
+*maximises* eroded area (isoperimetric), so that expression is an *upper* bound on the
+deflated area → it overestimates packed area and **fabricates infeasibilities on tight
+buffers**. Since the DFS already computes the exact δ/2-deflated polygons, H1 on their
+exact areas is the tightest sound area bound. Process lesson recorded: the
+zero-false-infeasible battery **must include tight/near-threshold cases** — a loose-only
+battery hid this bug.
+
+(e) **INFEASIBLE only on full exhaustion; timeout ⇒ `None` (marginal, reason=budget),
+never infeasible.** Budget = P19 (5 s / 1e5 EGEs). A degenerate δ/2-deflation (thin shape
+vanishes) also ⇒ `None`. The verdict is three-valued: `True` (proven infeasible), `False`
+(a packing was found ⇒ not infeasible), `None` (undecided → stays marginal).
+
+(f) **Integrate behind a `use_certificate` flag, default off.** `label.py`'s
+`label_candidate`/`label_all` gain the flag; it is off inside `generate_dd2d_problem`'s
+rejection-sampling loop (where the certificate is called hundreds of times and only the
+feasible labels — unaffected by it — drive strata/F3) and on only for authoritative
+once-per-candidate labeling. On-by-default hung the DD2D suite. On a `True` verdict the
+`marginal(budget)` becomes proven `infeasible(packing)`; on `False` (a packing exists) it
+is reclassified `marginal(inaccessible)`; `None` stays `marginal(budget)`.
+
+**Consequences.** Sound: 0 false-infeasible over ~730 constructed-feasible packings (loose
++ tight, concave + circles, |S|=2–4); 16 new `test_certificate.py` tests + 49 DD2D + 259
+spectre tests green. At λ=0.8 the certificate proves 0 packing-infeasibles (infeasibility
+is extraction-dominated at loose λ) and reclassifies all budget-marginals it saw to
+`inaccessible` (they pack). The real-scene *tight-λ* proven-infeasible characterization is
+deferred to **Step 4**'s λ-sweep (generation at tight λ is slow). No change to the SPECTRE
+model/loss/pipeline; the certificate is a labeler-side soundness upgrade. Applying it to
+stamp the SPECTRE training labels (refiner-`fail` outcomes) at collection time is wired in
+**Step 5**. `notebook.md` 2026-07-18 has the numbers.
+
+---
+
 ## 2026-07-18 — Modernize + pin the substrate deps so a fresh machine resolves
 
 **Context.** Development moved from a MacBook M3 Pro (CPU/MPS) to a new Ubuntu

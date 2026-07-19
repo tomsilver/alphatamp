@@ -30,6 +30,7 @@ import random
 
 from shapely import Polygon
 
+from .certificate import certify_infeasible_by_packing
 from .enumerate import (
     Candidate,
     _blocker_sets,
@@ -100,8 +101,22 @@ def _area_bound_infeasible(scene: DrawerScene, subset) -> bool:
 # --------------------------------------------------------------------------- #
 # candidate label
 # --------------------------------------------------------------------------- #
-def label_candidate(scene: DrawerScene, cand: Candidate, seed: int = 0) -> Candidate:
-    """Label one candidate in place (fills ``cand.meta``); returns it for chaining."""
+def label_candidate(
+    scene: DrawerScene,
+    cand: Candidate,
+    seed: int = 0,
+    use_certificate: bool = False,
+) -> Candidate:
+    """Label one candidate in place (fills ``cand.meta``); returns it for chaining.
+
+    ``use_certificate`` runs the §8.4 arrangement-complete negative certificate on a
+    provisional ``marginal(budget)`` to try to upgrade it to a proven ``infeasible``.
+    It is **off by default** because it is expensive (up to P19 = 5 s / candidate) and
+    ``label_candidate`` is called repeatedly inside ``generate_dd2d_problem``'s
+    rejection-sampling loop, where only the *feasible* labels (unaffected by the
+    certificate) drive the strata/F3 filters. Turn it on only for authoritative,
+    once-per-candidate labeling (collection / relabeling).
+    """
     subset = cand.subset
     inflate = scene.margin / 2.0
 
@@ -133,15 +148,32 @@ def label_candidate(scene: DrawerScene, cand: Candidate, seed: int = 0) -> Candi
             packed_any = True
             break
     reason = "inaccessible" if packed_any else "budget"
+
+    # Arrangement-complete negative certificate (spec §8.4): upgrade a provisional
+    # marginal(budget) to a *proven* infeasible where the exhaustive search proves no
+    # δ/2-clearance packing exists. Sound (zero false-infeasible); a timeout stays
+    # marginal(budget). If the certificate instead *finds* a packing the sampler missed,
+    # the subset packs — so the residual difficulty is accessibility, not packing.
+    if use_certificate and reason == "budget":
+        verdict = certify_infeasible_by_packing(scene, subset)
+        if verdict is True:
+            cand.meta.update(label="infeasible", reason="packing", witness=None)
+            return cand
+        if verdict is False:
+            reason = "inaccessible"
+
     cand.meta.update(label="marginal", reason=reason, witness=None)
     return cand
 
 
 def label_all(
-    scene: DrawerScene, candidates: list[Candidate], seed: int = 0
+    scene: DrawerScene,
+    candidates: list[Candidate],
+    seed: int = 0,
+    use_certificate: bool = False,
 ) -> list[Candidate]:
     for i, c in enumerate(candidates):
-        label_candidate(scene, c, seed=seed + 31 * i)
+        label_candidate(scene, c, seed=seed + 31 * i, use_certificate=use_certificate)
     return candidates
 
 

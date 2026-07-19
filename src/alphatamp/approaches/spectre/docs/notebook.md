@@ -18,6 +18,89 @@ Format:
 
 ---
 
+## 2026-07-18 — v2.2.1 Step 2: arrangement-complete negative packing certificate (Task 0)
+
+- What: implemented the sound §8.4 negative certificate from scratch on Shapely
+  (`envs/dd2d/dd2d/certificate.py`) — the scrapped `ttd_core` was **not** reused (user
+  call). Pieces: exact convex decomposition via `shapely.constrained_delaunay_triangles`
+  (handles the 3 concave families — `banana`/`shoe`/`dumbbell` — where a plain-Delaunay
+  fallback is unsound); exact convex Minkowski → exact NFP(a,b)=a⊕(−b) and IFP(b,buffer);
+  candidate positions = all vertices of the free region `IFP ∖ ⋃NFP` (Shapely's exact
+  difference materialises the NFP–NFP/NFP–IFP arrangement vertices → arrangement-complete
+  at fixed rotation); per-shape Lipschitz rotation grid `Δθ=δ/(4·r_max)` with sound
+  exact-congruence dedup; **all placement orders** (bottom-left completeness); H1 area
+  prune on **exact deflated areas**; P19 budget (5 s / 1e5 EGEs), timeout ⇒ `None`
+  (marginal), INFEASIBLE only on full exhaustion. Wired into `label.py`'s
+  `marginal(budget)` branch behind a `use_certificate` flag (default **off** — it is
+  called hundreds of times inside `generate_dd2d_problem`'s rejection loop, where only
+  the feasible labels matter; on by default hung the DD2D suite).
+- Result: **sound** — 0 false-infeasible across ~730 constructed-feasible packings
+  (loose + *tight/near-threshold*, incl concave + circles, |S|=2–4); NFP inside⇔overlap
+  0 mismatches incl concave; both directions of the rotation-grid lemma pass. **Bug
+  caught & fixed:** a Brunn–Minkowski `(√A−r√π)²` area term I first added is an *upper*
+  bound on eroded area (disk maximises it, isoperimetric), so it fabricated infeasibles
+  on tight buffers — the *loose-only* battery missed it; a **tight** battery exposed it.
+  Removed BM; H1 on exact deflated areas is the tightest sound area bound. **λ=0.8 yield**
+  (60 scenes): 104 feasible / 262 infeasible-extraction / 7 marginal(budget); the
+  certificate reclassified **all 7 marginal(budget) → inaccessible** (proved they pack;
+  the RESTARTS=3 sampler missed it), **0 → infeasible**. Packing-infeasibility is absent
+  at λ=0.8 (extraction-dominated) — matches the snapshot's "packing headroom thin, tight
+  λ only". Certificate label overhead ~0.18 s/scene at λ=0.8.
+- Takeaway / next: certificate is sound, integrated, and improves label quality by
+  removing spurious budget-marginals; its *infeasible-proving* power is validated on
+  constructed tight cases (`test_infeasible_by_shape_not_area`) and binds at tight λ —
+  the real-scene tight-λ proven-infeasible characterization is deferred to **Step 4**'s
+  λ-sweep (generation at tight λ is slow). Gate met: 0 false positives, H1 agreement,
+  tight/loose battery, yield reported. 16 cert tests + 49 DD2D tests + 259 spectre tests
+  green.
+
+---
+
+## 2026-07-18 — v2.2.1 Step 1: DD2D pilot bootstrap on the new workstation
+
+- What: re-established the DD2D pipeline end-to-end on the new Ubuntu/RTX-5090
+  box (no DD2D data survived the MacBook→workstation move — only an RT2D vocab).
+  Collected a tiny pilot with the locked config (`lam=0.8`, `crowd=5`,
+  `time_budget=20`, `k=200`, `full_pool=True`), targets 12/4/4 → **kept 40/22/29**
+  problems (train/val/test), 200-plan pools. Ran the full chain: `dd2d_convert`
+  (91 episodes, 0 failed) → `spectre_build_vocab` (3 ops / 6 preds / 1 type,
+  val+test OOV-clean, `max_pool_size=200`, `max_skeleton_length=9`) →
+  `spectre_check_pipeline` (all 91 consumable, 0 filtered) → **1-epoch train on
+  CUDA** (`env=dd2d_v2 seed=0`, torch 2.13.0+cu130, sm_120).
+- Result: 1-epoch pilot — `train_loss=2.37 val_loss=2.48 auroc0=0.53 auroc3=0.60
+  val_att=11.05±8.41`, `best.pt` written. AUROC≈0.53–0.60 is the expected
+  barely-above-chance / length-only fingerprint; exact reproduction of the
+  snapshot's `AUROC(3)<AUROC(0)` negative-control result is not expected at
+  40-episode / 1-epoch pilot scale and awaits the full dataset (Step 5) + the
+  negative certificate (Step 2). Substrate caveat: newer than the MacBook runs
+  (kindergarden 0.2.0 / prpl-mono `e215d1fc`), so these are the new-substrate
+  reference — not directly comparable to pre-2026-07-18 numbers.
+- Collector parallelism audit (user asked): **no infinite-hang/deadlock** — every
+  worker task is hard-bounded (refiner `exhausted()` on `time_budget` /
+  stream-`budget` / `_SAFETY_CALLS=5e6`, `budget=300` fallback; generation
+  `max_resamples=400`→drop). The historical *opaque-hang symptom* is long-but-
+  bounded tail tasks (`full_pool` × k=200, rare stratum-3 resampling → minutes)
+  drained with **no per-task timeout and no heartbeat** (`absorb()` only prints on
+  future completion → ETA freezes at `estimating…`). Overshoot (kept 29 vs
+  target 4) is intended (keeps workers busy).
+- Collector hardened (`envs/dd2d/dd2d/collect.py`, this commit): the parallel
+  dispatch now (1) `wait(..., timeout=progress_every)` so the drain prints a
+  **heartbeat** (`draining N in-flight, oldest Xs`) even when nothing completes;
+  (2) flags any single future past a generous **soft-timeout**
+  (`max(300s, 5×time_budget)`, informational — still bounded, not cancelled) by
+  seed; (3) **survives `BrokenProcessPool`** (OOM/segfault of a shapely worker) —
+  logs the dead seed, records synthetic drops for all in-flight seeds, and
+  finalizes the split (writes manifest; `--resume` continues) instead of crashing
+  the whole run. Validated: 7 collector unit tests pass, a real workers=3 parallel
+  collect runs end-to-end (manifest written, clean exit), black-clean.
+- Takeaway / next: Step 1 gate met + collector de-risked for the Step-4 λ-sweep
+  and Step-5 full collection. Next: Step 2 — the arrangement-complete negative
+  certificate (blocking; §8.4 NFP + arrangement vertices + Lipschitz rotation grid
+  is referenced in `docs/dd2d.md` but not yet spec'd in-repo → a genuine design
+  task).
+
+---
+
 ## 2026-07-13 — First SPECTRE training run on DD2D (3 seeds) + wandb logging
 
 - What: first real SPECTRE train on `dd2d_v2` (abstract-only converter data),
