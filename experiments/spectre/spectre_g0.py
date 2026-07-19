@@ -143,12 +143,17 @@ def _run_split(lam: float, band_lo: int, n: int, workers: int) -> LabeledCandida
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="DD2D Gate G0 λ-sweep")
-    ap.add_argument("--lams", default="0.8,0.65,0.5,0.4")
+    # Default sweep stays inside DD2D's designed operating range (0.7-0.95, the loose /
+    # naturalistic regime). Tighter λ is off-design (3-subsets stop packing → stratum-3
+    # ungenerable) and λ* is constrained to --op-lo..--op-hi regardless.
+    ap.add_argument("--lams", default="0.7,0.8,0.9,0.95")
     ap.add_argument("--n-train", type=int, default=60)
     ap.add_argument("--n-val", type=int, default=30)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--degrade-thresh", type=float, default=0.65)
     ap.add_argument("--oracle-thresh", type=float, default=0.5)
+    ap.add_argument("--op-lo", type=float, default=0.7)
+    ap.add_argument("--op-hi", type=float, default=0.95)
     args = ap.parse_args(argv)
 
     lams = [float(x) for x in args.lams.split(",")]
@@ -178,7 +183,9 @@ def main(argv=None) -> int:
         if p.top_features:
             tf = ", ".join(f"{n}={v:.3f}" for n, v in p.top_features)
             print(f"       GBDT top perm-importance: {tf}", flush=True)
-    lam_star = choose_lambda_star(points, args.degrade_thresh, args.oracle_thresh)
+    lam_star = choose_lambda_star(
+        points, args.degrade_thresh, args.oracle_thresh, (args.op_lo, args.op_hi)
+    )
     print("", flush=True)
     if lam_star is None:
         print(

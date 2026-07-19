@@ -18,6 +18,28 @@ Format:
 
 ---
 
+## 2026-07-19 — λ* correction: 0.5 → 0.8 (in the designed operating range)
+
+- What: the Step-4 sweep {0.8,0.65,0.5,0.4} + max-gap selection picked λ*=0.5, but DD2D's
+  designed operating range is λ≈0.7–0.95; 0.5 is off-design (tighter than intended). The
+  definitive collection exposed the consequence: at λ=0.5 stratum-3 (min-feasible-subset-3
+  that *packs* into a too-tight buffer) is nearly ungenerable (~18 h for 125). Added an
+  operating-range constraint to `choose_lambda_star` and re-swept **in-range**.
+- Result (in-range sweep {0.7,0.8,0.9,0.95}, 80/40): G0 passes across the range —
+  within-length GBDT AUROC 0.684 / **0.539** / 0.580 / 0.534, oracle 0.97/1.0/1.0/1.0,
+  feas% 26.5/**31.4**/26.6/26.8. **λ* = 0.8** (auto-rule picked 0.95 by a 0.005 gap =
+  noise; overrode to the design default: confirmed s3 generability, highest feasibility,
+  a bit more packing structure than the near-empty λ=0.95, tied within-length degradation).
+  **Live confirmation:** re-launched the definitive collection at λ=0.8 tb=4 — stratum-3
+  generates at ~9/min (s3 16/125 in <2 min, vs 1/125 in 9 min at λ=0.5); whole-collection
+  ETA ~40 min.
+- Takeaway / next: the G0 *finding* (cheap stats fail within-length → rich-rep headroom;
+  size-control mandatory) is unchanged and holds across the in-range sweep. λ*=0.8 is the
+  operating point for all downstream steps. Collection in progress → Step 9 (train v2 +
+  ladder/P1/P2).
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 8: v2.2-static geometry-aware model + tensorizer (code)
 
 - What: `model_v2.py` (additive; v1 `model.py` untouched) — the geometry-aware static

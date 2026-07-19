@@ -6,6 +6,36 @@ not, and why.
 
 ---
 
+## 2026-07-19 — Correct λ* to 0.8 (in the designed operating range); 0.5 was off-design
+
+**Context.** The 2026-07-18 G0 entry selected λ*=0.5 by maximizing the oracle−GBDT_wl gap
+over a sweep {0.8, 0.65, 0.5, 0.4}. But DD2D's **designed operating range is λ ≈ 0.7–0.95**
+(the loose, naturalistic regime); the sweep ran *below* it and the selection rule had no
+range constraint, so it picked an off-design λ=0.5. The symptom surfaced in the definitive
+collection: at λ=0.5 **stratum-3 is nearly ungenerable** (a min-feasible-subset-3 that also
+*packs* into a too-tight buffer is rare → ~18 h for a balanced 125), because λ=0.5 is
+tighter than the environment was built for.
+
+**Decisions.** (a) **λ* is constrained to the operating range** (`choose_lambda_star` gains
+`operating_range=(0.7, 0.95)`; a tighter λ is rejected even if it maximizes the gap — with a
+regression test). (b) **Re-swept in-range** {0.7, 0.8, 0.9, 0.95} (80/40 scenes): G0 passes
+across the range — within-length GBDT AUROC 0.68 / **0.539** / 0.580 / 0.534, oracle
+0.97/1.0/1.0/1.0. (c) **λ* = 0.8.** The auto-rule (max gap) picked 0.95 by 0.005 — noise at
+40 val scenes. λ=0.8 is chosen instead: it is the **design default where the original
+balanced dataset (incl. stratum-3) was collected** (so s3 generability is confirmed), has
+the **highest feasibility rate (31.4%)** and a little more packing structure than the
+near-empty λ=0.95 (marg 1.7% vs 0.4%), while its within-length degradation (0.539) ties
+0.95. (d) The definitive collection is re-launched at **λ=0.8, tb=4** (tb=4 for consistency
+with the G0 determination; at λ=0.8 packing is easy so tb barely affects labels).
+
+**Consequences.** The λ=0.5 collection was killed (kept 0 useful before the diagnosis; s0/1/2
+were filling but s3 stuck). λ*=0.8 resolves the s3 rarity and keeps the benchmark in-design.
+The G0 *finding* (cheap stats fail within-length while the oracle solves ⇒ a rich
+representation has headroom; size-control mandatory) is unchanged — it holds across the whole
+in-range sweep. `notebook.md` 2026-07-19 has the in-range table.
+
+---
+
 ## 2026-07-19 — Decouple post-mortem harvest + label-hygiene from the collection (Step 5)
 
 **Context.** Step 5 as planned bundled the typed-fact harvest, the §6.5 certificate

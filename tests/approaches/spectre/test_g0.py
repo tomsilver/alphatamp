@@ -92,26 +92,29 @@ def test_within_length_auroc_controls_for_size():
     assert within_length_auroc(y, score, sizes) == 0.5
 
 
-def test_choose_lambda_star_maximizes_oracle_minus_gbdt_gap():
-    # among degraded+solving λ, pick the largest oracle−GBDT_wl gap (most residual).
+def test_choose_lambda_star_maximizes_gap_within_operating_range():
+    # among in-range (0.7-0.95) degraded+solving λ, pick the largest oracle−GBDT_wl gap.
     points = [
-        _pt(0.8, 0.85, 1.0),  # within-length captured → not degraded
-        _pt(0.5, 0.60, 1.0),  # gap 0.40  <- max
-        _pt(0.4, 0.55, 0.6),  # gap 0.05
+        _pt(0.9, 0.85, 1.0),  # within-length captured → not degraded
+        _pt(0.8, 0.60, 1.0),  # gap 0.40  <- max (and in range)
+        _pt(0.75, 0.62, 0.8),  # gap 0.18
     ]
-    assert choose_lambda_star(points, degrade_thresh=0.65, oracle_thresh=0.5) == 0.5
+    assert choose_lambda_star(points, degrade_thresh=0.65, oracle_thresh=0.5) == 0.8
 
 
-def test_choose_lambda_star_on_real_g0_numbers():
-    # the actual 2026-07-18 within-length sweep → λ* = 0.5 (degraded {0.8,0.5}; 0.5 has
-    # the larger oracle−GBDT_wl gap: 1.00-0.578 > 0.97-0.588).
+def test_choose_lambda_star_rejects_out_of_range_even_if_best():
+    # a tighter λ maximizes the gap but is off-design (3-subsets stop packing) → excluded;
+    # the in-range λ=0.8 is chosen instead.
     points = [
-        _pt(0.80, 0.588, 0.97),
-        _pt(0.65, 0.654, 0.97),  # not degraded (0.654 > 0.65)
-        _pt(0.50, 0.578, 1.00),
-        _pt(0.40, 0.803, 0.97),  # not degraded
+        _pt(0.80, 0.588, 0.97),  # in range, degraded  <- selected
+        _pt(0.50, 0.578, 1.00),  # bigger gap but OUT of range -> rejected
+        _pt(0.40, 0.803, 0.97),  # out of range + not degraded
     ]
-    assert choose_lambda_star(points) == 0.5
+    assert choose_lambda_star(points, operating_range=(0.7, 0.95)) == 0.80
+    # if nothing in-range degrades, off-ramp:
+    assert (
+        choose_lambda_star([_pt(0.80, 0.9, 1.0)], operating_range=(0.7, 0.95)) is None
+    )
 
 
 def test_choose_lambda_star_offramp_when_oracle_fails():

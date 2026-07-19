@@ -287,17 +287,25 @@ def evaluate_g0_point(
 
 
 def choose_lambda_star(
-    points: list[G0Point], degrade_thresh: float = 0.65, oracle_thresh: float = 0.5
+    points: list[G0Point],
+    degrade_thresh: float = 0.65,
+    oracle_thresh: float = 0.5,
+    operating_range: tuple[float, float] = (0.7, 0.95),
 ) -> Optional[float]:
     """λ* = the λ that best exhibits "subset-coupled feasibility binds" — cheap stats
     degrade *within-length* (GBDT within-length AUROC < ``degrade_thresh``) yet the oracle
     still solves (solve rate ≥ ``oracle_thresh``) — chosen to **maximize the
-    oracle−GBDT_wl gap**, i.e. the regime where the residual a rich representation could
-    capture is largest. ``None`` triggers the G0 off-ramp."""
+    oracle−GBDT_wl gap**. λ* is **constrained to DD2D's designed operating range**
+    (``operating_range``, default 0.7–0.95, the naturalistic/loose regime); tighter λ is
+    off-design (3-subsets stop packing, so stratum-3 becomes ungenerable) and must not be
+    selected even if it maximizes the gap. ``None`` triggers the G0 off-ramp."""
+    lo, hi = operating_range
     candidates = [
         p
         for p in points
-        if p.cheap_degraded(degrade_thresh) and p.oracle_solve_rate >= oracle_thresh
+        if lo <= p.lam <= hi
+        and p.cheap_degraded(degrade_thresh)
+        and p.oracle_solve_rate >= oracle_thresh
     ]
     if not candidates:
         return None
