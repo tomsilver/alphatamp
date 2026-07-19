@@ -18,6 +18,35 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 5a: post-mortem typed-fact harvest (code)
+
+- What: built the post-mortem harvest (proposal §6.2/§6.4). `envs/dd2d/soundness.py` —
+  `SoundnessRegistry` (model-fidelity/exactness/removal-monotone/locality → proof vs hint
+  tier; DD2D declares all four; empty registry ⇒ all hints). `envs/dd2d/dd2d/harvest.py`
+  — reconstructs the harvest state by replaying the refiner's deepest bound prefix
+  (`RefineResult.bound_plan`, already present) into a fresh `DrawerWorld`, then reads
+  typed facts off exact checks: `blocked-at-contents` (proof, removal-monotone),
+  `grasp-witness` (hint, `_blocker_sets` ∩ over open corridors), `extracted-ok`/`packed-ok`
+  (proof-constructive, from prefix picks/places), `pack-impossible` (proof, §8.4
+  certificate), `pack-exhausted` (hint). Stores a **replayable** prefix + a state hash.
+- Result: 5 harvest tests, incl. the mandated **replay-hash** test (replay the stored
+  prefix → hash matches) and blocked-at-contents=proof / empty-registry=all-hints.
+  Validated on real λ=0.5 instances: retrieve-only on a blocked target → blocked-at-contents
+  proof (all 10 drawer blockers), replay hash matches; a buried-blocker staging skeleton →
+  blocked-at-contents proof, failed at `pick` step 0, replay hash matches. No import cycle;
+  322 spectre+dd2d tests green.
+- **Sequencing decision (see decisions.md):** the harvest + the §6.5 certificate
+  label-hygiene are **decoupled** from the multi-hour definitive collection. The collection
+  (Step 5b) persists geometry + refiner labels — what Steps 6–10 need — and the harvest +
+  per-subset certificate run as a **controlled offline pass** (scene is regenerable from
+  its seed → re-refine → harvest), so the expensive certificate stays out of the collection
+  hot path and produces the `post_mortem`/proven-infeasible stamps before the Step-9
+  training numbers / Step-11 evidence pathway.
+- Takeaway / next: harvest code ready; launching the definitive 500/100/100 collection at
+  λ*=0.5 (geometry-carrying) as Step 5b.
+
+---
+
 ## 2026-07-18 — v2.2.1 Step 4: Gate G0 — PASS at λ*=0.5 (saved by length-control)
 
 - What: G0 (§10.2) asks, before any model code, whether DD2D has a buffer-tightness λ

@@ -6,6 +6,35 @@ not, and why.
 
 ---
 
+## 2026-07-19 — Decouple post-mortem harvest + label-hygiene from the collection (Step 5)
+
+**Context.** Step 5 as planned bundled the typed-fact harvest, the §6.5 certificate
+label-hygiene, and the definitive 500/100/100 collection into one pass (collect once with
+everything). But the harvest's `pack-impossible` fact and the label-hygiene both call the
+§8.4 certificate per failed-skeleton subset — up to 5 s each — and the collector refines
+k=200 skeletons per problem over 700 problems. Running the certificate in that hot path
+would add many hours and risk the multi-hour collection.
+
+**Decision.** Decouple. (a) The **harvest** (`harvest.py`) and **soundness registry**
+(`soundness.py`) are built and unit-tested now, but are **not** wired into the collector.
+(b) The **definitive collection** persists geometry (via `record_ext`/converter, Step 3)
++ refiner binary labels — exactly what Steps 6–10 need — with **no certificate in the
+loop**. (c) The certificate **label-hygiene** (stamp each fail as proven-infeasible vs
+marginal) and the **post-mortem harvest** run as a **controlled offline pass** before the
+Step-9 training numbers / Step-11 evidence pathway: a DD2D scene is deterministic in its
+seed, so the pass regenerates the scene, re-refines each fail (recovering `bound_plan`),
+and harvests — with a per-*subset* certificate cache and a tunable budget, none of it on
+the collection's critical path. This is not a second collection (no re-generation of the
+dataset); it augments the existing records.
+
+**Consequences.** The multi-hour collection stays fast and is launched now (Step 5b);
+`post_mortem`/`aux_labels` on the records are populated by the offline pass (built just
+before Step 11). Rationale recorded so the split between "collected" and "harvested"
+artifacts is not mistaken for missing data. No change to the harvest algorithm or the
+schema. `notebook.md` 2026-07-19.
+
+---
+
 ## 2026-07-18 — Gate G0 passes at λ*=0.5; size-control is mandatory (v2.2.1 Task 1)
 
 **Context.** G0 (§10.2) is the pre-model off-ramp: does DD2D have a λ where cheap
