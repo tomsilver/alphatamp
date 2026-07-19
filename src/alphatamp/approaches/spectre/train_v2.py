@@ -330,6 +330,9 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--use-overlap", action="store_true", help="structural evidence features"
     )
+    ap.add_argument(
+        "--wl-weight", type=float, default=1.0, help="within-length PL weight"
+    )
     a = ap.parse_args(argv)
     root = Path(a.data_root)
     vocab = Vocab.from_json(root / "derived" / a.env / "train_vocab.json")
@@ -339,6 +342,7 @@ def main(argv=None) -> int:
         evidence=a.evidence,
         use_prior=a.use_prior,
         use_overlap=a.use_overlap,
+        within_length_weight=a.wl_weight,
     )
     sub = "checkpoints_v2_evidence" if a.evidence else "checkpoints_v2"
     if a.use_prior:
