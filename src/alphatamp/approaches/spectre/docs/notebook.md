@@ -18,6 +18,30 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 8: v2.2-static geometry-aware model + tensorizer (code)
+
+- What: `model_v2.py` (additive; v1 `model.py` untouched) — the geometry-aware static
+  ranker reusing v1's `SetAttentionBlock`/`PMA`. `FootprintEncoder` (point-set over the
+  32-point boundary ring → per-object descriptor, concave-safe); `SceneEncoder`
+  (`[tag; descriptor; pose; rel-to-target; is-target]` → 2×SAB, the relational join);
+  `CandidateEncoder` (op-schema + position + **tag** arg slots → per-candidate `e(s)`);
+  `CrossAttentionScorer` (candidate query over scene+global memory, + a slot for overlap
+  features, empty at static → wired for Step 11); `AuxHead` (necessary/relevant). ~268k
+  params. `dataset_v2.py` — tensorizes a geometry-carrying `EpisodeRecord` into a
+  `SpectreV2Batch` (canonicalize → `assign_tags` → arc-length-resampled boundary rings →
+  rel-to-target scalars → op/tag candidate tensors); `exclude_marginal` label-hygiene flag.
+- Result: validated end-to-end on **real pilot geometry** (obj (4,13), boundary
+  (4,13,32,2), 200-cand pools → `(B,K)` logits, PL loss backprops). 5 tests: forward
+  shapes/grad, **footprint point-permutation invariance**, **object-order permutation
+  invariance** of logits, the **anti-collapse** (same op-seq + different arg tags →
+  different logits — the v1 collapse is provably gone), and the tensorizer on a synthetic
+  geometry episode.
+- Takeaway / next: the representation is built and structurally sound. Step 9 wires the
+  `model_arch=v2` training branch and runs the elimination ladder + P1/P2 — gated on the
+  definitive λ*=0.5 collection (in progress).
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 7: episode-local object tags (P-A binding)
 
 - What: `spectre/tags.py` — `assign_tags(names, rng, max_tags)` maps each object to a

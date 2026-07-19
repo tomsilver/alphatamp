@@ -1,0 +1,255 @@
+"""SPECTRE v2.2 geometry-aware model (proposal §7). Additive to v1 (`model.py`).
+
+The static (t=0) architecture that conditions on object-centric geometry + episode-local
+tags instead of anonymous local ids — the fix for v1's length-only collapse. Token
+families (all width ``D_MODEL=64``, reusing v1's ``SetAttentionBlock``/``PMA``):
+
+- **scene tokens** — per object: ``[tag ; footprint descriptor ; pose ; relation-to-target]``.
+  The footprint descriptor is a *point-set* encoding of the boundary ring (not a radial
+  profile — concave-safe). A couple of Set-Attention layers let objects attend to each
+  other (the relational join).
+- **candidate tokens** — a skeleton is a *program over the scene*: per operator, its schema
+  embedding + position + argument slots holding the objects' **tags**. Pooled to one
+  ``e(s)`` per candidate.
+- **global token** — container/buffer geometry + pool statistics.
+- **fact tokens / overlap features** — empty at static (t=0); wired for the Step-11 typed-
+  evidence pathway. The scorer already accepts them so that step is additive.
+
+**Scorer** — per-candidate cross-attention (candidate query over scene + global memory),
+concatenated with computed overlap features → one logit; linear in pool size. **Aux head**
+— per scene token → ``necessary``/``relevant`` logits (proposal §8).
+
+The forward returns ``(B, K)`` logits with the same contract as v1's ``Scorer`` so the
+rollout / PL-loss machinery is reused unchanged.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+from torch import Tensor, nn
+
+from alphatamp.approaches.spectre.model import (
+    D_MODEL,
+    FFN_DIM,
+    N_HEADS,
+    PoolingByMultiheadAttention,
+    SetAttentionBlock,
+)
+from alphatamp.approaches.spectre.tags import PAD_TAG
+
+# geometry token dims
+N_BOUNDARY_POINTS = 32
+D_TAG = 32
+D_POINT = 16
+D_DESCRIPTOR = 32
+D_POSE = 8
+D_REL = 8  # relation-to-target scalars projection
+MAX_TAGS_DEFAULT = 32
+DROPOUT = 0.1
+
+
+@dataclass
+class SpectreV2Batch:
+    """Padded tensors for one batch of episodes (0 = pad; see ``dataset_v2``)."""
+
+    # scene (objects)
+    obj_tags: Tensor  # (B, N) long — episode-local tag ids (0 = pad)
+    obj_boundary: Tensor  # (B, N, P, 2) float — resampled boundary ring, item frame
+    obj_pose: Tensor  # (B, N, 3) float — (x, y, theta), normalized
+    obj_rel: Tensor  # (B, N, D_REL) float — relation-to-target scalars
+    obj_is_target: Tensor  # (B, N) float — 1 for the target object
+    obj_mask: Tensor  # (B, N) bool — real object
+    # candidates (skeletons)
+    cand_op_ids: Tensor  # (B, K, L) long — operator-schema ids (0 = pad)
+    cand_arg_tags: Tensor  # (B, K, L, A) long — arg-slot tags (0 = pad)
+    cand_pos: Tensor  # (B, K, L) long — operator position index
+    cand_step_mask: Tensor  # (B, K, L) bool — real operator
+    pool_mask: Tensor  # (B, K) bool — real candidate
+    # global
+    glob_feats: Tensor  # (B, D_GLOBAL) float — buffer dims + pool stats
+    # labels (for training)
+    success_mask: Tensor  # (B, K) bool — feasible candidate
+    aux_necessary: Tensor  # (B, N) float — necessary(o) target (or -1 = ignore)
+    aux_relevant: Tensor  # (B, N) float — relevant(o) target (or -1 = ignore)
+
+    def to(self, device) -> "SpectreV2Batch":
+        return SpectreV2Batch(**{k: v.to(device) for k, v in self.__dict__.items()})
+
+
+D_GLOBAL_IN = 6  # buffer (w, h, area) + pool_size + n_objects + mean_subset_size
+
+
+class FootprintEncoder(nn.Module):
+    """Point-set encoder over a fixed-size boundary ring → per-object descriptor.
+
+    A shared per-point MLP followed by a masked PMA pool. Being a set over the true
+    boundary points (not a radial function), it represents concave shapes faithfully and is
+    invariant to the ring's starting vertex / point order."""
+
+    def __init__(self, dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        self.point_mlp = nn.Sequential(
+            nn.Linear(2, D_POINT),
+            nn.GELU(),
+            nn.Linear(D_POINT, D_MODEL),
+        )
+        self.pool = PoolingByMultiheadAttention(
+            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
+        )
+        self.out = nn.Linear(D_MODEL, D_DESCRIPTOR)
+
+    def forward(self, boundary: Tensor, obj_mask: Tensor) -> Tensor:
+        # boundary (B, N, P, 2) -> per-point features (B, N, P, D_MODEL)
+        b, n, p, _ = boundary.shape
+        feats = self.point_mlp(boundary)  # (B, N, P, D)
+        feats = feats.reshape(b * n, p, D_MODEL)
+        pmask = torch.ones(b * n, p, dtype=torch.bool, device=boundary.device)
+        pooled = self.pool(feats, pmask).reshape(b, n, D_MODEL)  # (B, N, D)
+        desc = self.out(pooled)  # (B, N, D_DESCRIPTOR)
+        return desc * obj_mask.unsqueeze(-1)
+
+
+class SceneEncoder(nn.Module):
+    """Object tokens = [tag ; footprint descriptor ; pose ; rel-to-target ; is-target],
+    projected to D_MODEL, then two Set-Attention layers (objects attend to each other).
+    """
+
+    def __init__(
+        self, max_tags: int = MAX_TAGS_DEFAULT, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__()
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.footprint = FootprintEncoder(dropout_p)
+        self.pose_proj = nn.Linear(3, D_POSE)
+        self.rel_proj = nn.Linear(D_REL, D_REL)
+        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + D_REL + 1
+        self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
+        self.sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
+        self.sab2 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        tag = self.tag_emb(batch.obj_tags)  # (B, N, D_TAG)
+        desc = self.footprint(batch.obj_boundary, batch.obj_mask)  # (B, N, D_DESC)
+        pose = self.pose_proj(batch.obj_pose)
+        rel = self.rel_proj(batch.obj_rel)
+        tgt = batch.obj_is_target.unsqueeze(-1)
+        tok = self.proj(torch.cat([tag, desc, pose, rel, tgt], dim=-1))
+        tok = self.sab1(tok, batch.obj_mask)
+        tok = self.sab2(tok, batch.obj_mask)
+        return tok * batch.obj_mask.unsqueeze(-1)  # (B, N, D_MODEL)
+
+
+class CandidateEncoder(nn.Module):
+    """Per-candidate embedding from its operator program (schema + position + tag args)."""
+
+    def __init__(
+        self, n_ops: int, max_tags: int, max_arity: int, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__()
+        self.op_emb = nn.Embedding(n_ops + 1, D_MODEL, padding_idx=0)
+        self.pos_emb = nn.Embedding(64, D_MODEL)
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.arg_proj = nn.Linear(max_arity * D_TAG, D_MODEL)
+        self.step_ln = nn.LayerNorm(D_MODEL)
+        self.pool = PoolingByMultiheadAttention(
+            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
+        )
+        self.max_arity = max_arity
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        b, k, ell = batch.cand_op_ids.shape
+        op = self.op_emb(batch.cand_op_ids)  # (B, K, L, D)
+        pos = self.pos_emb(batch.cand_pos.clamp(max=63))
+        args = self.tag_emb(batch.cand_arg_tags)  # (B, K, L, A, D_TAG)
+        args = args.reshape(b, k, ell, self.max_arity * D_TAG)
+        step = self.step_ln(op + pos + self.arg_proj(args))  # (B, K, L, D)
+        step = step.reshape(b * k, ell, D_MODEL)
+        smask = batch.cand_step_mask.reshape(b * k, ell)
+        emb = self.pool(step, smask).reshape(b, k, D_MODEL)  # (B, K, D)
+        return emb * batch.pool_mask.unsqueeze(-1)
+
+
+class CrossAttentionScorer(nn.Module):
+    """Each candidate (query) cross-attends over scene + global memory; the attended vector
+    is concatenated with the candidate embedding and any overlap features → one logit.
+    """
+
+    def __init__(self, n_overlap_feats: int = 0, dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        self.attn = nn.MultiheadAttention(
+            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        )
+        self.glob_proj = nn.Linear(D_GLOBAL_IN, D_MODEL)
+        self.head = nn.Sequential(
+            nn.Linear(2 * D_MODEL + n_overlap_feats, FFN_DIM),
+            nn.GELU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(FFN_DIM, 1),
+        )
+        self.n_overlap_feats = n_overlap_feats
+
+    def forward(
+        self,
+        cand_emb: Tensor,  # (B, K, D)
+        scene_tok: Tensor,  # (B, N, D)
+        obj_mask: Tensor,  # (B, N)
+        glob_feats: Tensor,  # (B, D_GLOBAL_IN)
+        overlap: Tensor | None = None,  # (B, K, n_overlap_feats)
+    ) -> Tensor:
+        b, k, _ = cand_emb.shape
+        glob = self.glob_proj(glob_feats).unsqueeze(1)  # (B, 1, D)
+        memory = torch.cat([scene_tok, glob], dim=1)  # (B, N+1, D)
+        key_pad = torch.cat(
+            [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
+            dim=1,
+        )  # (B, N+1): True = pad-to-ignore
+        attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
+        parts = [cand_emb, attended]
+        if self.n_overlap_feats:
+            parts.append(
+                overlap
+                if overlap is not None
+                else cand_emb.new_zeros(b, k, self.n_overlap_feats)
+            )
+        return self.head(torch.cat(parts, dim=-1)).squeeze(-1)  # (B, K)
+
+
+class AuxHead(nn.Module):
+    """Per scene token → (necessary, relevant) logits (proposal §8)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.head = nn.Linear(D_MODEL, 2)
+
+    def forward(self, scene_tok: Tensor) -> Tensor:
+        return self.head(scene_tok)  # (B, N, 2)
+
+
+class SpectreV2Model(nn.Module):
+    """The v2.2-static geometry-aware ranker."""
+
+    def __init__(
+        self,
+        n_ops: int,
+        max_arity: int,
+        max_tags: int = MAX_TAGS_DEFAULT,
+        n_overlap_feats: int = 0,
+        dropout_p: float = DROPOUT,
+    ) -> None:
+        super().__init__()
+        self.scene = SceneEncoder(max_tags, dropout_p)
+        self.cands = CandidateEncoder(n_ops, max_tags, max_arity, dropout_p)
+        self.scorer = CrossAttentionScorer(n_overlap_feats, dropout_p)
+        self.aux = AuxHead()
+
+    def forward(self, batch: SpectreV2Batch, overlap: Tensor | None = None):
+        scene_tok = self.scene(batch)  # (B, N, D)
+        cand_emb = self.cands(batch)  # (B, K, D)
+        logits = self.scorer(
+            cand_emb, scene_tok, batch.obj_mask, batch.glob_feats, overlap
+        )  # (B, K)
+        logits = logits.masked_fill(~batch.pool_mask, float("-inf"))
+        aux = self.aux(scene_tok)  # (B, N, 2)
+        return logits, aux
