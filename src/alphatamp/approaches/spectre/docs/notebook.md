@@ -18,6 +18,28 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 6: comparison harness (LAZY baseline, seed checksums)
+
+- What: `eda.lazy_baseline` — the **LAZY untyped-adaptive** baseline (§9): static default-
+  order prior − β·(max shared-ground-action overlap with any failed skeleton), β tuned on
+  train, adaptive re-rank after each failure. This is the untyped failure-conditioning the
+  *typed* evidence pathway (Step 11) must beat (β=0 ≡ default order, verified).
+  `eda.assert_distinct_seed_checkpoints` — SHA-256 guard that ≥3 seed checkpoints are
+  distinct (the project shipped silently-duplicated "seeds" before). The rest of the §9
+  roster already exists: astar-dist ≈ `default_order_baseline`, slack = `g0.buffer_slack`,
+  PIGINet (vendored), oracle = `oracle_ceiling`, SPECTREv1 = the v1 model.
+- Result: 6 new tests (LAZY runs / β=0≡default / β-tuned; checksum distinct/duplicate/≥3);
+  validated on the pilot (LAZY β=1.0 ≈ default at λ=0.8 — expected, extraction-dominated).
+  32 harness+eda tests green. **Known gap:** the DD2D converter sets
+  `refinement_wall_clock_s=0` (per-skeleton refine time isn't in the raw JSON), so
+  wall-clock accounting for DD2D currently falls back to the EGE/`n_attempts` proxy
+  (`refiner_metadata`); FP (attempts) is the primary metric meanwhile. Full per-skeleton
+  timing would need a collector change — deferred, disclosed.
+- Takeaway / next: adaptive comparator + seed-distinctness guard in place. Next: Step 7
+  (object tags), building on pilot data while the λ*=0.5 collection runs.
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 5a: post-mortem typed-fact harvest (code)
 
 - What: built the post-mortem harvest (proposal §6.2/§6.4). `envs/dd2d/soundness.py` —

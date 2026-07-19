@@ -576,6 +576,123 @@ def heuristic_search_baseline(
     )
 
 
+def _lazy_rollout(
+    action_sets: list[set],
+    outcomes: list[str],
+    beta: float,
+    attempt_budget: int,
+) -> tuple[float, bool]:
+    """One LAZY adaptive rollout: score = default-order prior − β·(max shared-action
+    overlap with any failed skeleton); attempt the top, re-rank after each failure.
+
+    Returns ``(attempts, censored)``. ``action_sets`` are the per-skeleton ground-action
+    sets; ``outcomes`` the parallel success/fail/error labels (errors are skipped)."""
+    remaining = [i for i, o in enumerate(outcomes) if o != "error"]
+    failed: list[set] = []
+    attempts = 0
+    while remaining and attempts < attempt_budget:
+        # higher score first: prior favors low index (−i); penalize overlap with failures.
+        def score(i: int) -> float:
+            overlap = max((len(action_sets[i] & f) for f in failed), default=0)
+            return -float(i) - beta * float(overlap)
+
+        pick = max(remaining, key=lambda i: (score(i), -i))
+        attempts += 1
+        if outcomes[pick] == "success":
+            return float(attempts), False
+        failed.append(action_sets[pick])
+        remaining.remove(pick)
+    return float(attempt_budget + 1), True
+
+
+def lazy_baseline(
+    train: LoadedSplit,
+    test: LoadedSplit,
+    attempt_budget: int = 30,
+    betas: tuple[float, ...] = (0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0),
+    name: str = "B_LAZY",
+) -> BaselineResult:
+    """LAZY-style **untyped adaptive** baseline (proposal §9): static prior − β·action-
+    overlap with failed skeletons, β tuned on train. This is exactly the untyped
+    failure-conditioning the *typed* evidence pathway (Step 11) must beat — without it the
+    adaptive comparison would be a strawman against v1.
+
+    Action-overlap is the count of shared ground actions (the canonical skeleton key), a
+    representation-free "these plans are similar" signal; no geometry, no typed facts.
+    β is chosen to minimize mean attempts on train, then frozen for test."""
+
+    def _action_sets(split: LoadedSplit, ep_idx: int) -> list[set]:
+        return [set(k) for k in split.skeleton_keys[ep_idx]]
+
+    def _mean_attempts(split: LoadedSplit, beta: float) -> float:
+        vals = []
+        for ep_idx in _trainable_episodes(split):
+            ep = split.episodes[ep_idx]
+            outs = [o.outcome for o in ep.outcomes]
+            a, _ = _lazy_rollout(
+                _action_sets(split, ep_idx), outs, beta, attempt_budget
+            )
+            vals.append(a)
+        return float(np.mean(vals)) if vals else float("inf")
+
+    best_beta = min(betas, key=lambda b: _mean_attempts(train, b))
+
+    trainable = _trainable_episodes(test)
+    attempts = np.zeros(len(trainable), dtype=float)
+    wall_clock = np.zeros(len(trainable), dtype=float)
+    censored = np.zeros(len(trainable), dtype=bool)
+    problem_ids = np.zeros(len(trainable), dtype=np.int64)
+    for out_idx, ep_idx in enumerate(trainable):
+        ep = test.episodes[ep_idx]
+        outs = [o.outcome for o in ep.outcomes]
+        a, c = _lazy_rollout(
+            _action_sets(test, ep_idx), outs, best_beta, attempt_budget
+        )
+        attempts[out_idx] = a
+        censored[out_idx] = c
+        wall_clock[out_idx] = sum(
+            ep.outcomes[i].refinement_wall_clock_s for i in range(len(ep.outcomes))
+        )
+        problem_ids[out_idx] = ep.provenance.problem_id
+    result = BaselineResult(
+        name=f"{name}(beta={best_beta})",
+        attempts=attempts,
+        wall_clock=wall_clock,
+        censored=censored,
+        problem_ids=problem_ids,
+    )
+    return result
+
+
+def checkpoint_checksum(path) -> str:
+    """SHA-256 of a checkpoint file's bytes."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def assert_distinct_seed_checkpoints(paths) -> dict[str, str]:
+    """Assert ≥ 3 seed checkpoints exist with **distinct** checksums (proposal §9).
+
+    This project has shipped silently-duplicated "seeds" before (a seed-forwarding bug),
+    which makes a ≥3-seed spread meaningless. Every reported multi-seed number must call
+    this on its checkpoints first. Returns ``{path: checksum}``."""
+    paths = [str(p) for p in paths]
+    assert len(paths) >= 3, f"need >= 3 seeds, got {len(paths)}"
+    sums = {p: checkpoint_checksum(p) for p in paths}
+    distinct = set(sums.values())
+    assert len(distinct) == len(
+        paths
+    ), "duplicate seed checkpoints (seed-forwarding bug?): " + ", ".join(
+        f"{p}={s[:8]}" for p, s in sums.items()
+    )
+    return sums
+
+
 def oracle_ceiling(test: LoadedSplit, attempt_budget: int = 20) -> BaselineResult:
     """B5 (§4.5).
 
