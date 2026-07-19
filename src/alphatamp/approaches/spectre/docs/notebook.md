@@ -18,6 +18,46 @@ Format:
 
 ---
 
+## 2026-07-18 — v2.2.1 Step 4: Gate G0 — PASS at λ*=0.5 (saved by length-control)
+
+- What: G0 (§10.2) asks, before any model code, whether DD2D has a buffer-tightness λ
+  where cheap statistics degrade but the oracle still solves (subset-coupled feasibility
+  binds). New `g0.py` (slack ordering + a HistGBDT probe over per-object/pairwise hand
+  features) + `experiments/spectre/spectre_g0.py` (parallel λ-sweep; scenes generated +
+  certificate-labeled worker-side). Swept λ ∈ {0.8,0.65,0.5,0.4}, 80 train / 40 val
+  scenes each. **Key methodological choice:** report both **overall** and
+  **within-length (size-conditional)** AUROC, because DD2D feasibility is
+  length/count-dominated and an overall AUROC is inflated by |S|.
+- Result (within-length sweep):
+
+  | λ | oracle | marg% | slack_all | GBDT_all | slack_wl | **GBDT_wl** |
+  |---|---|---|---|---|---|---|
+  | 0.80 | 0.97 | 1.6 | 0.566 | 0.669 | 0.593 | **0.588** |
+  | 0.65 | 0.97 | 15.4 | 0.488 | 0.778 | 0.493 | **0.654** |
+  | 0.50 | 1.00 | 15.7 | 0.529 | 0.774 | 0.525 | **0.578** |
+  | 0.40 | 0.97 | 18.1 | 0.638 | 0.907 | 0.660 | **0.803** |
+
+  **Near-miss off-ramp:** the *overall* GBDT AUROC reaches 0.90 at λ=0.4 — which, taken
+  at face value, would have failed G0 (cheap stats explain feasibility). But the GBDT's
+  top permutation-importance is always `pair_area_complementarity` / `sum_area` (size
+  correlates), and the **within-length** GBDT AUROC is near chance (0.58–0.65) at
+  λ∈{0.5,0.65,0.8}. So cheap stats capture *length/area*, not subset *identity* — the
+  residual a rich representation targets is real. This is literally the "area is the new
+  length" trap the elimination ladder (§10.3) exists to catch; controlling for size was
+  essential. At λ=0.4 (very tight) area-stats start to win within-length (0.80) —
+  packing becomes area-dominated.
+- **G0 PASS → λ* = 0.5** (selection: maximize oracle−GBDT_wl among degraded+solving →
+  1.00−0.578=0.422, the largest gap; packing binds at 15.7% marginals; oracle solves;
+  not area-dominated unlike λ=0.4). slack ordering fails everywhere (AUROC ≈0.5), so the
+  §10.3 ladder's "beat slack" bar is easy; the real bar is the within-length residual.
+- Takeaway / next: DD2D at λ*=0.5 supports the subset-coupling claim (cheap stats fail
+  within-length, oracle solves). The definitive full 500/100/100 collection at λ*=0.5 is
+  folded into **Step 5** (adds post-mortems) to avoid collecting twice; G0 itself used
+  on-the-fly generation. 7 g0 tests green. **Flag for the writeup:** always size-control
+  when claiming a representation beats cheap stats on DD2D.
+
+---
+
 ## 2026-07-18 — v2.2.1 Step 3: schema geometry/evidence layer + geometry stream
 
 - What: extended the on-disk schema (`schema.py`) with the v2.2.1 geometry/evidence

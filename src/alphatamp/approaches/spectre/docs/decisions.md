@@ -6,6 +6,36 @@ not, and why.
 
 ---
 
+## 2026-07-18 — Gate G0 passes at λ*=0.5; size-control is mandatory (v2.2.1 Task 1)
+
+**Context.** G0 (§10.2) is the pre-model off-ramp: does DD2D have a λ where cheap
+statistics degrade but the oracle solves? The cheap probes are slack ordering and a
+pairwise-features GBDT. First pass measured *overall* per-candidate feasibility AUROC and
+found the GBDT reaching 0.90 at tight λ — which reads as an off-ramp (cheap stats explain
+feasibility). But DD2D feasibility is length/count-dominated (the v1 snapshot's central
+finding), so an overall AUROC is inflated by |S|.
+
+**Decisions.** (a) **G0 is judged on the within-length (size-conditional) AUROC**, not the
+overall AUROC. Controlling for |S|, the GBDT is near chance (within-length AUROC 0.58–0.65
+at λ∈{0.5,0.65,0.8}) with its top permutation-importance always a size correlate
+(`pair_area_complementarity`/`sum_area`) — cheap stats capture length/area, not subset
+identity. This is the "area is the new length" trap (§10.3) surfacing at the G0 stage;
+size-control is the fix and is now the standing rule for any "representation beats cheap
+stats" claim on DD2D. (b) **λ* = 0.5**, chosen to maximize the oracle−GBDT_wl gap among λ
+that both degrade (GBDT_wl < 0.65) and solve (oracle ≥ 0.5): at λ=0.5, oracle 1.00 −
+GBDT_wl 0.578 = 0.422 (the largest), packing binds (15.7% marginals, certificate-proven
+infeasibles present), and it is not so tight that area-stats win (unlike λ=0.4, GBDT_wl
+0.803). (c) **G0 uses on-the-fly generation, no persisted collection**; the definitive
+500/100/100 collection at λ*=0.5 is folded into Step 5 (which also adds post-mortems), so
+DD2D is collected once, not twice.
+
+**Consequences.** G0 PASSES → proceed to the model steps. `g0.py` (probes + within-length
+AUROC + λ* rule) + `spectre_g0.py` (parallel sweep) + `test_g0.py` (7). slack ordering
+fails everywhere (AUROC ≈ 0.5), so the §10.3 ladder's "beat slack" bar is trivial; the
+real acceptance bar is the within-length residual. `notebook.md` 2026-07-18 has the table.
+
+---
+
 ## 2026-07-18 — v2.2.1 schema geometry/evidence layer: additive + migration shim
 
 **Context.** v2.2.1 needs ground-truth object geometry (for the geometry-aware model) and
