@@ -18,6 +18,36 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 11: learned typed-evidence pathway — P5 PASS
+
+- What: built the typed-evidence pathway (offline geometry-grounded harvest → fact tokens in
+  the scorer's cross-attention memory → F-context training with evidence dropout + a live
+  scramble gauge). Trained 3 checksum-distinct evidence seeds (30 epochs, ~15 s/ep on the
+  5090). P5 rollout eval on the 141-episode test split (facts on vs off; vs the LAZY
+  untyped-adaptive baseline), strata≥2, paired bootstrap (`spectre_eval_p5.py`).
+- Evidence yield (all splits harvested via `spectre_harvest.py`, reconstruct-not-regenerate):
+  train 97528 / val 25067 / test 25111 post_mortems. blocked-at-contents (proof) = **47% of
+  fails**; the dominant **hint is extraction-failed** (`pick(item)` off stored
+  `failure_action`, ~80k train); grasp-witness (12k) + pack-exhausted (3.8k) rarer;
+  pack-impossible = 0 at λ=0.8 (extraction-dominated, so the certificate is off in the harvest).
+- Result (mean over 3 seeds, test, strata≥2, n=66):
+  - **scramble gauge = 0.091 ± 0.100** (nonzero ⇒ the net uses fact *identity*; seed-dependent
+    — seed 2 gauge 0.23, seeds 0/1 ≈ 0.02). Gauge tracks the increment across seeds.
+  - **evidence increment (FP_off − FP_on) = +6.22, CI (4.15, 8.43)** — typed facts cut ~6
+    attempts over the *same* static model without them.
+  - **v2-evidence vs LAZY (FP_lazy − FP_on) = +31.57, CI (14.15, 48.74)** — beats untyped
+    failure-counting decisively (LAZY β*=1.0).
+  - Decomposition: **LAZY 71.1 → v2-static (facts off) 45.6 → v2-evidence (facts on) 39.5** —
+    the representation does the bulk (~25 FP), typed evidence a secondary composable +6, exactly
+    the project thesis (evidence orthogonal to, and combinable with, the winning representation).
+  - **P5 PASS** (increment nonzero *and* v2-evidence ≤ LAZY, both CI-clean).
+- Takeaway / next: the pathway uses fact identity (gauge>0) and the typed increment beats
+  untyped LAZY *on-distribution* (stronger than the plan's "may be small" pre-registration).
+  The registered test — a *larger* increment under distribution shift — is Step 12
+  (held-out shape families).
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 10: proof-demotion hand-rule stack — P4 PASS (after a regeneration bug)
 
 - What: the zero-parameter hand-rule stack (default planner order + §5 proof-demotion of

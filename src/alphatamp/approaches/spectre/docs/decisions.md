@@ -6,6 +6,65 @@ not, and why.
 
 ---
 
+## 2026-07-19 — Step-11 typed evidence: offline geometry-grounded harvest + metadata hints; the learned pathway is a composable increment
+
+**Context.** Step 11 needs typed post-mortem facts on the records for the learned evidence
+pathway (fact tokens in the scorer). The §6.2 harvest (`harvest.py`) computes facts from a
+failed refinement's `RefineResult.bound_plan`, which the definitive collection deliberately
+did **not** persist (2026-07-19 decoupling). Two ways to recover them offline: re-refine each
+fail (needs a faithfully-regenerated scene — the exact bug the reconstruct-not-regenerate rule
+forbids), or reconstruct facts from stored geometry + stored metadata. Also open: what counts
+as a *hint* the net can learn from at λ=0.8, where grasp-witness (universal-blocker
+intersection) turned out rare.
+
+**Decisions.**
+
+(a) **Harvest geometry-grounded facts by reconstruction, per failed skeleton, not by
+re-refinement** (`envs/dd2d/spectre_harvest.py`, built on `spectre_geometry.reconstruct_scene`):
+blocked-at-contents (proof, `target_blocked_after_removing`), grasp-witness (hint,
+`grasp_witness_after_removing`), pack-impossible (proof, certificate). All are pure functions
+of `(stored geometry, staged subset)`, so they inherit the 0/6622 label-consistency of the
+reconstructor and need no scene regeneration.
+
+(b) **Recover the abundant hint from the *stored* `refiner_metadata`, not from re-refinement.**
+The collection already persisted `failure_action` (e.g. `pick(o11)`), `n_attempts`, `steps_bound`
+per fail. So `extraction-failed(item)` (hint: which item's extraction stalled) and
+`pack-exhausted(subset)` are read straight off the record — no `bound_plan` needed. At λ=0.8,
+`failure_action` is ~93% `pick` → extraction-failed is the dominant, information-rich hint;
+grasp-witness fires ~5% (universal blocker rare for a pincered target). This is what makes P5
+non-trivial: without the metadata hints the hint tier would be near-empty on-distribution. The
+refiner-trace-only constructive facts (extracted-ok / packed-ok) that truly need `bound_plan`
+are deferred — the pathway rides entirely on reconstruction + stored metadata (P-F: these are
+observations of genuine attempts, not exact computations relabeled as features).
+
+(c) **Certificate off in the definitive harvest.** At λ=0.8 it proves 0 pack-impossibles
+(extraction-dominated, 2026-07-18) and costs ~0.5 s/fail, so `spectre_harvest.py` defaults it
+off; `--run-certificate` re-enables it at tight λ.
+
+(d) **canonicalize remaps `post_mortem` fact args.** Facts carry object *identity* (their args),
+which must bind to the same episode-local tags as the scene/candidate tokens; `canonicalize_episode`
+now renames fact args alongside `scene_geometry`/`aux_labels` (outcomes were previously passed
+through unchanged — safe only before facts referenced objects).
+
+(e) **Fact tokens are additive; the static path is byte-identical.** `SpectreV2Batch` gains
+trailing-`None` `fact_*` + `avail_mask`; with no facts the scorer/loss are the Step-9 static
+model exactly. Training samples an F-context (heavy at |F|=0) with **evidence dropout** so the
+static pathway must stand alone (P-D). Model selection stays the **static** val PL loss (t=0 is
+the deployment start); the **live scramble gauge** (identity-scramble logit sensitivity) is the
+facts-are-used detector, recomputed on `best.pt` at eval (the training-log gauge is the
+final-epoch model).
+
+**Consequences.** P5 PASSES (`notebook.md` 2026-07-19): scramble gauge 0.091±0.100 (nonzero),
+evidence increment +6.22 CI (4.15, 8.43), v2-evidence beats untyped LAZY by +31.57 CI (14.15,
+48.74) on strata≥2. The margin decomposes LAZY 71.1 → static 45.6 → evidence 39.5 — the
+representation dominates, typed evidence is the **secondary composable increment** the pivot
+predicted. New modules `facts.py`, `evidence.py`, `envs/dd2d/spectre_harvest.py`,
+`experiments/spectre/{spectre_harvest,spectre_eval_p5}.py` + `test_facts_evidence.py`,
+`test_spectre_harvest.py`. The registered *shift* test (larger increment under held-out shape
+families) is Step 12.
+
+---
+
 ## 2026-07-19 — Post-hoc geometric proofs reconstruct from stored geometry, never regenerate the scene
 
 **Context.** Step 10's hand-rule P4 gate needs a `blocked-at-contents` grasp proof for
