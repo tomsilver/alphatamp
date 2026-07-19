@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
+from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.model_v2 import (
     D_GLOBAL_IN,
     D_REL,
@@ -236,3 +239,64 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         aux_necessary=t(aux_nec),
         aux_relevant=t(aux_rel),
     )
+
+
+class SpectreV2Dataset(Dataset):
+    """Torch dataset over geometry-carrying episodes for the v2 model.
+
+    Filters to trainable episodes (>= 1 success, >= 2 skeletons). ``augment`` permutes the
+    object tags per epoch (seeded from ``(seed, episode_idx, epoch)``); eval uses ``rng=None``
+    (deterministic). One episode == one training example (its whole candidate pool)."""
+
+    def __init__(
+        self,
+        split_dir: Path,
+        vocab: Vocab,
+        max_tags: int = 32,
+        augment: bool = True,
+        seed: int = 0,
+        exclude_marginal: bool = False,
+    ) -> None:
+        self.vocab = vocab
+        self.max_tags = max_tags
+        self.augment = augment
+        self.seed = seed
+        self.exclude_marginal = exclude_marginal
+        self.epoch = 0
+        self._paths = []
+        for p in list_episodes(split_dir):
+            ep = load_episode(p)
+            if (
+                ep.scene_geometry is not None
+                and ep.summary.num_success >= 1
+                and len(ep.skeleton_pool) >= 2
+            ):
+                self._paths.append(p)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def __getitem__(self, idx: int) -> "_V2Example":
+        ep = load_episode(self._paths[idx])
+        rng = None
+        if self.augment:
+            rng = np.random.default_rng((self.seed, idx, self.epoch))
+        return build_v2_example(
+            ep,
+            self.vocab,
+            rng=rng,
+            max_tags=self.max_tags,
+            exclude_marginal=self.exclude_marginal,
+        )
+
+
+def make_collate(max_arity: int):
+    """A picklable-ish collate closure for a DataLoader (returns a ``SpectreV2Batch``)."""
+
+    def _collate(examples: list) -> SpectreV2Batch:
+        return collate_v2(examples, max_arity=max_arity)
+
+    return _collate
