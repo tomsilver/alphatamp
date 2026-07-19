@@ -1,10 +1,11 @@
 """v2.2 tensorizer: geometry-carrying ``EpisodeRecord`` → ``SpectreV2Batch`` (Step 8).
 
 Additive to v1's ``dataset.py``. Consumes ``episode.scene_geometry`` (Step 3) and the
-skeleton pool, binds every object mention to its episode-local **tag** (Step 7), resamples
-each object's boundary ring to a fixed point set, and computes relation-to-target scalars.
-Marginal-labeled negatives can be excluded from the success mask (a belt-and-suspenders
-label-hygiene flag; with the §8.4 certificate applied most negatives are proven).
+skeleton pool, binds every object mention to its episode-local **tag** (Step 7),
+resamples each object's boundary ring to a fixed point set, and computes relation-to-
+target scalars. Marginal-labeled negatives can be excluded from the success mask (a
+belt-and-suspenders label-hygiene flag; with the §8.4 certificate applied most negatives
+are proven).
 """
 
 from __future__ import annotations
@@ -19,16 +20,55 @@ import torch
 from torch.utils.data import Dataset
 
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
+from alphatamp.approaches.spectre.facts import gather_context_facts
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.model_v2 import (
     D_GLOBAL_IN,
     D_REL,
+    MAX_FACT_ARGS,
     N_BOUNDARY_POINTS,
     SpectreV2Batch,
 )
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.tags import assign_tags
 from alphatamp.approaches.spectre.vocab import Vocab
+
+
+def sample_context(
+    fail_idx: list[int],
+    rng: np.random.Generator,
+    p_empty: float = 0.35,
+    p_drop_facts: float = 0.3,
+    max_f: int = 8,
+) -> tuple[frozenset[int], bool]:
+    """Sample a failed-context ``F`` for evidence training + an evidence-dropout flag.
+
+    Heavy mass at ``|F|=0`` (the ``t=0`` deployment state the static pathway must own,
+    P-D), otherwise a small uniform size. ``hide_facts`` (evidence dropout) trains the
+    ranker to stand on geometry alone even when failures exist. Returns ``(F,
+    hide_facts)``.
+    """
+    if not fail_idx or rng.random() < p_empty:
+        return frozenset(), False
+    size = int(rng.integers(1, min(max_f, len(fail_idx)) + 1))
+    chosen = rng.choice(np.asarray(fail_idx), size=size, replace=False)
+    return frozenset(int(i) for i in chosen), bool(rng.random() < p_drop_facts)
+
+
+def _fact_arrays(
+    episode: EpisodeRecord, context_f: frozenset[int], tags: dict[str, int]
+) -> tuple[list[int], list[int], list[list[int]]]:
+    """Tensorize the typed facts of the failed skeletons in ``context_f`` to tag-bound
+    ids."""
+    type_ids: list[int] = []
+    tier_ids: list[int] = []
+    arg_tags: list[list[int]] = []
+    for fr in gather_context_facts(episode, sorted(context_f)):
+        ats = [tags[a] for a in fr.args if a in tags][:MAX_FACT_ARGS]
+        type_ids.append(fr.type_id)
+        tier_ids.append(fr.tier_id)
+        arg_tags.append(ats)
+    return type_ids, tier_ids, arg_tags
 
 
 def resample_ring(
@@ -70,6 +110,11 @@ class _V2Example:
     success: list
     aux_necessary: np.ndarray
     aux_relevant: np.ndarray
+    # Step-11 typed evidence (empty in the static path).
+    avail: list  # bool per candidate: not in the failed context F
+    fact_type_ids: list  # int per fact
+    fact_tier_ids: list  # int per fact
+    fact_arg_tags: list  # list[list[int]] per fact (object tags, capped)
 
 
 def _target_name(episode: EpisodeRecord) -> Optional[str]:
@@ -87,15 +132,28 @@ def build_v2_example(
     rng: Optional[np.random.Generator] = None,
     max_tags: int = 32,
     exclude_marginal: bool = False,
+    evidence: bool = False,
+    context_f: Optional[frozenset[int]] = None,
+    hide_facts: bool = False,
+    augment_tags: bool = True,
 ) -> _V2Example:
-    """Tensorize one geometry-carrying episode. ``rng`` set ⇒ tag permutation (training)."""
+    """Tensorize one geometry-carrying episode.
+
+    ``rng`` set ⇒ tag permutation (training).     Evidence pathway (Step 11): with
+    ``evidence=True`` and ``context_f`` unset, a failed     context ``F`` is sampled
+    (``rng`` required); with ``context_f`` given (eval rollout) it     is used as-is.
+    Candidates in ``F`` are marked unavailable, and the typed facts of ``F``     become
+    fact tokens unless ``hide_facts`` (evidence dropout) suppresses them.
+    """
     if episode.scene_geometry is None:
         raise ValueError("build_v2_example requires scene_geometry (Step 3)")
     canon = canonicalize_episode(episode, rng=None)  # structure/names; tags added below
     geo = canon.scene_geometry
     assert geo is not None
     obj_names = [o.name for o in geo.objects]
-    tags = assign_tags(obj_names, rng=rng, max_tags=max_tags)
+    tags = assign_tags(
+        obj_names, rng=(rng if augment_tags else None), max_tags=max_tags
+    )
 
     # scale for pose normalization: drawer frame extent (fallback to buffer bounds).
     frame = geo.frame or {}
@@ -124,7 +182,8 @@ def build_v2_example(
         rel[i, 7] = float(o.area) / (tgt.area if tgt else 1.0)
 
     # candidates: operator-schema ids + arg tags (by canonical object name).
-    op_ids, arg_tags, success = [], [], []
+    op_ids, arg_tags = [], []
+    success: list[Optional[bool]] = []
     for skel, out in zip(canon.skeleton_pool, canon.outcomes):
         ops, ats = [], []
         for op in skel.operator_seq:
@@ -132,7 +191,7 @@ def build_v2_example(
             ats.append([tags.get(a.name, 0) for a in op.parameters])
         op_ids.append(ops)
         arg_tags.append(ats)
-        s = out.outcome == "success"
+        s: Optional[bool] = out.outcome == "success"
         if exclude_marginal and out.outcome == "fail":
             meta = out.refiner_metadata or {}
             if meta.get("status") == "marginal":
@@ -154,6 +213,26 @@ def build_v2_example(
         ],
         dtype=np.float32,
     )
+
+    # typed-evidence context F: candidates in F are "already tried" (unavailable); their
+    # facts become tokens unless evidence dropout hides them.
+    fail_idx = [i for i, out in enumerate(canon.outcomes) if out.outcome == "fail"]
+    hide = hide_facts
+    if context_f is not None:
+        ctx: frozenset[int] = frozenset(int(i) for i in context_f)
+    elif evidence and rng is not None:
+        ctx, hide = sample_context(fail_idx, rng)
+    else:
+        ctx = frozenset()
+    avail = [i not in ctx for i in range(len(op_ids))]
+    ftype: list[int]
+    ftier: list[int]
+    farg: list[list[int]]
+    if hide or not ctx:
+        ftype, ftier, farg = [], [], []
+    else:
+        ftype, ftier, farg = _fact_arrays(canon, ctx, tags)
+
     return _V2Example(
         obj_tags,
         obj_boundary,
@@ -165,6 +244,10 @@ def build_v2_example(
         success,
         necessary,
         relevant,
+        avail,
+        ftype,
+        ftier,
+        farg,
     )
 
 
@@ -185,6 +268,8 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     ell = max((len(o) for e in examples for o in e.op_ids), default=1)
     p = N_BOUNDARY_POINTS
 
+    fmax = max((len(e.fact_type_ids) for e in examples), default=0)
+
     obj_tags = np.zeros((b, n), np.int64)
     obj_boundary = np.zeros((b, n, p, 2), np.float32)
     obj_pose = np.zeros((b, n, 3), np.float32)
@@ -196,10 +281,16 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     cand_pos = np.zeros((b, k, ell), np.int64)
     cand_step_mask = np.zeros((b, k, ell), bool)
     pool_mask = np.zeros((b, k), bool)
+    avail = np.zeros((b, k), bool)
     success = np.zeros((b, k), bool)
     aux_nec = np.full((b, n), -1.0, np.float32)
     aux_rel = np.full((b, n), -1.0, np.float32)
     glob = np.zeros((b, D_GLOBAL_IN), np.float32)
+    fa = max(MAX_FACT_ARGS, 1)
+    fact_type = np.zeros((b, fmax), np.int64)
+    fact_tier = np.zeros((b, fmax), np.int64)
+    fact_arg = np.zeros((b, fmax, fa), np.int64)
+    fact_mask = np.zeros((b, fmax), bool)
 
     for bi, e in enumerate(examples):
         no = len(e.obj_tags)
@@ -214,12 +305,20 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         glob[bi] = _glob_feats(e)
         for ki, (ops, ats, s) in enumerate(zip(e.op_ids, e.arg_tags, e.success)):
             pool_mask[bi, ki] = True
+            avail[bi, ki] = bool(e.avail[ki]) if ki < len(e.avail) else True
             success[bi, ki] = bool(s) if s is not None else False
             for li, (oid, at) in enumerate(zip(ops, ats)):
                 cand_op_ids[bi, ki, li] = oid
                 cand_pos[bi, ki, li] = li
                 cand_step_mask[bi, ki, li] = True
                 cand_arg_tags[bi, ki, li, : len(at)] = at[:max_arity]
+        for fi, (ty, ti, ar) in enumerate(
+            zip(e.fact_type_ids, e.fact_tier_ids, e.fact_arg_tags)
+        ):
+            fact_type[bi, fi] = ty
+            fact_tier[bi, fi] = ti
+            fact_mask[bi, fi] = True
+            fact_arg[bi, fi, : len(ar)] = ar[:fa]
 
     t = torch.as_tensor
     return SpectreV2Batch(
@@ -238,15 +337,22 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         success_mask=t(success),
         aux_necessary=t(aux_nec),
         aux_relevant=t(aux_rel),
+        avail_mask=t(avail),
+        fact_type_ids=t(fact_type) if fmax else None,
+        fact_tier_ids=t(fact_tier) if fmax else None,
+        fact_arg_tags=t(fact_arg) if fmax else None,
+        fact_mask=t(fact_mask) if fmax else None,
     )
 
 
 class SpectreV2Dataset(Dataset):
     """Torch dataset over geometry-carrying episodes for the v2 model.
 
-    Filters to trainable episodes (>= 1 success, >= 2 skeletons). ``augment`` permutes the
-    object tags per epoch (seeded from ``(seed, episode_idx, epoch)``); eval uses ``rng=None``
-    (deterministic). One episode == one training example (its whole candidate pool)."""
+    Filters to trainable episodes (>= 1 success, >= 2 skeletons). ``augment`` permutes
+    the object tags per epoch (seeded from ``(seed, episode_idx, epoch)``); eval uses
+    ``rng=None`` (deterministic). One episode == one training example (its whole
+    candidate pool).
+    """
 
     def __init__(
         self,
@@ -256,12 +362,14 @@ class SpectreV2Dataset(Dataset):
         augment: bool = True,
         seed: int = 0,
         exclude_marginal: bool = False,
+        evidence: bool = False,
     ) -> None:
         self.vocab = vocab
         self.max_tags = max_tags
         self.augment = augment
         self.seed = seed
         self.exclude_marginal = exclude_marginal
+        self.evidence = evidence
         self.epoch = 0
         self._paths = []
         for p in list_episodes(split_dir):
@@ -282,7 +390,7 @@ class SpectreV2Dataset(Dataset):
     def __getitem__(self, idx: int) -> "_V2Example":
         ep = load_episode(self._paths[idx])
         rng = None
-        if self.augment:
+        if self.augment or self.evidence:
             rng = np.random.default_rng((self.seed, idx, self.epoch))
         return build_v2_example(
             ep,
@@ -290,11 +398,14 @@ class SpectreV2Dataset(Dataset):
             rng=rng,
             max_tags=self.max_tags,
             exclude_marginal=self.exclude_marginal,
+            evidence=self.evidence,
+            augment_tags=self.augment,
         )
 
 
 def make_collate(max_arity: int):
-    """A picklable-ish collate closure for a DataLoader (returns a ``SpectreV2Batch``)."""
+    """A picklable-ish collate closure for a DataLoader (returns a
+    ``SpectreV2Batch``)."""
 
     def _collate(examples: list) -> SpectreV2Batch:
         return collate_v2(examples, max_arity=max_arity)

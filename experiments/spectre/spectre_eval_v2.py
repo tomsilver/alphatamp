@@ -51,7 +51,9 @@ def _staged(skel) -> list[str]:
     ]
 
 
-def episode_features(episode):
+def episode_features(
+    episode,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Per-skeleton (length, slack, proximity, feasible) + the problem stratum."""
     geo = episode.scene_geometry
     area = {o.name: float(o.area) for o in geo.objects}
@@ -76,14 +78,16 @@ def episode_features(episode):
                     d.append(math.hypot(pa[0] - pb[0], pa[1] - pb[1]))
         prox.append(float(np.mean(d)) if d else 0.0)
         feas.append(out.outcome == "success")
-    feas = np.array(feas, dtype=bool)
-    staged_counts = [len(_staged(s)) for s, f in zip(episode.skeleton_pool, feas) if f]
+    feas_arr = np.array(feas, dtype=bool)
+    staged_counts = [
+        len(_staged(s)) for s, f in zip(episode.skeleton_pool, feas_arr) if f
+    ]
     stratum = min(staged_counts) if staged_counts else -1
     return (
         np.array(lengths),
         np.array(slacks),
         np.array(prox),
-        feas,
+        feas_arr,
         stratum,
     )
 

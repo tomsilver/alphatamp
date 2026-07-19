@@ -86,8 +86,8 @@ def beats_slack_paired(
         slack_order = np.argsort(-slack_per_skel[i])
         d = _rollout_fp(slack_order, feasible[i]) - _rollout_fp(v2_order, feasible[i])
         diffs.append(float(d))
-    diffs = np.asarray(diffs, dtype=float)
-    if len(diffs) == 0:
+    diff_arr = np.asarray(diffs, dtype=float)
+    if len(diff_arr) == 0:
         return {
             "n": 0,
             "mean_diff": float("nan"),
@@ -96,12 +96,15 @@ def beats_slack_paired(
         }
     rng = np.random.default_rng(seed)
     boot = np.array(
-        [rng.choice(diffs, size=len(diffs), replace=True).mean() for _ in range(n_boot)]
+        [
+            rng.choice(diff_arr, size=len(diff_arr), replace=True).mean()
+            for _ in range(n_boot)
+        ]
     )
     lo, hi = np.percentile(boot, [2.5, 97.5])
     return {
-        "n": len(diffs),
-        "mean_diff": float(diffs.mean()),
+        "n": len(diff_arr),
+        "mean_diff": float(diff_arr.mean()),
         "ci": (float(lo), float(hi)),
         "passes": bool(lo > 0.0),  # v2 strictly beats slack, CI excludes zero
     }

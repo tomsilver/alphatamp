@@ -30,6 +30,7 @@ from relational_structs import GroundAtom, GroundOperator, Object, Type
 from alphatamp.approaches.spectre.schema import (
     AuxLabels,
     EpisodeRecord,
+    PostMortemRecord,
     SceneGeometry,
     SkeletonRecord,
 )
@@ -38,9 +39,8 @@ from alphatamp.approaches.spectre.schema import (
 def _gather_types(episode: EpisodeRecord) -> dict[str, Type]:
     """Collect every ``Type`` actually referenced in the episode.
 
-    We index by ``type.name`` and assert uniqueness so downstream code can
-    look up the canonical ``Type`` instance that already carries the right
-    parent-chain for the env.
+    We index by ``type.name`` and assert uniqueness so downstream code can look up the
+    canonical ``Type`` instance that already carries the right parent-chain for the env.
     """
     found: dict[str, Type] = {}
 
@@ -89,9 +89,8 @@ def _renumber_mapping(
 
     ``type_aug_policy`` is a ``{type_name: augmentable}`` dict (per
     ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §4.6). Missing keys default to
-    ``augmentable=True`` (backwards-compatible). When ``rng is None`` the
-    policy is irrelevant — every type uses the deterministic alphabetical
-    order.
+    ``augmentable=True`` (backwards-compatible). When ``rng is None`` the policy is
+    irrelevant — every type uses the deterministic alphabetical order.
     """
     type_table = _gather_types(episode)
     policy = type_aug_policy or {}
@@ -147,9 +146,11 @@ def _remap_operator(op: GroundOperator, mapping: dict[str, Object]) -> GroundOpe
 def _remap_scene_geometry(
     sg: SceneGeometry, mapping: dict[str, Object]
 ) -> SceneGeometry:
-    """Rename each object's geometry to its canonical id (v2.2.1). Keeps geometry
-    aligned with the canonicalized ``object_registry`` (invariant I5); containers /
-    frame carry no object names."""
+    """Rename each object's geometry to its canonical id (v2.2.1).
+
+    Keeps geometry aligned with the canonicalized ``object_registry`` (invariant I5);
+    containers / frame carry no object names.
+    """
     objs = tuple(replace(o, name=mapping[o.name].name) for o in sg.objects)
     return replace(sg, objects=objs)
 
@@ -159,6 +160,23 @@ def _remap_aux_labels(aux: AuxLabels, mapping: dict[str, Object]) -> AuxLabels:
         necessary=frozenset(mapping[o].name for o in aux.necessary),
         relevant=frozenset(mapping[o].name for o in aux.relevant),
     )
+
+
+def _remap_post_mortem(
+    pm: PostMortemRecord, mapping: dict[str, Object]
+) -> PostMortemRecord:
+    """Rename the object-name arguments of every harvested fact to canonical ids
+    (v2.2.1), so the typed-evidence tokens bind to the same tags as the scene/candidate
+    tokens.
+
+    Non-object scalars/prefix/hashes are untouched.
+    """
+    new_facts = tuple(
+        replace(f, args=tuple(sorted(mapping[a].name for a in f.args)))
+        for f in pm.facts
+    )
+    new_args = tuple(mapping[a].name for a in pm.failed_args)
+    return replace(pm, facts=new_facts, failed_args=new_args)
 
 
 def canonicalize_episode(
@@ -174,8 +192,9 @@ def canonicalize_episode(
     - ``object_registry`` (names become ``"{type}_{idx}"``)
     - every skeleton's ``operator_seq`` and ``final_abstract_state``
 
-    Outcomes, provenance, and summary are passed through unchanged since they
-    do not reference Object instances.
+    Provenance and summary are passed through unchanged. Outcomes are unchanged
+    except for the v2.2.1 ``post_mortem`` fact arguments, which are renamed to the
+    canonical object ids so the typed-evidence tokens share the scene tags.
 
     ``type_aug_policy`` (a ``{type_name: augmentable}`` dict per spec §4.6)
     suppresses the random within-type permutation for non-augmentable types
@@ -211,6 +230,14 @@ def canonicalize_episode(
         if episode.aux_labels is not None
         else None
     )
+    new_outcomes = tuple(
+        (
+            replace(o, post_mortem=_remap_post_mortem(o.post_mortem, mapping))
+            if o.post_mortem is not None
+            else o
+        )
+        for o in episode.outcomes
+    )
 
     return replace(
         episode,
@@ -218,6 +245,7 @@ def canonicalize_episode(
         goal_atoms=new_goal,
         object_registry=new_registry,
         skeleton_pool=tuple(new_skeletons),
+        outcomes=new_outcomes,
         scene_geometry=new_geometry,
         aux_labels=new_aux,
     )

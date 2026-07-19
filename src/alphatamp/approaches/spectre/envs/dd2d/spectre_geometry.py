@@ -31,7 +31,7 @@ from alphatamp.approaches.spectre.schema import ObjectGeometry, SceneGeometry
 from .dd2d.grasps import has_grasp
 from .dd2d.scene import WALL_BAND
 from .dd2d.shapes import Shape
-from .dd2d.world import place_polygon
+from .dd2d.world import DrawerScene, ItemState, place_polygon
 
 
 def _item_polygon(geom: ObjectGeometry) -> Polygon:
@@ -53,6 +53,87 @@ def reconstruct_wall_band(frame: dict[str, float]) -> Polygon:
     d = float(frame["drawer_d"])
     outer = shp_box(-WALL_BAND, -WALL_BAND, w + WALL_BAND, d + WALL_BAND)
     return outer.difference(shp_box(0.0, 0.0, w, d))
+
+
+def reconstruct_scene(
+    scene_geometry: SceneGeometry, margin: float = 1.0
+) -> DrawerScene:
+    """Rebuild a live ``DrawerScene`` from stored geometry — every item in the drawer at
+    its stored pose, the reconstructed wall band, and the stored buffer.
+
+    This is the same-poses-the-labeler-used reconstruction extended from single grasp
+    queries to a full scene, so the env's own ``_blocker_sets`` / certificate run over
+    it unchanged (reconstruct, never regenerate — ``docs/decisions.md`` 2026-07-19).
+    """
+    if scene_geometry.frame is None:
+        raise ValueError("scene_geometry.frame lacks drawer_w/drawer_d")
+    w = float(scene_geometry.frame["drawer_w"])
+    d = float(scene_geometry.frame["drawer_d"])
+    buffer = None
+    for c in scene_geometry.containers:
+        if c.kind == "buffer":
+            buffer = shp_box(*(float(v) for v in c.bounds))
+    if buffer is None:
+        raise ValueError("scene_geometry has no buffer container")
+    items: dict[str, ItemState] = {}
+    target_name = None
+    for o in scene_geometry.objects:
+        items[o.name] = ItemState(
+            name=o.name,
+            shape=Shape(family=o.family, polygon=_item_polygon(o), concave=o.concave),
+            pose=tuple(float(v) for v in o.pose),  # type: ignore[arg-type]
+            region="drawer",
+            is_target=o.is_target,
+        )
+        if o.is_target:
+            target_name = o.name
+    if target_name is None:
+        raise ValueError("scene_geometry has no target object")
+    return DrawerScene(
+        drawer=shp_box(0.0, 0.0, w, d),
+        wall_band=reconstruct_wall_band(scene_geometry.frame),
+        buffer=buffer,
+        items=items,
+        target=target_name,
+        margin=margin,
+        dims={"W": w, "D": d},
+    )
+
+
+def _scene_without(scene: DrawerScene, subset: set[str]) -> DrawerScene:
+    """A view of ``scene`` with ``subset`` items removed from the drawer (target
+    kept)."""
+    kept = {n: s for n, s in scene.items.items() if n not in subset}
+    return DrawerScene(
+        drawer=scene.drawer,
+        wall_band=scene.wall_band,
+        buffer=scene.buffer,
+        items=kept,
+        target=scene.target,
+        margin=scene.margin,
+        dims=scene.dims,
+    )
+
+
+def grasp_witness_after_removing(
+    scene: DrawerScene, subset: Iterable[str]
+) -> frozenset[str]:
+    """Drawer items that block **every** still-open target corridor once ``subset`` is
+    removed — their removal is necessary to open any of those corridors (a hint, §6.4).
+
+    Intersection of the per-corridor blocker sets over corridors that are not walled
+    off; empty if the target is already graspable or no corridor is jointly blocked.
+    """
+    from .dd2d.enumerate import _blocker_sets, _footprints
+
+    view = _scene_without(scene, set(subset))
+    sets = [s for s in _blocker_sets(view, _footprints(view)) if s]
+    if not sets:
+        return frozenset()
+    witness = set(sets[0])
+    for s in sets[1:]:
+        witness &= s
+    return frozenset(witness)
 
 
 def target_blocked_after_removing(

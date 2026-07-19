@@ -39,10 +39,11 @@ def _one_episode(path_str: str):
     from alphatamp.approaches.spectre.proof_demotion import ProofState, demote
 
     ep = load_episode(Path(path_str))
-    if ep.scene_geometry is None or ep.summary.num_success < 1:
+    scene_geometry = ep.scene_geometry
+    if scene_geometry is None or ep.summary.num_success < 1:
         return None
 
-    def staged(sk):
+    def staged(sk) -> frozenset[str]:
         return frozenset(
             op.parameters[0].name for op in sk.operator_seq if op.name == "place-buffer"
         )
@@ -57,7 +58,7 @@ def _one_episode(path_str: str):
 
     def is_blocked(fs) -> bool:
         if fs not in blocked:
-            blocked[fs] = target_blocked_after_removing(ep.scene_geometry, fs)
+            blocked[fs] = target_blocked_after_removing(scene_geometry, fs)
         return blocked[fs]
 
     base_order = list(range(len(subsets)))  # default planner order

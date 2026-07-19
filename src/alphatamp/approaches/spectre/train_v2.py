@@ -20,10 +20,49 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from alphatamp.approaches.spectre.dataset_v2 import SpectreV2Dataset, make_collate
+from alphatamp.approaches.spectre.dataset_v2 import (
+    SpectreV2Dataset,
+    build_v2_example,
+    collate_v2,
+    make_collate,
+)
+from alphatamp.approaches.spectre.evidence import scramble_gauge
+from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss
-from alphatamp.approaches.spectre.model_v2 import SpectreV2Model
+from alphatamp.approaches.spectre.model_v2 import SpectreV2Batch, SpectreV2Model
 from alphatamp.approaches.spectre.vocab import Vocab
+
+
+def _build_gauge_batch(
+    val_dir: Path, vocab: Vocab, cfg: "TrainV2Config", n_eps: int = 24
+) -> Optional[SpectreV2Batch]:
+    """A fixed val batch of evidence examples with a nonempty failed context ``F`` (up
+    to 3 fails/episode), for the scramble gauge.
+
+    None if no val episode has a usable context.
+    """
+    exs = []
+    for p in list_episodes(val_dir)[:n_eps]:
+        ep = load_episode(p)
+        if ep.scene_geometry is None:
+            continue
+        fails = [i for i, o in enumerate(ep.outcomes) if o.outcome == "fail"]
+        if not fails:
+            continue
+        exs.append(
+            build_v2_example(
+                ep,
+                vocab,
+                rng=None,
+                max_tags=cfg.max_tags,
+                evidence=True,
+                context_f=frozenset(fails[:3]),
+                augment_tags=False,
+            )
+        )
+    if not exs:
+        return None
+    return collate_v2(exs, max_arity=vocab.max_operator_arity)
 
 
 @dataclass
@@ -39,6 +78,9 @@ class TrainV2Config:
     exclude_marginal: bool = False
     seed: int = 0
     warmup_epochs: int = 2
+    evidence: bool = (
+        False  # Step 11: train the typed-evidence pathway (F-context sampling)
+    )
 
 
 def _aux_loss(aux_logits, aux_nec, aux_rel, obj_mask) -> torch.Tensor:
@@ -75,7 +117,7 @@ def _run_epoch(model, loader, device, aux_weight: float, opt=None) -> float:
                 )
         if train:
             opt.zero_grad()
-            loss.backward()
+            loss.backward()  # type: ignore[no-untyped-call]
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
         total += float(loss.item())
@@ -102,7 +144,11 @@ def train_v2(
         augment=cfg.augment,
         seed=cfg.seed,
         exclude_marginal=cfg.exclude_marginal,
+        evidence=cfg.evidence,
     )
+    # Val loss (checkpoint selection) is the STATIC ranking quality at t=0 — the deployment
+    # start the static pathway must own (P-D); the evidence use is tracked by the scramble
+    # gauge, not the selection metric.
     val_ds = SpectreV2Dataset(
         val_dir, vocab, cfg.max_tags, augment=False, seed=cfg.seed
     )
@@ -129,12 +175,16 @@ def train_v2(
         prog = (epoch - cfg.warmup_epochs) / max(cfg.epochs - cfg.warmup_epochs, 1)
         return 0.5 * (1 + math.cos(math.pi * prog))
 
+    gauge_batch = _build_gauge_batch(val_dir, vocab, cfg) if cfg.evidence else None
+    gauge_rng = np.random.default_rng(cfg.seed)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     best_val = float("inf")
     log = []
     print(
         f"[train_v2] seed={cfg.seed} device={device} n_train={len(train_ds)} "
-        f"n_val={len(val_ds)} epochs={cfg.epochs} batch={cfg.batch_size}",
+        f"n_val={len(val_ds)} epochs={cfg.epochs} batch={cfg.batch_size} "
+        f"evidence={cfg.evidence}",
         flush=True,
     )
     t_start = time.time()
@@ -144,7 +194,14 @@ def train_v2(
         train_ds.set_epoch(epoch)
         tr = _run_epoch(model, train_loader, device, cfg.aux_weight, opt)
         va = _run_epoch(model, val_loader, device, cfg.aux_weight, None)
-        log.append({"epoch": epoch, "train_loss": tr, "val_loss": va})
+        gauge = (
+            scramble_gauge(model, gauge_batch, device, gauge_rng)
+            if gauge_batch is not None
+            else 0.0
+        )
+        log.append(
+            {"epoch": epoch, "train_loss": tr, "val_loss": va, "scramble_gauge": gauge}
+        )
         improved = va < best_val
         if improved:
             best_val = va
@@ -153,19 +210,27 @@ def train_v2(
                 out_dir / "best.pt",
             )
         # Periodic heartbeat so a long run is never mistaken for a hang: every 5 epochs,
-        # plus the first and last, with train/val loss, best-so-far, and an ETA.
+        # plus the first and last, with train/val loss, best-so-far, scramble gauge, ETA.
         if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
             elapsed = time.time() - t_start
             per_epoch = elapsed / (epoch + 1)
             eta = per_epoch * (cfg.epochs - epoch - 1)
+            gauge_str = f" gauge={gauge:.3f}" if cfg.evidence else ""
             print(
                 f"[train_v2] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
                 f"train={tr:.4f} val={va:.4f} best={best_val:.4f}"
-                f"{' *' if improved else ''} | {per_epoch:.1f}s/ep ETA {eta / 60:.1f}m",
+                f"{' *' if improved else ''}{gauge_str} | "
+                f"{per_epoch:.1f}s/ep ETA {eta / 60:.1f}m",
                 flush=True,
             )
     (out_dir / "log.jsonl").write_text("\n".join(json.dumps(r) for r in log))
-    return {"best_val_loss": best_val, "epochs": len(log), "n_train": len(train_ds)}
+    final_gauge = log[-1]["scramble_gauge"] if log else 0.0
+    return {
+        "best_val_loss": best_val,
+        "epochs": len(log),
+        "n_train": len(train_ds),
+        "final_scramble_gauge": final_gauge,
+    }
 
 
 def main(argv=None) -> int:
@@ -176,11 +241,13 @@ def main(argv=None) -> int:
     ap.add_argument("--env", default="dd2d_v2")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--evidence", action="store_true", help="train the Step-11 pathway")
     a = ap.parse_args(argv)
     root = Path(a.data_root)
     vocab = Vocab.from_json(root / "derived" / a.env / "train_vocab.json")
-    cfg = TrainV2Config(epochs=a.epochs, seed=a.seed)
-    out = root / "checkpoints_v2" / a.env / f"seed_{a.seed}"
+    cfg = TrainV2Config(epochs=a.epochs, seed=a.seed, evidence=a.evidence)
+    sub = "checkpoints_v2_evidence" if a.evidence else "checkpoints_v2"
+    out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v2(
         cfg,
         root / "raw" / a.env / "train",

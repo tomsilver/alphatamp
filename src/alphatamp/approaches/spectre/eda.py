@@ -578,7 +578,7 @@ def heuristic_search_baseline(
 
 def _lazy_rollout(
     action_sets: list[set],
-    outcomes: list[str],
+    outcomes: Sequence[str],
     beta: float,
     attempt_budget: int,
 ) -> tuple[float, bool]:

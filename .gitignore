@@ -218,6 +218,7 @@ tests/approaches/box_approach_performance_summary.png
 data/spectre/raw/
 data/spectre/checkpoints/
 data/spectre/checkpoints_v2/
+data/spectre/checkpoints_v2_evidence/
 data/spectre/configs/
 data/spectre/derived/
 

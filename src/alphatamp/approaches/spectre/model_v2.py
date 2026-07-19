@@ -1,5 +1,6 @@
-"""SPECTRE v2.2 geometry-aware model (proposal §7). Additive to v1 (`model.py`).
+"""SPECTRE v2.2 geometry-aware model (proposal §7).
 
+Additive to v1 (`model.py`).
 The static (t=0) architecture that conditions on object-centric geometry + episode-local
 tags instead of anonymous local ids — the fix for v1's length-only collapse. Token
 families (all width ``D_MODEL=64``, reusing v1's ``SetAttentionBlock``/``PMA``):
@@ -26,10 +27,12 @@ rollout / PL-loss machinery is reused unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from torch import Tensor, nn
 
+from alphatamp.approaches.spectre.facts import N_FACT_TYPES
 from alphatamp.approaches.spectre.model import (
     D_MODEL,
     FFN_DIM,
@@ -48,6 +51,10 @@ D_POSE = 8
 D_REL = 8  # relation-to-target scalars projection
 MAX_TAGS_DEFAULT = 32
 DROPOUT = 0.1
+
+# typed-evidence (Step 11) dims
+MAX_FACT_ARGS = 12  # cap on a fact's argument list (mean-pooled); larger sets truncate
+D_FACT_TIER = 8
 
 
 @dataclass
@@ -73,9 +80,20 @@ class SpectreV2Batch:
     success_mask: Tensor  # (B, K) bool — feasible candidate
     aux_necessary: Tensor  # (B, N) float — necessary(o) target (or -1 = ignore)
     aux_relevant: Tensor  # (B, N) float — relevant(o) target (or -1 = ignore)
+    # typed evidence (Step 11); all None in the static (t=0) path.
+    fact_type_ids: Optional[Tensor] = None  # (B, F) long — 0 = pad
+    fact_tier_ids: Optional[Tensor] = None  # (B, F) long — 0 = pad
+    fact_arg_tags: Optional[Tensor] = None  # (B, F, MAX_FACT_ARGS) long — 0 = pad
+    fact_mask: Optional[Tensor] = None  # (B, F) bool — real fact
+    avail_mask: Optional[Tensor] = None  # (B, K) bool — candidate not yet tried (∉ F)
 
     def to(self, device) -> "SpectreV2Batch":
-        return SpectreV2Batch(**{k: v.to(device) for k, v in self.__dict__.items()})
+        return SpectreV2Batch(
+            **{  # type: ignore[arg-type]
+                k: (v.to(device) if v is not None else None)
+                for k, v in self.__dict__.items()
+            }
+        )
 
 
 D_GLOBAL_IN = 6  # buffer (w, h, area) + pool_size + n_objects + mean_subset_size
@@ -85,8 +103,9 @@ class FootprintEncoder(nn.Module):
     """Point-set encoder over a fixed-size boundary ring → per-object descriptor.
 
     A shared per-point MLP followed by a masked PMA pool. Being a set over the true
-    boundary points (not a radial function), it represents concave shapes faithfully and is
-    invariant to the ring's starting vertex / point order."""
+    boundary points (not a radial function), it represents concave shapes faithfully and
+    is invariant to the ring's starting vertex / point order.
+    """
 
     def __init__(self, dropout_p: float = DROPOUT) -> None:
         super().__init__()
@@ -142,7 +161,8 @@ class SceneEncoder(nn.Module):
 
 
 class CandidateEncoder(nn.Module):
-    """Per-candidate embedding from its operator program (schema + position + tag args)."""
+    """Per-candidate embedding from its operator program (schema + position + tag
+    args)."""
 
     def __init__(
         self, n_ops: int, max_tags: int, max_arity: int, dropout_p: float = DROPOUT
@@ -171,10 +191,43 @@ class CandidateEncoder(nn.Module):
         return emb * batch.pool_mask.unsqueeze(-1)
 
 
-class CrossAttentionScorer(nn.Module):
-    """Each candidate (query) cross-attends over scene + global memory; the attended vector
-    is concatenated with the candidate embedding and any overlap features → one logit.
+class FactEncoder(nn.Module):
+    """Typed-fact token = [fact-type emb ; tier emb ; mean-pooled argument-tag emb] → D_MODEL.
+
+    The fact carries **identity** through its argument tags (the same episode-local tags as
+    the scene/candidate tokens), so scrambling those tags changes the token — the property
+    the live scramble gauge exploits. Empty-arg facts contribute only type/tier.
     """
+
+    def __init__(self, max_tags: int, dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        self.type_emb = nn.Embedding(N_FACT_TYPES + 1, D_MODEL, padding_idx=0)
+        self.tier_emb = nn.Embedding(3, D_FACT_TIER, padding_idx=0)
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.proj = nn.Sequential(
+            nn.Linear(D_MODEL + D_FACT_TIER + D_TAG, D_MODEL),
+            nn.Dropout(dropout_p),
+            nn.LayerNorm(D_MODEL),
+        )
+
+    def forward(
+        self, type_ids: Tensor, tier_ids: Tensor, arg_tags: Tensor, fact_mask: Tensor
+    ) -> Tensor:
+        # type_ids (B,F); tier_ids (B,F); arg_tags (B,F,A); fact_mask (B,F)
+        typ = self.type_emb(type_ids)  # (B, F, D)
+        tier = self.tier_emb(tier_ids)  # (B, F, D_FACT_TIER)
+        arg = self.tag_emb(arg_tags)  # (B, F, A, D_TAG)
+        arg_present = (arg_tags != PAD_TAG).float().unsqueeze(-1)  # (B, F, A, 1)
+        denom = arg_present.sum(dim=2).clamp(min=1.0)  # (B, F, 1)
+        arg_pool = (arg * arg_present).sum(dim=2) / denom  # (B, F, D_TAG)
+        tok = self.proj(torch.cat([typ, tier, arg_pool], dim=-1))  # (B, F, D)
+        return tok * fact_mask.unsqueeze(-1)
+
+
+class CrossAttentionScorer(nn.Module):
+    """Each candidate (query) cross-attends over scene + global (+ fact) memory; the
+    attended vector is concatenated with the candidate embedding and any overlap
+    features → one logit."""
 
     def __init__(self, n_overlap_feats: int = 0, dropout_p: float = DROPOUT) -> None:
         super().__init__()
@@ -197,14 +250,22 @@ class CrossAttentionScorer(nn.Module):
         obj_mask: Tensor,  # (B, N)
         glob_feats: Tensor,  # (B, D_GLOBAL_IN)
         overlap: Tensor | None = None,  # (B, K, n_overlap_feats)
+        fact_tok: Tensor | None = None,  # (B, F, D)
+        fact_mask: Tensor | None = None,  # (B, F)
     ) -> Tensor:
         b, k, _ = cand_emb.shape
         glob = self.glob_proj(glob_feats).unsqueeze(1)  # (B, 1, D)
-        memory = torch.cat([scene_tok, glob], dim=1)  # (B, N+1, D)
-        key_pad = torch.cat(
-            [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
-            dim=1,
-        )  # (B, N+1): True = pad-to-ignore
+        mems = [scene_tok, glob]
+        pads = [
+            ~obj_mask,
+            torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device),
+        ]
+        if fact_tok is not None and fact_tok.shape[1] > 0:
+            mems.append(fact_tok)
+            assert fact_mask is not None
+            pads.append(~fact_mask)
+        memory = torch.cat(mems, dim=1)  # (B, N+1(+F), D)
+        key_pad = torch.cat(pads, dim=1)  # True = pad-to-ignore
         attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
         parts = [cand_emb, attended]
         if self.n_overlap_feats:
@@ -241,15 +302,31 @@ class SpectreV2Model(nn.Module):
         super().__init__()
         self.scene = SceneEncoder(max_tags, dropout_p)
         self.cands = CandidateEncoder(n_ops, max_tags, max_arity, dropout_p)
+        self.facts = FactEncoder(max_tags, dropout_p)
         self.scorer = CrossAttentionScorer(n_overlap_feats, dropout_p)
         self.aux = AuxHead()
 
     def forward(self, batch: SpectreV2Batch, overlap: Tensor | None = None):
         scene_tok = self.scene(batch)  # (B, N, D)
         cand_emb = self.cands(batch)  # (B, K, D)
+        fact_tok = None
+        if batch.fact_type_ids is not None and batch.fact_type_ids.shape[1] > 0:
+            fact_tok = self.facts(
+                batch.fact_type_ids,
+                batch.fact_tier_ids,
+                batch.fact_arg_tags,
+                batch.fact_mask,
+            )  # (B, F, D)
         logits = self.scorer(
-            cand_emb, scene_tok, batch.obj_mask, batch.glob_feats, overlap
+            cand_emb,
+            scene_tok,
+            batch.obj_mask,
+            batch.glob_feats,
+            overlap,
+            fact_tok,
+            batch.fact_mask,
         )  # (B, K)
-        logits = logits.masked_fill(~batch.pool_mask, float("-inf"))
+        avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
+        logits = logits.masked_fill(~avail, float("-inf"))
         aux = self.aux(scene_tok)  # (B, N, 2)
         return logits, aux
