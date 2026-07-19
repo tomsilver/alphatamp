@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
@@ -131,6 +132,12 @@ def train_v2(
     out_dir.mkdir(parents=True, exist_ok=True)
     best_val = float("inf")
     log = []
+    print(
+        f"[train_v2] seed={cfg.seed} device={device} n_train={len(train_ds)} "
+        f"n_val={len(val_ds)} epochs={cfg.epochs} batch={cfg.batch_size}",
+        flush=True,
+    )
+    t_start = time.time()
     for epoch in range(cfg.epochs):
         for grp in opt.param_groups:
             grp["lr"] = cfg.lr * lr_at(epoch)
@@ -138,11 +145,24 @@ def train_v2(
         tr = _run_epoch(model, train_loader, device, cfg.aux_weight, opt)
         va = _run_epoch(model, val_loader, device, cfg.aux_weight, None)
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va})
-        if va < best_val:
+        improved = va < best_val
+        if improved:
             best_val = va
             torch.save(
                 {"state_dict": model.state_dict(), "cfg": asdict(cfg), "n_ops": n_ops},
                 out_dir / "best.pt",
+            )
+        # Periodic heartbeat so a long run is never mistaken for a hang: every 5 epochs,
+        # plus the first and last, with train/val loss, best-so-far, and an ETA.
+        if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
+            elapsed = time.time() - t_start
+            per_epoch = elapsed / (epoch + 1)
+            eta = per_epoch * (cfg.epochs - epoch - 1)
+            print(
+                f"[train_v2] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
+                f"train={tr:.4f} val={va:.4f} best={best_val:.4f}"
+                f"{' *' if improved else ''} | {per_epoch:.1f}s/ep ETA {eta / 60:.1f}m",
+                flush=True,
             )
     (out_dir / "log.jsonl").write_text("\n".join(json.dumps(r) for r in log))
     return {"best_val_loss": best_val, "epochs": len(log), "n_train": len(train_ds)}
