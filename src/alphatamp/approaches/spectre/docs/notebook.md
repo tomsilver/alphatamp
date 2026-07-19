@@ -18,6 +18,25 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 7: episode-local object tags (P-A binding)
+
+- What: `spectre/tags.py` — `assign_tags(names, rng, max_tags)` maps each object to a
+  distinct tag id in `[1, max_tags]` (0 = pad/OOV). Deterministic (sorted order) at eval;
+  a random injection permuted per epoch in training via `tag_seed(seed, ep, epoch)` so no
+  id accrues global meaning. The same mapping is applied wherever an object appears
+  (scene/skeleton/fact) — the join key that lets the model look up an object's geometry
+  from its tag, discharging P-A. Layered on top of `canonicalize` (v1 untouched); consumed
+  by the v2 tensorizer (Step 8).
+- Result: 7 tests — bijection, determinism at `rng=None`, per-epoch variation (still a
+  bijection), reproducibility, same-tag-everywhere, and the tag-level anti-collapse
+  (different objects → different tags → distinguishable arg sequences). The full
+  tensor-level anti-collapse regression lands with the Step-8 tensorizer.
+- Takeaway / next: Step 8 — the v2.2-static geometry-aware model (footprint encoder, scene/
+  candidate/fact tokens, cross-attention scorer) + `dataset_v2` tensorizer, building on the
+  pilot while the λ*=0.5 collection runs.
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 6: comparison harness (LAZY baseline, seed checksums)
 
 - What: `eda.lazy_baseline` — the **LAZY untyped-adaptive** baseline (§9): static default-
