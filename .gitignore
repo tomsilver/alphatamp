@@ -217,6 +217,7 @@ tests/approaches/box_approach_performance_summary.png
 # tracked before this rule and stays tracked; new derived files need `git add -f`.
 data/spectre/raw/
 data/spectre/checkpoints/
+data/spectre/checkpoints_v2/
 data/spectre/configs/
 data/spectre/derived/
 

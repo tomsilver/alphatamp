@@ -18,6 +18,36 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 10: proof-demotion hand-rule stack — P4 PASS (after a regeneration bug)
+
+- What: the zero-parameter hand-rule stack (default planner order + §5 proof-demotion of
+  removal-monotone `blocked-at-contents` proofs), rollout-FP vs its own static base on the
+  141-episode test split (`spectre_handrule_p4.py`, uncensored, paired bootstrap CI).
+- **Bug found & fixed:** the first run *regenerated* each scene from its seed to run the
+  grasp proof, **inferring** the generation params (crowd/min_subset/…) from the outcome.
+  Under any mismatch the generator's rejection sampling diverges → a geometrically-different
+  scene (same object *names*, different *poses*) that passed the name check but whose proofs
+  contradicted the collected feasibility labels. Result: a **spurious negative** ΔFP (ALL
+  −3.4, strata≥2 −7.5, CIs spanning 0 → "P4=no") — impossible for a *sound* demotion, which
+  can only ever help. 16/142 episodes were also silently dropped on name-mismatch.
+- **Fix:** compute the grasp proof by *reconstructing* the obstacle set from the **stored**
+  `scene_geometry` (`envs/dd2d/spectre_geometry.target_blocked_after_removing`) — the same
+  poses the labeler used; wall_band is the fixed 1.5 cm frame rebuilt from stored W/D,
+  footprints are `place_polygon(boundary_i, pose_i)`, grasp uses the env's own `has_grasp`.
+  Acid test: over all 284 val+test episodes, **0/6622** feasible subsets reconstruct as
+  blocked (label consistency). A parametrized test pins reconstruction == the live env's
+  grasp check across seeds/subsets.
+- Result (test, uncensored, reconstruction path, n=142 all usable):
+  - **ALL: base_FP 33.11 → hand 22.03, ΔFP +11.08, CI (7.77, 14.73) — P4 PASS.**
+  - **strata≥2: base_FP 69.98 → hand 46.15, ΔFP +23.83, CI (17.80, 30.06) — P4 PASS.**
+  - Soundness telemetry is 0 by construction now (a proof can't contradict a label).
+- Takeaway / next: the zero-param proof tier is a strong, correct baseline — the "dangerous"
+  hand-rule stack the learned pathway must beat. Reconstruct-don't-regenerate is the
+  standing rule for every post-hoc geometric query (Step 11 harvest reuses the same module).
+  Proceed to Step 11 (learned typed-evidence pathway + scramble gauge, P5).
+
+---
+
 ## 2026-07-19 — v2.2.1 Step 9: v2-static training + elimination ladder — P1 PASS
 
 - What: definitive λ=0.8 collection (548/142/141, all geometry-carrying) → v2-static trained

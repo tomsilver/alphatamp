@@ -6,6 +6,54 @@ not, and why.
 
 ---
 
+## 2026-07-19 — Post-hoc geometric proofs reconstruct from stored geometry, never regenerate the scene
+
+**Context.** Step 10's hand-rule P4 gate needs a `blocked-at-contents` grasp proof for
+*counterfactual* candidates — subsets not attempted in the collector's own rollout order —
+so the proof cannot come from the persisted post-mortems alone; it must be *computed*. The
+first implementation regenerated the `DrawerScene` from its stored `problem_seed` and ran
+the env's grasp check on it. But the DD2D generator is parameterized (`crowd`,
+`require_subset`, `min_subset`, `unblocked_target`, `lam`, `n_items`) and those params were
+**not** stored per-episode, so the eval *inferred* them from the outcome. Any inference miss
+makes the generator's rejection-sampling path diverge → a different scene with the *same
+object names* but *different poses*. It passed the `item_names` guard yet its grasp geometry
+disagreed with the collected feasibility labels, so a sound proof-demotion (which can only
+ever help — it demotes provably-blocked candidates, never the feasible one) produced a
+**spurious negative ΔFP** and "P4=no". The bug was invisible because the name-check looked
+like a soundness guard but only checked identity, not geometry (`notebook.md` 2026-07-19).
+
+**Decision.** Every post-hoc geometric query over a collected episode is computed by
+**reconstructing** the geometry from the record's stored `scene_geometry`, never by
+regenerating the scene. New module `envs/dd2d/spectre_geometry.py`
+(`target_blocked_after_removing`, `reconstruct_wall_band`): item footprints are
+`place_polygon(stored_boundary_i, stored_pose_i)`, the wall band is the fixed
+`WALL_BAND`=1.5 cm frame rebuilt from the stored drawer `W`/`D`, and the grasp test is the
+env's own `has_grasp`/`grasp_cells` (a pure function of `shape.polygon` = the stored
+item-frame ring). This is exact up to the 4-decimal storage rounding — far below
+grasp-clearance tolerances. Rejected: (a) regenerate-and-guess-params (the bug); (b) persist
+the full generation params to enable faithful regeneration (still redundant work, and the
+poses are *already on the record*); (c) cache regenerated `DrawerScene` pickles (caches the
+wrong thing — a re-derived scene, not the labeled one). The record already **is** the cache.
+
+**Why it is correct, not just cheaper.** Because the reconstruction runs on the *same poses
+the labeler used*, a proof can never contradict a label. Acid test: over all 284 val+test
+episodes, **0/6622** feasible subsets reconstruct as `blocked` (a feasible subset opens the
+target by definition, so it must never be flagged blocked). The proof-demotion soundness
+telemetry (fraction of demoted candidates that later succeed) is therefore 0 *by
+construction*, not merely empirically.
+
+**Consequences.** `spectre_handrule_p4.py` rewritten off the reconstructor: all 142 test
+episodes usable (was 126 after name-mismatch drops), and P4 flips from a spurious "no"
+(ΔFP<0) to a decisive **PASS** (ALL ΔFP +11.08 CI (7.77,14.73); strata≥2 +23.83 CI
+(17.80,30.06)). New `test_spectre_geometry.py` pins reconstruction == the live grasp check
+across seeds/subsets and the wall-band equality. **This is the standing rule for Step 11's
+typed-evidence harvest** and any future post-hoc proof/hint computation — reuse
+`spectre_geometry`, do not regenerate. (Renamed the Step-7 `tests/.../test_tags.py` →
+`test_object_tags.py` to clear a pytest basename collision with the RT2D
+`envs/routedtransport2d/test_tags.py` surfaced when the full suite collects both dirs.)
+
+---
+
 ## 2026-07-19 — Correct λ* to 0.8 (in the designed operating range); 0.5 was off-design
 
 **Context.** The 2026-07-18 G0 entry selected λ*=0.5 by maximizing the oracle−GBDT_wl gap
