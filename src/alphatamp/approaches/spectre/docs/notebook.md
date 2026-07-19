@@ -18,6 +18,30 @@ Format:
 
 ---
 
+## 2026-07-19 — v2.2.1 Step 9: v2-static training + elimination ladder — P1 PASS
+
+- What: definitive λ=0.8 collection (548/142/141, all geometry-carrying) → v2-static trained
+  3 checksum-distinct seeds (30 epochs, val PL loss 2.68/2.62/2.68). Ran the elimination
+  ladder + paired rollout-FP vs slack ordering on strata≥2 (`spectre_eval_v2.py`).
+- Result (mean over 3 seeds, test):
+  - **η²(length) = 0.227** — v2-static's scores are NOT a length function (v1 was 1.00; the
+    length-only collapse is gone). Ladder rungs: length 0.20 → +slack 0.20 (slack adds ~0 —
+    at λ=0.8 feasibility is extraction- not packing-driven) → +proximity 0.45 → **residual
+    0.535** (the subset-identity signal beyond all cheap stats).
+  - **P1 PASS**: v2-static beats slack ordering on strata≥2 by **Δ=54.7 FP**, 95% CI excludes
+    zero for **all 3 seeds** (per-seed Δ 58/49/57). rollout-FP strata≥2: v2 ~50 vs slack
+    105.5 vs default 70. (Slack is *worse* than default at λ=0.8 — a packing statistic
+    misranks an extraction-dominated regime; the geometry model captures what it can't.)
+  - **P2 (≥ PIGINet)**: deferred — needs PIGINet retrained on the λ=0.8 data (separate
+    effort). v2 already beats default/astar-order (70) and slack (105).
+- Process note: the full 3-seed run completed cleanly (no hang); a 1-epoch pilot smoke ran
+  first, but future full runs should smoke-test on the *definitive* data, not just the pilot.
+- Takeaway / next: the representation clears the anti-shortcut bar decisively — a rich
+  geometry rep captures ~half the score variance beyond length/slack/proximity and cuts
+  strata≥2 FP ~2× vs the cheap null. Next: Step 10 (proof-demotion + hand-rule stack, P4).
+
+---
+
 ## 2026-07-19 — λ* correction: 0.5 → 0.8 (in the designed operating range)
 
 - What: the Step-4 sweep {0.8,0.65,0.5,0.4} + max-gap selection picked λ*=0.5, but DD2D's
