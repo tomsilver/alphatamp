@@ -72,6 +72,86 @@ class SkeletonRecord:
     final_abstract_state: RelationalAbstractState
 
 
+# --------------------------------------------------------------------------- #
+# v2.2.1 geometry / evidence layer (all OPTIONAL and nullable; RT2D/kinder
+# records leave these ``None`` and round-trip unchanged — see the migration shim
+# in ``io.load_episode``). SPECTRE stays abstract-first; geometry is carried for
+# the v2.2 geometry-aware model and the typed post-mortem evidence pathway.
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ObjectGeometry:
+    """One object's ground-truth footprint (proposal §6.1 scene record).
+
+    ``boundary`` is the exterior ring in the item frame (centroid at the origin),
+    consumed by the footprint point-set encoder; ``pose`` places it in the world.
+    """
+
+    name: str
+    pose: tuple[float, float, float]  # (x, y, theta), world frame
+    boundary: tuple[
+        tuple[float, float], ...
+    ]  # exterior ring, item frame, centroid at 0
+    family: str
+    area: float
+    concave: bool
+    is_target: bool = False
+
+
+@dataclass(frozen=True)
+class ContainerGeometry:
+    """A container / free-space region (drawer, buffer, wall band)."""
+
+    kind: str  # e.g. "drawer" | "buffer" | "wall_band"
+    bounds: tuple[float, float, float, float]  # axis-aligned (x0, y0, x1, y1)
+    polygon: Optional[tuple[tuple[float, float], ...]] = None  # exact ring if non-rect
+
+
+@dataclass(frozen=True)
+class SceneGeometry:
+    """Ground-truth object-centric scene geometry for one episode (proposal §6.1)."""
+
+    objects: tuple[ObjectGeometry, ...]
+    containers: tuple[ContainerGeometry, ...]
+    units: str = "cm"
+    frame: Optional[dict[str, float]] = None  # e.g. drawer_wh for normalization
+
+
+@dataclass(frozen=True)
+class Fact:
+    """One typed post-mortem fact (proposal §6.4). ``args`` are pre-canonical object
+    names (the witness set); ``tier`` is the proof/hint split."""
+
+    fact_type: str
+    args: tuple[str, ...]
+    tier: str  # "proof" | "hint"
+    schema: Optional[str] = None  # failing action schema, when applicable
+    scalars: tuple[tuple[str, float], ...] = ()  # (name, value): depth, samples, ...
+
+
+@dataclass(frozen=True)
+class PostMortemRecord:
+    """The typed record harvested from one failed refinement attempt (proposal §6.2)."""
+
+    skeleton_idx: int
+    refinement_seed: int
+    failed_step_index: Optional[int] = None  # ℓ*+1
+    failed_schema: Optional[str] = None
+    failed_args: tuple[str, ...] = ()
+    harvest_prefix: tuple[str, ...] = ()  # replayable bound-prefix action reprs
+    harvest_state_hash: Optional[str] = None
+    facts: tuple[Fact, ...] = ()
+    harvest_cost_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class AuxLabels:
+    """Per-episode auxiliary supervision (proposal §8): ``necessary(o)`` (in every
+    minimal feasible subset) and ``relevant(o)`` (in at least one)."""
+
+    necessary: frozenset[str] = frozenset()
+    relevant: frozenset[str] = frozenset()
+
+
 @dataclass(frozen=True)
 class OutcomeRecord:
     """Outcome of one per-skeleton refinement attempt, pipeline spec §5.6."""
@@ -84,6 +164,8 @@ class OutcomeRecord:
     sampler_retries: Optional[int] = None
     error_info: Optional[dict[str, str]] = None
     refiner_metadata: dict[str, object] = field(default_factory=dict)
+    # v2.2.1: typed post-mortem evidence (populated for "fail" outcomes at collection).
+    post_mortem: Optional[PostMortemRecord] = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +187,9 @@ class EpisodeRecord:
     skeleton_pool: tuple[SkeletonRecord, ...]
     outcomes: tuple[OutcomeRecord, ...]
     summary: SummaryBlock
+    # v2.2.1: optional geometry / evidence layer (None for RT2D/kinder; see io shim).
+    scene_geometry: Optional[SceneGeometry] = None
+    aux_labels: Optional[AuxLabels] = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -133,6 +218,23 @@ class EpisodeRecord:
             assert (
                 self.outcomes[c.first_success_idx].outcome == "success"
             ), f"I4 violated: first_success_idx={c.first_success_idx} is not success"
+        # I5 (guarded): every registered object has ground-truth geometry.
+        if self.scene_geometry is not None:
+            geo_names = {o.name for o in self.scene_geometry.objects}
+            missing = set(self.object_registry) - geo_names
+            assert (
+                not missing
+            ), f"I5 violated: object_registry keys w/o geometry: {missing}"
+        # I6 (guarded): a post_mortem indexes its own "fail" outcome.
+        for o in self.outcomes:
+            if o.post_mortem is not None:
+                assert o.post_mortem.skeleton_idx == o.skeleton_idx, (
+                    f"I6 violated: post_mortem.skeleton_idx={o.post_mortem.skeleton_idx}"
+                    f" != outcome {o.skeleton_idx}"
+                )
+                assert (
+                    o.outcome == "fail"
+                ), f"I6 violated: post_mortem on non-fail outcome {o.skeleton_idx}"
 
     def success_indices(self) -> list[int]:
         """Skeleton indices whose outcome is ``"success"``."""

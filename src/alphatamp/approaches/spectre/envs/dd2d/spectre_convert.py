@@ -22,8 +22,11 @@ This module maps a directory to a validated :class:`EpisodeRecord`:
   training; no label-dependent research number should be reported until DD2D's
   arrangement-complete negative certificate lands.
 
-Continuous geometry (poses / shapes / sizes) is intentionally *not* preserved;
-it remains in the source JSON for a future x0-conditioned variant (proposal §6).
+The **abstract state** stays x0-free (the ``at-pose`` literals are still dropped). Since
+v2.2.1, ground-truth object-centric geometry (per-object pose + boundary ring + buffer)
+IS carried alongside, on ``EpisodeRecord.scene_geometry`` (see ``_parse_scene_geometry``),
+for the geometry-aware v2 model; a raw dir collected before the ``boundary`` field
+existed yields ``scene_geometry=None`` and converts abstract-only as before.
 """
 
 from __future__ import annotations
@@ -45,15 +48,20 @@ from alphatamp.approaches.spectre.envs.dd2d.spectre_operators import (
     ItemType,
 )
 from alphatamp.approaches.spectre.schema import (
+    ContainerGeometry,
     EpisodeRecord,
+    ObjectGeometry,
     OutcomeRecord,
     ProvenanceBlock,
+    SceneGeometry,
     SkeletonRecord,
     SummaryBlock,
 )
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
-CONVERTER_VERSION = "dd2d_convert_v1"
+# v2: also carries ground-truth SceneGeometry (per-object pose + boundary ring + buffer),
+# so the config_hash changes and vocab/train re-read cleanly.
+CONVERTER_VERSION = "dd2d_convert_v2"
 DEFAULT_ENV_ID = "dd2d/DrawerDeclutter2D-v0"
 
 
@@ -118,6 +126,46 @@ def _ground_task_plan(
 def _record_paths(problem_dir: Path) -> list[Path]:
     """Sorted ``NNN.json`` skeleton records in a problem directory."""
     return sorted(problem_dir.glob("[0-9]*.json"))
+
+
+def _parse_scene_geometry(first: dict[str, Any]) -> SceneGeometry | None:
+    """Build ground-truth ``SceneGeometry`` from a DD2D record's per-object geometry.
+
+    Requires the ``boundary`` ring (written by ``record_ext.build_dd2d_example``); a raw
+    dir collected before that field existed yields ``None`` (episode stays abstract-only,
+    ``scene_geometry=None``). The buffer is stored as an exact-bounds container; the
+    drawer dimensions go in ``frame`` (its world origin is not in the record).
+    """
+    objs: list[ObjectGeometry] = []
+    for o in first["objects"]:
+        boundary = o.get("boundary")
+        shape = o.get("shape")
+        pose = o.get("pose")
+        if boundary is None or shape is None or pose is None:
+            return None
+        objs.append(
+            ObjectGeometry(
+                name=o["name"],
+                pose=tuple(float(v) for v in pose),  # type: ignore[arg-type]
+                boundary=tuple((float(px), float(py)) for px, py in boundary),
+                family=str(shape["family"]),
+                area=float(shape["area"]),
+                concave=bool(shape["concave"]),
+                is_target=(o.get("category") == "target"),
+            )
+        )
+    prov = first.get("provenance", {})
+    containers: list[ContainerGeometry] = []
+    bb = prov.get("buffer_bounds")
+    if bb is not None:
+        containers.append(
+            ContainerGeometry(kind="buffer", bounds=tuple(float(v) for v in bb))  # type: ignore[arg-type]
+        )
+    dw = prov.get("drawer_wh")
+    frame = {"drawer_w": float(dw[0]), "drawer_d": float(dw[1])} if dw else None
+    return SceneGeometry(
+        objects=tuple(objs), containers=tuple(containers), units="cm", frame=frame
+    )
 
 
 def convert_problem_dir(
@@ -226,4 +274,5 @@ def convert_problem_dir(
         skeleton_pool=tuple(skeleton_records),
         outcomes=tuple(outcome_records),
         summary=summary,
+        scene_geometry=_parse_scene_geometry(first),
     )

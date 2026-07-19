@@ -118,4 +118,4 @@ def test_config_hash_is_deterministic() -> None:
     """The stamped config hash is stable and version-keyed."""
     assert config_hash("dd2d_v2") == config_hash("dd2d_v2")
     assert config_hash("dd2d_v2") != config_hash("other")
-    assert CONVERTER_VERSION in {"dd2d_convert_v1"}
+    assert CONVERTER_VERSION == "dd2d_convert_v2"  # v2: carries SceneGeometry

@@ -18,6 +18,36 @@ Format:
 
 ---
 
+## 2026-07-18 — v2.2.1 Step 3: schema geometry/evidence layer + geometry stream
+
+- What: extended the on-disk schema (`schema.py`) with the v2.2.1 geometry/evidence
+  dataclasses — `SceneGeometry`/`ObjectGeometry`/`ContainerGeometry` (per-object pose +
+  item-frame boundary ring + buffer/drawer), `PostMortemRecord`/`Fact` (typed evidence,
+  proof/hint tier), `AuxLabels` (necessary/relevant) — attached as **trailing nullable**
+  fields (`EpisodeRecord.{scene_geometry,aux_labels}`, `OutcomeRecord.post_mortem`, all
+  default `None`). Added guarded invariants **I5** (every registered object has geometry)
+  / **I6** (a post_mortem indexes its own `fail` outcome), firing only when the field is
+  present. Added an `io.load_episode` **migration shim** filling the new attrs on
+  pre-v2.2.1 pickles (frozen-dataclass unpickle skips `__init__`, so old records lack the
+  attrs). Geometry stream: `record_ext.build_dd2d_example` now writes each object's
+  `boundary` ring; `spectre_convert._parse_scene_geometry` builds `SceneGeometry` from it
+  (converter bumped `dd2d_convert_v1→v2`). Abstract state stays x0-free — geometry rides
+  alongside, not in the STRIPS atoms.
+- Result: geometry validated end-to-end on freshly-collected data — converter yields
+  `scene_geometry` with one `ObjectGeometry` per registry object (I5 holds), target
+  flagged, buffer container + drawer frame present, per-family boundary rings (box 4 pts,
+  can 28, concave more). New `test_schema_v2_geometry.py` (6 tests): geometry + post-mortem
+  round-trip, I5/I6 raise, **legacy-pickle migration** (old record loads via shim, new
+  fields `None`, no AttributeError). A raw dir collected before `boundary` existed →
+  `scene_geometry=None` (still converts abstract-only). All green: 265 spectre + 14
+  convert/schema/record_ext + the version-bump test updated.
+- Takeaway / next: the data layer now carries ground-truth geometry for the v2 model
+  (Step 8) and slots for post-mortem evidence (populated in Step 5). RT2D/kinder corpora
+  load unchanged via the shim. Pilot re-collected with the new `record_ext` so its
+  episodes carry geometry. Next: Step 4 — Gate G0 (λ-sweep, off-ramp).
+
+---
+
 ## 2026-07-18 — v2.2.1 Step 2: arrangement-complete negative packing certificate (Task 0)
 
 - What: implemented the sound §8.4 negative certificate from scratch on Shapely
@@ -48,9 +78,11 @@ Format:
   λ only". Certificate label overhead ~0.18 s/scene at λ=0.8.
 - Takeaway / next: certificate is sound, integrated, and improves label quality by
   removing spurious budget-marginals; its *infeasible-proving* power is validated on
-  constructed tight cases (`test_infeasible_by_shape_not_area`) and binds at tight λ —
-  the real-scene tight-λ proven-infeasible characterization is deferred to **Step 4**'s
-  λ-sweep (generation at tight λ is slow). Gate met: 0 false positives, H1 agreement,
+  constructed tight cases (`test_infeasible_by_shape_not_area`) and binds at tight λ.
+  Real-scene confirmation (tight-λ preview; full sweep is **Step 4**): λ=0.5 (55 scenes)
+  proved **2** `marginal(budget)→infeasible(packing)` + 33 →inaccessible; λ=0.4 (18
+  scenes) proved **3** →infeasible + 18 →inaccessible — packing-infeasibility appears and
+  is soundly proven as λ tightens, absent at λ=0.8. Gate met: 0 false positives, H1 agreement,
   tight/loose battery, yield reported. 16 cert tests + 49 DD2D tests + 259 spectre tests
   green.
 

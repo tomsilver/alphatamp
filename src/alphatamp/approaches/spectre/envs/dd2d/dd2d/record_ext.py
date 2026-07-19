@@ -117,6 +117,13 @@ def build_dd2d_example(
             "area": round(st.shape.area, _ROUND),
             "concave": bool(st.shape.concave),
         }
+        # exterior ring in the item frame (centroid at origin), so the SPECTRE
+        # converter can build the footprint descriptor without re-deriving the Shape
+        # (spectre_convert._parse_scene_geometry). Closing duplicate point dropped.
+        obj["boundary"] = [
+            [round(px, _ROUND), round(py, _ROUND)]
+            for px, py in list(st.shape.polygon.exterior.coords)[:-1]
+        ]
 
     # 2) explicit pose-carrying init facts: ["at-pose", name, [x, y, theta]] (one per object)
     for obj in ex.objects:

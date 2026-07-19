@@ -27,7 +27,12 @@ import numpy as np
 from bilevel_planning.structs import RelationalAbstractState
 from relational_structs import GroundAtom, GroundOperator, Object, Type
 
-from alphatamp.approaches.spectre.schema import EpisodeRecord, SkeletonRecord
+from alphatamp.approaches.spectre.schema import (
+    AuxLabels,
+    EpisodeRecord,
+    SceneGeometry,
+    SkeletonRecord,
+)
 
 
 def _gather_types(episode: EpisodeRecord) -> dict[str, Type]:
@@ -139,6 +144,23 @@ def _remap_operator(op: GroundOperator, mapping: dict[str, Object]) -> GroundOpe
     return op.parent.ground(new_objects)
 
 
+def _remap_scene_geometry(
+    sg: SceneGeometry, mapping: dict[str, Object]
+) -> SceneGeometry:
+    """Rename each object's geometry to its canonical id (v2.2.1). Keeps geometry
+    aligned with the canonicalized ``object_registry`` (invariant I5); containers /
+    frame carry no object names."""
+    objs = tuple(replace(o, name=mapping[o.name].name) for o in sg.objects)
+    return replace(sg, objects=objs)
+
+
+def _remap_aux_labels(aux: AuxLabels, mapping: dict[str, Object]) -> AuxLabels:
+    return AuxLabels(
+        necessary=frozenset(mapping[o].name for o in aux.necessary),
+        relevant=frozenset(mapping[o].name for o in aux.relevant),
+    )
+
+
 def canonicalize_episode(
     episode: EpisodeRecord,
     rng: np.random.Generator | None = None,
@@ -177,10 +199,25 @@ def canonicalize_episode(
             )
         )
 
+    # v2.2.1: keep the optional geometry / aux labels aligned with the canonical ids
+    # (guarded — RT2D/kinder leave these None and are untouched).
+    new_geometry = (
+        _remap_scene_geometry(episode.scene_geometry, mapping)
+        if episode.scene_geometry is not None
+        else None
+    )
+    new_aux = (
+        _remap_aux_labels(episode.aux_labels, mapping)
+        if episode.aux_labels is not None
+        else None
+    )
+
     return replace(
         episode,
         initial_abstract_state=new_s0,
         goal_atoms=new_goal,
         object_registry=new_registry,
         skeleton_pool=tuple(new_skeletons),
+        scene_geometry=new_geometry,
+        aux_labels=new_aux,
     )

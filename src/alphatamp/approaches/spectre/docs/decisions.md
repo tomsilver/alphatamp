@@ -6,6 +6,37 @@ not, and why.
 
 ---
 
+## 2026-07-18 — v2.2.1 schema geometry/evidence layer: additive + migration shim
+
+**Context.** v2.2.1 needs ground-truth object geometry (for the geometry-aware model) and
+typed post-mortem evidence carried on the episode records, without breaking the many
+existing RT2D/kinder `EpisodeRecord` pickles or the abstract-first pipeline.
+
+**Decisions.** (a) **Additive, trailing, nullable fields** — `EpisodeRecord.{scene_geometry,
+aux_labels}`, `OutcomeRecord.post_mortem`, plus new frozen dataclasses (`SceneGeometry`/
+`ObjectGeometry`/`ContainerGeometry`/`Fact`/`PostMortemRecord`/`AuxLabels`) — all default
+`None`/empty, so every existing construction site and RT2D/kinder record round-trips
+unchanged. New invariants I5/I6 are **guarded** (fire only when the field is present).
+(b) **Load-time migration shim over global regeneration.** Frozen-dataclass pickles restore
+via `__dict__` and skip `__init__`/`__post_init__`, so pre-v2.2.1 pickles lack the new
+attrs (→ `AttributeError`). `io.load_episode` fills the defaults via `object.__setattr__`.
+Chosen over bumping a schema version + regenerating all corpora: RT2D data lives only on
+other machines and need not be re-collected; DD2D is re-collected regardless (for
+post-mortems). (c) **Geometry is a converter/`record_ext` change, not a raw re-collection**
+for the *geometry* part — the DD2D JSON already had pose/shape; `record_ext` now also writes
+the item-frame `boundary` ring and `spectre_convert` reads it (`CONVERTER_VERSION`
+`v1→v2`). A dir predating `boundary` yields `scene_geometry=None` (abstract-only). The
+**abstract STRIPS state stays x0-free**; geometry rides on `scene_geometry`, never in the
+atoms.
+
+**Consequences.** On-disk format grew (optional) fields; `test_schema_v2_geometry.py`
+covers round-trip + I5/I6 + legacy-pickle migration; the `dd2d_convert` version-pin test
+updated to v2. No change to the model/loss/training yet — this is the data-layer
+foundation Steps 5 (post-mortem population) and 8 (geometry model) build on. `notebook.md`
+2026-07-18.
+
+---
+
 ## 2026-07-18 — DD2D arrangement-complete negative packing certificate (v2.2.1 Task 0)
 
 **Context.** v2.2.1 makes completing the arrangement-complete negative certificate the
