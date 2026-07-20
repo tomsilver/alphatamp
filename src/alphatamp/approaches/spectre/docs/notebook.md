@@ -18,6 +18,42 @@ Format:
 
 ---
 
+## 2026-07-19 — Observed vs computed demotion signal: quantifying the geometry predicate's value (1-seed dev)
+
+Question raised: is the proof-demotion's `blocked-at-contents` signal *hard-coded* (needs the
+DD2D grasp predicate), or can it be **observed** for free from the refiner? First-principles
+answer + experiment:
+
+- The demotion rule `C ⊆ S ⇒ dead` needs two things: (1) *is S blocked?* and (2) *is C ⊆ S?*.
+  Only (1) is domain-specific. (2) is a domain-agnostic set op. And (1) can be **observed**:
+  the refiner's `failure_action="retrieve"` means all removals ran and the target was still
+  ungraspable = blocked-at-contents, no geometry call.
+- **Can the *net* learn the demotion rule itself end-to-end?** No — set-containment is a
+  universal-AND that attention approximates poorly, and *soundness* needs the exact discrete
+  test; empirically (this session) the model given blocked facts as *tokens* learned the crude
+  "prefer longer" instead. So the containment stays a computed feature (domain-agnostic),
+  observation-fed; the net learns to *weight* it. Not wishful for the observed signal; wishful
+  for the net inventing the rule.
+- **Alignment (observed vs computed blocked):** observed catches ~245 of ~697 blocked signals;
+  1/6376 "unsound" (itself a real observed grasp-fail). The 453-case gap = plans that failed at
+  **extraction (pick) before retrieve** — the geometry reasons *counterfactually*, observation
+  cannot.
+- **Result (1-seed, deployed = model + proof-demotion):**
+
+  | demotion signal | s1 | s2 | s3 | all | hard-coding |
+  |---|---|---|---|---|---|
+  | **observed** (refiner failure) | 4.61 | 38.8 | 32.1 | **18.22** | ~0 (a monotone-precondition declaration) |
+  | **computed** (grasp geometry) | 4.57 | 33.9 | 27.5 | **15.99** | a per-env feasibility predicate |
+
+- **Takeaway / decision.** The geometry predicate is **load-bearing, not just convenient** — its
+  value is *counterfactual* demotion, worth ~14% here. Both beat hand-rule (23) / default (34).
+  Kept as a `demotion_source` **flag, default `observed`** (max generalizability) with `computed`
+  opt-in where a domain offers a cheap sound predicate (`decisions.md` this date). `evidence.
+  deployed_rollout` runs either. This is a clean, quantified generalization result *before* a
+  second environment.
+
+---
+
 ## 2026-07-19 — Fixing v2's every-stratum performance: length-bias diagnosis → generalizable fixes → evidence made helpful (1-seed dev)
 
 The main-table below showed the learned models winning s3 but *losing easy strata* and

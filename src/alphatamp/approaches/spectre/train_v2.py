@@ -142,6 +142,9 @@ class TrainV2Config:
     )
     within_length_weight: float = 1.0  # within-length PL (kills the length shortcut)
     use_overlap: bool = False  # structural evidence features (subset⊆blocked etc.)
+    demotion_source: str = (
+        "observed"  # blocked signal: "observed" (refiner) | "computed"
+    )
 
 
 def _aux_loss(aux_logits, aux_nec, aux_rel, obj_mask) -> torch.Tensor:
@@ -215,6 +218,7 @@ def train_v2(
         seed=cfg.seed,
         exclude_marginal=cfg.exclude_marginal,
         evidence=cfg.evidence,
+        demotion_source=cfg.demotion_source,
     )
     # Val loss (checkpoint selection) is the STATIC ranking quality at t=0 — the deployment
     # start the static pathway must own (P-D); the evidence use is tracked by the scramble
@@ -333,6 +337,12 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--wl-weight", type=float, default=1.0, help="within-length PL weight"
     )
+    ap.add_argument(
+        "--demotion-source",
+        choices=["observed", "computed"],
+        default="observed",
+        help="blocked signal: refiner-observed (default) or geometry-computed",
+    )
     a = ap.parse_args(argv)
     root = Path(a.data_root)
     vocab = Vocab.from_json(root / "derived" / a.env / "train_vocab.json")
@@ -343,12 +353,15 @@ def main(argv=None) -> int:
         use_prior=a.use_prior,
         use_overlap=a.use_overlap,
         within_length_weight=a.wl_weight,
+        demotion_source=a.demotion_source,
     )
     sub = "checkpoints_v2_evidence" if a.evidence else "checkpoints_v2"
     if a.use_prior:
         sub += "_prior"
     if a.use_overlap:
         sub += "_ov"
+    if a.demotion_source == "computed":
+        sub += "_comp"
     out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v2(
         cfg,

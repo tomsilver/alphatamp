@@ -122,3 +122,74 @@ def evidence_rollout(
         tried.add(pick)
         fp += 1
     return fp
+
+
+def _observed_blocked(outcome, demotion_source: str) -> bool:
+    """Whether a *failed* candidate is blocked-at-contents, per the demotion signal.
+
+    ``observed`` (default) reads the refiner's own failure (``failure_action`` reached
+    ``retrieve`` ⇒ all removals ran and the target was still ungraspable) — no geometry.
+    ``computed`` reads the harvested geometry fact (adds counterfactual demotions).
+    """
+    if demotion_source == "computed":
+        pm = outcome.post_mortem
+        return pm is not None and any(
+            f.fact_type == "blocked-at-contents" for f in pm.facts
+        )
+    return str((outcome.refiner_metadata or {}).get("failure_action", "")).startswith(
+        "retrieve"
+    )
+
+
+@torch.no_grad()
+def deployed_rollout(
+    model: SpectreV2Model,
+    episode: EpisodeRecord,
+    vocab: Vocab,
+    device: str,
+    demotion_source: str = "observed",
+    max_tags: int = 32,
+) -> int:
+    """The full deployed ranker: model scores + the sound proof-demotion filter (Step 10).
+
+    Each step scores the pool (facts on), pushes provably-dead candidates (subset ⊆ an
+    observed-blocked set) to the back, tries the argmax, and on a blocked failure updates the
+    demotion state. Returns attempts-to-first-success (1-indexed). The demotion is applied
+    *outside* the network, so it can only reorder — never lose the feasible plan.
+    """
+    from alphatamp.approaches.spectre.proof_demotion import ProofState, demote_scores
+
+    model.eval()
+    subsets = [
+        frozenset(
+            op.parameters[0].name for op in s.operator_seq if op.name == "place-buffer"
+        )
+        for s in episode.skeleton_pool
+    ]
+    success = {i for i, o in enumerate(episode.outcomes) if o.outcome == "success"}
+    state = ProofState(subsets=subsets)
+    tried: list[int] = []
+    while len(tried) < len(subsets):
+        ex = build_v2_example(
+            episode,
+            vocab,
+            rng=None,
+            max_tags=max_tags,
+            evidence=True,
+            context_f=frozenset(tried),
+            augment_tags=False,
+            demotion_source=demotion_source,
+        )
+        batch = collate_v2([ex], max_arity=vocab.max_operator_arity).to(device)
+        logits, _ = model(batch)
+        row = logits[0].detach().cpu().numpy().astype(float)
+        if tried:
+            row[tried] = -1e9
+        row = demote_scores(row, state.dead)
+        pick = int(row.argmax())
+        tried.append(pick)
+        if pick in success:
+            return len(tried)
+        if _observed_blocked(episode.outcomes[pick], demotion_source):
+            state.observe_failure(pick, blocked=True, pack_impossible=False)
+    return len(tried)

@@ -251,3 +251,4 @@ data/spectre/checkpoints_v2_prior/
 data/spectre/checkpoints_v2_evidence_prior/
 data/spectre/checkpoints_v2_evidence_prior_ov/
 data/spectre/checkpoints_v2_prior_ov/
+data/spectre/checkpoints_v2_evidence_prior_ov_comp/

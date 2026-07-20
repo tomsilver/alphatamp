@@ -6,6 +6,40 @@ not, and why.
 
 ---
 
+## 2026-07-19 — Demotion signal is a flag (default observed); geometry predicate is opt-in, quantified at ~14%
+
+**Context.** The proof-demotion `dead` feature (`candidate ⊆ an observed-blocked set`) needs a
+"blocked" signal. It was sourced from the harvested `blocked-at-contents` fact, which runs a
+DD2D grasp predicate (`target_blocked_after_removing`) — the same geometry as the rejected
+`clears`. Question: can this be made hard-coding-free? First-principles decomposition: the rule
+needs (1) *is S blocked?* — domain-specific — and (2) *is C ⊆ S?* — a domain-agnostic set op.
+Only (1) is the issue, and it can be **observed** from the refiner (`failure_action="retrieve"`
+= all removals ran, target still ungraspable), no geometry. The net cannot *learn* the sound
+rule itself (set-containment is a universal-AND attention approximates poorly, and soundness
+needs the exact test — empirically the net given blocked *tokens* learned crude "prefer
+longer"), so (2) stays a computed domain-agnostic feature the net learns to weight.
+
+**Decision.** `demotion_source` is a **flag, default `observed`**:
+- `observed` (default, generalizable): blocked ⇐ the refiner's own `failure_action`; only per-env
+  knowledge is a one-line declaration that the retrieval precondition is removal-monotone. Runs
+  on any env with a failure-reporting refiner.
+- `computed` (opt-in): blocked ⇐ the harvested geometry fact. Adds **counterfactual** demotions
+  (subsets whose plan failed earlier, e.g. at extraction, that observation can't recover).
+
+Threaded through `build_v2_example` / `SpectreV2Dataset` / `TrainV2Config` / the `--demotion-
+source` CLI (checkpoint dir suffix `_comp`); `evidence.deployed_rollout(...,
+demotion_source=...)` is the reusable deployed ranker (model scores + proof-demotion).
+
+**Consequences.** Quantified the geometry predicate's worth: **~14%** (1-seed deployed: observed
+18.22 vs computed 15.99; both beat hand-rule 23 / default 34, tie s1, win s3). So the predicate
+is load-bearing (counterfactual reasoning), not merely convenient — but the method does **not**
+require it: the observed default is essentially sound (1/6376 edge case) and hard-coding-free.
+Two checkpoints kept (`checkpoints_v2_evidence_prior_ov` observed / `…_ov_comp` computed), each
+recording `demotion_source` in its cfg. `notebook.md` 2026-07-19 has the table. Verdict: the
+generalization claim is now backed by a number on this env, before touching a second one.
+
+---
+
 ## 2026-07-19 — v2 ranker: fix the length bias generalizably; no hand-crafted per-env predicate; consume proofs structurally not as tokens
 
 **Context.** The in-distribution main table exposed two problems with the v2 learned rankers:

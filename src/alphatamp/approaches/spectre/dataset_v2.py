@@ -151,6 +151,7 @@ def build_v2_example(
     context_f: Optional[frozenset[int]] = None,
     hide_facts: bool = False,
     augment_tags: bool = True,
+    demotion_source: str = "observed",
 ) -> _V2Example:
     """Tensorize one geometry-carrying episode.
 
@@ -264,20 +265,35 @@ def build_v2_example(
     prior = [[-(i / max(k - 1, 1)), -(removals[i] / max(max_rm, 1))] for i in range(k)]
 
     # structural evidence features: relate each candidate's action-set to the OBSERVED failed
-    # sets in F (zeroed under evidence dropout / empty context). blocked = failed subsets with
-    # a blocked-at-contents fact; a candidate ⊆ a blocked set is provably also-blocked (sound
-    # proof-demotion). Jaccard-with-failed is a mild similarity hint.
+    # sets in F (zeroed under evidence dropout / empty context). A candidate ⊆ a blocked set
+    # is provably also-blocked (sound proof-demotion, removal-monotone); Jaccard-with-failed
+    # is a mild similarity hint. `demotion_source` selects the blocked signal:
+    #   "observed"  — the refiner's own failure: `failure_action` starting with "retrieve"
+    #                 means all removals ran and the target was still ungraspable. No geometry
+    #                 predicate; only a declared monotone precondition. Maximally generalizable.
+    #   "computed"  — the harvested blocked-at-contents fact (DD2D grasp geometry). Adds
+    #                 counterfactual demotions (subsets whose plan failed earlier, e.g. at
+    #                 extraction) that observation cannot recover — stronger, but hard-coded.
     overlap: list[list[float]] = [[0.0, 0.0] for _ in range(k)]
     if ctx and not hide:
-        blocked = [
-            cand_subsets[f]
-            for f in ctx
-            if (canon.outcomes[f].post_mortem is not None)
-            and any(
-                fc.fact_type == "blocked-at-contents"
-                for fc in canon.outcomes[f].post_mortem.facts  # type: ignore[union-attr]
-            )
-        ]
+        if demotion_source == "computed":
+            blocked = [
+                cand_subsets[f]
+                for f in ctx
+                if (canon.outcomes[f].post_mortem is not None)
+                and any(
+                    fc.fact_type == "blocked-at-contents"
+                    for fc in canon.outcomes[f].post_mortem.facts  # type: ignore[union-attr]
+                )
+            ]
+        else:  # observed (default)
+            blocked = [
+                cand_subsets[f]
+                for f in ctx
+                if str(
+                    (canon.outcomes[f].refiner_metadata or {}).get("failure_action", "")
+                ).startswith("retrieve")
+            ]
         failed = [cand_subsets[f] for f in ctx]
         for i, ci in enumerate(cand_subsets):
             dead = 1.0 if any(ci <= bf for bf in blocked) else 0.0
@@ -424,6 +440,7 @@ class SpectreV2Dataset(Dataset):
         seed: int = 0,
         exclude_marginal: bool = False,
         evidence: bool = False,
+        demotion_source: str = "observed",
     ) -> None:
         self.vocab = vocab
         self.max_tags = max_tags
@@ -431,6 +448,7 @@ class SpectreV2Dataset(Dataset):
         self.seed = seed
         self.exclude_marginal = exclude_marginal
         self.evidence = evidence
+        self.demotion_source = demotion_source
         self.epoch = 0
         self._paths = []
         for p in list_episodes(split_dir):
@@ -461,6 +479,7 @@ class SpectreV2Dataset(Dataset):
             exclude_marginal=self.exclude_marginal,
             evidence=self.evidence,
             augment_tags=self.augment,
+            demotion_source=self.demotion_source,
         )
 
 
