@@ -83,6 +83,20 @@ Format:
   (0.08%), plus 3 boundary problems where a different seed was kept. Decision (user):
   accept v4 as collected and document, rather than fix + re-collect. Likely leak site:
   `enumerate.py`'s `present = set(scene.item_names()) - {scene.target}`.
+- **D4 — necessity labeller built; `d_hat == stratum` exactly, but s3 pool coverage is far
+  worse than assumed.** `necessity.py`: p_i = fraction of **minimum-size feasible
+  manipulated sets** containing object i, deduped by subset, any-ordering-feasible, goal
+  objects excluded. On dd2d_v3 train, `max |d_hat - stratum| = 0.0` over 400 episodes.
+  Mean distinct minimal solutions rises with stratum (1.00 / 1.19 / 1.34 / 1.51 at
+  s0-s3) — i.e. soft-vs-binary matters most exactly where s2/s3 live.
+  **Correction to the pre-registered risk:** subset-lattice coverage by size on dd2d_v4
+  train is 1.000 / 1.000 / 1.000 for |S| = 0,1,2 but only **0.171 mean, 0.045 min** for
+  |S| = 3 (the plan's register guessed 66-77%). With k=200 candidates and C(12,3)=220 that
+  is expected, but it means the *set* of minimal solutions seen at s3 is a ~17% sample
+  drawn in planner-preference order, so p_i at s3 is biased toward planner-preferred
+  solutions. `min_size` itself is unbiased (the pool contains a true-minimal subset on
+  400/400, matching the collector's own `min_feasible_subset`), so `d_hat` is safe; it is
+  the per-object split that is noisy. Report this beside any G8 number.
 - **G2 — the domain contract replaces 11 DD2D literals, oracle still exact [verified].**
   `domain.py` derives a candidate's manipulated set, its plan length, and whether its failure
   licenses demotion from the operator schema + a three-line axiom declaration. Licensed by
