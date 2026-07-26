@@ -184,3 +184,49 @@ def test_unmoved_at_the_final_step_reduces_to_the_v22_subset_rule() -> None:
                 assert (uj >= ui) == (sj <= si), (i, j)
                 checked += 1
     assert checked > 0
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not (_SPLITS[0] / "episodes").is_dir(), reason="dd2d_v3 collection absent"
+)
+def test_canonicalize_is_not_idempotent_so_eval_must_load_raw() -> None:
+    """Pins the trap that silently skewed every cached comparison number.
+
+    ``canonicalize_episode`` renames objects, and a *second* pass renames them again
+    differently (``item_10`` -> ``item_2``). Scene poses survive, but the object->tag
+    binding does not -- and tags are the join key the whole representation runs on. The
+    comparison cache used to source already-canonicalized episodes from
+    ``eda.load_split_episodes`` and hand them to ``build_v2_example``, which canonicalizes
+    again, so evaluation ran on a different binding than training (which loads raw).
+
+    This asserts the *non*-idempotence deliberately: the day it becomes idempotent this
+    test fails, and whoever fixed it should then simplify the loaders rather than keep a
+    workaround nobody can explain.
+    """
+    from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
+    from alphatamp.approaches.spectre.io import list_episodes, load_episode
+
+    def _names(ep) -> list[str]:
+        return [o.name for o in ep.scene_geometry.objects]
+
+    differing = 0
+    checked = 0
+    for path in list_episodes(_SPLITS[0])[:20]:
+        raw = load_episode(path)
+        if raw.scene_geometry is None:
+            continue
+        once = canonicalize_episode(raw, rng=None)
+        twice = canonicalize_episode(once, rng=None)
+        checked += 1
+        # poses are stable; only the naming/order moves
+        assert [o.pose for o in once.scene_geometry.objects] == [
+            o.pose for o in twice.scene_geometry.objects
+        ]
+        if _names(once) != _names(twice):
+            differing += 1
+    assert checked > 0
+    assert differing > 0, (
+        "canonicalize_episode now looks idempotent -- if that is a real fix, drop the "
+        "_RawSplit workaround in precompute_dd2d_cache and delete this test"
+    )

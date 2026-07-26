@@ -135,8 +135,11 @@ order, per-step demotion state and logits of the deployed policy). Replaying it 
 vs the cached/published 13.68**, per-problem FP identical on 61/100, attempt order on 55/100.
 Ruled out: not v3 (v2 and v3 agree bit-for-bit), not dropout (identical in eval), not device (CPU
 and CUDA agree), not nondeterminism (identical across processes under `PYTHONHASHSEED=random`),
-not the other checkpoint. `model_v2.py`/`dataset_v2.py` are clean at HEAD and the episodes predate
-the cache, so the cache was written by a code state no longer on disk. The oracle was therefore
+not the other checkpoint. **Cause identified the same day and recorded in a follow-up entry:
+`canonicalize_episode` is not idempotent and the cache builder applied it twice (episodes came
+from `eda.load_split_episodes`, already canonicalized, and `build_v2_example` canonicalized
+again), so cached numbers were computed on a different object->tag binding than training uses.
+Not code staleness -- that diagnosis was wrong. The oracle was therefore
 re-pointed to a side-by-side v2.2/v3 run — strictly stronger (bit-identical, no 4-dp tolerance),
 needs no stored artifact, and cannot rot. **Consequence: 13.68 must not be quoted again until the
 cache is rebuilt with `--force`** (it appears in `as_built_v2.2` §3.7 and two `notebook.md`

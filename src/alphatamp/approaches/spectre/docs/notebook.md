@@ -51,8 +51,8 @@ Format:
   submodules, so the deployed checkpoint loads `strict=True` (91 keys, head (256,130), no
   `prior_gate`). v3 and v2 rollouts agree on `order`, `step_dead`, attempts **and logits
   exactly**, over 20 episodes strided across all four strata.
-- **⚠ The stored dd2d_v3 comparison cache — the source of the published 13.68 — is not
-  reproducible from the checkpoint and code now on disk.** Recomputing all 100 test
+- **The stored dd2d_v3 comparison cache — the source of the published 13.68 — does not
+  reproduce from the checkpoint and code now on disk.** Recomputing all 100 test
   problems with the current code and `checkpoints_v2_evidence_ov/dd2d_v3/seed_0`:
 
   | | ALL | s0 | s1 | s2 | s3 |
@@ -66,8 +66,84 @@ Format:
   (identical in eval at `dropout_p` 0.0 vs 0.1), not device (CPU and CUDA agree), not
   nondeterminism (identical across processes under `PYTHONHASHSEED=random`), and not the
   other v3 checkpoint (`_prior_ov` is further away, max |Δ| 3.49). `model_v2.py` and
-  `dataset_v2.py` are clean at HEAD and the episode pickles predate the cache, so the cache
-  was written by a code state that no longer exists on disk.
+  `dataset_v2.py` are clean at HEAD and the episode pickles predate the cache.
+  **Cause identified later the same day: double canonicalization in the cache builder —
+  see the entry below. Not code staleness.**
+
+## 2026-07-26 — D2: SPECTRE v2.2's entire advantage is cross-length calibration; within a length it is at best planner-order
+
+- **What:** the pre-registered s2 fork (`experiments/spectre/spectre_d2_s2.py`), on dd2d_v4
+  test with the deployed v2.2 checkpoint [1-seed dev]. Every row is a rollout over the same
+  pool restriction, so nothing mixes static-vs-adaptive with restricted-vs-full. The
+  **length oracle** restricts the attemptable pool to minimum-length candidates — it uses
+  the stratum, so it is a diagnostic bound and never a model input.
+- **Result — mean rollout FP:**
+
+  | stratum | min-len candidates | v2.2 full | v2.2 length-oracle | astar full | astar length-oracle |
+  |---|---|---|---|---|---|
+  | s1 | 10 / 200 (5%) | 6.20 | 5.20 | 2.24 | **1.24** |
+  | s2 | 97 / 200 (48%) | 26.00 | **33.92** | 17.08 | **5.80** |
+  | s3 | 92 / 200 (46%) | 26.44 | 30.76 | 118.76 | **30.36** |
+
+- **The fork answers "within-length" at every stratum, not just s2.** Handing the model the
+  correct plan length makes it *worse* at s2 (26.00 → 33.92) and s3 (26.44 → 30.76), while
+  the same restriction makes plain planner order dramatically better (s2 17.08 → 5.80).
+- **Where v2.2's win actually comes from.** At s3 the model beats astar 4.5× on the full
+  pool (26.44 vs 118.76) but *ties* it under the length oracle (30.76 vs 30.36). So the
+  entire s3 advantage is **length calibration** — knowing to prefer long plans — and none
+  of it is within-length discrimination. At s2 the model is materially *worse* than index
+  order within the correct length (33.92 vs 5.80). Roughly, 33.92 failures among 97
+  candidates is what random ordering gives with ~2 feasible: **the ranker is effectively random
+  within a length.** This sits uneasily with the v2.2 claim that the within-length PL loss
+  "forces the geometry signal at every stratum"; its within-length AUROC (0.585–0.673) does
+  not translate into ordering that beats plain enumeration order.
+- **Consequences for the plan.** (i) **G8's premise is weakened as pre-registered**:
+  necessity conditioning mainly improves *length* calibration, which is the one thing v2.2
+  already does well, so P-v3-1 (s2 ≤ 17.08) will only be reachable through the *within*-length
+  component of the necessity features — `coverage`/`waste` differing between same-size
+  subsets — and that in turn depends on the necessity head predicting p_i accurately from
+  geometry. Worth testing the head's per-object AUROC *before* building the conditioning.
+  (ii) **A new and cheaper lead:** the planner's enumeration order is a strong within-length
+  signal (5.80 at s2) that the deployed model **cannot see at all** — R1 removed the prior,
+  and the deployed dd2d_v3/v4 config already had `use_prior=False`. The prior was dropped
+  wholesale because its *short-first* column collapsed s3, but that is column 1; column 0
+  (`−index/K`, enumeration order) is a different signal and was never separately ablated.
+- **Takeaway / next:** ping the user — the fork's answer changes what G8 is for. Cheap
+  follow-ups, in order: (a) necessity-head accuracy alone, (b) an **index-only** prior
+  (column 0 without short-first), which the diagnostic directly motivates.
+
+## 2026-07-26 — `canonicalize_episode` is not idempotent, and the comparison cache applied it twice
+
+- **What:** chasing why a *freshly built* dd2d_v4 cache disagreed with a direct rollout on
+  the same checkpoint (s2 23.92 vs 26.00), after ruling out staleness, dropout, device and
+  cross-process nondeterminism (all verified identical, on CPU and CUDA).
+- **Result:** `canonicalize_episode(canonicalize_episode(ep)) != canonicalize_episode(ep)`.
+  A second pass permutes object names differently (`item_10` → `item_2`, …). Scene poses
+  are untouched, but the object→**tag** binding changes — and tags are the join key the
+  entire v2.2/v3 representation runs on. `precompute_dd2d_cache` sourced episodes from
+  `eda.load_split_episodes`, which canonicalizes on load, and `build_v2_example`
+  canonicalizes again, so **every cached SPECTRE number was computed on doubly-
+  canonicalized episodes** while training loads raw and canonicalizes once.
+- **Impact (dd2d_v4 test, deployed v2.2, n=100):**
+
+  | | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | single-canon (matches training) | **14.66** | 0.00 | 6.20 | **26.00** | **26.44** |
+  | double-canon (what the cache did) | 14.85 | 0.00 | 6.16 | 23.92 | 29.32 |
+
+  Per-problem FP differs on **35/100**. The aggregate barely moves, but per-stratum swings
+  2–3 FP in *both* directions.
+- **Takeaway / next:** fixed in `precompute_dd2d_cache` (a `_RawSplit` view feeds raw
+  episodes to the tensorizers, so evaluation matches training); the dd2d_v4 yardstick was
+  regenerated and now agrees with a direct rollout. Two things worth keeping: (i) **every
+  published SPECTRE comparison number — dd2d_v2's 17.09, dd2d_v3's 13.68 and its
+  per-stratum row — was produced under double canonicalization** and would move by ~0.2
+  overall / 2–3 per stratum if regenerated; (ii) a pure *relabeling* moving s2/s3 by 2–3 FP
+  is itself a measurement of how tag-permutation-invariant the deployed model actually is.
+  Per-epoch tag permutation (P-A) was supposed to buy that invariance; it is evidently only
+  approximate, which is a legitimate robustness finding rather than only a bug.
+  `eda.load_split_episodes` still canonicalizes for the EDA baselines that key on canonical
+  skeletons — only the model-cache paths changed.
 - **`dd2d_v4` collected: 400/100/100, exactly 100 (train) / 25 (val,test) per stratum**,
   125 min wall-clock (76.1 + 21.8 + 27.4, 14 workers). Records carry culprits, per-step
   effort, exhausted-vs-budget, backjump count, `elapsed` and the generator arguments;
@@ -89,12 +165,12 @@ Format:
   | method | ALL | s0 | s1 | s2 | s3 |
   |---|---|---|---|---|---|
   | astar-dist | 34.52 | 0.00 | 2.24 | **17.08** | 118.76 |
-  | SPECTREv2-adaptive | **14.85** | 0.00 | 6.16 | 23.92 | 29.32 |
-  | SPECTREv2-static | 20.38 | 0.00 | 9.44 | 29.36 | 42.72 |
+  | SPECTREv2-adaptive | **14.66** | 0.00 | 6.20 | 26.00 | 26.44 |
+  | SPECTREv2-static | 20.08 | 0.00 | 8.60 | 30.36 | 41.36 |
 
-  Cross-checks: v4's 14.85 sits beside dd2d_v3's *recomputed* 14.50, and astar is 34.52
+  Cross-checks: v4's 14.66 sits beside dd2d_v3's *recomputed* 14.50, and astar is 34.52
   vs v3's 34.65 — so the two collections agree at method level, as the 0.08% label
-  divergence predicts. **The s2 gap survives on v4** (23.92 vs astar 17.08), so G8's
+  divergence predicts. **The s2 gap survives on v4** (26.00 vs astar 17.08), so G8's
   target is real here and not an artifact of v3. PIGINet has no v4 row yet (it trains on
   the native JSON with its own CLIP cache); the table warns rather than silently omitting.
   A second arm, `--evidence` **without** overlap (relrank 1.428 vs 1.374), is trained and

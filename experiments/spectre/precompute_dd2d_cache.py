@@ -357,6 +357,24 @@ def cache_spectre(force: bool, device: str) -> None:
             print(f"[spectre-static seed {seed}] wrote {ns} -> {sdir}")
 
 
+class _RawSplit:
+    """``eda.LoadedSplit``-shaped view over **un-canonicalized** episodes.
+
+    ``eda.load_split_episodes`` canonicalizes on load, which is right for the EDA
+    baselines (they key on canonical skeletons) but wrong for anything that then calls a
+    tensorizer, because ``build_v2_example`` canonicalizes again and
+    ``canonicalize_episode`` is not idempotent. Double canonicalization silently changes
+    the object->tag binding relative to training, which loads raw.
+
+    Exposes only ``.episodes`` -- the attribute the model cache functions use.
+    """
+
+    def __init__(self, split_dir: Path) -> None:
+        from alphatamp.approaches.spectre.io import list_episodes, load_episode
+
+        self.episodes = [load_episode(p) for p in list_episodes(split_dir)]
+
+
 def _load_v2_model(ckpt: Path, vocab: Vocab, device: str):
     """Rebuild a trained SpectreV2Model from a checkpoint.
 
@@ -398,7 +416,16 @@ def cache_spectre2(force: bool, device: str) -> None:
     from alphatamp.approaches.spectre.evidence import deployed_rollout_traced
 
     vocab = Vocab.from_json(VOCAB_PATH)
-    test = eda.load_split_episodes(SPECTRE_TEST)
+    # RAW episodes, deliberately not `eda.load_split_episodes`. That helper returns
+    # *canonicalized* episodes, and `build_v2_example` canonicalizes again --
+    # `canonicalize_episode` is **not idempotent** (a second pass permutes object names
+    # differently, e.g. item_10 -> item_2), so the doubly-canonicalized episode carries a
+    # different object->tag binding than the singly-canonicalized one training sees.
+    # Measured on dd2d_v4: identical scene poses, but per-problem FP differs on 35/100
+    # and per-stratum by up to 2-3 FP (s2 26.00 vs 23.92, s3 26.44 vs 29.32).
+    # Training loads raw (`SpectreV2Dataset.__getitem__` -> `load_episode`), so raw is
+    # what makes evaluation match training.
+    test = _RawSplit(SPECTRE_TEST)
     for seed in SEEDS:
         adir = CACHE_DIR / "spectre2_adaptive" / f"seed_{seed}"
         sdir = CACHE_DIR / "spectre2_static" / f"seed_{seed}"
