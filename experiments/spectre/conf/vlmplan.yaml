@@ -1,0 +1,84 @@
+# VLMPlan baseline — zero-shot VLM plan generation + scoring on DD2D.
+#
+# Two entry points share this config, and the split between them is deliberate:
+#   vlmplan_run.py    queries the model, writes transcripts + proposal sequences
+#   vlmplan_score.py  labels those sequences, writes the compare-cache record
+# Generation is the expensive, model-dependent half; scoring is free and local. So a
+# re-collection (or a scoring change) re-runs only the second stage, and a prompt-identical
+# problem hits the prpl_llm_utils response cache.
+
+defaults:
+  - env: dd2d_v3
+  - _self_
+
+data_root: "data/spectre"
+split: "train"
+
+# Problem selection. n_problems <= 0 means the whole split. Problems are taken in
+# sorted-problem-id order so a subset is reproducible.
+n_problems: 5
+problem_ids: []
+
+# Run identity. Generation writes under <data_root>/derived/<env_variant>/vlmplan/<run>/;
+# scoring writes the comparison row into the compare cache under `cache_subdir`.
+run: "qwen3vl8b"
+seed: 0
+cache_subdir: "vlmplan"
+
+# ---------------------------------------------------------------------------
+# Model. Local dev arm = an OpenAI-compatible server (LM Studio / vLLM):
+#   lms server start
+#   export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=lm-studio
+# Switching to a frontier API arm is a change to `model` only.
+# ---------------------------------------------------------------------------
+model:
+  backend: "openai" # openai | openai_responses | gemini
+  model_name: "qwen3-vl-8b-instruct"
+  cache_kind: "sqlite"
+  cache_path: "data/spectre/derived/dd2d_v3/vlmplan_cache.db"
+  base_url: null # null -> take OPENAI_BASE_URL from the environment
+  decode:
+    # NOT 0.0: this loop wants diverse plans across rounds, and at temperature 0 a round
+    # that yields nothing leaves the next round with a byte-identical prompt. KinDER's own
+    # runs also use temperature 1. loop.py additionally varies `seed` per round.
+    temperature: 1.0
+    # 8192, not 4096. At 4096 the 2026-07-24 smoke run truncated 16/104 completions
+    # (completion_tokens == the cap exactly) and total_tokens hit the 8192 server window
+    # exactly, so plans were being cut mid-block and silently dropped by the parser. Load
+    # the model with a >= 32768 context to match, and watch `n_truncated` in the record.
+    max_tokens: 8192
+
+# Attach the labelled top-down render (the VLMPlan arm). false = the LLMPlan text-only
+# arm, from the identical prompt.
+with_images: true
+image_width_px: 1024
+
+# ---------------------------------------------------------------------------
+# Generation loop. Pilot on the train split, then FREEZE these before touching test.
+# ---------------------------------------------------------------------------
+loop:
+  max_plans: 200 # = the pool cap, so protocol parity with the other methods
+  plans_per_round: 10
+  tau: 0.2 # stall if new-unique-valid yield rate drops below this ...
+  stall_rounds: 2 # ... for this many consecutive rounds
+  max_rounds: 12
+  max_retries: 3
+  retry_backoff_s: 2.0
+
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
+attempt_budget: 200 # uncensored: = pool cap (decisions.md 2026-06-07)
+fill_from_published: true # exhausted episodes degrade to astar-dist, not to a missing value
+overwrite: false
+
+# Consistency gate: re-label stored pool plans live and compare to the stored outcome.
+# Well below 1.0 means the env code moved since the collection, so in-pool and off-pool
+# attempts are on different label functions and no number should be reported.
+check_label_agreement: true
+label_agreement_episodes: 12
+label_agreement_samples: 4
+
+hydra:
+  job:
+    chdir: false

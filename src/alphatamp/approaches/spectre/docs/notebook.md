@@ -83,6 +83,29 @@ Format:
   (0.08%), plus 3 boundary problems where a different seed was kept. Decision (user):
   accept v4 as collected and document, rather than fix + re-collect. Likely leak site:
   `enumerate.py`'s `present = set(scene.item_names()) - {scene.target}`.
+- **G3 — dd2d_v4 yardstick [1-seed dev].** Deployed v2.2 (`--evidence --use-overlap`,
+  no prior) retrained on dd2d_v4; compare cache built (astar + spectre2). Mean rollout FP:
+
+  | method | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | astar-dist | 34.52 | 0.00 | 2.24 | **17.08** | 118.76 |
+  | SPECTREv2-adaptive | **14.85** | 0.00 | 6.16 | 23.92 | 29.32 |
+  | SPECTREv2-static | 20.38 | 0.00 | 9.44 | 29.36 | 42.72 |
+
+  Cross-checks: v4's 14.85 sits beside dd2d_v3's *recomputed* 14.50, and astar is 34.52
+  vs v3's 34.65 — so the two collections agree at method level, as the 0.08% label
+  divergence predicts. **The s2 gap survives on v4** (23.92 vs astar 17.08), so G8's
+  target is real here and not an artifact of v3. PIGINet has no v4 row yet (it trains on
+  the native JSON with its own CLIP cache); the table warns rather than silently omitting.
+  A second arm, `--evidence` **without** overlap (relrank 1.428 vs 1.374), is trained and
+  held for G6's evidence-increment bar, which must be measured with `cand_overlap` out of
+  both arms.
+- **Seed policy → 1-seed for development** (user directive), 3 seeds reserved for the
+  final paper evaluation. Consequence for the gates: "no stratum regresses beyond seed
+  noise" is unmeasurable at 1 seed, so the working acceptance rule becomes a **paired
+  bootstrap over problems** (`eda.bootstrap_mean_difference`, the same instrument the
+  P1/P4/P5 gates used) — comparing two methods on the *same* problems, which is both
+  more powerful than a seed spread and available now.
 - **D4 — necessity labeller built; `d_hat == stratum` exactly, but s3 pool coverage is far
   worse than assumed.** `necessity.py`: p_i = fraction of **minimum-size feasible
   manipulated sets** containing object i, deduped by subset, any-ordering-feasible, goal

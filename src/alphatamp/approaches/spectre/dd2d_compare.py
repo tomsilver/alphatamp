@@ -32,6 +32,7 @@ per-problem FP is cached directly. SPECTRE FPs are averaged over the cached seed
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -242,9 +243,19 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
         )
 
     records: list[dict] = []
+    missing: list[str] = []
     for method, subdir in STATIC_METHODS.items():
-        by_pid = _static_fp_by_pid(_require_dir(cache_dir / subdir, cache_dir))
-        for pid, (stratum, fp) in by_pid.items():
+        # Unlike `load_fp_records`, a missing static baseline is skipped rather than
+        # fatal: a newly-onboarded collection has SPECTRE checkpoints before it has a
+        # retrained PIGINet (which trains on the native JSON with its own CLIP cache), and
+        # the yardstick row does not depend on it. Absent arms are *reported*, never
+        # silently dropped -- a comparison table quietly missing a baseline is worse than
+        # one that says so.
+        parent = cache_dir / subdir
+        if not parent.is_dir():
+            missing.append(method)
+            continue
+        for pid, (stratum, fp) in _static_fp_by_pid(parent).items():
             records.append(
                 {
                     "seed": None,
@@ -254,6 +265,12 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
                     "fp": fp,
                 }
             )
+    if missing:
+        warnings.warn(
+            f"compare cache {cache_dir} has no rows for {', '.join(missing)}; "
+            "the table will omit them",
+            stacklevel=2,
+        )
 
     seeded: list[tuple[str, str, bool]] = []
     for stat_m, stat_d, adap_m, adap_d in SPECTRE_FAMILIES:

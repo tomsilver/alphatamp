@@ -1,0 +1,20 @@
+# DD2D (Drawer Decluttering 2D) — SPECTRE env variant, v3 collection.
+#
+# Same domain as dd2d_v2; re-collected after the 2026-07-24 grasp-model changes
+# (contact-run contact fix + internal concave grasps) moved the feasibility
+# labels, which made every v2 label-dependent number stale. Kept as a separate
+# variant rather than overwriting v2 so the old artifacts stay reproducible and
+# the two can never be silently mixed.
+#
+# Also differs in refiner budget: the v3 collection ran time_budget=20.0
+# (v2: 4.0), so anything that live-refines against v3 must match that — see
+# vlmplan/score.py REFINER_PRESETS.
+#
+# As with v2, the dataset is wired in via the JSON->EpisodeRecord converter
+# (experiments/spectre/dd2d_convert.py), not a live SesameModels env, so
+# env_id / model_name / model_kwargs are placeholders unused by the training
+# pipeline; only env_variant selects the on-disk data layout + policy tables.
+env_id: "dd2d/DrawerDeclutter2D-v0"
+env_variant: "dd2d_v3"
+model_name: "dd2d"
+model_kwargs: {}

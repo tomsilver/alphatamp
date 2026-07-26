@@ -94,6 +94,10 @@ _PIGINET_PATHS = {
 _V2_CKPT_SUBDIR = {
     "dd2d_v2": "checkpoints_v2_evidence_prior_ov",
     "dd2d_v3": "checkpoints_v2_evidence_ov",
+    # dd2d_v4 inherits v3's config (no prior): it is the same domain and difficulty, and
+    # this row is the v3 migration's *yardstick* -- the deployed v2.2 model every v3 gate
+    # is measured against -- so it must be the same recipe, not a re-tuned one.
+    "dd2d_v4": "checkpoints_v2_evidence_ov",
 }
 
 # Env-variant-dependent path globals. The cache functions read these as module globals
@@ -140,11 +144,16 @@ def _configure_paths(env_variant: str) -> None:
     """(Re)bind every env-variant-dependent module global from ``env_variant``."""
     global ENV_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, CACHE_DIR, N_PROBLEMS
-    if env_variant not in _PIGINET_PATHS:
+    if env_variant not in _V2_CKPT_SUBDIR:
         raise SystemExit(
-            f"unknown --env-variant {env_variant!r}; known: {sorted(_PIGINET_PATHS)} "
-            "(add a _PIGINET_PATHS entry to onboard a new collection)"
+            f"unknown --env-variant {env_variant!r}; known: {sorted(_V2_CKPT_SUBDIR)} "
+            "(add a _V2_CKPT_SUBDIR entry to onboard a new collection)"
         )
+    # PIGINet is optional per variant: it trains on the *native* DD2D JSON with its own
+    # CLIP cache, so onboarding a collection for the SPECTRE methods does not
+    # automatically give it a PIGINet row. Missing paths become None and only fail if
+    # `--methods piginet` actually asks for it.
+    piginet = _PIGINET_PATHS.get(env_variant, {})
     ENV_VARIANT = env_variant
     SPECTRE_TEST = REPO / "data" / "spectre" / "raw" / env_variant / "test"
     VOCAB_PATH = (
@@ -152,9 +161,9 @@ def _configure_paths(env_variant: str) -> None:
     )
     CKPT_DIR = REPO / "data" / "spectre" / "checkpoints" / env_variant
     V2_CKPT_DIR = REPO / "data" / "spectre" / _V2_CKPT_SUBDIR[env_variant] / env_variant
-    PIGINET_CKPT = _PIGINET_PATHS[env_variant]["ckpt"]
-    PIGINET_DATA = _PIGINET_PATHS[env_variant]["data"]
-    PIGINET_CACHE = _PIGINET_PATHS[env_variant]["cache"]
+    PIGINET_CKPT = piginet.get("ckpt")
+    PIGINET_DATA = piginet.get("data")
+    PIGINET_CACHE = piginet.get("cache")
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / env_variant / "compare_cache"
     N_PROBLEMS = _count_test_problems(SPECTRE_TEST)
 
@@ -220,6 +229,13 @@ def cache_astar(force: bool) -> None:
 @torch.no_grad()
 def cache_piginet(force: bool, device: str) -> None:
     """PIGINet (BCE-trained, paper baseline): fresh inference; cache logits + labels."""
+    if PIGINET_CKPT is None:
+        raise SystemExit(
+            f"--methods piginet requested but {ENV_VARIANT!r} has no _PIGINET_PATHS "
+            "entry. PIGINet trains on the native DD2D JSON with its own CLIP cache, so a "
+            "new collection needs it retrained first (envs/dd2d/piginet/train.py), then "
+            "an entry added here."
+        )
     out = CACHE_DIR / "piginet"
     if _dir_complete(out) and not force:
         print("[piginet] complete; skipping")
@@ -510,7 +526,7 @@ def main() -> None:
     parser.add_argument(
         "--env-variant",
         default=DEFAULT_ENV_VARIANT,
-        choices=sorted(_PIGINET_PATHS),
+        choices=sorted(_V2_CKPT_SUBDIR),
         help="Which DD2D collection to score (repoints test split, vocab, checkpoints, "
         "PIGINet artifacts, and the cache dir).",
     )
