@@ -68,6 +68,21 @@ Format:
   other v3 checkpoint (`_prior_ov` is further away, max |Δ| 3.49). `model_v2.py` and
   `dataset_v2.py` are clean at HEAD and the episode pickles predate the cache, so the cache
   was written by a code state that no longer exists on disk.
+- **`dd2d_v4` collected: 400/100/100, exactly 100 (train) / 25 (val,test) per stratum**,
+  125 min wall-clock (76.1 + 21.8 + 27.4, 14 workers). Records carry culprits, per-step
+  effort, exhausted-vs-budget, backjump count, `elapsed` and the generator arguments;
+  600 episodes converted (`dd2d_convert_v3`), vocab OOV-clean on val/test.
+- **⚠ The v4-vs-v3 identity gate FAILS, and the cause is DD2D's generator, not the
+  instrumentation.** `generate_dd2d_problem` is deterministic within a process but
+  **`PYTHONHASHSEED`-dependent across processes**: with everything else fixed, seed 500039
+  gives target pose (23.696, 9.206) under `PYTHONHASHSEED=0` and (14.981, 21.960) under
+  `=1`, each reproducibly. Same seed can even yield a different `n_items` (9 vs 10 for
+  750039). So every DD2D collection — v2, v3, v4 — is a valid sample but not a reproducible
+  one. Divergence over the 597 matched problems: **99.2% identical scenes, 94.6% identical
+  labels, 90.3% identical plans, 86.9% fully identical**; 98/119400 candidate labels differ
+  (0.08%), plus 3 boundary problems where a different seed was kept. Decision (user):
+  accept v4 as collected and document, rather than fix + re-collect. Likely leak site:
+  `enumerate.py`'s `present = set(scene.item_names()) - {scene.target}`.
 - **G2 — the domain contract replaces 11 DD2D literals, oracle still exact [verified].**
   `domain.py` derives a candidate's manipulated set, its plan length, and whether its failure
   licenses demotion from the operator schema + a three-line axiom declaration. Licensed by

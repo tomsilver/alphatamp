@@ -70,6 +70,19 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     "routedtransport2d_n3_v1": _RT2D_TYPE_AUG_POLICY,
     "routedtransport2d_n4_v1": _RT2D_TYPE_AUG_POLICY,
     "dd2d_v2": _DD2D_TYPE_AUG_POLICY,
+    # dd2d_v3: same domain and policy, re-collected after the 2026-07-24 grasp-model
+    # changes (contact-run fix + internal grasps) invalidated v2's labels. A separate
+    # variant, not an overwrite, so the stale v2 artifacts stay reproducible and a
+    # v2-vs-v3 number can never be mixed by accident.
+    "dd2d_v3": _DD2D_TYPE_AUG_POLICY,
+    # dd2d_v4: same domain and policy again, re-collected with the v3 refiner
+    # instrumentation so failures carry observed culprits / per-step effort /
+    # exhausted-vs-budget. The instrumentation is observation-only, but DD2D's problem
+    # *generator* is PYTHONHASHSEED-dependent, so v4 is not a byte-identical re-run of
+    # v3: 86.9% of problems are fully identical and 0.08% of candidate labels differ.
+    # Kept as a separate variant for the same reason as v3 -- so the two can never be
+    # silently mixed in one number.
+    "dd2d_v4": _DD2D_TYPE_AUG_POLICY,
 }
 
 

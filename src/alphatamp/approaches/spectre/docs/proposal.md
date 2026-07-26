@@ -102,6 +102,20 @@ Khodeir et al.) augmented with a **low-level baseline** — over the grid of
 See [`research_lit.md`](research_lit.md) for the candidate environments and the
 low-level (PIGINet-class) comparison.
 
+**The zero-data corner: VLMPlan.** The data axis needs an endpoint at *zero* training
+problems, so a zero-shot VLM planner (the KinDER LLMPlan/VLMPlan convention) is a
+comparison method alongside PIGINet (trained low-level) and SPECTRE (trained
+abstract-first) — `vlmplan/`, wired into the DD2D comparison; see `decisions.md`
+2026-07-24 for the protocol. It is framed as **a corner of the grid, not a defeated
+rival**, and it answers the reviewer-obvious "did you try just asking a VLM?" on the
+record. Three properties are load-bearing for it to be a fair point rather than a straw
+man: it never sees refinement outcomes (static, so it is not competing with SPECTRE's
+adaptivity); it is given the operator semantics and the object-centric geometry that every
+other method reads from the domain and the state; and because it *generates* plans instead
+of reordering the candidate pool, its off-pool proposals are refined for real and charged
+as attempts. Deviations from the KinDER template are enumerated in
+`vlmplan/prompts/PROVENANCE.md` for the appendix.
+
 ---
 
 ## Superseded framing (April 2026)

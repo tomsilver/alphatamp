@@ -6,6 +6,64 @@ not, and why.
 
 ---
 
+## 2026-07-26 — DD2D's problem generator is `PYTHONHASHSEED`-dependent; `dd2d_v4` ships with the divergence documented rather than fixed
+
+Addendum to the same-day G0–G2 ADR. This one is a *finding about DD2D*, not about v3.
+
+**Context.** G0's acceptance was that `dd2d_v4` — a re-collection whose only intended change
+was observation-only refiner instrumentation — would reproduce `dd2d_v3`'s labels
+candidate-for-candidate. If it did, the whole comparison landscape (PIGINet, v1, astar and
+both VLMPlan arms, ~10.5 h of generation) would carry over untouched. It did not.
+
+**What was measured.** Over the 597 problems present in both collections:
+
+| | identical |
+|---|---|
+| scene (object poses) | 592 (99.2%) |
+| labels, all 200 candidates | 565 (94.6%) |
+| task plans | 539 (90.3%) |
+| fully identical | 519 (86.9%) |
+
+98 of 119400 candidate labels differ (0.08%), plus 3 problems where the collector kept a
+different seed at a stratum boundary.
+
+**Root cause — not the instrumentation.** `generate_dd2d_problem` is deterministic *within*
+a process but not *across* processes: with everything else fixed, `PYTHONHASHSEED=0` yields
+one scene for seed 500039 and `PYTHONHASHSEED=1` yields a different one, each reproducibly.
+Python randomises the hash seed per process by default, so **every DD2D collection ever made
+(v2, v3, v4) is a valid sample but not a reproducible one**, and the same seed can even yield
+a different `n_items`. The leak is set/dict iteration order somewhere in the generation +
+rejection-sampling path; the most likely site is `enumerate.py`'s
+`present = set(scene.item_names()) - {scene.target}` feeding `_obstacles`. This is almost
+certainly the same class of problem behind the neighbouring finding that the dd2d_v3
+comparison cache is no longer reproducible from the code on disk.
+
+The instrumentation itself is clean and was verified separately: replaying stored candidates
+at their stored seeds through the instrumented refiner reproduces `label`, `steps_bound`,
+`plan_length` and `failure_action` on 290/290.
+
+**Decision (user call): accept `dd2d_v4` as collected and document the divergence; do not fix
+the generator or re-collect now.** Rejected alternatives: (a) fix the hash-order leak, add a
+cross-process determinism test and re-collect (~2 h — makes DD2D reproducible for every later
+gate, but v4 still would not match v3, so the comparison rows need re-running either way);
+(b) fix and additionally re-run every comparison row including both VLMPlan arms (~10.5 h of
+VLM generation to move a row whose qualitative shape cannot plausibly flip on a 0.08% label
+change).
+
+**Consequences.**
+- G0's acceptance criterion is **amended**: label identity with v3 is unachievable in
+  principle, so what is asserted instead is (i) the instrumentation is observation-only
+  (verified differentially, 290/290) and (ii) the v3-vs-v4 divergence is measured, bounded
+  and recorded above.
+- `dd2d_v4` is a **separate env variant**, never averaged with v3 into one row. Numbers are
+  comparable at the ~0.1%-label level, far below seed noise, but they are not the same data.
+- Existing PIGINet / v1 / astar / VLMPlan rows carry over **with this caveat attached**; any
+  claim that turns on a <1% effect must be re-run rather than inherited.
+- **Known issue, deliberately left open:** DD2D generation is not reproducible. Anyone
+  re-collecting should expect a fresh sample, and a future fix should sort the offending
+  iteration and add a cross-process regression test (two `PYTHONHASHSEED` values, one scene).
+  Recorded here so it is a known limitation rather than a recurring surprise.
+
 ## 2026-07-26 — v3 migration G0–G2: instrument rather than reconstruct; one domain contract; the equivalence oracle is a live run, not a cached artifact
 
 Opens the SPECTRE v3 migration (`docs/SPECTRE_v3_proposal.md`, Phases 0–3, DD2D-complete;
