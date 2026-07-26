@@ -61,7 +61,11 @@ from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
 # v2: also carries ground-truth SceneGeometry (per-object pose + boundary ring + buffer),
 # so the config_hash changes and vocab/train re-read cleanly.
-CONVERTER_VERSION = "dd2d_convert_v2"
+# v3: carries the refiner's typed failure observations (culprits / per-step effort /
+# exhausted-vs-budget), per-candidate wall-clock, backjump count and generation params.
+# The extra keys ride inside ``refiner_metadata`` (a free-form dict on OutcomeRecord),
+# so no schema field is added and pre-v3 collections convert unchanged.
+CONVERTER_VERSION = "dd2d_convert_v3"
 DEFAULT_ENV_ID = "dd2d/DrawerDeclutter2D-v0"
 
 
@@ -84,6 +88,20 @@ def config_hash(env_variant: str) -> str:
         sort_keys=True,
     ).encode()
     return hashlib.sha256(payload).hexdigest()[:12]
+
+
+def _gen_provenance(rec: dict[str, Any]) -> dict[str, Any]:
+    """The v3 generation/refinement arguments, if the source record carries them.
+
+    Empty dict for pre-v3 collections, so ``scene_latent`` stays ``None`` there and
+    nothing downstream changes.
+    """
+    prov = rec.get("provenance", {}) or {}
+    out: dict[str, Any] = {}
+    for key in ("gen_params", "refiner_params", "stratum"):
+        if key in prov:
+            out[key] = prov[key]
+    return out
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -234,7 +252,11 @@ def convert_problem_dir(
             OutcomeRecord(
                 skeleton_idx=idx,
                 outcome=outcome,  # type: ignore[arg-type]
-                refinement_wall_clock_s=0.0,
+                # v3 collections persist the refiner's own wall-clock; pre-v3 ones did
+                # not (the field was dropped in ``record.build_example``), which is why
+                # DD2D could never report the proposal's wall-clock metric and fell back
+                # to FP. 0.0 for those, as before.
+                refinement_wall_clock_s=float(refine_meta.get("elapsed", 0.0) or 0.0),
                 refinement_seed=int(rprov.get("refine_seed", 0)),
                 refiner_metadata=refine_meta,
             )
@@ -264,6 +286,10 @@ def convert_problem_dir(
         # per-episode refinement latent (RT2D). DD2D has none; the source
         # directory is recoverable from (split, problem_seed).
         scene_latent=None,
+        # v3: the generator/refiner arguments this episode was produced under. Audit
+        # trail only -- it carries `stratum`, which is the answer, so it must never
+        # reach a model input (nothing in the dataset path reads ProvenanceBlock).
+        gen_params=_gen_provenance(first) or None,
     )
 
     return EpisodeRecord(

@@ -52,6 +52,44 @@ class BoundStep:
 
 
 @dataclass
+class FailureObservation:
+    """One observed refinement failure -- the v3 ``FailureRecord`` payload.
+
+    Emitted by the DD2D refiner at the point a continuous query actually failed (or at
+    the budget exit). Every field is a value the refiner had already computed; nothing
+    here runs an extra geometric query, which is what lets the instrumented collection
+    reproduce the un-instrumented labels bit-for-bit (see
+    ``docs/SPECTRE_v3_proposal.md`` Section 6.1 and the G0 gate).
+
+    - ``step_index`` / ``schema`` / ``args`` -- *which* query failed, and on what. Unlike
+      ``RefineResult.failure_action`` (which names the deepest step *reached*, not
+      necessarily one that was tested -- see ``budget_exhausted``), these name a query
+      that genuinely ran.
+    - ``culprits`` -- objects whose footprints the fingers hit, observed from the
+      collision checks that already ran. Empty for a non-collision failure.
+    - ``unmoved`` -- objects still in their start region when the query failed: the
+      ``U(sigma, j)`` of the certificate rule.
+    - ``n_step`` -- stream calls spent on *this* step (contrast ``RefineResult
+      .n_attempts``, which is the global count for the whole skeleton).
+    - ``exhausted`` -- True iff the sampler ran out of its own retries (a genuine
+      exhaustion, so the failure is exact); False iff it stopped on the global budget.
+      This is the ``exact`` axiom of the v3 registry.
+    - ``budget_exhausted`` -- True only for the terminal record emitted when the refiner
+      stopped on the global time/call budget without any query failing. Such a record
+      proves nothing and must never be promoted to proof tier.
+    """
+
+    step_index: int
+    schema: str
+    args: tuple[str, ...]
+    culprits: tuple[str, ...] = ()
+    unmoved: tuple[str, ...] = ()
+    n_step: int = 0
+    exhausted: bool = True
+    budget_exhausted: bool = False
+
+
+@dataclass
 class RefineResult:
     status: str  # "feasible" | "infeasible"
     steps_bound: int  # furthest prefix length bound in any attempt ("how far we got")
@@ -60,6 +98,11 @@ class RefineResult:
     failure_action: str | None  # str(action) where the best attempt got stuck
     bound_plan: list[BoundStep] = field(default_factory=list)
     elapsed: float = 0.0  # wall-clock seconds the refinement took (for anytime curves)
+    # --- v3 instrumentation (additive, observation-only; empty on refiners that do
+    # not emit it, so every pre-v3 construction site and consumer is unaffected) ---
+    failures: list[FailureObservation] = field(default_factory=list)
+    n_backjumps: int = 0
+    budget_exhausted: bool = False
 
     @property
     def feasible(self) -> bool:

@@ -24,7 +24,7 @@ def atomic_write_pickle_gz(obj: object, path: Path) -> None:
 
 
 def _migrate(ep: "EpisodeRecord") -> "EpisodeRecord":
-    """Fill v2.2.1 fields missing on pickles written before they existed.
+    """Fill trailing-nullable fields missing on pickles written before they existed.
 
     Frozen-dataclass pickles restore via ``__dict__`` and do NOT re-run ``__init__``/
     ``__post_init__``, so a record written before the geometry/evidence layer landed
@@ -32,11 +32,16 @@ def _migrate(ep: "EpisodeRecord") -> "EpisodeRecord":
     each outcome); accessing them would raise ``AttributeError``. Set the field defaults
     in place via ``object.__setattr__`` (the dataclasses are frozen). This keeps existing
     RT2D/kinder corpora loadable unchanged; DD2D is re-collected regardless.
+
+    v3 extends the same shim to ``ProvenanceBlock.gen_params``.
     """
     for obj, attrs in [
         (ep, ("scene_geometry", "aux_labels")),
+        (getattr(ep, "provenance", None), ("gen_params",)),
         *[(o, ("post_mortem",)) for o in getattr(ep, "outcomes", ())],
     ]:
+        if obj is None:
+            continue
         for name in attrs:
             if not hasattr(obj, name):
                 object.__setattr__(obj, name, None)

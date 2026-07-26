@@ -34,6 +34,11 @@ from .shapes import Shape
 _EPS = 1e-9
 _CONTAIN_TOL = 1e-7
 
+# Sentinel name for the drawer wall band in the obstacle-name lists. Not an item, so it
+# can never collide with a real object name (which are ``target`` / ``oNN``); the v3
+# failure records emit it as a culprit when the fingers hit the drawer frame itself.
+WALL_NAME = "__wall__"
+
 
 # --------------------------------------------------------------------------- #
 # pose transform + scene containers
@@ -334,6 +339,19 @@ class DrawerWorld:
 
     def buffer_obstacles(self, ignore: str | None = None) -> list[Polygon]:
         return [self.footprint(n) for n in self.region_items("buffer", ignore)]
+
+    def drawer_obstacle_names(self, ignore: str | None = None) -> list[str]:
+        """Names positionally parallel to :meth:`drawer_obstacles`.
+
+        Index-aligned by construction (same ``region_items`` call, same trailing wall
+        band), so a blocker index from ``grasps.grasp_blocker`` names an object. The
+        wall band is not an item, so it gets the sentinel :data:`WALL_NAME`.
+        """
+        return self.region_items("drawer", ignore) + [WALL_NAME]
+
+    def buffer_obstacle_names(self, ignore: str | None = None) -> list[str]:
+        """Names positionally parallel to :meth:`buffer_obstacles`."""
+        return self.region_items("buffer", ignore)
 
     # -- mutations -----------------------------------------------------------
     def pick(self, name: str) -> bool:

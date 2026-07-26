@@ -118,4 +118,7 @@ def test_config_hash_is_deterministic() -> None:
     """The stamped config hash is stable and version-keyed."""
     assert config_hash("dd2d_v2") == config_hash("dd2d_v2")
     assert config_hash("dd2d_v2") != config_hash("other")
-    assert CONVERTER_VERSION == "dd2d_convert_v2"  # v2: carries SceneGeometry
+    # v2 added SceneGeometry; v3 adds the refiner's typed failure observations,
+    # per-candidate wall-clock and generation params. The pin is deliberate: the hash is
+    # keyed on this string, so a schema change to the converter must be a conscious edit.
+    assert CONVERTER_VERSION == "dd2d_convert_v3"

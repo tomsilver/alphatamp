@@ -27,6 +27,7 @@ import hashlib
 import itertools
 import json
 import os
+import shutil
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -263,6 +264,30 @@ def collect_problem(
                 "refine_seed": rseed,
                 "planner_search": "astar",
                 "planner_heuristic": "dist",
+                # v3: the exact arguments this scene was generated and refined under.
+                # `decisions.md` 2026-07-19 records that omitting these forced the
+                # "reconstruct, don't regenerate" rule, because a post-hoc consumer had
+                # to *infer* them and a miss silently produced a different scene with
+                # the same object names. Storing them does not retire that rule -- the
+                # record's own poses stay authoritative -- but it makes provenance
+                # auditable and any future regeneration checkable rather than guessed.
+                "gen_params": {
+                    "lam": config.lam,
+                    "margin": config.margin,
+                    "crowd": 0 if stratum == 0 else config.crowd,
+                    "diverse_crowd": config.diverse_crowd,
+                    "require_subset": stratum >= 2,
+                    "min_subset": max(stratum, 2),
+                    "unblocked_target": stratum == 0,
+                    "n_items": n_items,
+                    "certify": True,
+                },
+                "refiner_params": {
+                    "budget": config.budget,
+                    "retry_cap": config.retry_cap,
+                    "samples_per_step": config.samples_per_step,
+                    "time_budget": config.time_budget,
+                },
             },
         )
         _atomic_write(os.path.join(prob_dir, f"{plan_idx:03d}.json"), ex.to_json())
@@ -392,6 +417,43 @@ def _fmt_hms(secs: float) -> str:
     return f"{h:d}h{m:02d}m" if h else f"{m:d}m{s:02d}s"
 
 
+def _truncate_to_targets(
+    split_dir: str,
+    sub_bands: list[tuple[int, int]],
+    sub_targets: list[int],
+    strata: tuple[int, ...],
+) -> dict[int, list[str]]:
+    """Delete any overshoot so each stratum has EXACTLY its sub-target on disk.
+
+    Keeps the first ``sub_target`` kept problems per stratum (lowest seed = collected
+    first, deterministic/reproducible) and ``rmtree``s the rest. Idempotent and a no-op
+    when already exact (the common case, since the in-flight cap prevents overshoot in a
+    fresh run); it exists to guarantee exact counts under ``--resume`` over a split a
+    prior (pre-cap) run overshot, and as a belt-and-suspenders invariant. Returns
+    ``{stratum: [surviving problem_ids sorted by seed]}``.
+    """
+    target_of = dict(zip(strata, sub_targets))
+    by_stratum: dict[int, list[tuple[int, str]]] = {s: [] for s in strata}
+    if os.path.isdir(split_dir):
+        for name in os.listdir(split_dir):
+            if not os.path.isdir(os.path.join(split_dir, name)):
+                continue
+            seed = _seed_from_problem_id(name)
+            if seed is None:
+                continue
+            s = _stratum_of_seed(seed, sub_bands, strata)
+            if s is not None:
+                by_stratum[s].append((seed, name))
+    survivors: dict[int, list[str]] = {}
+    for s in strata:
+        entries = sorted(by_stratum[s])  # ascending seed
+        keep, drop = entries[: target_of[s]], entries[target_of[s] :]
+        for _seed, name in drop:
+            shutil.rmtree(os.path.join(split_dir, name), ignore_errors=True)
+        survivors[s] = [name for _seed, name in keep]
+    return survivors
+
+
 def collect_split(
     split_name: str,
     seed_band: tuple[int, int],
@@ -431,6 +493,7 @@ def collect_split(
             "n_neg": 0,
             "reasons": Counter(),
             "exhausted": False,
+            "in_flight": 0,  # tasks submitted but not yet completed (overshoot guard)
         }
         for i, s in enumerate(strata)
     }
@@ -452,11 +515,17 @@ def collect_split(
         )
 
     def next_task():
-        """Round-robin the next open stratum; return (seed, stratum) or None."""
+        """Round-robin the next open stratum; return (seed, stratum) or None.
+
+        A stratum is "open" only while ``kept + in_flight < target``: counting in-flight
+        tasks caps submission so a stratum can never overshoot its sub-target (in-flight
+        keeps that complete after the target is otherwise reachable are never spawned),
+        and workers freed by a filled stratum flow to the under-target ones.
+        """
         for _ in range(len(strata)):
             s = next(rr)
             st = st_state[s]
-            if st["kept"] >= st["target"] or st["exhausted"]:
+            if st["kept"] + st["in_flight"] >= st["target"] or st["exhausted"]:
                 continue
             while True:
                 try:
@@ -544,6 +613,7 @@ def collect_split(
                     seed, stratum = task
                     fut = pool.submit(_collect_task, (seed, stratum, config, split_dir))
                     inflight[fut] = (seed, stratum, time.time())
+                    st_state[stratum]["in_flight"] += 1
                     return True
 
                 for _ in range(workers * 2):
@@ -578,6 +648,9 @@ def collect_split(
                         continue
                     for fut in done:
                         seed, stratum, _t_sub = inflight.pop(fut)
+                        st_state[stratum][
+                            "in_flight"
+                        ] -= 1  # free the slot before refill
                         try:
                             res = fut.result()
                         except BrokenProcessPool as e:
@@ -613,6 +686,16 @@ def collect_split(
                         submit_next()
     finally:
         log_f.close()
+
+    # Guarantee exactly the sub-target per stratum: drop any overshoot from disk and
+    # re-derive the kept tallies/ids from the surviving dirs so the manifest is exact.
+    survivors = _truncate_to_targets(split_dir, sub_bands, sub_targets, strata)
+    for s in strata:
+        st_state[s]["kept"] = len(survivors[s])
+    kept_ids = [pid for s in strata for pid in survivors[s]]
+    seeds_used = [
+        sd for sd in (_seed_from_problem_id(pid) for pid in kept_ids) if sd is not None
+    ]
 
     return _write_manifest(
         split_dir,

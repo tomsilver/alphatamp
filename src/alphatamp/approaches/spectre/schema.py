@@ -20,7 +20,7 @@ We deliberately do *not* serialize:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from bilevel_planning.structs import RelationalAbstractState
 from relational_structs import GroundAtom, GroundOperator
@@ -36,6 +36,13 @@ class ProvenanceBlock:
     governed by an externally-sampled per-episode latent (currently:
     RoutedTransport2D, where it carries ``(blocked_color, blocked_grasp)``).
     For the kinder envs it stays ``None`` and round-trips unchanged.
+
+    ``gen_params`` (v3, trailing-nullable like the v2.2.1 geometry layer) records the
+    generator/refiner arguments an episode was produced under. It exists so provenance
+    is auditable rather than inferred -- omitting it is what forced the
+    "reconstruct, don't regenerate" rule (``decisions.md`` 2026-07-19). It is an **audit
+    trail, never a model input**: it carries ``stratum``, which is the answer, and
+    nothing in the dataset/tensorizer path reads ``ProvenanceBlock``.
     """
 
     problem_id: int
@@ -48,6 +55,7 @@ class ProvenanceBlock:
     collection_timestamp: str
     package_versions: dict[str, str]
     scene_latent: Optional[dict[str, str]] = None
+    gen_params: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)

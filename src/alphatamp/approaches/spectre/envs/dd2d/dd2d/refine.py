@@ -28,10 +28,14 @@ import random
 import time
 import warnings
 
-from alphatamp.approaches.spectre.envs.dd2d.refine import BoundStep, RefineResult
+from alphatamp.approaches.spectre.envs.dd2d.refine import (
+    BoundStep,
+    FailureObservation,
+    RefineResult,
+)
 from alphatamp.approaches.spectre.envs.dd2d.skeleton import Skeleton
 
-from .grasps import finger_rects, has_grasp
+from .grasps import finger_rects, has_grasp_witness
 from .world import DrawerWorld, StreamCounter, sample_buffer_pose
 
 # hard backstop so a mis-configured "unbounded" run can never thrash forever
@@ -109,6 +113,12 @@ class DD2DRefiner:
         best_reached = 0
         best_steps: list[BoundStep] = []
         idx = 0
+        # v3 instrumentation: observation-only accumulators. Nothing below may call the
+        # stream counter, draw from ``rng``, or change control flow -- ``n_attempts`` is
+        # ``counter.calls``, so one extra stream call would shift every downstream label.
+        failures: list[FailureObservation] = []
+        n_backjumps = 0
+        budget_exit = False
 
         def note_progress() -> None:
             nonlocal best_reached, best_steps
@@ -116,14 +126,35 @@ class DD2DRefiner:
                 best_reached = idx
                 best_steps = [bs for _, bs, _ in committed]
 
-        while idx < n and not exhausted():
+        # Equivalent to ``while idx < n and not exhausted()`` -- same evaluation order and
+        # same number of (side-effect-free) ``exhausted()`` calls -- but it records
+        # *which* condition ended the loop, so a budget exit is distinguishable from a
+        # query failure. That distinction is invisible in ``failure_action``, which names
+        # the deepest step *reached* rather than one that was tested.
+        while idx < n:
+            if exhausted():
+                budget_exit = True
+                break
             act = plan[idx]
             if act.name == "pick":
                 o = act.args[0]
                 st = world.states[o]
                 counter.test()  # sample-grasp + CFreeGrasp against the drawer
-                g = has_grasp(st.shape, st.pose, world.drawer_obstacles(ignore=o))
+                obstacles = world.drawer_obstacles(ignore=o)
+                g, blocked = has_grasp_witness(st.shape, st.pose, obstacles)
                 if g is None:
+                    names = world.drawer_obstacle_names(ignore=o)
+                    failures.append(
+                        FailureObservation(
+                            step_index=idx,
+                            schema="pick",
+                            args=(o,),
+                            culprits=tuple(sorted(names[i] for i in blocked)),
+                            unmoved=tuple(sorted(world.region_items("drawer"))),
+                            n_step=1,
+                            exhausted=True,  # every grasp cell was tried
+                        )
+                    )
                     break  # blocker ungraspable (buried) -> hard dead-end
                 snap = world.snapshot()
                 world.pick(o)
@@ -145,8 +176,12 @@ class DD2DRefiner:
                 st = world.states[o]
                 pose = grasp = None
                 ghosts: list[tuple[float, float, float]] = []
+                calls_before = counter.calls
+                hit_budget = False
+                blocked_names: set[str] = set()
                 for _ in range(self.retry_cap):
                     if exhausted():
+                        hit_budget = True
                         break
                     counter.sample()  # sample-buffer-pose
                     cand = sample_buffer_pose(
@@ -159,15 +194,33 @@ class DD2DRefiner:
                     if cand is None:
                         continue
                     counter.test()  # CFreeGrasp at the destination (accessibility)
-                    g = has_grasp(st.shape, cand, world.buffer_obstacles())
+                    obstacles = world.buffer_obstacles()
+                    g, blocked = has_grasp_witness(st.shape, cand, obstacles)
                     if g is None:
+                        names = world.buffer_obstacle_names()
+                        blocked_names.update(names[i] for i in blocked)
                         ghosts.append(cand)  # packs but not graspable there
                         continue
                     pose, grasp = cand, g
                     break
                 if pose is None:
+                    # No culprit means the sampler never found a *packing* pose at all
+                    # (a volume failure); culprits mean it packed but the staged items
+                    # blocked the approach (an accessibility failure).
+                    failures.append(
+                        FailureObservation(
+                            step_index=idx,
+                            schema="place-buffer",
+                            args=(o,),
+                            culprits=tuple(sorted(blocked_names)),
+                            unmoved=tuple(sorted(world.region_items("drawer"))),
+                            n_step=counter.calls - calls_before,
+                            exhausted=not hit_budget,
+                        )
+                    )
                     if not self._backjump(world, committed):
                         break  # nothing to backjump to -> infeasible (joint overflow)
+                    n_backjumps += 1
                     # resume at the place-buffer we just undid (its pick is still committed)
                     idx = (committed[-1][0] + 1) if committed else 0
                     continue
@@ -195,8 +248,21 @@ class DD2DRefiner:
                 o = act.args[0]
                 st = world.states[o]
                 counter.test()
-                g = has_grasp(st.shape, st.pose, world.drawer_obstacles(ignore=o))
+                obstacles = world.drawer_obstacles(ignore=o)
+                g, blocked = has_grasp_witness(st.shape, st.pose, obstacles)
                 if g is None:
+                    names = world.drawer_obstacle_names(ignore=o)
+                    failures.append(
+                        FailureObservation(
+                            step_index=idx,
+                            schema="retrieve",
+                            args=(o,),
+                            culprits=tuple(sorted(names[i] for i in blocked)),
+                            unmoved=tuple(sorted(world.region_items("drawer"))),
+                            n_step=1,
+                            exhausted=True,  # every grasp cell was tried
+                        )
+                    )
                     break  # target still blocked
                 committed.append(
                     (
@@ -228,6 +294,28 @@ class DD2DRefiner:
                 failure_action=None,
                 bound_plan=[bs for _, bs, _ in committed],
                 elapsed=elapsed,
+                failures=failures,
+                n_backjumps=n_backjumps,
+            )
+        # Fourth emission site: the loop stopped on the global budget rather than on a
+        # failed query, so none of the three sites above fired for the step we were
+        # about to try. ``failure_action`` still names ``plan[best_reached]`` -- a step
+        # that was never tested -- which is precisely the misreport that made v2.2's
+        # proof-demotion unsound (one dd2d_v2 candidate, ``n_attempts=2406``). Emitting
+        # an explicit marker makes "no evidence" distinguishable from "lost in
+        # conversion", and the v3 registry refuses to promote it to proof tier.
+        if budget_exit and idx < n:
+            act = plan[idx]
+            failures.append(
+                FailureObservation(
+                    step_index=idx,
+                    schema=act.name,
+                    args=tuple(act.args),
+                    unmoved=tuple(sorted(world.region_items("drawer"))),
+                    n_step=0,
+                    exhausted=False,
+                    budget_exhausted=True,
+                )
             )
         failure_action = str(plan[best_reached]) if best_reached < n else None
         return RefineResult(
@@ -238,6 +326,9 @@ class DD2DRefiner:
             failure_action=failure_action,
             bound_plan=best_steps,
             elapsed=elapsed,
+            failures=failures,
+            n_backjumps=n_backjumps,
+            budget_exhausted=budget_exit,
         )
 
     @staticmethod
