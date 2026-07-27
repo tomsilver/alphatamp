@@ -43,8 +43,15 @@ from alphatamp.approaches.spectre.vocab import Vocab
 REPO = Path(__file__).resolve().parents[2]
 
 
-def load_v3(ckpt: Path, vocab: Vocab, device: str) -> SpectreV3Model:
-    """Rebuild a v3 model from its checkpoint, with dropout off for evaluation."""
+def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, str]:
+    """Rebuild a v3 model from its checkpoint, with dropout off for evaluation.
+
+    Returns ``(model, overlap_mode)``: the mode is read back off the checkpoint rather
+    than passed in, because deploying a model under a different ``overlap_mode`` than it
+    trained under feeds it a feature column it has never seen populated (or blanks one
+    it relies on) -- a silent train/deploy mismatch of exactly the kind §6.6 warns
+    about.
+    """
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
     model = SpectreV3Model(
@@ -59,17 +66,31 @@ def load_v3(ckpt: Path, vocab: Vocab, device: str) -> SpectreV3Model:
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)
-    return model.eval().to(device)
+    return model.eval().to(device), str(cfg.get("overlap_mode", "both"))
 
 
 def score(
-    model, episodes, vocab, device, spec, mode: Literal["permissive", "strict"]
+    model,
+    episodes,
+    vocab,
+    device,
+    spec,
+    mode: Literal["permissive", "strict"],
+    apply_demotion: bool = True,
+    overlap_mode: str = "both",
 ) -> dict[int, float]:
     """Uncensored deployed FP per problem id."""
     out = {}
     for ep in episodes:
         attempts, _ = deployed_rollout_v3_traced(
-            model, ep, vocab, device, spec=spec, mode=mode
+            model,
+            ep,
+            vocab,
+            device,
+            spec=spec,
+            mode=mode,
+            apply_demotion=apply_demotion,
+            overlap_mode=overlap_mode,
         )
         out[int(ep.provenance.problem_id)] = float(attempts) - 1.0
     return out
@@ -108,6 +129,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline", help='"label:ckpt_subdir" to compare arms against')
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
+    ap.add_argument(
+        "--no-demotion",
+        action="store_true",
+        help="withhold the proof-demotion offset, measuring the model's own ordering "
+        "(the eval-time axis of the G7 2x2)",
+    )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(argv)
 
@@ -137,14 +164,19 @@ def main(argv: list[str] | None = None) -> int:
         if is_v2:
             model, _ = load_v2_checkpoint(ckpt)
             model = model.eval().to(a.device)
+            ov_mode = "both"
         else:
-            model = load_v3(ckpt, vocab, a.device)
+            model, ov_mode = load_v3(ckpt, vocab, a.device)
         # argparse `choices` already constrains this; `cast` tells mypy the same thing
         mode = cast(Literal["permissive", "strict"], a.mode)
-        results[label] = score(model, episodes, vocab, a.device, spec, mode)
+        results[label] = score(
+            model, episodes, vocab, a.device, spec, mode, not a.no_demotion, ov_mode
+        )
 
+    demo = "off" if a.no_demotion else f"on ({a.mode})"
     print(
-        f"\n# {a.env_variant} test, uncensored deployed FP, mode={a.mode}, n={len(pids)}"
+        f"\n# {a.env_variant} test, uncensored deployed FP, "
+        f"demotion={demo}, n={len(pids)}"
     )
     print(f"{'arm':<24} {'ALL':>8} {'s0':>8} {'s1':>8} {'s2':>8} {'s3':>8}")
     for label, fps in results.items():

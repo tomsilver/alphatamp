@@ -258,3 +258,76 @@ def test_instrumentation_makes_soundness_free() -> None:
         totals[mode] = n_dead
     assert totals["strict"] == totals["permissive"], totals
     assert totals["strict"] > 0
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not (_V4 / "episodes").is_dir(), reason="dd2d_v4 collection absent")
+def test_apply_demotion_false_withholds_only_the_offset() -> None:
+    """The G7 eval-time axis changes what is *acted on*, not what is *deduced*.
+
+    ``apply_demotion=False`` must leave the proof state advancing exactly as before --
+    otherwise the 2x2's two columns would differ in two ways at once (offset withheld
+    *and* deductions lost) and neither arm would isolate the offset's contribution.
+
+    So: the traced ``step_dead`` sets must be identical with and without the offset up to
+    the point the two rollouts still agree on what to attempt, and withholding the offset
+    must actually be capable of changing the attempt order (else the switch is inert and
+    the ablation would be vacuous).
+    """
+    import torch
+
+    from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
+    from alphatamp.approaches.spectre.io import list_episodes, load_episode
+    from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+    from alphatamp.approaches.spectre.vocab import Vocab
+
+    ckpt = (
+        _ROOT
+        / "data"
+        / "spectre"
+        / "checkpoints_v3_g6b_recON_ovON"
+        / "dd2d_v4"
+        / "seed_0"
+        / "best.pt"
+    )
+    if not ckpt.is_file():
+        pytest.skip("G6b checkpoint absent")
+    vocab = Vocab.from_json(
+        _ROOT / "data" / "spectre" / "derived" / "dd2d_v4" / "train_vocab.json"
+    )
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    model = SpectreV3Model(
+        n_ops=int(ck["n_ops"]),
+        max_arity=vocab.max_operator_arity,
+        cfg=V3Config(
+            n_overlap_feats=2,
+            n_prior_feats=0,
+            max_tags=32,
+            dropout_p=0.0,
+            use_records=True,
+        ),
+    )
+    model.load_state_dict(ck["state_dict"], strict=True)
+    model.eval()
+
+    diverged = 0
+    # Stride, never truncate: episodes are stored in seed order and the collector fills
+    # strata in seed bands, so a prefix is all stratum 0 -- where the first attempt
+    # usually succeeds and demotion never gets to act.
+    _paths = list_episodes(_V4)
+    for path in _paths[:: max(1, len(_paths) // 12)][:12]:
+        episode = load_episode(path)
+        on = deployed_rollout_v3_traced(model, episode, vocab, "cpu")[1]
+        off = deployed_rollout_v3_traced(
+            model, episode, vocab, "cpu", apply_demotion=False
+        )[1]
+        # deductions are identical while the rollouts are still on the same trajectory
+        common = 0
+        for a, b in zip(on.order, off.order):
+            if a != b:
+                break
+            common += 1
+        assert on.step_dead[:common] == off.step_dead[:common], path.name
+        if common < min(len(on.order), len(off.order)):
+            diverged += 1
+    assert diverged > 0, "withholding demotion never changed the order; switch is inert"

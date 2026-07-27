@@ -82,6 +82,14 @@ class TrainV3Config:
     val_episodes: int = 100
     select_budget: Optional[int] = None
     num_workers: int = 4
+    # "both" | "jaccard" | "dead" | "none" -- which cand_overlap columns the net sees.
+    # Dropping `dead` is C5 hygiene (the sound rule stays outside the net as demotion);
+    # see the note in `dataset_v3.build_v3_example`.
+    overlap_mode: str = "both"
+    # >0 switches on rollout-aligned |F| sampling out to this size. v2.2's inherited cap
+    # of 8 never shows the model the |F| ~ 20-40 regime an s3 rollout actually spends
+    # most of its attempts in.
+    tail_max_f: int = 0
 
 
 class SpectreV3Dataset(Dataset):
@@ -129,7 +137,7 @@ class SpectreV3Dataset(Dataset):
         spec = self.spec or spec_for(episode.provenance.env_variant)
         rng = np.random.default_rng((self.cfg.seed, idx, self.epoch))
         fail_idx = [i for i, o in enumerate(episode.outcomes) if o.outcome == "fail"]
-        ctx, hide = sample_context(fail_idx, rng)
+        ctx, hide = sample_context(fail_idx, rng, tail_max_f=self.cfg.tail_max_f)
         example, records = build_v3_example(
             episode,
             self.vocab,
@@ -140,6 +148,7 @@ class SpectreV3Dataset(Dataset):
             hide_facts=hide,
             augment_tags=self.cfg.augment,
             spec=spec,
+            overlap_mode=self.cfg.overlap_mode,
         )
         if not self.cfg.use_records:
             records = []
@@ -172,6 +181,7 @@ def deployed_val_fp(
     spec: DomainSpec,
     max_tags: int,
     budget: Optional[int] = None,
+    overlap_mode: str = "both",
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -192,6 +202,7 @@ def deployed_val_fp(
             max_tags=max_tags,
             mode="permissive",
             max_attempts=budget,
+            overlap_mode=overlap_mode,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -289,7 +300,9 @@ def train_v3(
     print(
         f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
-        f"overlap={cfg.use_overlap} selection=deployed-val-FP(ma{cfg.select_window}, "
+        f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
+        f"tail_max_f={cfg.tail_max_f or 'off'} "
+        f"selection=deployed-val-FP(ma{cfg.select_window}, "
         f"n={len(val_episodes)}, "
         f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
         flush=True,
@@ -305,7 +318,14 @@ def train_v3(
         tr = _run_epoch(model, train_loader, device, cfg.within_length_weight, opt)
         va = _run_epoch(model, val_loader, device, 0.0, None)
         fp = deployed_val_fp(
-            model, val_episodes, vocab, device, spec, cfg.max_tags, cfg.select_budget
+            model,
+            val_episodes,
+            vocab,
+            device,
+            spec,
+            cfg.max_tags,
+            cfg.select_budget,
+            cfg.overlap_mode,
         )
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
@@ -367,6 +387,19 @@ def main(argv=None) -> int:
         default=None,
         help="censor the selector's rollout at N attempts; omit for uncensored",
     )
+    ap.add_argument(
+        "--overlap-mode",
+        default="both",
+        choices=["both", "jaccard", "dead", "none"],
+        help="which cand_overlap columns the net sees; the sound rule is applied "
+        "outside the net as demotion regardless",
+    )
+    ap.add_argument(
+        "--tail-max-f",
+        type=int,
+        default=0,
+        help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
+    )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -382,6 +415,8 @@ def main(argv=None) -> int:
         num_workers=a.num_workers,
         val_episodes=a.val_episodes,
         select_budget=a.select_budget,
+        overlap_mode=a.overlap_mode,
+        tail_max_f=a.tail_max_f,
     )
     sub = "checkpoints_v3"
     if a.no_records:

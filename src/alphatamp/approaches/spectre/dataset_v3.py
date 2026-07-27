@@ -67,16 +67,26 @@ def sample_context(
     p_empty: float = 0.35,
     p_drop_facts: float = 0.3,
     max_f: int = 8,
+    tail_max_f: int = 0,
 ) -> tuple[frozenset[int], bool]:
     """Sample a failure context ``F`` plus an evidence-dropout flag.
 
     Mass is heavy at ``|F| = 0`` because that is the deployment start: the static pathway
     has to stand on its own before any failure has been observed. ``hide_facts`` drops the
     evidence for an example so the ranker cannot become dependent on it.
+
+    ``tail_max_f > 0`` switches on **rollout-aligned** sampling: half the non-empty mass
+    stays uniform on ``1..max_f`` (the easy strata, where rollouts end after a few
+    attempts) and half spreads uniformly out to ``tail_max_f``. The default ``max_f=8``
+    inherited from v2.2 is a genuine train/deploy mismatch at the hard strata -- an s3
+    rollout is queried at ``|F|`` up to ~40, a regime training never showed it -- and this
+    is the knob that closes it. Named for the original RT2D ``rollout_aligned_mix``, whose
+    purpose was the same: make training mass match the test-time visit distribution.
     """
     if not fail_idx or rng.random() < p_empty:
         return frozenset(), False
-    size = int(rng.integers(1, min(max_f, len(fail_idx)) + 1))
+    hi = max_f if (tail_max_f <= 0 or rng.random() < 0.5) else tail_max_f
+    size = int(rng.integers(1, min(hi, len(fail_idx)) + 1))
     chosen = rng.choice(np.asarray(fail_idx), size=size, replace=False)
     return frozenset(int(i) for i in chosen), bool(rng.random() < p_drop_facts)
 
@@ -157,6 +167,7 @@ def build_v3_example(
     hide_facts: bool = False,
     augment_tags: bool = True,
     spec: Optional[DomainSpec] = None,
+    overlap_mode: str = "both",
 ) -> tuple[_V2Example, list[tuple[int, list[int], list[int], list[float]]]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
@@ -258,6 +269,19 @@ def build_v3_example(
     max_len = max(lengths) if lengths else 1
     prior = [[-(i / max(k - 1, 1)), -(lengths[i] / max(max_len, 1))] for i in range(k)]
 
+    # `overlap_mode` zeroes a column rather than narrowing the tensor, so the state dict
+    # shape is untouched and the D-8 exact-absence oracle keeps loading. A zeroed column
+    # *is* the feature's absence: its weight receives no gradient signal from it.
+    #
+    # Dropping `dead` is a C5 argument, not a tuning knob. `dead` is the proof rule fed
+    # to the net as a feature, and it is strongly anti-correlated with subset size
+    # (corr −0.284; mean |S| 1.38 dead vs 2.39 alive on dd2d_v4 train), so the net can
+    # fit it as "short ⇒ bad". That is sound only where the rule actually fired and is
+    # L4's failure mode everywhere else -- which is why s1, the stratum on which short
+    # *is* correct, regressed. The sound consequence still applies outside the net as the
+    # demotion offset, where a wrong weight cannot override it.
+    want_dead = overlap_mode in ("both", "dead")
+    want_jac = overlap_mode in ("both", "jaccard")
     overlap = [[0.0, 0.0] for _ in range(k)]
     if ctx and not hide:
         blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
@@ -267,7 +291,10 @@ def build_v3_example(
             jaccard = max(
                 (len(si & f) / max(len(si | f), 1) for f in failed), default=0.0
             )
-            overlap[i] = [dead, float(jaccard)]
+            overlap[i] = [
+                dead if want_dead else 0.0,
+                float(jaccard) if want_jac else 0.0,
+            ]
 
     records = (
         build_record_arrays(canon, ctx, tags, vocab, spec) if (ctx and not hide) else []

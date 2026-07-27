@@ -72,6 +72,8 @@ def deployed_rollout_v3_traced(
     max_tags: int = 32,
     mode: DemotionMode = "strict",
     max_attempts: Optional[int] = None,
+    apply_demotion: bool = True,
+    overlap_mode: str = "both",
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
@@ -89,6 +91,15 @@ def deployed_rollout_v3_traced(
     demotion. ``strict`` (default) requires positive evidence that the query ran to
     exhaustion, which is what keeps the deduction sound; ``permissive`` reproduces v2.2's
     semantics and exists so the two can be compared candidate-for-candidate.
+
+    ``apply_demotion=False`` runs the ranker with the proof-demotion offset withheld, so
+    the model's own ordering is what gets measured. This is deliberately *not* a third
+    ``DemotionMode``: the modes say how much evidence licenses a sound deduction, whereas
+    this says whether to act on the deduction at all. It exists for the G7 2x2, which
+    crosses it with the net's ``[dead, jaccard]`` features to ask whether the learned
+    ``dead`` column is redundant with the rule applied outside the net. The proof state is
+    still advanced either way, so the trace's ``step_dead`` stays populated and the two
+    arms differ only in whether the offset is applied.
 
     There is no ``demotion_source`` knob: v3 reads the refiner's own report, and the
     geometry-reconstruction alternative is not ported (R2).
@@ -113,6 +124,7 @@ def deployed_rollout_v3_traced(
             context_f=frozenset(tried),
             augment_tags=False,
             spec=spec,
+            overlap_mode=overlap_mode,
         )
         # Records are passed at deployment too, not just in training. Omitting them here
         # would deploy a records-trained model blind to its own evidence -- the train/
@@ -128,7 +140,8 @@ def deployed_rollout_v3_traced(
         row = raw.copy()
         if tried:
             row[tried] = _TRIED
-        row = demote_scores(row, state.dead)
+        if apply_demotion:
+            row = demote_scores(row, state.dead)
         pick = int(np.argmax(row))
         tried.append(pick)
         if pick in success:

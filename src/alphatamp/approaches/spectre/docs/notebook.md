@@ -70,6 +70,40 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-26 — G7: P-v3-3 falsified — `cand_overlap` is load-bearing, and the net has already internalised the demotion rule
+
+- **What:** the S4/G7 2×2, {overlap on/off} × {demotion on/off}, on dd2d_v4 test [1-seed
+  dev]. The two *training* arms already existed — G6b's record arms have exactly G7's
+  configs (records ON, overlap ON/OFF, same seed/epochs/lr, verified against the stored
+  cfgs) — so this gate needed **no training at all**, only the eval-time demotion axis.
+  That axis is new: `deployed_rollout_v3_traced(..., apply_demotion=False)`, deliberately
+  not a third `DemotionMode` (the modes say what licenses a *sound deduction*; this says
+  whether to *act* on one). The proof state still advances either way, pinned by test.
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100:**
+
+  | overlap | demotion | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|---|
+  | ON | ON | **16.17** | 0.00 | 8.56 | 22.00 | 34.12 |
+  | ON | OFF | 16.30 | 0.00 | 8.56 | 22.28 | 34.36 |
+  | OFF | ON | 21.24 | 0.00 | 16.60 | 25.60 | 42.76 |
+  | OFF | OFF | 23.06 | 0.00 | 16.60 | 28.56 | 47.08 |
+
+- **P-v3-3 is FALSIFIED.** The prediction was that removing `cand_overlap` is
+  performance-neutral because tag attention learns soft set-overlap. It is not:
+  **−5.07 FP, CI [−8.56, −1.78]** with demotion on, **−6.76, CI [−10.48, −3.28]** with it
+  off. Per R7's own escape clause, overlap is reinstated as honest features and reported.
+- **Demotion is nearly free when overlap is on (0.13 FP) and worth 1.82 when it is off.**
+  Read together with the row above: the net's learned `dead` column has already
+  internalised the proof rule, so the outside-the-net offset finds little left to correct.
+  The same holds for v2.2 — scoring the yardstick with demotion off gives **14.70 vs
+  14.66**, i.e. its 26.44 at s3 is pure model quality, not the proof rule.
+- **Keep both anyway, and the reason is soundness not FP.** The learned `dead` column is a
+  *correlate*; the offset is a *proof*. C5 exists so that a wrong weight can never override
+  a sound deduction. Paying 0.13 FP for that guarantee is the right trade, and it is now a
+  measured trade rather than an assumed one.
+- **Takeaway / next:** the interesting consequence is for `dead` as a **feature**, not as a
+  rule — see the G8 entry.
+
 ## 2026-07-26 — G6b: uncensoring the selector closes the v2.2 gap; the record increment survives, but records *alone* do not
 
 - **What:** G6 re-run with exactly one change — the checkpoint selector is uncensored

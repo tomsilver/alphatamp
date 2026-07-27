@@ -61,6 +61,15 @@ PRESETS: dict[str, dict[str, str]] = {
         "g7_ovON": "",
         "g7_ovOFF": "--no-overlap",
     },
+    # G8 (performance push): close the s1 and s3 gaps to v2.2 without giving up s2.
+    # `jac` drops the `dead` column, which is a disguised shortness cue and the suspected
+    # cause of the s1 regression; `tailF` shows training the |F| ~ 20-40 regime an s3
+    # rollout actually visits; `both` combines them.
+    "g8": {
+        "g8_jac": "--overlap-mode jaccard",
+        "g8_tailF": "--tail-max-f 40",
+        "g8_jac_tailF": "--overlap-mode jaccard --tail-max-f 40",
+    },
 }
 
 
