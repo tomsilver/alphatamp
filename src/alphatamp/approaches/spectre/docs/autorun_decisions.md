@@ -339,3 +339,26 @@ no-records (4.64 < 6.20), s2 to *raw* records (22.00 < 26.00), s3 to *aggregated
 (29.36, still > 26.44). No single arm holds all three, and s3 remains the only stratum where
 nothing v3 does beats the yardstick. That is what P4 (give records their own attention
 channel) and P5 (observed coverage/waste) are for.
+
+Against the yardstick, all three are **statistically tied** — norec +0.68 CI [−2.01, +3.86],
+agg +1.14 CI [−0.94, +3.44], G6b +1.51 CI [−2.29, +5.72]. None is significantly worse; none
+is better. Breaking the tie needs added signal, which is the point of P4–P7.
+
+### A12 — the observed culprit set over-covers, so `coverage` is a blunt instrument
+
+Measured how many *distinct* objects have been reported as culprits after k attempts:
+
+| stratum | \|F\|=1 | 3 | 5 | 10 | 20 | objects actually needed |
+|---|---|---|---|---|---|---|
+| s1 | 1.7 | 3.5 | 4.6 | 5.4 | 6.5 | 1 |
+| s2 | 2.4 | 4.6 | 5.7 | 6.8 | 7.3 | 2 |
+| s3 | 1.9 | 4.2 | 5.2 | 6.3 | 7.6 | 3 |
+
+The set **accumulates** as a rollout proceeds, which is what makes it an adaptive signal at
+all. But it over-covers by ~2.5× — an object that blocked in *some* configuration is not
+necessarily in the minimum feasible subset. So `coverage = |S(c) ∩ culprits| / |culprits|`
+cannot distinguish "removes the right three" from "removes any three". It still separated
+2.45× at s3, because feasible candidates preferentially remove the *frequently* observed
+blockers — which points at the obvious refinement if the plain version underperforms:
+**weight each culprit by how often it was reported** rather than treating the set as flat.
+Recorded, not implemented — no point adding a second feature before the first is measured.
