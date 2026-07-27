@@ -227,8 +227,6 @@ def _aggregate_per_query(records: list) -> list:
     Aggregation keeps the deepest occurrence (the furthest the plan got), sums effort,
     and takes the union of culprits, so nothing the token *encodes* is lost.
     """
-    import dataclasses
-
     best: dict[tuple, list] = {}
     for rec in records:
         key = (rec.schema, rec.args)
