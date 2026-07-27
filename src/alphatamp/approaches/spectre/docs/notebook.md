@@ -104,6 +104,11 @@ Format:
   the extra seeds were run. Overall FP is by contrast stable across seeds
   (7.50 / 7.63 / 7.19 / 8.05 / 8.08 / 8.94).
 
+- **Baseline seed count.** The yardstick is v2.2 seed 0 — its *best* of three (14.66 /
+  16.57 / 20.57; mean 17.27 ± 3.02, s1 sd ±14.20 because seed 2's `relrank` picked an epoch
+  scoring 30.04 at s1). Against the 3-seed mean v3's margin would be −9.37 and it would win
+  every stratum. **Reported against seed 0** as the conservative choice.
+
 - **Ablations, 1-seed dev, same yardstick:**
 
   | arm | ALL | s0 | s1 | s2 | s3 | Δ vs v2.2 |

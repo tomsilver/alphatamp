@@ -170,6 +170,13 @@ python experiments/spectre/spectre_score_v3.py \
 At 3 seeds s1 read 3.79 and looked decisive; that is the one number a 3-seed report would
 have got wrong. On a wide-spread stratum, check the margin against the seed sd, not the sign.
 
+**Baseline seed count.** The yardstick is v2.2 **seed 0**, the number published throughout
+the project — and it is v2.2's *best* of three (per-seed 14.66 / 16.57 / 20.57; 3-seed mean
+**17.27 ± 3.02**). Against that mean v3's margin would be −9.37 and it would win every
+stratum including s1. **We report against seed 0**: comparing to a baseline's best seed is
+the conservative choice. v2.2's s1 spread is ±14.20 (seed 2 lands at 30.04, `relrank`
+picking a bad epoch) — the miscalibration R8 replaced.
+
 **Both record consumptions matter** (6 seeds each): dropping the per-failure token stream
 costs 1.28 FP (7.90 → 9.18), *entirely at s1* (5.60 → 10.78, worse than v2.2 there) while
 s2/s3 tie, and it doubles the variance. Compact features carry s2/s3; tokens carry s1.

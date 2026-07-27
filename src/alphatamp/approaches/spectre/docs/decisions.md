@@ -83,9 +83,19 @@ still acts only outside the net as demotion; what the net sees is the *observati
   halve the overall variance. So: compact features carry s2/s3, tokens carry s1 and
   stability. An earlier 1-seed reading put the token contribution at 0.26 FP and is
   superseded (`autorun_decisions.md` A17).
-- **Caveats.** Ablations are 1-seed; only the deployed config is multi-seed. Env-2 remains
-  un-attempted, so generality is architectural (`porting_guide.md`), not demonstrated. The
-  v2.2 yardstick is itself 1 seed.
+- **The yardstick is v2.2's best seed, and we report against it anyway.** Two further v2.2
+  seeds were trained with its own recipe: per-seed 14.66 / 16.57 / 20.57, mean
+  **17.27 ± 3.02**. Against that mean the margin is −9.37 and v3 wins every stratum
+  including s1; against seed 0 it is −6.76 with s1 a tie. Reporting the latter is the
+  conservative choice and avoids selecting the framing that flatters v3 after seeing both.
+  v2.2's s1 spread is ±14.20 — seed 2 lands at 30.04 because `relrank` selected a bad epoch,
+  which is the miscalibration R8 replaced.
+- **The margin is not the selector.** Every v3 arm *without* coverage ties v2.2 (14.34 /
+  14.92 / 15.34 vs 14.66) despite all of them using v3's uncensored deployed-val-FP
+  selection. If R8 were carrying the result, those arms would show it.
+- **Caveats.** Ablations are 1-seed; the deployed config is 6-seed and the yardstick 3-seed.
+  Env-2 remains un-attempted, so generality is architectural (`porting_guide.md`), not
+  demonstrated.
 
 ---
 
