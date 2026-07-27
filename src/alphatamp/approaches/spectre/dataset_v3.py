@@ -31,6 +31,7 @@ import math
 from typing import Optional
 
 import numpy as np
+import torch
 
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
 from alphatamp.approaches.spectre.dataset_v2 import (
@@ -40,13 +41,24 @@ from alphatamp.approaches.spectre.dataset_v2 import (
 )
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.facts import TIER_IDS, gather_context_facts
+from alphatamp.approaches.spectre.failure_record import records_for_candidate
 from alphatamp.approaches.spectre.model_v2 import D_REL, MAX_FACT_ARGS
-from alphatamp.approaches.spectre.model_v3 import SpectreV3Batch
+from alphatamp.approaches.spectre.model_v3 import (
+    MAX_RECORD_ARGS,
+    MAX_RECORD_CULPRITS,
+    N_RECORD_SCALARS,
+    SpectreV3Batch,
+)
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.tags import assign_tags
 from alphatamp.approaches.spectre.vocab import Vocab
 
-__all__ = ["build_v3_example", "collate_v3", "sample_context"]
+__all__ = [
+    "build_v3_example",
+    "collate_v3",
+    "sample_context",
+    "build_record_arrays",
+]
 
 
 def sample_context(
@@ -230,6 +242,83 @@ def _sin_cos(theta: float) -> tuple[float, float]:
     return math.sin(theta), math.cos(theta)
 
 
-def collate_v3(examples: list[_V2Example], max_arity: int) -> SpectreV3Batch:
-    """Pad + stack examples into a batch the v3 model consumes."""
-    return collate_v2(examples, max_arity=max_arity)
+def build_record_arrays(
+    episode: EpisodeRecord,
+    context_f: frozenset[int],
+    tags: dict[str, int],
+    vocab: Vocab,
+    spec: DomainSpec,
+) -> list[tuple[int, list[int], list[int], list[float]]]:
+    """Failure records of the tried candidates, as ``(schema_id, args, culprits, scalars)``.
+
+    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts. Their
+    sound consequence is applied outside the net as demotion; feeding them in as tokens
+    invites the scorer to learn the crude correlate instead ("blocked sets are large, so
+    prefer longer plans"), which measurably wrecked the easy strata in v2.2 until the tiers
+    were split. What reaches the net is evidence the deduction could *not* use.
+
+    Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
+    decoration: backfilled records report whole-attempt effort while instrumented ones
+    report per-step, so the flag tells the net which quantity it is reading instead of
+    letting a re-collection silently redefine the column.
+    """
+    out: list[tuple[int, list[int], list[int], list[float]]] = []
+    for idx in sorted(context_f):
+        skeleton = episode.skeleton_pool[idx]
+        plan_len = max(len(skeleton.operator_seq), 1)
+        for rec in records_for_candidate(episode, idx, spec):
+            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+                continue  # handled structurally by demotion, not learned
+            out.append(
+                (
+                    int(vocab.operators.get(rec.schema, 0)),
+                    [tags[a] for a in rec.args if a in tags][:MAX_RECORD_ARGS],
+                    [tags[c] for c in rec.culprits if c in tags][:MAX_RECORD_CULPRITS],
+                    [
+                        rec.step_index / plan_len,
+                        math.log1p(max(rec.n_step, 0)) / 10.0,
+                        1.0 if rec.exhausted else 0.0,
+                        1.0 if rec.effort_is_total else 0.0,
+                    ],
+                )
+            )
+    return out
+
+
+def collate_v3(
+    examples: list[_V2Example],
+    max_arity: int,
+    records: Optional[list[list[tuple[int, list[int], list[int], list[float]]]]] = None,
+) -> SpectreV3Batch:
+    """Pad + stack examples into a batch the v3 model consumes.
+
+    ``records`` is per-example and optional; without it the result is exactly a v2.2
+    batch, which is what keeps the compat path (and the equivalence oracle) intact.
+    """
+    base = collate_v2(examples, max_arity=max_arity)
+    batch = SpectreV3Batch(**base.__dict__)
+    if not records or not any(records):
+        return batch
+
+    b = len(examples)
+    r = max(len(rs) for rs in records)
+    schema = np.zeros((b, r), np.int64)
+    args = np.zeros((b, r, MAX_RECORD_ARGS), np.int64)
+    culprits = np.zeros((b, r, MAX_RECORD_CULPRITS), np.int64)
+    scalars = np.zeros((b, r, N_RECORD_SCALARS), np.float32)
+    mask = np.zeros((b, r), bool)
+    for bi, rs in enumerate(records):
+        for ri, (sid, ar, cu, sc) in enumerate(rs):
+            schema[bi, ri] = sid
+            args[bi, ri, : len(ar)] = ar
+            culprits[bi, ri, : len(cu)] = cu
+            scalars[bi, ri] = sc
+            mask[bi, ri] = True
+
+    t = torch.as_tensor
+    batch.rec_schema_ids = t(schema)
+    batch.rec_arg_tags = t(args)
+    batch.rec_culprit_tags = t(culprits)
+    batch.rec_scalars = t(scalars)
+    batch.rec_mask = t(mask)
+    return batch

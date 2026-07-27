@@ -28,10 +28,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import torch
 from torch import Tensor, nn
 
 from alphatamp.approaches.spectre.model import D_MODEL
 from alphatamp.approaches.spectre.model_v2 import (
+    D_TAG,
     MAX_TAGS_DEFAULT,
     AuxHead,
     CandidateEncoder,
@@ -40,12 +42,91 @@ from alphatamp.approaches.spectre.model_v2 import (
     SceneEncoder,
     SpectreV2Batch,
 )
-
-# The v3 batch is the v2 batch until a gate adds a field to it; aliased rather than
-# re-declared so the tensorizers and the model cannot drift apart.
-SpectreV3Batch = SpectreV2Batch
+from alphatamp.approaches.spectre.tags import PAD_TAG
 
 DROPOUT = 0.1
+
+# Record-token dims. `MAX_RECORD_ARGS` / `MAX_RECORD_CULPRITS` cap how many objects one
+# record names in each role; DD2D queries are unary and a grasp is blocked by a handful of
+# objects, so these are generous.
+MAX_RECORD_ARGS = 4
+MAX_RECORD_CULPRITS = 8
+D_SCHEMA = 32
+N_RECORD_SCALARS = 4  # [depth j/L, effort (log1p, scaled), exhausted, effort_is_total]
+
+
+@dataclass
+class SpectreV3Batch(SpectreV2Batch):
+    """The v2.2 batch plus v3's failure-record tokens.
+
+    Record fields are trailing and optional, so a batch built without them *is* a v2.2
+    batch and the compat path is unaffected. They replace the five bespoke `fact_*`
+    tensors, which stay present so the legacy encoder remains selectable (D-8).
+
+    Tags are **role-separated**: `rec_arg_tags` holds the objects the failing query was
+    *about*, `rec_culprit_tags` the objects observed to block it. v2.2 kept that
+    distinction only implicitly, by giving `grasp-witness` its own fact type; pooling both
+    roles into one slot would tell the net "these objects are associated with this
+    failure" without saying which was the target and which the obstacle.
+    """
+
+    rec_schema_ids: Optional[Tensor] = None  # (B, R) long — 0 = pad
+    rec_arg_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_ARGS) long
+    rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
+    rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
+    rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
+
+    def to(self, device) -> "SpectreV3Batch":
+        return SpectreV3Batch(
+            **{  # type: ignore[arg-type]
+                k: (v.to(device) if v is not None else None)
+                for k, v in self.__dict__.items()
+            }
+        )
+
+
+class RecordEncoder(nn.Module):
+    """One observed failure -> one token, with the object roles kept apart.
+
+    Replaces `FactEncoder`'s hand-built type vocabulary with the domain's own operator
+    schemas, and finally consumes the scalars v2.2 harvested and then dropped on the floor
+    (`Fact.scalars` never reached the tensorizer). No tier embedding: only hint-tier
+    evidence ever entered the network, so it was a constant column.
+    """
+
+    def __init__(
+        self, n_schemas: int, max_tags: int, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__()
+        self.schema_emb = nn.Embedding(n_schemas + 1, D_SCHEMA, padding_idx=0)
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.proj = nn.Sequential(
+            nn.Linear(D_SCHEMA + 2 * D_TAG + N_RECORD_SCALARS, D_MODEL),
+            nn.Dropout(dropout_p),
+            nn.LayerNorm(D_MODEL),
+        )
+
+    @staticmethod
+    def _pool(emb: Tensor, ids: Tensor) -> Tensor:
+        """Masked mean over a role's tag slots; zeros when the role is empty."""
+        present = (ids != PAD_TAG).float().unsqueeze(-1)
+        return (emb * present).sum(dim=2) / present.sum(dim=2).clamp(min=1.0)
+
+    def forward(
+        self,
+        schema_ids: Tensor,
+        arg_tags: Tensor,
+        culprit_tags: Tensor,
+        scalars: Tensor,
+        mask: Tensor,
+    ) -> Tensor:
+        parts = [
+            self.schema_emb(schema_ids),
+            self._pool(self.tag_emb(arg_tags), arg_tags),
+            self._pool(self.tag_emb(culprit_tags), culprit_tags),
+            scalars,
+        ]
+        return self.proj(torch.cat(parts, dim=-1)) * mask.unsqueeze(-1)
 
 
 @dataclass(frozen=True)
@@ -110,10 +191,16 @@ class SpectreV3Model(nn.Module):
             c.n_overlap_feats, c.n_prior_feats, c.dropout_p
         )
         self.aux = AuxHead()
-        if c.use_records or c.use_necessity:  # pragma: no cover - later gates
+        # Additive by construction: the record encoder only exists when asked for, so a
+        # default-config state dict is byte-identical to v2.2's (D-8) and the equivalence
+        # oracle keeps loading.
+        self.records = (
+            RecordEncoder(n_ops, c.max_tags, c.dropout_p) if c.use_records else None
+        )
+        if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
             raise NotImplementedError(
-                "use_records (G6) / use_necessity (G8) are not built yet; "
-                "they must land as additional submodules, never by mutating compat mode"
+                "necessity conditioning was cut from v3 (decisions.md 2026-07-26): D2 "
+                "showed the s2 deficit is within-length, which it does not address"
             )
 
     def forward(
@@ -126,8 +213,30 @@ class SpectreV3Model(nn.Module):
         """
         scene_tok = self.scene(batch)
         cand_emb = self.cands(batch)
+        # Evidence memory: v3 record tokens when enabled, else the legacy fact tokens.
+        # Never both -- they encode the same failures, so stacking them would double-count
+        # the evidence and make the increment unattributable.
         fact_tok = None
-        if batch.fact_type_ids is not None and batch.fact_type_ids.shape[1] > 0:
+        fact_mask = batch.fact_mask
+        if (
+            self.records is not None
+            and getattr(batch, "rec_schema_ids", None) is not None
+            and batch.rec_schema_ids is not None
+            and batch.rec_schema_ids.shape[1] > 0
+        ):
+            fact_tok = self.records(
+                batch.rec_schema_ids,
+                batch.rec_arg_tags,
+                batch.rec_culprit_tags,
+                batch.rec_scalars,
+                batch.rec_mask,
+            )
+            fact_mask = batch.rec_mask
+        elif (
+            self.records is None
+            and batch.fact_type_ids is not None
+            and batch.fact_type_ids.shape[1] > 0
+        ):
             fact_tok = self.facts(
                 batch.fact_type_ids,
                 batch.fact_tier_ids,
@@ -144,7 +253,7 @@ class SpectreV3Model(nn.Module):
             batch.glob_feats,
             overlap,
             fact_tok,
-            batch.fact_mask,
+            fact_mask,
             prior,
         )
         avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask

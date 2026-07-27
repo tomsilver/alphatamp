@@ -32,11 +32,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
 
-# `train_v2` heartbeat, e.g.
-#   [train_v2] seed=0 epoch 15/30 train=4.47 val=2.45 relrank=1.428 best=1.428 * ... ETA 4.2m
+# Training heartbeat from either trainer, e.g.
+#   [train_v2] seed=0 epoch 15/30 ... relrank=1.428 best=1.428 * ... ETA 4.2m
+#   [train_v3] seed=0 epoch 15/30 ... val_fp=17.20 ma=17.9 best=17.9 * ... ETA 4.2m
+# The selection metric differs between them (relrank vs deployed val FP), so it is
+# captured generically as "whatever this trainer calls best".
 _TRAIN = re.compile(
-    r"\[train_v2\]\s+seed=(?P<seed>\d+)\s+epoch\s+(?P<ep>\d+)/(?P<tot>\d+).*?"
-    r"(?:relrank=(?P<relrank>[\d.]+))?.*?(?:ETA\s+(?P<eta>[\d.]+)m)?$"
+    r"\[(?P<who>train_v[23])\]\s+seed=(?P<seed>\d+)\s+epoch\s+(?P<ep>\d+)/(?P<tot>\d+)"
+    r".*?(?:best=(?P<best>[\d.]+))?.*?(?:ETA\s+(?P<eta>[\d.]+)m)?$"
 )
 # collector heartbeat, e.g. "  [train] 12m30s | kept 204/400  (s0 100/100, ...) | ETA 33m"
 _COLLECT = re.compile(
@@ -53,7 +56,13 @@ def _running() -> list[tuple[str, str, str]]:
         ).stdout
     except Exception:  # pragma: no cover - ps should exist
         return []
-    keys = ("train_v2", "dd2d.dd2d.collect", "precompute_dd2d_cache", "vlmplan_")
+    keys = (
+        "train_v2",
+        "train_v3",
+        "dd2d.dd2d.collect",
+        "precompute_dd2d_cache",
+        "vlmplan_",
+    )
     rows = []
     for line in out.splitlines()[1:]:
         if any(k in line for k in keys) and "spectre_status" not in line:
@@ -78,8 +87,10 @@ def _log_status(path: Path) -> str | None:
         m = _TRAIN.search(line)
         if m:
             eta = f"ETA {m['eta']}m" if m["eta"] else "ETA ?"
-            rr = f" relrank={m['relrank']}" if m["relrank"] else ""
-            return f"train seed={m['seed']} epoch {m['ep']}/{m['tot']}{rr}  {eta}"
+            best = f" best={m['best']}" if m["best"] else ""
+            return (
+                f"{m['who']} seed={m['seed']} epoch {m['ep']}/{m['tot']}{best}  {eta}"
+            )
         m = _COLLECT.search(line)
         if m:
             return (
@@ -102,13 +113,14 @@ def _checkpoints() -> list[tuple[str, str]]:
             continue
         if not recs:
             continue
-        best = min(r.get("val_relrank", float("inf")) for r in recs)
+        key = "val_fp" if "val_fp" in recs[0] else "val_relrank"
+        best = min(r.get(key, float("inf")) for r in recs)
         rel = log.relative_to(root).parent
         rows.append(
             (
                 log.stat().st_mtime,
                 str(rel),
-                f"{len(recs)} epochs, best relrank {best:.3f}",
+                f"{len(recs)} epochs, best {key} {best:.3f}",
             )
         )
     rows.sort(reverse=True)

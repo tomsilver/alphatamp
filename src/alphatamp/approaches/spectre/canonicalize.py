@@ -179,6 +179,47 @@ def _remap_post_mortem(
     return replace(pm, facts=new_facts, failed_args=new_args)
 
 
+def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
+    """Rename the object names inside v3 failure observations.
+
+    ``refiner_metadata`` is a free-form dict, and its v3 ``failures`` entries carry object
+    names in three roles (``args``, ``culprits``, ``unmoved``). Those must land in the same
+    namespace as the scene and candidate tokens or the record tokens silently lose all
+    object identity -- the tags simply fail to resolve and every record degenerates to
+    "some failure of some schema". This is the same trap ``_remap_post_mortem`` exists for.
+
+    Anything not a known object name (e.g. the ``__wall__`` sentinel, which is not an
+    item) is passed through unchanged rather than dropped, so a non-object culprit stays
+    visible as itself.
+    """
+    failures = meta.get("failures")
+    if not isinstance(failures, (list, tuple)) or not failures:
+        return meta
+
+    def _rename(names) -> list[str]:
+        return [
+            mapping[n].name if n in mapping else n
+            for n in (names or [])
+            if isinstance(n, str)
+        ]
+
+    out = dict(meta)
+    out["failures"] = [
+        (
+            {
+                **f,
+                "args": _rename(f.get("args")),
+                "culprits": _rename(f.get("culprits")),
+                "unmoved": _rename(f.get("unmoved")),
+            }
+            if isinstance(f, dict)
+            else f
+        )
+        for f in failures
+    ]
+    return out
+
+
 def canonicalize_episode(
     episode: EpisodeRecord,
     rng: np.random.Generator | None = None,
@@ -231,10 +272,14 @@ def canonicalize_episode(
         else None
     )
     new_outcomes = tuple(
-        (
-            replace(o, post_mortem=_remap_post_mortem(o.post_mortem, mapping))
-            if o.post_mortem is not None
-            else o
+        replace(
+            o,
+            post_mortem=(
+                _remap_post_mortem(o.post_mortem, mapping)
+                if o.post_mortem is not None
+                else None
+            ),
+            refiner_metadata=_remap_refiner_metadata(o.refiner_metadata or {}, mapping),
         )
         for o in episode.outcomes
     )
