@@ -57,7 +57,9 @@ still acts only outside the net as demotion; what the net sees is the *observati
   win. **Consequence for the project's seed discipline:** ≥3 seeds is the stated bar, and on
   the widest-spread stratum 3 was not enough to avoid an over-claim. Where a per-stratum
   claim is load-bearing, check the margin against the seed sd, not just the sign.
-- **P-v3-1's number is met, its mechanism is not.** The bar was s2 ≤ 17.08 *via necessity
+- **P-v3-1's number is met, its mechanism is not** — and the bar is cross-collection
+  (17.08 was measured on dd2d_v3, ours on dd2d_v4; ~0.08% of labels differ). The bar was
+  s2 ≤ 17.08 *via necessity
   conditioning*; s2 lands at 15.88 via observed coverage. Report both halves — the target was
   right, the proposed mechanism was unnecessary.
 - **Adaptivity is genuinely record-driven.** Both features are exactly zero until a failure

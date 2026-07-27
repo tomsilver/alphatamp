@@ -446,6 +446,40 @@ Also worth noting against the earlier diagnosis: rollout-aligned context mass, w
 like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
 (−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
 
+### A19 — two caveats that were only ever said out loud
+
+Both surfaced while explaining the result at the end of the run, after the docs were
+written. Recorded so they are not rediscovered as objections.
+
+**1. P-v3-1's bar is cross-collection.** The 17.08 astar-dist target was measured on
+**dd2d_v3**; v3's s2 of 13.03 ± 1.52 is on **dd2d_v4**. The two collections differ on only
+~0.08% of candidate labels (`decisions.md` 2026-07-26), so they are comparable at that
+level — but it is not literally the same benchmark, and any writeup should say "s2 = 13.03
+on dd2d_v4, against a 17.08 bar measured on dd2d_v3" rather than implying one number beat
+the other on identical data.
+
+**2. The `clears` defence now rests entirely on *observed vs computed*.** §5.3 of the
+proposal defended necessity features against L2's rejected `clears` on the grounds that
+necessity was *learned* rather than *given*. That argument no longer applies: nothing is
+learned in `coverage`/`waste` — the culprits are read off the record. The defence that
+remains is narrower and must be made precisely:
+
+> `clears(S)` answers a **counterfactual** — would removing S unblock the target — for any
+> subset, without trying it, by running a geometry routine *we* wrote. `coverage` only
+> knows objects **already observed blocking in attempts already made**. It cannot say
+> whether removing S will work; it says S contains k of the blockers seen so far. Strictly
+> weaker, purely retrospective, and exactly what §6.1 lists `culprits` for.
+
+That holds, but it is now load-bearing where it used to be belt-and-braces. It belongs in
+the defence-risk register (§8) as the single most likely reviewer objection.
+
+**3. Unverified hypothesis, flagged as such.** Sampling one s2 episode, a context of 8
+failed candidates produced only **1** record token, because most DD2D failures are
+`retrieve` — proof-tier, so routed to demotion and excluded from the token path. If that
+holds generally it would explain A17's finding that tokens contribute almost entirely at
+**s1** (shallower failures, more often hint-tier) while s2/s3 tie. **One episode is not
+evidence.** The check is a tier split of emitted records by stratum; it was not run.
+
 ### A18 — the v2.2 yardstick is v2.2's *best* seed; the honest comparison is stated against it anyway
 
 The baseline was 1 seed against v3's 6, so I trained two more with v2.2's own recipe

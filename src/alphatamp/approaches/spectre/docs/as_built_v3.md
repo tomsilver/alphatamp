@@ -288,7 +288,9 @@ a measurement rather than a sweep:
 | aggregate records per query | one token per failing *query*, not per failed sample | −88.7% tokens, max 2045 → 37 |
 | separate evidence attention | evidence competed with geometry in one softmax | `suppress_records`: 16.17 → 16.40 |
 
-**On P-v3-1.** The pre-registered bar was s2 ≤ 17.08 *via necessity conditioning*. s2 lands
+**On P-v3-1.** The pre-registered bar was s2 ≤ 17.08 *via necessity conditioning*, and note
+the bar was measured on **dd2d_v3** while ours is **dd2d_v4** (~0.08% of labels differ, so
+comparable, but not the same benchmark). s2 lands
 at 15.88 (12.64 in the coverage-only arm), so the **number** is beaten — but by observed
 culprits, not by the predicted necessity head, which was withdrawn. Both halves are worth
 stating: the target was right, the proposed mechanism was not needed.
