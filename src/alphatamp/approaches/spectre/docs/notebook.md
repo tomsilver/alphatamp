@@ -85,16 +85,37 @@ Format:
   Once the refiner reports culprits, the same two features need no head at all — and become
   *more* C2-legal, since nothing is inferred by us. Paired with `--overlap-mode jaccard`,
   which drops the `dead` length proxy that G8 showed was wrong at s1.
-- **Result — uncensored deployed FP, dd2d_v4 test, n=100 [1-seed dev]:**
+- **Headline, 3 seeds** (mean ± std *across seeds* of the per-stratum mean), deployed
+  config `--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`:
 
-  | arm | ALL | s0 | s1 | s2 | s3 |
+  | | ALL | s0 | s1 | s2 | s3 |
   |---|---|---|---|---|---|
-  | **p5 jaccard + coverage** | **8.39** | **0.00** | **2.72** | **12.64** | **18.20** |
-  | p4 evidence-attention | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 |
-  | p4 evattn + aggregate | 15.74 | 0.00 | 4.36 | 24.40 | 34.20 |
-  | p3 object-evidence | 16.12 | 0.00 | 20.84 | 17.80 | 25.84 |
-  | p2 no-records | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 |
+  | **v3 deployed** | **7.44 ± 0.23** | 0.00 ± 0.00 | 3.79 ± 3.29 | **13.67 ± 1.88** | **12.31 ± 3.68** |
   | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+  **−7.22 FP, 95% CI [−9.69, −5.02]** (paired bootstrap on the seed-mean per problem).
+  **Weak per-stratum dominance holds in the mean at every stratum.** ⚠ **s1 is
+  seed-unstable** — per-seed 1.16 / 2.72 / **7.48**, so one seed exceeds the yardstick's
+  6.20. s1 has the smallest FP and so the largest relative spread; ALL is stable
+  (7.50 / 7.63 / 7.19). Say per-stratum dominance holds *on average*, not seed-wise.
+
+- **Ablations, 1-seed dev, same yardstick:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 | Δ vs v2.2 |
+  |---|---|---|---|---|---|---|
+  | deployed (seed 0) | 7.50 | 0.00 | 1.16 | 15.80 | 13.04 | **−7.16** ✱ |
+  | coverage + `dead` kept | 7.76 | 0.00 | 2.56 | 12.60 | 15.88 | **−6.90** ✱ |
+  | coverage, **no record tokens** | 7.82 | 0.00 | 3.48 | 12.28 | 15.52 | **−6.84** ✱ |
+  | **coverage alone (jaccard)** | **8.39** | **0.00** | **2.72** | **12.64** | **18.20** | **−6.27** ✱ |
+  | rollout-aligned context, no coverage | 14.34 | 0.00 | 8.04 | 17.48 | 31.84 | −0.32 |
+  | evidence-attention alone | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 | +0.26 |
+  | no records at all | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 | +0.68 |
+  | evattn + aggregate | 15.74 | 0.00 | 4.36 | 24.40 | 34.20 | +1.08 |
+  | object-evidence alone | 16.12 | 0.00 | 20.84 | 17.80 | 25.84 | +1.46 |
+  | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* | — |
+
+  ✱ = CI excludes 0. **Every coverage-bearing arm wins; nothing else does.** The result is
+  robust to the exact combination but depends entirely on `coverage`/`waste`.
 
 - **Weak per-stratum dominance is achieved.** s0 ties at 0.00; s1 **2.72 < 6.20**; s2
   **12.64 < 26.00**; s3 **18.20 < 26.44**. Overall **−6.27 FP, 95% CI [−8.92, −3.74]**,
