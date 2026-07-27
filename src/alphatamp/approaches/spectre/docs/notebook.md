@@ -70,6 +70,43 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-27 — P2: the missing G6 cell — record *tokens* cost during training even though the deployed model ignores them
+
+- **What:** the cell the G6 ablation never ran — **records OFF, overlap ON** — which is the
+  closest v3 analogue of the v2.2 configuration. Plus `aggregate_records` (one token per
+  failing *query* rather than per failed *sample*). Both 1-seed dev on dd2d_v4.
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | p2 `norec` (overlap ON) | **15.34** | 0.00 | **4.64** | 26.24 | 30.48 |
+  | p2 `agg` (records, aggregated) | 15.80 | 0.00 | 5.96 | 27.88 | **29.36** |
+  | G6b rec+ov (raw records) | 16.17 | 0.00 | 8.56 | **22.00** | 34.12 |
+  | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+- **Two facts that look contradictory and are both true.** `suppress_records` (running the
+  G6b checkpoint with its evidence memory emptied at every step) moves it only
+  **16.17 → 16.40**, so the *deployed* model barely reads its records. Yet training with
+  those same records costs **−0.83 FP overall and −3.9 at s1** against the no-records cell.
+  A token stream the model learns to discard is **not free**: it is ignored at inference but
+  still shapes the weights while training.
+- **The G6 headline is therefore mis-attributed.** Its −3.37 "record increment" was measured
+  against a bar with overlap *also* removed. Against the honest bar, records are negative.
+  G7's −5.07 for overlap was the real effect all along.
+- **Aggregation is a genuine fix, not a wash:** −0.37 vs raw records, s1 8.56 → 5.96, and
+  s3 34.12 → **29.36** — the best s3 of any arm to date. So the token flood (mean 226 tokens
+  at |F|=30, max 2045, against v2.2's ~40 facts) was a real defect.
+- **No single configuration holds every stratum.** s1 belongs to no-records (4.64, beating
+  v2.2's 6.20), s2 to *raw* records (22.00, beating 26.00), s3 to *aggregated* records
+  (29.36, still short of 26.44). s3 is the only stratum where nothing v3 does wins.
+- **Takeaway / next:** two structural suspects, both now measured rather than guessed.
+  (i) The scorer concatenates scene, global and record tokens into **one** attention memory,
+  so ~10 scene tokens compete with up to 2045 record tokens and discarding evidence is
+  loss-minimizing — hence a separate evidence channel. (ii) With v2.2's inherited context
+  sampling, **53.7% of training examples carry no evidence at all**, while a deployed s3
+  rollout is at |F|=0 for only 3.2% of its decisions — so the model is trained as a static
+  ranker most of the time.
+
 ## 2026-07-27 — G8: dropping the `dead` feature fixes s1 outright; s3 is the last blocker
 
 - **What:** three arms on dd2d_v4 [1-seed dev], testing the two hypotheses from the G6b
