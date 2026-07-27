@@ -138,6 +138,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--baseline", help='"label:ckpt_subdir" to compare arms against')
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=None,
+        help="aggregate an arm over several seeds. A subdir may contain '{seed}', which "
+        "is substituted per seed (e.g. checkpoints_v3_v3final_s{seed}); the checkpoint "
+        "path's own seed_<n> component is substituted regardless. Reports mean +- std "
+        "ACROSS SEEDS of the per-stratum mean, which is the spread a gate is judged on.",
+    )
     ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
     ap.add_argument(
         "--no-demotion",
@@ -164,46 +174,69 @@ def main(argv: list[str] | None = None) -> int:
 
     specs = [(e, False) for e in list(a.arm) + ([a.baseline] if a.baseline else [])]
     specs += [(e, True) for e in a.v2_arm]
-    results: dict[str, dict[int, float]] = {}
+    # per label: one dict[problem_id -> FP] per seed that actually had a checkpoint
+    results: dict[str, list[dict[int, float]]] = {}
     for entry, is_v2 in specs:
         label, _, subdir = entry.partition(":")
-        ckpt = data / subdir / a.env_variant / f"seed_{a.seed}" / "best.pt"
-        if not ckpt.is_file():
-            print(f"!! missing {ckpt}")
-            continue
-        if is_v2:
-            model, _ = load_v2_checkpoint(ckpt)
-            model = model.eval().to(a.device)
-            ov_mode: dict = {}
-        else:
-            model, ov_mode = load_v3(ckpt, vocab, a.device)
-        # argparse `choices` already constrains this; `cast` tells mypy the same thing
-        mode = cast(Literal["permissive", "strict"], a.mode)
-        results[label] = score(
-            model, episodes, vocab, a.device, spec, mode, not a.no_demotion, ov_mode
-        )
+        seeds = a.seeds if (a.seeds and "{seed}" in subdir) else [a.seed]
+        for sd in seeds:
+            path = subdir.replace("{seed}", str(sd))
+            ckpt = data / path / a.env_variant / f"seed_{sd}" / "best.pt"
+            if not ckpt.is_file():
+                print(f"!! missing {ckpt}")
+                continue
+            if is_v2:
+                model, _ = load_v2_checkpoint(ckpt)
+                model = model.eval().to(a.device)
+                ov_mode: dict = {}
+            else:
+                model, ov_mode = load_v3(ckpt, vocab, a.device)
+            # argparse `choices` constrains this; `cast` tells mypy the same
+            mode = cast(Literal["permissive", "strict"], a.mode)
+            results.setdefault(label, []).append(
+                score(
+                    model,
+                    episodes,
+                    vocab,
+                    a.device,
+                    spec,
+                    mode,
+                    not a.no_demotion,
+                    ov_mode,
+                )
+            )
 
     demo = "off" if a.no_demotion else f"on ({a.mode})"
     print(
         f"\n# {a.env_variant} test, uncensored deployed FP, "
         f"demotion={demo}, n={len(pids)}"
     )
-    print(f"{'arm':<24} {'ALL':>8} {'s0':>8} {'s1':>8} {'s2':>8} {'s3':>8}")
-    for label, fps in results.items():
-        v = np.array([fps[p] for p in pids])
-        cells = [f"{v.mean():8.2f}"] + [
-            f"{v[strata == s].mean():8.2f}" for s in (0, 1, 2, 3)
-        ]
-        print(f"{label:<24} " + " ".join(cells))
+    wide = any(len(v) > 1 for v in results.values())
+    w = 15 if wide else 8
+    print(
+        f"{'arm':<26}" + "".join(f"{c:>{w}}" for c in ["ALL", "s0", "s1", "s2", "s3"])
+    )
+    for label, runs in results.items():
+        mat = np.stack([[r[p] for p in pids] for r in runs])  # (n_seeds, n_problems)
+        cells = []
+        for sel in [np.ones_like(strata, bool)] + [strata == s for s in (0, 1, 2, 3)]:
+            per_seed = mat[:, sel].mean(axis=1)
+            cells.append(
+                f"{per_seed.mean():.2f} ± {per_seed.std(ddof=1):.2f}"
+                if len(per_seed) > 1
+                else f"{per_seed.mean():.2f}"
+            )
+        n = f" [{len(runs)} seeds]" if len(runs) > 1 else ""
+        print(f"{label + n:<26}" + "".join(f"{c:>{w}}" for c in cells))
 
     if a.baseline:
         base_label = a.baseline.partition(":")[0]
-        base = np.array([results[base_label][p] for p in pids])
+        base = np.stack([[r[p] for p in pids] for r in results[base_label]]).mean(0)
         print(f"\n# paired bootstrap vs '{base_label}' (negative = arm is better)")
         for label, fps in results.items():
             if label == base_label:
                 continue
-            v = np.array([fps[p] for p in pids])
+            v = np.stack([[r[p] for p in pids] for r in fps]).mean(0)
             mean, (lo, hi) = paired_bootstrap(v, base)
             sig = "" if lo <= 0 <= hi else "  *CI excludes 0"
             print(
