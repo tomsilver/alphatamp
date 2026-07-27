@@ -7,9 +7,13 @@ disagree, **this one describes the code** and the proposal describes what was pl
 Numbers cite [`notebook.md`](notebook.md); decisions cite [`decisions.md`](decisions.md)
 and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
 
-> **Status (2026-07-27).** v3 is complete as a *system* — the consolidation goals are met
-> and demonstrated. The **performance goal is not yet met**: see §7, which states the gap
-> plainly rather than burying it. Read §7 before quoting any headline number.
+> **Status (2026-07-27).** All three v3 goals are met on DD2D. Performance: v3 **weakly
+> dominates deployed v2.2 at every stratum** (7.56 vs 14.66 overall; −7.10 FP, CI
+> [−9.52, −4.96]) — §7. Cleanliness and generality: §1, §3, and
+> [`porting_guide.md`](porting_guide.md). **Caveat: every number here is 1-seed development**
+> (a 3-seed run of the deployed configuration was in flight when this was written); and the
+> generality claim is architectural, not yet demonstrated by a transfer to a second
+> environment. §9 lists the limitations.
 
 ---
 
@@ -181,10 +185,58 @@ The sinusoidal encoder is future-proofing for longer-horizon domains and a gener
 
 ---
 
-## 7. Results, and the gap
+## 7. Results
 
-*(Filled in at the end of the run — see the closing section of `autorun_decisions.md` and
-the dated `notebook.md` entries for the per-gate numbers.)*
+**Uncensored deployed FP on dd2d_v4 test, n=100.** Lower is better. Acceptance is a paired
+bootstrap over problems (1-seed development; see §9.1 for the seed caveat).
+
+| method | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| **v3 deployed** | **7.56** | **0.00** | **1.32** | **15.88** | **13.04** |
+| v3, coverage only (no aggregation/attention) | 8.39 | 0.00 | 2.72 | 12.64 | 18.20 |
+| v3, evidence-attention only | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 |
+| v3, no records at all | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 |
+| v3 as of G6b (record tokens, shared attention) | 16.17 | 0.00 | 8.56 | 22.00 | 34.12 |
+| **v2.2 yardstick** | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
+
+**Weak per-stratum dominance over deployed v2.2 is achieved**: s0 ties at 0.00, and s1, s2
+and s3 are all won. Overall **−7.10 FP, 95% CI [−9.52, −4.96]**, excluding 0.
+
+**The deployed configuration** is `--overlap-mode jaccard --coverage-feats
+--aggregate-records --evidence-attn`, i.e. four changes to the G6b model, each motivated by
+a measurement rather than a sweep:
+
+| change | why | measured before training |
+|---|---|---|
+| drop `dead` from the net | it is a *length* proxy: correct at s3, wrong at s1 | corr(dead, \|S\|) = −0.284 |
+| observed `coverage`/`waste` | states the *count* `dead` was proxying for | 2.45× separation at s3 |
+| aggregate records per query | one token per failing *query*, not per failed sample | −88.7% tokens, max 2045 → 37 |
+| separate evidence attention | evidence competed with geometry in one softmax | `suppress_records`: 16.17 → 16.40 |
+
+**On P-v3-1.** The pre-registered bar was s2 ≤ 17.08 *via necessity conditioning*. s2 lands
+at 15.88 (12.64 in the coverage-only arm), so the **number** is beaten — but by observed
+culprits, not by the predicted necessity head, which was withdrawn. Both halves are worth
+stating: the target was right, the proposed mechanism was not needed.
+
+**On P-v3-3.** Falsified, and reported as such: removing `cand_overlap` costs −5.07 FP,
+CI [−8.56, −1.78]. It is reinstated per R7's own escape clause.
+
+### 7.1 What the win rests on
+
+The whole gain traces to one substitution. §5.1 wanted a per-object necessity `p_i`
+*predicted* by a head; v3 gets the same two candidate features from culprits the refiner
+*reported*:
+
+```
+coverage = |S(c) ∩ culprits| / |culprits|      waste = |S(c) \ culprits| / |S(c)|
+```
+
+Both are exactly zero until a failure has been observed, so the first attempt is still
+purely static and the signal accrues as the rollout proceeds — this is the adaptive
+component doing the work, and it is the record schema that carries it. A leakage audit
+(features zero at |F|=0; culprits only from candidates in the failure context, all of which
+are failures; the deploy loop breaks on success before a successful candidate can enter the
+context) returned 0 violations.
 
 ---
 
@@ -211,8 +263,7 @@ nothing.
 
 ## 9. Known limitations
 
-1. **v3 does not yet beat v2.2** — §7.
-2. **1-seed development.** Every v3 number is 1 seed, accepted by paired bootstrap over
+1. **1-seed development.** Every v3 number is 1 seed, accepted by paired bootstrap over
    problems. Paper numbers need ≥3 seeds.
 3. **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is reproducible
    across processes. dd2d_v4 differs from dd2d_v3 on 0.08% of candidate labels.
