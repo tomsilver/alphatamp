@@ -66,7 +66,8 @@ each other wherever slots allow (5 concurrent training procs at peak, 20 of 32 c
 | `p7` | `recprimary` | rollout-aligned context mass alone | tie (−0.32) |
 | `p9` | `cov_only`, `cov_norec` | is `dead` still harmful? do tokens still add? | `dead` now harmless; tokens worth 0.26 |
 | `v3final` | 6 seeds | the reportable number | 7.90 ± 0.61, −6.76 |
-| `v3lean` | 6 seeds | is the config without record tokens simpler *and* better? | (see below) |
+| `v3lean` | 6 seeds | is the config without record tokens simpler *and* better? | **no** — 9.18 ± 1.41, tokens are worth 1.28 FP (A17) |
+| `v22_yardstick` | 3 seeds | the baseline was 1 seed against v3's 6 | (see A18) |
 
 ### A-G9 — the length-generalization premise does not hold on DD2D
 
