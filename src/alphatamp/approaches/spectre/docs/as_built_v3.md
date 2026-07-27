@@ -228,7 +228,16 @@ the honest reading is stratum by stratum:
 | s2 | **win** — 13.03 ± 1.52 vs 26.00, ~2× |
 | s3 | **win** — 12.96 ± 2.46 vs 26.44, ~2× |
 
-**The extra seeds earned their keep, and this is the one number a 3-seed report would have
+**On the baseline's seed count.** The yardstick above is v2.2 seed 0, the number published
+throughout this project. Two further v2.2 seeds were trained with its own recipe: the
+3-seed mean is **17.27 ± 3.02** (per-seed 14.66 / 16.57 / 20.57), so **seed 0 is v2.2's
+best**. Against the 3-seed mean v3's margin would be −9.37 and it would win every stratum
+including s1. **This document reports the comparison against seed 0** — the conservative
+choice, and the one that does not amount to picking the flattering framing after seeing
+both. v2.2's s1 spread is ±14.20 (seed 2 lands at 30.04, `relrank` selecting a bad epoch),
+which is itself the miscalibration R8 replaced.
+
+**The extra v3 seeds earned their keep, and s1 is the one number a 3-seed report would have
 got wrong.** At 3 seeds s1 read 3.79 ± 3.29 and looked like a clear win; three more seeds
 moved it to 5.60 and revealed that four of six seeds are *worse* than the yardstick there.
 s1 has the smallest FP and so the largest relative spread. Overall FP is by contrast stable

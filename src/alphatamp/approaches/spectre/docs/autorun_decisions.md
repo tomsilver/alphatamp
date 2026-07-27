@@ -446,6 +446,42 @@ Also worth noting against the earlier diagnosis: rollout-aligned context mass, w
 like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
 (−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
 
+### A18 — the v2.2 yardstick is v2.2's *best* seed; the honest comparison is stated against it anyway
+
+The baseline was 1 seed against v3's 6, so I trained two more with v2.2's own recipe
+(`train_v2 --evidence --use-overlap`, frozen under D-7 — run, not edited):
+
+| v2.2 seed | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| 0 — *the published yardstick* | **14.66** | 0.00 | 6.20 | 26.00 | 26.44 |
+| 1 | 16.57 | 0.00 | 4.76 | 23.84 | 37.68 |
+| 2 | 20.57 | 0.00 | **30.04** | 20.52 | 31.72 |
+| **mean ± sd** | **17.27 ± 3.02** | 0.00 | **13.67 ± 14.20** | 23.45 ± 2.76 | 31.95 ± 5.62 |
+
+**Seed 0 is v2.2's best of three.** So there are two defensible comparisons:
+
+| | v3 (6 seeds) | v2.2 | verdict |
+|---|---|---|---|
+| vs the **published seed-0 yardstick** | 7.90 ± 0.61 | 14.66 | **−6.76**; s2/s3 won, s1 a tie |
+| vs v2.2's **3-seed mean** | 7.90 ± 0.61 | 17.27 ± 3.02 | −9.37; every stratum won |
+
+**Decision: report the first.** Comparing against a baseline's best seed is the conservative
+choice, it is the number already published throughout this project, and quoting the 3-seed
+mean would be selecting the framing that flatters v3 after seeing both. The 3-seed mean is
+recorded here so the choice is visible rather than silent.
+
+**v2.2's instability is itself a finding, and it is R8's.** Its s1 spread is **±14.20** —
+seed 2 lands at 30.04 because `relrank` selected a bad epoch. That is precisely the
+miscalibration R8 replaced with uncensored deployed-val-FP. So v2.2's own variance argues
+for one of v3's changes; it does not, however, explain v3's margin — §7.1 of `as_built_v3`
+shows every v3 arm *without* coverage ties v2.2 despite using the v3 selector.
+
+**Method note that nearly cost a wrong number:** scoring immediately after launching those
+two runs read `best.pt` at epoch 10/30 and produced a 3-seed v2.2 of 17.56 that looked
+plausible. `train_*` rewrites `best.pt` whenever selection improves, so a checkpoint from a
+live job is a mid-training model. `spectre_score_v3` now warns when `best.pt` was written in
+the last two minutes.
+
 ### A17 — **correction to A14: record tokens are worth 1.28 FP, not 0.26**
 
 A14 concluded, from a single seed, that the per-failure token stream contributed almost
