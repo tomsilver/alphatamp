@@ -362,3 +362,49 @@ cannot distinguish "removes the right three" from "removes any three". It still 
 blockers — which points at the obvious refinement if the plain version underperforms:
 **weight each culprit by how often it was reported** rather than treating the set as flat.
 Recorded, not implemented — no point adding a second feature before the first is measured.
+
+### A13 — **what actually worked: observe the necessity you cannot predict**
+
+The winning change, and the reason it works, stated for whoever reads this next.
+
+G8 established that `dead` is a **length proxy**: right at s3 where long plans are needed,
+wrong at s1 where short ones are. Every attempt to *tune* that proxy traded one stratum for
+another. The fix was to stop proxying and state the quantity directly — at s3 three objects
+block and the right candidate removes all three — which is a **count**, not a length.
+
+The records already contain it. So:
+
+```
+coverage = |S(c) ∩ culprits| / |culprits|        waste = |S(c) \ culprits| / |S(c)|
+```
+
+**This is §5.1's necessity conditioning with `p_i` observed instead of predicted.** The
+proposal's mechanism needed a head to predict per-object necessity from geometry, and was
+cut when D2 showed it addressed the wrong deficit. Once the refiner *reports* culprits, the
+same two features fall out of the record with no head, no second loss, and no geometry
+routine — and they are **more** C2-legal than the predicted version, because nothing is
+inferred by us at all. It is also exactly why this is not `clears` (L2): `clears` was a
+geometric routine *we* ran; this is the refiner reporting a collision check it already did.
+
+Result: **8.39 vs 14.66, −6.27 FP, CI [−8.92, −3.74]**, weak dominance at every stratum.
+
+Three things worth carrying forward from *how* this was found:
+
+1. **The diagnostic chain was partly a red herring, and that is fine.** `suppress_records`
+   → shared-attention competition → separate channel was a correct diagnosis of why *tokens*
+   were inert, and the fix (`evidence_attn`, 14.92) is real but small. The large win came
+   from a different question: not "why is the model ignoring evidence?" but "what is the
+   feature it is using a bad proxy for?".
+2. **Cheap signal checks before expensive sweeps paid for themselves.** Coverage was
+   measured to separate feasible from infeasible 2.45× at s3 *before* a single epoch was
+   trained. The features that measured weakly (object-evidence's column 4) also
+   underperformed in training.
+3. **A leakage audit is mandatory for a result this large.** Run before reporting: zero at
+   |F|=0, culprits only from failed candidates in the context, deploy loop breaks on success
+   before a successful candidate can enter it. 0 violations.
+
+**Process failure to record:** two `p5_jac_cov` processes raced on one checkpoint path after
+I relaunched following a collate crash, so the first reported checkpoint scored 8.57 and then
+8.39 as the second run overwrote it. Same config, so the conclusion is unaffected, but the
+provenance was muddy — the reportable number is the clean 3-seed re-run. `spectre_sweep.py`
+should refuse to start an arm whose checkpoint directory is already being written.
