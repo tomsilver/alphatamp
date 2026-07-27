@@ -9,8 +9,8 @@ Two knobs matter and they interact:
 - ``--max-parallel`` -- how many training processes run at once. Each is its own CUDA
   context (~300-500 MB of overhead), so VRAM is not the limit; CPU is.
 - ``--num-workers`` -- dataloader workers *inside* each run. Total load is roughly
-  ``max_parallel * (1 + num_workers)`` processes, so keep that under the core count or the
-  runs start fighting each other and the wall-clock stops improving.
+  ``max_parallel * (1 + num_workers)`` processes, so keep that under the core count or
+  the runs start fighting each other and the wall-clock stops improving.
 
 Each arm writes to ``data/spectre/logs/<name>.log``, which is where
 ``spectre_status.py`` looks, so a sweep stays checkable mid-flight.
@@ -19,7 +19,8 @@ Usage::
 
     python experiments/spectre/spectre_sweep.py --preset g6
     python experiments/spectre/spectre_sweep.py --preset g7 --max-parallel 4
-    python experiments/spectre/spectre_sweep.py --arm "recA:--no-overlap" --arm "recB:--no-overlap --no-records"
+    python experiments/spectre/spectre_sweep.py \\
+        --arm "recA:--no-overlap" --arm "recB:--no-overlap --no-records"
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import IO
 
 REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
@@ -42,9 +44,19 @@ PRESETS: dict[str, dict[str, str]] = {
         "g6_recOFF_ovOFF": "--no-overlap --no-records",
         "g6_recON_ovON": "",
     },
+    # G6b re-runs G6 with the *only* change being an uncensored, whole-split selector
+    # (now the `train_v3` default, hence no extra args). G6's censored-at-30 selector
+    # scored v2.2 and v3 within 0.3 FP of each other while they were 4+ FP apart on test,
+    # so it was ranking epochs by noise. Separate output dirs: G6's checkpoints are kept
+    # so the two selectors can be compared rather than one quietly overwriting the other.
+    "g6b": {
+        "g6b_recON_ovOFF": "--no-overlap",
+        "g6b_recOFF_ovOFF": "--no-overlap --no-records",
+        "g6b_recON_ovON": "",
+    },
     # G7's 2x2 isolates `jaccard` (genuinely uncertain) from `dead` (redundant with the
-    # demotion applied outside the net). The demotion half of the 2x2 is an evaluation-time
-    # switch, not a training one, so only the two training arms appear here.
+    # demotion applied outside the net). The demotion half of the 2x2 is an
+    # evaluation-time switch, not a training one, so only the two training arms appear.
     "g7": {
         "g7_ovON": "",
         "g7_ovOFF": "--no-overlap",
@@ -53,6 +65,7 @@ PRESETS: dict[str, dict[str, str]] = {
 
 
 def launch(name: str, extra: str, env: str, seed: int, epochs: int, workers: int):
+    """Start one training arm detached, returning ``(process, log path, handle)``."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = LOG_DIR / f"{name}.log"
     cmd = [
@@ -86,6 +99,7 @@ def launch(name: str, extra: str, env: str, seed: int, epochs: int, workers: int
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the requested arms, at most ``--max-parallel`` at a time."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--preset", choices=sorted(PRESETS))
     ap.add_argument(
@@ -123,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\ncheck progress: python experiments/spectre/spectre_status.py\n")
 
     pending = list(jobs)
-    running: list[tuple[str, subprocess.Popen, Path, object]] = []
+    running: list[tuple[str, subprocess.Popen, Path, IO[str]]] = []
     failed: list[str] = []
     t0 = time.time()
     while pending or running:

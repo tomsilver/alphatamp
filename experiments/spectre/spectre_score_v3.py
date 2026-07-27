@@ -16,6 +16,7 @@ Usage::
     python experiments/spectre/spectre_score_v3.py \\
         --arm "records+overlap:checkpoints_v3_g6_recON_ovON" \\
         --arm "records only:checkpoints_v3_noov_g6_recON_ovOFF" \\
+        --v2-arm "v2.2 yardstick:checkpoints_v2_evidence_ov" \\
         --baseline "no records:checkpoints_v3_norec_noov_g6_recOFF_ovOFF"
 """
 
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal, cast
 
 import numpy as np
 import torch
@@ -31,13 +33,18 @@ from alphatamp.approaches.spectre.dd2d_compare import stratum_of
 from alphatamp.approaches.spectre.domain import spec_for
 from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+from alphatamp.approaches.spectre.model_v3 import (
+    SpectreV3Model,
+    V3Config,
+    load_v2_checkpoint,
+)
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 def load_v3(ckpt: Path, vocab: Vocab, device: str) -> SpectreV3Model:
+    """Rebuild a v3 model from its checkpoint, with dropout off for evaluation."""
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
     model = SpectreV3Model(
@@ -55,7 +62,9 @@ def load_v3(ckpt: Path, vocab: Vocab, device: str) -> SpectreV3Model:
     return model.eval().to(device)
 
 
-def score(model, episodes, vocab, device, spec, mode: str) -> dict[int, float]:
+def score(
+    model, episodes, vocab, device, spec, mode: Literal["permissive", "strict"]
+) -> dict[int, float]:
     """Uncensored deployed FP per problem id."""
     out = {}
     for ep in episodes:
@@ -83,9 +92,19 @@ def paired_bootstrap(a: np.ndarray, b: np.ndarray, n: int = 10000, seed: int = 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Score every requested arm on the test split and print the comparison table."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--env-variant", default="dd2d_v4")
     ap.add_argument("--arm", action="append", default=[], help='"label:ckpt_subdir"')
+    ap.add_argument(
+        "--v2-arm",
+        action="append",
+        default=[],
+        help='"label:ckpt_subdir" for a train_v2 checkpoint, loaded in compat mode '
+        "(D-8) so the yardstick is scored by this instrument on these episodes -- "
+        "which is what makes a v3-vs-v2.2 paired bootstrap meaningful rather than a "
+        "comparison of two separately-produced numbers",
+    )
     ap.add_argument("--baseline", help='"label:ckpt_subdir" to compare arms against')
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
@@ -106,17 +125,23 @@ def main(argv: list[str] | None = None) -> int:
     pids = [int(e.provenance.problem_id) for e in episodes]
     strata = np.array([stratum_of(p) for p in pids])
 
-    specs = list(a.arm) + ([a.baseline] if a.baseline else [])
+    specs = [(e, False) for e in list(a.arm) + ([a.baseline] if a.baseline else [])]
+    specs += [(e, True) for e in a.v2_arm]
     results: dict[str, dict[int, float]] = {}
-    for entry in specs:
+    for entry, is_v2 in specs:
         label, _, subdir = entry.partition(":")
         ckpt = data / subdir / a.env_variant / f"seed_{a.seed}" / "best.pt"
         if not ckpt.is_file():
             print(f"!! missing {ckpt}")
             continue
-        results[label] = score(
-            load_v3(ckpt, vocab, a.device), episodes, vocab, a.device, spec, a.mode
-        )
+        if is_v2:
+            model, _ = load_v2_checkpoint(ckpt)
+            model = model.eval().to(a.device)
+        else:
+            model = load_v3(ckpt, vocab, a.device)
+        # argparse `choices` already constrains this; `cast` tells mypy the same thing
+        mode = cast(Literal["permissive", "strict"], a.mode)
+        results[label] = score(model, episodes, vocab, a.device, spec, mode)
 
     print(
         f"\n# {a.env_variant} test, uncensored deployed FP, mode={a.mode}, n={len(pids)}"

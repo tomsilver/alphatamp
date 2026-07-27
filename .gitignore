@@ -215,12 +215,17 @@ tests/approaches/box_approach_performance_summary.png
 # Spectre data artifacts (collection outputs, derived datasets, checkpoints).
 # Note: data/spectre/derived/routedtransport2d_n3_v1/train_vocab.json was
 # tracked before this rule and stays tracked; new derived files need `git add -f`.
+# `checkpoints*` is a glob on purpose: every training variant mints its own dir
+# (`checkpoints_v3_g6b_recON_ovON`, ...), and the previous per-dir enumeration
+# silently fell behind every time one was added.
 data/spectre/raw/
-data/spectre/checkpoints/
-data/spectre/checkpoints_v2/
-data/spectre/checkpoints_v2_evidence/
+data/spectre/checkpoints*/
+data/spectre/logs/
 data/spectre/configs/
 data/spectre/derived/
+
+# DD2D collections at the repo root (raw_v3/raw_v4 datasets; several GB).
+data/dd2d/
 
 # DD2D vendored-env artifacts (large, derived/input data — keep out of git; the
 # vendored env *source* under envs/dd2d/ stays tracked). data/ = raw_v2 dataset
@@ -247,8 +252,3 @@ wandb/
 # from repo-wide CI tooling (autoformat/mypy/pylint/pytest) — see run_autoformat.sh,
 # [tool.mypy]/[tool.isort]/[tool.pytest] in pyproject.toml, and .pylintrc.
 /kb/
-data/spectre/checkpoints_v2_prior/
-data/spectre/checkpoints_v2_evidence_prior/
-data/spectre/checkpoints_v2_evidence_prior_ov/
-data/spectre/checkpoints_v2_prior_ov/
-data/spectre/checkpoints_v2_evidence_prior_ov_comp/

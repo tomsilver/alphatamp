@@ -5,25 +5,35 @@ restricted to within plan-length buckets so length cannot be used as a shortcut.
 changes is the evidence pathway (v3 failure-record tokens instead of five bespoke fact
 types) and the checkpoint selector.
 
-**Selection is deployed-val-FP, not `relrank`.** v2.2 selected on a difficulty-normalized
-rank statistic that turned out to be miscalibrated on dd2d_v3 (never below 1, i.e. never
-better than random) and could pick an underfit epoch. v3 selects on the quantity actually
-reported: mean failed attempts before the first success, from the real deployed rollout on
-val -- model scores plus sound demotion. Two guards, both from hard experience:
+**Selection is deployed-val-FP, not `relrank`.** v2.2 selected on a
+difficulty-normalized rank statistic that turned out to be miscalibrated on dd2d_v3
+(never below 1, i.e. never better than random) and could pick an underfit epoch. v3
+selects on the quantity actually reported: mean failed attempts before the first
+success, from the real deployed rollout on val -- model scores plus sound demotion.
+Three guards, each from a specific failure:
 
-- the **rule used for selection is frozen** at ``permissive`` regardless of the mode a gate
-  deploys with, so a change to the demotion rule cannot silently move the selector
+- the **rule used for selection is frozen** at ``permissive`` regardless of the mode a
+  gate deploys with, so a change to the demotion rule cannot silently move the selector
   underneath a comparison;
-- selection uses a **3-epoch moving average**, because a single val pass over 100 episodes
-  is noisy and ``argmin`` over 30 epochs is a maximization-biased estimator.
+- selection uses a **3-epoch moving average**, because a single val pass is noisy and
+  ``argmin`` over 30 epochs is a maximization-biased estimator;
+- selection is **uncensored and over the whole val split**, because a budget is a
+  ceiling on the statistic and the models differ in the tail above it. G6 shipped with
+  the selector censored at 30 attempts over a 50-episode subsample: it scored v2.2 at
+  11.12 and v3 at 11.40 -- indistinguishable -- while the same two models were 4+ FP
+  apart uncensored on test, because s2/s3 episodes routinely need 30-40+ attempts and
+  every one was clipped to the same number. A selector blind to the region where models
+  differ ranks epochs by noise. Cheaper recoveries if this ever costs too much: run it
+  every K epochs, or uncensored on a stride -- never censored below the separating tail.
 
-The aux head is *not* trained: no collection populates ``aux_labels``, so v2.2's masked BCE
-contributed exactly zero, and necessity conditioning was cut from v3 (``decisions.md``
-2026-07-26). Pretending to train it would be theatre.
+The aux head is *not* trained: no collection populates ``aux_labels``, so v2.2's masked
+BCE contributed exactly zero, and necessity conditioning was cut from v3
+(``decisions.md`` 2026-07-26). Pretending to train it would be theatre.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import time
@@ -37,12 +47,12 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from alphatamp.approaches.spectre.dataset_v3 import (
-    build_record_arrays,
     build_v3_example,
     collate_v3,
     sample_context,
 )
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
 from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
@@ -51,6 +61,8 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 @dataclass
 class TrainV3Config:
+    """Hyperparameters for :func:`train_v3`, persisted into every checkpoint."""
+
     epochs: int = 30
     lr: float = 3e-4
     weight_decay: float = 5e-4
@@ -64,18 +76,21 @@ class TrainV3Config:
     use_overlap: bool = True
     use_records: bool = True
     select_window: int = 3
-    val_episodes: int = 50
-    select_budget: int = 30
+    # Uncensored, whole-split selection. `select_budget=None` means "run to the pool
+    # cap", the same convention reporting uses (`decisions.md` 2026-06-07). See module
+    # docstring for why censoring here was silently fatal.
+    val_episodes: int = 100
+    select_budget: Optional[int] = None
     num_workers: int = 4
 
 
 class SpectreV3Dataset(Dataset):
     """Episodes -> ``(_V2Example, record arrays)``.
 
-    Loads **raw** and lets ``build_v3_example`` canonicalize once. That is not incidental:
-    ``canonicalize_episode`` is not idempotent, and feeding it an already-canonical episode
-    silently changes the object->tag binding (the bug that skewed every cached comparison
-    number until 2026-07-26).
+    Loads **raw** and lets ``build_v3_example`` canonicalize once. That is not
+    incidental: ``canonicalize_episode`` is not idempotent, and feeding it an
+    already-canonical episode silently changes the object->tag binding (the bug that
+    skewed every cached comparison number until 2026-07-26).
     """
 
     def __init__(
@@ -93,7 +108,17 @@ class SpectreV3Dataset(Dataset):
             p for p in list_episodes(split_dir) if _trainable(load_episode(p))
         ]
 
+    @property
+    def paths(self) -> list[Path]:
+        """Episode paths, in split order.
+
+        Public because the selector needs to *stride* this list rather than take a
+        prefix: the collector fills strata in seed bands, so a prefix is the easy half.
+        """
+        return self._paths
+
     def set_epoch(self, epoch: int) -> None:
+        """Reseed the per-epoch F-subset sampling, so each epoch draws new contexts."""
         self.epoch = epoch
 
     def __len__(self) -> int:
@@ -146,15 +171,15 @@ def deployed_val_fp(
     device: str,
     spec: DomainSpec,
     max_tags: int,
-    budget: int = 30,
+    budget: Optional[int] = None,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
     The demotion rule is pinned to ``permissive`` so the selector measures the *model*,
-    not whichever rule a gate happens to deploy with.
+    not whichever rule a gate happens to deploy with. ``budget=None`` runs to the pool
+    cap, i.e. uncensored -- the same convention reporting uses, and the only setting
+    under which this statistic can see the s2/s3 tail where models actually differ.
     """
-    from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
-
     model.eval()
     fps = []
     for ep in episodes:
@@ -206,6 +231,10 @@ def train_v3(
     out_dir: Path,
     device: Optional[str] = None,
 ) -> dict:
+    """Train one v3 ranker, writing ``best.pt`` and ``log.jsonl`` under ``out_dir``.
+
+    Returns the run summary (best selection score, epochs, training-set size).
+    """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -236,9 +265,9 @@ def train_v3(
         num_workers=cfg.num_workers,
     )
     # Stride, never truncate. The collector fills strata in seed bands and episodes are
-    # stored in seed order, so `[:50]` would hand the selector only strata 0-1 -- the easy
-    # half -- and it would happily pick a checkpoint that is hopeless on s2/s3.
-    _val_paths = val_ds._paths
+    # stored in seed order, so `[:50]` would hand the selector only strata 0-1 -- the
+    # easy half -- and it would happily pick a checkpoint hopeless on s2/s3.
+    _val_paths = val_ds.paths
     _stride = max(1, len(_val_paths) // max(cfg.val_episodes, 1))
     val_episodes = [load_episode(p) for p in _val_paths[::_stride]][: cfg.val_episodes]
 
@@ -260,7 +289,9 @@ def train_v3(
     print(
         f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
-        f"overlap={cfg.use_overlap} selection=deployed-val-FP(ma{cfg.select_window})",
+        f"overlap={cfg.use_overlap} selection=deployed-val-FP(ma{cfg.select_window}, "
+        f"n={len(val_episodes)}, "
+        f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
         flush=True,
     )
 
@@ -313,8 +344,7 @@ def _lr_at(epoch: int, cfg: TrainV3Config) -> float:
 
 
 def main(argv=None) -> int:
-    import argparse
-
+    """CLI entry point; see the module docstring for the selection protocol."""
     ap = argparse.ArgumentParser(description="Train the SPECTRE v3 ranker")
     ap.add_argument("--data-root", default="data/spectre")
     ap.add_argument("--env", default="dd2d_v4")
@@ -325,6 +355,18 @@ def main(argv=None) -> int:
     ap.add_argument("--no-records", action="store_true", help="ablate record tokens")
     ap.add_argument("--no-overlap", action="store_true", help="ablate [dead, jaccard]")
     ap.add_argument("--num-workers", type=int, default=4)
+    ap.add_argument(
+        "--val-episodes",
+        type=int,
+        default=TrainV3Config.val_episodes,
+        help="val episodes used by the selector (strided, never truncated)",
+    )
+    ap.add_argument(
+        "--select-budget",
+        type=int,
+        default=None,
+        help="censor the selector's rollout at N attempts; omit for uncensored",
+    )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -338,6 +380,8 @@ def main(argv=None) -> int:
         use_records=not a.no_records,
         use_overlap=not a.no_overlap,
         num_workers=a.num_workers,
+        val_episodes=a.val_episodes,
+        select_budget=a.select_budget,
     )
     sub = "checkpoints_v3"
     if a.no_records:
