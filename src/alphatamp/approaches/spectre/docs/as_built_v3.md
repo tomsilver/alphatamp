@@ -287,7 +287,24 @@ stating: the target was right, the proposed mechanism was not needed.
 **On P-v3-3.** Falsified, and reported as such: removing `cand_overlap` costs −5.07 FP,
 CI [−8.56, −1.78]. It is reinstated per R7's own escape clause.
 
-### 7.1 What the win rests on
+### 7.1 It is not the selector
+
+v3 replaced v2.2's `relrank` checkpoint selection with uncensored deployed-val-FP (R8), and
+`relrank` is known-miscalibrated — so an obvious question is how much of the margin is just
+better selection rather than the representation. **The ablations answer it directly: every
+v3 arm *without* coverage ties v2.2, despite all of them using the v3 selector.**
+
+| arm (all use the v3 selector) | ALL | vs v2.2 |
+|---|---|---|
+| rollout-aligned context, no coverage | 14.34 | −0.32, n.s. |
+| evidence-attention only | 14.92 | +0.26, n.s. |
+| no records at all | 15.34 | +0.68, n.s. |
+| *v2.2 (relrank selector)* | *14.66* | — |
+
+If the selector were carrying the result, those arms would already show it. They do not, so
+the ~7 FP belongs to `coverage`/`waste`, not to R8.
+
+### 7.2 What the win rests on
 
 The whole gain traces to one substitution. §5.1 wanted a per-object necessity `p_i`
 *predicted* by a head; v3 gets the same two candidate features from culprits the refiner
