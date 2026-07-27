@@ -1,0 +1,207 @@
+# SPECTRE v3 — As Built
+
+Companion to [`as_built_v2.2.md`](as_built_v2.2.md): what v3 *is*, as implemented, with
+the evidence for each choice. The design intent lives in
+[`SPECTRE_v3_proposal.md`](SPECTRE_v3_proposal.md); where this document and the proposal
+disagree, **this one describes the code** and the proposal describes what was planned.
+Numbers cite [`notebook.md`](notebook.md); decisions cite [`decisions.md`](decisions.md)
+and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
+
+> **Status (2026-07-27).** v3 is complete as a *system* — the consolidation goals are met
+> and demonstrated. The **performance goal is not yet met**: see §7, which states the gap
+> plainly rather than burying it. Read §7 before quoting any headline number.
+
+---
+
+## 1. What v3 changed, in one table
+
+| | v2.2 | v3 |
+|---|---|---|
+| Per-environment knowledge | 11 DD2D literals across "domain-agnostic" modules | **one `DomainSpec`**: 3 lines, 0 geometry |
+| Evidence schema | 5 bespoke fact types + `FactEncoder` type vocabulary | **one `FailureRecord`** + role-separated tokens over the domain's own operator schemas |
+| Sound demotion | `failure_action.startswith("retrieve")`, DD2D-specific | **declarative `QueryAxioms(monotone, local, exact)`** per query type |
+| Evidence source | offline harvest pass reconstructing facts from stored geometry | **refiner instrumentation**, observation-only (verified 290/290) |
+| Prior | `[-index, -length]` data-dependent hand switch | removed (R1); length survives only as the within-length loss bucket key |
+| Checkpoint selection | `relrank`, miscalibrated on dd2d_v3 | **uncensored deployed-val-FP** over the whole val split |
+| Demotion soundness | 12/3289 demoted candidates were feasible on dd2d_v2 | **0** under `strict` mode |
+
+The generality claim is concrete and checkable: porting to a new environment needs a
+converter, refiner instrumentation, and a `DomainSpec`. DD2D's is reproduced in full in §3.
+
+---
+
+## 2. Architecture
+
+Unchanged from v2.2 except where stated; shared primitives (SAB/PMA, tags, PL losses) are
+*imported*, never copied, because they are survivors rather than v2-specific.
+
+- **`SceneEncoder`** — per-object [tag emb; 32-point boundary descriptor via PMA; pose;
+  relation-to-target; is-target] → SAB×2. Unchanged.
+- **`CandidateEncoder`** — per-step [op emb + position + projected arg tags] → PMA.
+  `CandidateEncoderV3` optionally replaces the learned absolute position table with a
+  sinusoidal encoding (§6).
+- **`RecordEncoder`** (new) — one observed failure → one token:
+  `Linear([schema emb ; pooled arg-tags ; pooled culprit-tags ; scalars])`.
+  **Role separation is load-bearing**: in v2.2 "argument of the failed query" and "object
+  implicated as a blocker" were distinguished *by fact type*; pooling both into one slot
+  would destroy that distinction. Scalars are `[j/L, log1p(effort)/10, exhausted,
+  effort_is_total]` — v2.2 harvested `Fact.scalars` and then dropped them in the tensorizer.
+- **`CrossAttentionScorer`** — candidates attend over scene tokens and the evidence memory;
+  `[dead, jaccard]` overlap features concatenated at the head.
+- **`AuxHead`** — present, **never trained**. No collection has ever populated
+  `aux_labels`, so v2.2's masked BCE contributed exactly zero gradient. v3 says so rather
+  than implying an aux loss exists. (`as_built_v2.2` §2.4's claim to the contrary is
+  incorrect and is corrected here.)
+
+**Loss** — listwise Plackett–Luce, global + within-length buckets. No pointwise BCE on the
+ranker. The bucket key is `domain.length_key`, verified to induce the identical partition
+to v2.2's DD2D-specific key on 120000/120000 skeletons.
+
+**D-8, exact absence.** Every v3 feature is config-gated on `V3Config`, and with all flags
+off the model is built from the *same submodule classes under the same attribute names* as
+v2.2 — so a v2.2 checkpoint loads `strict=True` and `test_v3_equivalence.py` demands
+identical decisions through the v3 code path. That oracle is what made the data-path
+rewrites safe. It retires only when `sinusoidal_pos` is enabled, since `cands.pos_emb`
+then leaves the state dict.
+
+---
+
+## 3. The domain contract — the whole per-environment surface
+
+```python
+_DD2D = DomainSpec(
+    axioms={
+        "retrieve":     QueryAxioms(monotone=True, local=True, exact=True),
+        "pick":         QueryAxioms(),
+        "place-buffer": QueryAxioms(),
+    },
+    min_calls_per_schema={"pick": 1, "place-buffer": 2, "retrieve": 1},
+)
+```
+
+Everything else is derived from the operator schema: `goal_objects` from the goal literals,
+`manipulated` as `args(σ) \ goal_objects` (equals v2.2's `place-buffer` filter on
+120000/120000 skeletons), `length_key` as the operator count.
+
+Declaring an axiom has the epistemic status of writing the PDDL domain file — it is
+*specification*, not a learned or inferred routine. An unknown environment degrades to
+`EMPTY_SPEC` (everything hint-tier) rather than raising, so **"learning is the floor" is
+the default path, not a special case**.
+
+**The `exact` axiom is not decoration.** `refine()` reports the deepest step *reached*, which
+on a wall-clock exit was never tested — it will name `retrieve(target)` though the retrieve
+never ran. That is the confirmed cause of all 12/18694 dd2d_v2 demotion violations. Splitting
+"the domain says this query type is exhaustive when it completes" from "the observation says
+it actually ran" is what makes `strict` mode sound: 0 demoted-but-feasible.
+
+---
+
+## 4. Failures as observations
+
+`FailureRecord(candidate_idx, step_index, schema, args, culprits, unmoved, n_step,
+exhausted, budget_exhausted, effort_is_total, instrumented)`.
+
+Two tiers, and the split is the lesson of L4:
+
+- **Proof tier** — where the domain declares monotone + local + exact *and* the observation
+  proves the query ran, the consequence is applied **outside the network** as a finite
+  demotion offset. Never pool removal (P-E): a wrong proof costs attempts, it cannot lose
+  the feasible plan.
+- **Hint tier** — everything else becomes a learned token.
+
+**`effort_is_total` exists because a re-collection would otherwise silently redefine a
+column**: backfilled records report whole-attempt effort, instrumented ones report per-step.
+
+**Instrumentation is observation-only, and that is an invariant.** `n_attempts` *is*
+`counter.calls`, so one extra stream call shifts it and cascades into every label.
+`grasp_cfree` was therefore refactored to `grasp_blocker(...) < 0` — the culprit is the
+witness the short-circuit already computed. Verified differentially: `label`, `steps_bound`,
+`plan_length`, `failure_action` identical on 290/290 replayed candidates.
+
+**Aggregation.** The refiner emits one observation per failed *sample*; §6.1 defines a record
+per failing *query*. Left raw, a candidate whose `place-buffer(o)` was retried across many
+poses contributes hundreds of near-identical tokens (mean 2.2 per candidate but max 290; at
+|F|=30, mean 226 tokens and max 2045, against v2.2's ~40 facts). `aggregate_records` collapses
+to one per `(schema, args)` — deepest step, summed effort, unioned culprits — for −88.7%
+tokens with nothing the token *encodes* lost.
+
+---
+
+## 5. Training and selection
+
+Recipe: AdamW, lr 3e-4, cosine with 2 warmup epochs, 30 epochs, batch 8, dropout 0.1,
+weight decay 5e-4, within-length weight 1.0, tag-permutation augmentation on. Identical to
+v2.2's deployed recipe — verified field-by-field against the stored checkpoint cfgs, so
+v3-vs-v2.2 is not a recipe comparison.
+
+**Selection is uncensored deployed-val-FP** over the whole 100-episode val split, on a
+3-epoch moving average, with the demotion rule pinned to `permissive` so a change to the
+rule cannot move the selector underneath a comparison. Three guards, each from a specific
+failure — see `train_v3.py`'s module docstring. The censoring lesson generalizes and is
+worth restating: **a selection statistic must never be censored below the region where the
+candidates differ**, and *stable curves are not evidence of a good selector* — the censored
+selector's curves were stable and picked sensible mid-training epochs while spanning ≈6 FP
+where the uncensored one spans ≈15.
+
+**Failure-context sampling.** `sample_context` keeps ~35% of mass at `|F| = 0` (the
+deployment start, which the static pathway must own alone) and applies evidence dropout.
+`tail_max_f` optionally spreads half the non-empty mass out to |F| ≈ 40, because v2.2's
+inherited cap of 8 never shows the model the regime an s3 rollout actually spends most of
+its attempts in.
+
+---
+
+## 6. Position encoding
+
+`CandidateEncoderV3` replaces the learned absolute `nn.Embedding(64, D_MODEL)` with a
+sinusoidal encoding, subclassed rather than edited in place because D-7 freezes v2 modules.
+`pos_emb` is *deleted*, so it leaves the state dict — which is precisely why enabling it
+retires the D-8 oracle.
+
+**Honest scope note:** the motivating OOV problem does **not** occur on DD2D. Measured, s0–s2
+candidate pools already contain 9-operator plans (max step index 8) while s3 needs only 6, so
+under the "train s0–s2 / deploy s3" protocol the absolute table is never queried out of range.
+The sinusoidal encoder is future-proofing for longer-horizon domains and a generality argument
+— not a fix for a live DD2D defect. Claiming otherwise would be unsupported.
+
+---
+
+## 7. Results, and the gap
+
+*(Filled in at the end of the run — see the closing section of `autorun_decisions.md` and
+the dated `notebook.md` entries for the per-gate numbers.)*
+
+---
+
+## 8. What was removed, and what came back
+
+| # | Component | Disposition | Evidence |
+|---|---|---|---|
+| R1 | short-first prior | **removed** | data-dependent; diverged training on dd2d_v3 (L3) |
+| R2 | computed demotion source | **not ported** | last per-env geometry routine in the deployment story |
+| R3 | packing certificate in the method | **not ported** | inert: 0 proofs at λ=0.8 |
+| R4 | analytic `grasp-witness` | **replaced** by observed culprits | C1/C2 |
+| R5 | 5 fact types + `FactEncoder` vocab | **replaced** by one record | §4 |
+| R6 | global token | **kept** — container tokens (its replacement) are G10 work, which was not reached; removing it first would have deleted information with nothing to carry it | |
+| R7 | `cand_overlap` | **kept — P-v3-3 falsified** | removal costs −5.07 FP, CI [−8.56, −1.78] |
+| R8 | `relrank` selection | **replaced** | §5 |
+| R9 | `exclude_marginal` | **not ported** | inert twice over; reinstating needs a real label mask |
+
+Necessity conditioning (proposal §5) was **cut** — D2 showed the s2 deficit is
+*within-length*, which necessity conditioning does not address. `necessity.py` remains built
+and tested but unwired, and `V3Config.use_necessity` raises rather than silently doing
+nothing.
+
+---
+
+## 9. Known limitations
+
+1. **v3 does not yet beat v2.2** — §7.
+2. **1-seed development.** Every v3 number is 1 seed, accepted by paired bootstrap over
+   problems. Paper numbers need ≥3 seeds.
+3. **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is reproducible
+   across processes. dd2d_v4 differs from dd2d_v3 on 0.08% of candidate labels.
+4. **dd2d_v4 carries no harvested post-mortem facts**, so any v2.2 checkpoint trained on it
+   has an inert evidence pathway. This is a property of the *collection*, not of v2.2.
+5. **Env-2 has not been attempted.** The generality claim is therefore *architectural* — the
+   contract is 3 lines and the fallback is measured — not yet *demonstrated by transfer*.
