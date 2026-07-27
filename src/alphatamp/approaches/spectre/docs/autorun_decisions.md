@@ -45,6 +45,38 @@ Rationale: goal 1 is explicit and the advisor meeting needs a coherent story wit
 G10 is interface-only work whose own acceptance criterion is "changes nothing", so it is
 invisible to the story and the safest thing to defer.
 
+**Revised mid-run.** The user confirmed G9 (length generalization) is secondary to beating
+v2.2, and that v2.2 does not need re-deriving. G9's encoder is built and tested but the
+*experiment* is not run — which is doubly justified, since its premise does not hold on
+DD2D anyway (see A-G9 below). G10 is not attempted.
+
+### Sweep ledger
+
+Each sweep is ~50 min for 3 arms in parallel; arms run concurrently with scoring and with
+each other wherever slots allow (5 concurrent training procs at peak, 20 of 32 cores).
+
+| sweep | arms | question |
+|---|---|---|
+| `g8` | `jac`, `tailF`, `jac_tailF` | does dropping the `dead` feature fix s1, does rollout-aligned |F| fix s3 |
+| `p2` | `norec`, `agg` (+2 staged) | the missing G6 cell; does taming the token flood make records work |
+| `p3` | `objev`, `objev_norec`, `objev_tailF` | does evidence work when routed through the tag join instead of as tokens |
+
+### A-G9 — the length-generalization premise does not hold on DD2D
+
+Measured before spending a sweep on it. Max plan length in the *candidate pool*, by the
+episode's stratum:
+
+| stratum of episode | max plan length in its pool | max step index |
+|---|---|---|
+| s0, s1, s2 | 9 | 8 |
+| s3 | 7 | 6 |
+
+Training on s0–s2 therefore already exercises step indices 0–8, which **covers everything
+s3 needs**. The absolute `pos_emb` table is never queried out of range under the
+"train s0–s2 / deploy s3" protocol, so that experiment would not have been testing what it
+claims. The sinusoidal encoder is kept as future-proofing for longer-horizon domains and as
+a generality argument — not as a fix for a live DD2D defect, and the docstring says so.
+
 ---
 
 ## Entries
