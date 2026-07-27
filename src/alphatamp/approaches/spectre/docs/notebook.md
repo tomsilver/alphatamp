@@ -70,6 +70,43 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-27 — G8: dropping the `dead` feature fixes s1 outright; s3 is the last blocker
+
+- **What:** three arms on dd2d_v4 [1-seed dev], testing the two hypotheses from the G6b
+  post-mortem. `jac` drops the `dead` column from the net's `cand_overlap` (keeping the
+  sound demotion outside the net); `tailF` spreads half the training |F| mass out to 40,
+  because v2.2's inherited cap of 8 never shows the model the regime an s3 rollout visits.
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | g8 `jac` | 16.86 | 0.00 | **4.84** | 27.20 | 35.40 |
+  | g8 `tailF` | 17.38 | 0.00 | 6.80 | 27.92 | 34.80 |
+  | g8 `jac+tailF` | 18.31 | 0.00 | 6.04 | 25.64 | 41.56 |
+  | G6b rec+ov (reference) | **16.17** | 0.00 | 8.56 | **22.00** | **34.12** |
+  | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+- **The s1 diagnosis was right, and the fix is decisive.** Removing `dead` from the net
+  takes s1 from 8.56 to **4.84** — past v2.2's 6.20. It was a disguised shortness cue
+  (corr(dead, |S|) = −0.284, mean |S| 1.38 dead vs 2.39 alive), sound as an outside-the-net
+  offset but, as a *feature*, a free-running "short ⇒ bad" correlate. s1 is exactly the
+  stratum where short is correct, so it took the damage. This is L4 reappearing as a
+  feature rather than as a token.
+- **But it is a trade, not a free win.** The same shortness bias is *correct* at s2/s3, so
+  dropping it costs s2 (22.00 → 27.20) and s3 (34.12 → 35.40), and ALL gets slightly worse.
+  Length calibration is being carried by a feature that is right at one end of the stratum
+  range and wrong at the other.
+- **`tailF` does not fix s3** (34.12 → 34.80), so the train/deploy |F| mismatch is real but
+  is *not* what limits s3. Recorded as a negative result; the knob stays available.
+- **Where this leaves weak dominance.** Per stratum the best v3 arms already have s1 (4.84
+  vs 6.20) and s2 (22.00 vs 26.00). **s3 is the only stratum still losing** (34.12 vs
+  26.44), and it alone decides the headline: a model with s1 4.84 / s2 22.00 / s3 26.44
+  would average **13.32**, beating the yardstick's 14.66.
+- **Takeaway / next:** stop tuning the length proxy and give the model the signal it is
+  proxying for. The record fields already contain it — how many *distinct* objects have been
+  observed to block the target is a direct statement of how many removals are needed — which
+  is what the P3 object-evidence column and the P4 evidence-attention channel are for.
+
 ## 2026-07-26 — G7: P-v3-3 falsified — `cand_overlap` is load-bearing, and the net has already internalised the demotion rule
 
 - **What:** the S4/G7 2×2, {overlap on/off} × {demotion on/off}, on dd2d_v4 test [1-seed
