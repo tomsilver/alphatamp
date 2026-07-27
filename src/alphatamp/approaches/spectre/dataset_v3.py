@@ -505,8 +505,28 @@ def collate_v3(
     ``records`` is per-example and optional; without it the result is exactly a v2.2
     batch, which is what keeps the compat path (and the equivalence oracle) intact.
     """
-    base = collate_v2(examples, max_arity=max_arity)
+    # `collate_v2` hard-codes a width-2 `cand_overlap` and D-7 freezes it, so a wider
+    # example is stacked here instead. Narrow *copies* go to the v2 collator -- mutating
+    # the caller's examples in place and restoring them afterwards would work today and
+    # break the moment anything holds a reference.
+    wide = max((len(e.overlap[0]) if e.overlap else 2) for e in examples)
+    narrow = (
+        [
+            dataclasses.replace(e, overlap=[row[:2] for row in e.overlap])
+            for e in examples
+        ]
+        if wide > 2
+        else examples
+    )
+    base = collate_v2(narrow, max_arity=max_arity)
     batch = SpectreV3Batch(**base.__dict__)
+    if wide > 2:
+        b_, k_ = batch.pool_mask.shape
+        ov_arr = np.zeros((b_, k_, wide), np.float32)
+        for bi, e in enumerate(examples):
+            for ki, row in enumerate(e.overlap[:k_]):
+                ov_arr[bi, ki] = row
+        batch.cand_overlap = torch.as_tensor(ov_arr)
     evs = [getattr(e, "obj_evidence", None) for e in examples]
     if any(e is not None for e in evs):
         n_obj = int(batch.obj_tags.shape[1])
