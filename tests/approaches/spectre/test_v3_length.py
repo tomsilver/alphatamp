@@ -154,3 +154,82 @@ def test_aggregation_is_idempotent_and_never_grows_the_set() -> None:
     assert [(r.schema, r.args, r.step_index, r.n_step) for r in once] == [
         (r.schema, r.args, r.step_index, r.n_step) for r in twice
     ]
+
+
+# --------------------------------------------------------------------------- #
+# object-level evidence (P3): failures summarised onto the objects they name
+# --------------------------------------------------------------------------- #
+
+
+def test_object_evidence_is_absent_before_any_failure_is_observed() -> None:
+    """At |F| = 0 there is nothing to summarise, and the column must be exactly absent.
+
+    Not "all zeros by luck": the deployment start is the state the static pathway has to
+    own alone (P-D), so a nonzero summary there would be evidence leaking into t=0.
+    """
+    import numpy as np
+
+    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+
+    ev = _object_evidence(frozenset(), [], ["a", "b"], [], [])
+    assert ev.shape == (2, 5)
+    assert not ev.any()
+    assert ev.dtype == np.float32
+
+
+def test_object_evidence_binds_counts_to_the_right_objects_and_stays_normalized() -> (
+    None
+):
+    """Each column is a fraction in [0, 1] attached to the object it names."""
+    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+
+    objects = ["a", "b", "c"]
+    subsets = {0: frozenset({"a"}), 1: frozenset({"a", "b"})}
+    recs = [
+        _rec("pick", ["a"], step=2, n=1, culprits=["c"]),
+        _rec("pick", ["b"], step=4, n=1, culprits=["c"]),
+    ]
+    ev = _object_evidence(frozenset({0, 1}), subsets, objects, recs, [])
+
+    a, b, c = (ev[objects.index(o)] for o in objects)
+    assert a[0] == 1.0, "'a' is manipulated by both failed candidates"
+    assert b[0] == 0.5, "'b' by one of two"
+    assert c[0] == 0.0, "'c' by neither"
+    assert a[1] == 0.5 and b[1] == 0.5, "each named as an argument once of two records"
+    assert c[2] == 1.0, "'c' is the culprit in both records"
+    assert a[2] == 0.0, "'a' is never a culprit"
+    assert (ev >= 0).all() and (ev <= 1).all(), "columns must stay in [0, 1]"
+
+
+def test_object_evidence_changes_the_scene_projection_width_only_when_enabled() -> None:
+    """It is a real input change, so it must be visible in the parameter shapes."""
+    from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+
+    def width(flag: bool) -> int:
+        m = SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(use_obj_evidence=flag))
+        return int(m.scene.proj[0].in_features)
+
+    assert width(True) == width(False) + 5
+
+
+def test_proof_tier_culprits_reach_column_4_and_nothing_else() -> None:
+    """The tier split is preserved: proof records contribute identity, never set size.
+
+    Column 4 is the *observation* that an object blocked a query -- the honest, observed
+    counterpart of the `clears` predicate L2 rejected for being a routine we ran
+    ourselves. It must not leak into the hint columns, which is what would re-import L4's
+    "blocked sets are large" correlate.
+    """
+    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+
+    objects = ["a", "b"]
+    proof = [_rec("retrieve", ["t"], step=6, n=1, culprits=["b"])]
+    ev = _object_evidence(frozenset({0}), {0: frozenset({"a"})}, objects, [], proof)
+
+    a_row, b_row = ev[0], ev[1]
+    assert b_row[4] == 1.0, "'b' was reported as a proof-tier culprit"
+    assert b_row[1] == b_row[2] == 0.0, "proof records must not fill the hint columns"
+    assert a_row[4] == 0.0
+    assert (
+        a_row[0] == 1.0
+    ), "'a' is still counted as manipulated by the failed candidate"

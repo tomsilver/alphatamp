@@ -180,3 +180,63 @@ information, and one unlucky candidate can dominate the evidence memory.
 the deepest step, summing effort, unioning culprits. Measured: **−88.7% tokens, max
 2045 → 37**, which is v2.2's order of magnitude. This is a *faithfulness* fix, not a
 tuning knob: §6.1 defines the record as the failing query and its arguments.
+
+### A8 — **the trained model already ignores its record tokens**, and v3 in fact *matches* v2.2
+
+The pivotal measurement of the run, and it overturned my own A6 reading. Added
+`suppress_records` (a diagnostic, never a deployment mode) and ran the G6b
+records+overlap checkpoint with its evidence memory emptied at every step:
+
+| deploy | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| records ON (as trained) | 16.17 | 0.00 | 8.56 | 22.00 | 34.12 |
+| records SUPPRESSED | 16.40 | 0.00 | 8.56 | 22.64 | 34.40 |
+
+**0.23 FP.** The record tokens are doing essentially nothing. So:
+
+- G6's −3.37 "record increment" was **`cand_overlap`**, not records — which agrees with
+  G7's independent −5.07 for overlap, and means the G6 headline was mis-attributed.
+- A6's inference ("records are net-harmful by ~1.5 FP") was **wrong in mechanism**. They
+  are not harmful, they are *inert*. The dd2d_v4 fact-inertness finding stands and still
+  matters for how the comparison is described, but it does not explain the gap.
+
+And the gap itself is not what it looked like. Scoring both models on **both** splits:
+
+| | val FP | test FP |
+|---|---|---|
+| v2.2 yardstick | 17.30 | 14.66 |
+| v3 G6b rec+ov | **17.09** | 16.17 |
+
+v3 is slightly *better* on val and worse on test, and the paired bootstrap on test already
+had CI [−2.29, +5.72] including 0. **v3 matches v2.2; it does not underperform it.** The
+100-episode splits simply do not resolve a ~1.5 FP difference. Beating v2.2 therefore
+requires *adding signal*, not repairing a regression — a materially different problem from
+the one I started the night with.
+
+### A9 — evidence should enter where the tag join is: on objects, not as free tokens
+
+Diagnosis from A8: the failure is not "evidence is useless" — `cand_overlap`, two compact
+scalars per candidate over the *same* failure set, is worth 5 FP. It is that **free-floating
+tokens are the wrong shape for this architecture**. The scorer's strength is the tag join
+between scene objects and candidate arguments; a record token participates only weakly,
+through pooled tag slots, and competes with scene tokens for the same attention.
+
+**Decision: `SceneEncoderV3` (`--obj-evidence`)** — summarise the observed failures onto the
+objects they *name*, as 4 scalars per object appended to the scene token input, all in
+[0,1] and all zero before any failure:
+
+```
+[ frac of failed candidates that manipulate o,
+  frac of hint records naming o as an argument,
+  frac of hint records naming o as a culprit,
+  mean normalized depth of records naming o ]
+```
+
+Domain-agnostic by construction (set membership over record fields — no geometry, no
+per-environment predicate, C1/L2). Proof-tier records stay excluded exactly as in the token
+path, so this does not re-import the L4 "blocked sets are large ⇒ prefer longer" correlate.
+
+Implementation note worth keeping: `_V3Example` **subclasses** `_V2Example` rather than
+widening `build_v3_example`'s return, so all three callers keep their two-tuple and
+`collate_v2` flows through untouched. Like `sinusoidal_pos`, enabling it changes a
+projection width and therefore retires the D-8 oracle; default off stays byte-identical.

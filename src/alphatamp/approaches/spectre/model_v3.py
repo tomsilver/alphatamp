@@ -153,7 +153,7 @@ def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
     return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
 
-N_OBJ_EVIDENCE = 4
+N_OBJ_EVIDENCE = 5
 """Per-object evidence summary width; see :class:`SceneEncoderV3`."""
 
 

@@ -82,6 +82,16 @@ PRESETS: dict[str, dict[str, str]] = {
         "p2_agg_tailF": "--aggregate-records --tail-max-f 40",
         "p2_agg_jac_tailF": "--aggregate-records --overlap-mode jaccard --tail-max-f 40",
     },
+    # P3: evidence via the tag join. `suppress_records` showed the trained model ignores
+    # its record tokens (16.17 -> 16.40 with the memory emptied), while cand_overlap --
+    # compact scalars over the same failure set -- is worth 5 FP. So route the records
+    # onto the objects they name. `objev_norec` is the cleanest form of the story: no
+    # free-floating token stream at all, evidence enters only where the tag join lives.
+    "p3": {
+        "p3_objev": "--obj-evidence",
+        "p3_objev_norec": "--obj-evidence --no-records",
+        "p3_objev_tailF": "--obj-evidence --tail-max-f 40",
+    },
 }
 
 

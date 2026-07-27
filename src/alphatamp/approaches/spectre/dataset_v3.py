@@ -79,30 +79,55 @@ class _V3Example(_V2Example):
 def records_for_evidence(
     episode: EpisodeRecord, ctx: frozenset, spec: DomainSpec
 ) -> list:
-    """Hint-tier records of the context, as objects (the token path returns arrays).
+    """Split the context's records into ``(hint_tier, proof_tier)``.
 
-    Same tier filter as :func:`build_record_arrays`: proof-tier records whose deduction
-    actually fired are handled outside the net, so they must not re-enter as features
-    either -- that is the split L4 paid for.
+    The token path consumes only the hint tier, exactly as v2.2 did. The object summary
+    consumes both, but keeps them in **separate columns** -- see :func:`_object_evidence`
+    for why that is not a violation of the tier split.
     """
-    out = []
+    hint, proof = [], []
     for idx in sorted(ctx):
         for rec in records_for_candidate(episode, idx, spec):
             if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
-                continue
-            out.append(rec)
-    return out
+                proof.append(rec)
+            else:
+                hint.append(rec)
+    return hint, proof
 
 
 def _object_evidence(
-    canon: EpisodeRecord,
     ctx: frozenset,
     subsets: list,
     objects: list,
-    records: list,
-    spec: DomainSpec,
+    hint_records: list,
+    proof_records: list,
 ) -> np.ndarray:
-    """Summarise the observed failures onto the objects they name. See SceneEncoderV3."""
+    """Summarise the observed failures onto the objects they name. See SceneEncoderV3.
+
+    Five columns per object, all fractions in [0, 1], all zero before any failure:
+
+    0. fraction of failed candidates that manipulate ``o``
+    1. fraction of hint records naming ``o`` as an argument
+    2. fraction of hint records naming ``o`` as a culprit
+    3. mean normalized depth of the records naming ``o``
+    4. fraction of **proof-tier** records naming ``o`` as a culprit
+
+    **Column 4 needs its own justification, because it looks like a tier violation and is
+    not.** Proof-tier records are kept out of the *token* path because what a token
+    exposes there is the failed **set**, and the net learns the crude size correlate from
+    it ("blocked sets are large, so prefer longer") -- L4, which cost +13.5 FP on s1.
+    Column 4 exposes something categorically different: the **identity of an object the
+    refiner's own collision check reported as blocking**. That is an *observation* (C2's
+    legal source), not the *deduction*; the deduction still acts only outside the net as
+    demotion (C5), and no weight can override it.
+
+    It is also the honest, observed version of the `clears` predicate that L2 rejected.
+    `clears` was rejected for being a hand-coded per-environment geometric routine we ran
+    ourselves. This is the refiner reporting what it already computed -- the same legality
+    class as `failure_action`, and exactly what §6.1 lists ``culprits`` for. On dd2d_v4
+    `retrieve` records carry culprits 100% of the time, so this column is where "which
+    object is actually blocking the target" enters the model at all.
+    """
     ev = np.zeros((len(objects), N_OBJ_EVIDENCE), dtype=np.float32)
     if not ctx:
         return ev
@@ -112,19 +137,24 @@ def _object_evidence(
         for o in subsets[f]:
             if o in index:
                 ev[index[o], 0] += 1.0 / n_ctx
-    n_rec = float(len(records)) or 1.0
+    n_hint = float(len(hint_records)) or 1.0
     depth_sum = np.zeros(len(objects), dtype=np.float32)
     depth_cnt = np.zeros(len(objects), dtype=np.float32)
-    for rec in records:
+    for rec in hint_records:
         for o in rec.args:
             if o in index:
-                ev[index[o], 1] += 1.0 / n_rec
+                ev[index[o], 1] += 1.0 / n_hint
                 depth_sum[index[o]] += rec.step_index
                 depth_cnt[index[o]] += 1.0
         for o in rec.culprits:
             if o in index:
-                ev[index[o], 2] += 1.0 / n_rec
+                ev[index[o], 2] += 1.0 / n_hint
     ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / 8.0
+    n_proof = float(len(proof_records)) or 1.0
+    for rec in proof_records:
+        for o in rec.culprits:
+            if o in index:
+                ev[index[o], 4] += 1.0 / n_proof
     return np.clip(ev, 0.0, 1.0)
 
 
@@ -410,18 +440,12 @@ def build_v3_example(
         else []
     )
 
-    obj_evidence = (
-        _object_evidence(
-            canon,
-            ctx,
-            subsets,
-            [o.name for o in geo.objects],
-            records_for_evidence(canon, ctx, spec),
-            spec,
+    obj_evidence = None
+    if ctx and not hide:
+        _hint, _proof = records_for_evidence(canon, ctx, spec)
+        obj_evidence = _object_evidence(
+            ctx, subsets, [o.name for o in geo.objects], _hint, _proof
         )
-        if (ctx and not hide)
-        else None
-    )
 
     return (
         _V3Example(
