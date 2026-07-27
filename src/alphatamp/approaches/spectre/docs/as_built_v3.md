@@ -72,6 +72,18 @@ Unchanged from v2.2 except where stated; shared primitives (SAB/PMA, tags, PL lo
   than implying an aux loss exists. (`as_built_v2.2` §2.4's claim to the contrary is
   incorrect and is corrected here.)
 
+**Which of these the deployed config actually enables** — the gated components are not all
+on, and it matters for reading §7's ablations:
+
+| component | in deployed config? |
+|---|---|
+| `RecordEncoder` (record tokens), aggregated per query | **yes** |
+| `CrossAttentionScorerV3` (separate evidence channel) | **yes** |
+| observed `coverage`/`waste`, `dead` dropped from the net | **yes** — this is what carries the result |
+| `SceneEncoderV3` (per-object evidence) | **no** — built and tested; hurt s1 badly on its own (20.84) |
+| `CandidateEncoderV3` (sinusoidal positions) | **no** — built and tested; G9 descoped, so the D-8 oracle is still live |
+| necessity head | **no** — cut; `use_necessity` raises |
+
 **Loss** — listwise Plackett–Luce, global + within-length buckets. No pointwise BCE on the
 ranker. The bucket key is `domain.length_key`, verified to induce the identical partition
 to v2.2's DD2D-specific key on 120000/120000 skeletons.
