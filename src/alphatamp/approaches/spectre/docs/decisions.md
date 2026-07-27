@@ -45,11 +45,16 @@ a predicted head, not less. It also does not touch C5: the *deduction* (this sub
 still acts only outside the net as demotion; what the net sees is the *observation*.
 
 **Consequences.**
-- **Weak per-stratum dominance over deployed v2.2, the proposal's goal 1** [1-seed dev]:
-  **7.56 vs 14.66** overall, **−7.10 FP, 95% CI [−9.52, −4.96]**; s0 ties at 0.00, s1
-  1.32/6.20, s2 15.88/26.00, s3 13.04/26.44. Deployed config is
-  `--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`
-  (preset `v3final`).
+- **Weak per-stratum dominance over deployed v2.2, the proposal's goal 1.** Over **3
+  seeds**: **7.44 ± 0.23 vs 14.66**, **−7.22 FP, 95% CI [−9.69, −5.02]**. Per stratum
+  (mean ± std across seeds): s0 0.00 ± 0.00, s1 3.79 ± 3.29, s2 13.67 ± 1.88, s3
+  12.31 ± 3.68 — every one at or below the yardstick's 0.00 / 6.20 / 26.00 / 26.44.
+  Deployed config is `--overlap-mode jaccard --coverage-feats --aggregate-records
+  --evidence-attn` (preset `v3final`).
+- **s1 is seed-unstable and the claim there is a mean, not a guarantee.** Per-seed s1 is
+  1.16 / 2.72 / **7.48**, so one seed exceeds the yardstick's 6.20. s1 has the smallest FP
+  and therefore the largest relative spread; ALL is stable (7.50 / 7.63 / 7.19). State
+  per-stratum dominance as holding *on average*.
 - **P-v3-1's number is met, its mechanism is not.** The bar was s2 ≤ 17.08 *via necessity
   conditioning*; s2 lands at 15.88 via observed coverage. Report both halves — the target was
   right, the proposed mechanism was unnecessary.
@@ -67,9 +72,15 @@ still acts only outside the net as demotion; what the net sees is the *observati
 - **Superseded:** G6's arm levels (censored selector) and G6's "−3.37 record increment",
   which was `cand_overlap` — its bar removed both. **P-v3-3 falsified** (G7): removing
   `cand_overlap` costs −5.07 FP, CI [−8.56, −1.78]; reinstated per R7's escape clause.
-- **Caveats.** Every number is **1-seed development**; a 3-seed run of the deployed config is
-  the reportable figure. Env-2 remains un-attempted, so generality is architectural
-  (`porting_guide.md`), not demonstrated.
+- **The result does not depend on the exact combination.** Every coverage-bearing arm beats
+  the yardstick significantly (−6.3 to −7.2 FP, all CIs excluding 0); the one arm without
+  coverage (rollout-aligned context mass) is a tie at −0.32. Record *tokens* are worth 0.26
+  FP on top of coverage, so the adaptive signal rides on compact per-candidate features
+  rather than a per-failure token stream — which is the better outcome for generality, since
+  features over a reported culprit set need no per-environment token vocabulary.
+- **Caveats.** Ablations are 1-seed; only the deployed config is multi-seed. Env-2 remains
+  un-attempted, so generality is architectural (`porting_guide.md`), not demonstrated. The
+  v2.2 yardstick is itself 1 seed.
 
 ---
 
