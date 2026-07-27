@@ -34,8 +34,10 @@ BCE contributed exactly zero, and necessity conditioning was cut from v3
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -200,6 +202,36 @@ def _trainable(ep) -> bool:
     )
 
 
+def _claim_out_dir(out_dir: Path) -> None:
+    """Refuse to start if another live run already owns this checkpoint directory.
+
+    Two runs of the same arm silently interleave their writes to ``best.pt``, so the file
+    ends up from whichever finished last and the checkpoint's provenance is unrecoverable.
+    That happened during the 2026-07-27 push: a relaunch after a crash left two processes
+    on one path, and the same config scored 8.57 then 8.39 as the second overwrote the
+    first. The conclusion survived because the config was identical; it would not have if
+    the arms had differed.
+
+    A stale marker (owner no longer alive) is reclaimed rather than fatal, so a killed run
+    does not block the directory forever.
+    """
+    marker = out_dir / ".owner"
+    if marker.is_file():
+        try:
+            owner = int(marker.read_text().strip())
+            os.kill(owner, 0)  # signal 0 = liveness probe, sends nothing
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass  # stale or unreadable -> reclaim
+        else:
+            raise RuntimeError(
+                f"{out_dir} is already being written by pid {owner}. Two runs sharing a "
+                f"checkpoint dir produce a best.pt of unrecoverable provenance. Use a "
+                f"different --out-suffix, or stop that run first."
+            )
+    marker.write_text(str(os.getpid()))
+    atexit.register(lambda: marker.unlink(missing_ok=True))
+
+
 def _keep(ep, strata: tuple[int, ...]) -> bool:
     """``_trainable`` plus the optional G9 stratum restriction on the training split."""
     if not _trainable(ep):
@@ -302,6 +334,7 @@ def train_v3(
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _claim_out_dir(out_dir)
 
     probe = load_episode(list_episodes(train_dir)[0])
     spec = spec_for(probe.provenance.env_variant)
