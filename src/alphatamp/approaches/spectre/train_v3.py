@@ -46,7 +46,6 @@ from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
 from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
-from alphatamp.approaches.spectre.tags import assign_tags
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
@@ -65,7 +64,8 @@ class TrainV3Config:
     use_overlap: bool = True
     use_records: bool = True
     select_window: int = 3
-    val_episodes: int = 100
+    val_episodes: int = 50
+    select_budget: int = 30
 
 
 class SpectreV3Dataset(Dataset):
@@ -104,7 +104,7 @@ class SpectreV3Dataset(Dataset):
         rng = np.random.default_rng((self.cfg.seed, idx, self.epoch))
         fail_idx = [i for i, o in enumerate(episode.outcomes) if o.outcome == "fail"]
         ctx, hide = sample_context(fail_idx, rng)
-        example = build_v3_example(
+        example, records = build_v3_example(
             episode,
             self.vocab,
             rng=rng,
@@ -115,24 +115,8 @@ class SpectreV3Dataset(Dataset):
             augment_tags=self.cfg.augment,
             spec=spec,
         )
-        records: list = []
-        if self.cfg.use_records and ctx and not hide:
-            # Tags must match the ones the example was built with, so they are re-derived
-            # from the same canonical names under the same rng draw.
-            from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
-
-            canon = canonicalize_episode(episode, rng=None)
-            assert canon.scene_geometry is not None
-            tags = assign_tags(
-                [o.name for o in canon.scene_geometry.objects],
-                rng=(
-                    np.random.default_rng((self.cfg.seed, idx, self.epoch))
-                    if self.cfg.augment
-                    else None
-                ),
-                max_tags=self.cfg.max_tags,
-            )
-            records = build_record_arrays(canon, ctx, tags, self.vocab, spec)
+        if not self.cfg.use_records:
+            records = []
         return example, records
 
 
@@ -161,6 +145,7 @@ def deployed_val_fp(
     device: str,
     spec: DomainSpec,
     max_tags: int,
+    budget: int = 30,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -173,7 +158,14 @@ def deployed_val_fp(
     fps = []
     for ep in episodes:
         attempts, _ = deployed_rollout_v3_traced(
-            model, ep, vocab, device, spec=spec, max_tags=max_tags, mode="permissive"
+            model,
+            ep,
+            vocab,
+            device,
+            spec=spec,
+            max_tags=max_tags,
+            mode="permissive",
+            max_attempts=budget,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -230,7 +222,12 @@ def train_v3(
     val_loader = DataLoader(
         val_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=collate
     )
-    val_episodes = [load_episode(p) for p in val_ds._paths][: cfg.val_episodes]
+    # Stride, never truncate. The collector fills strata in seed bands and episodes are
+    # stored in seed order, so `[:50]` would hand the selector only strata 0-1 -- the easy
+    # half -- and it would happily pick a checkpoint that is hopeless on s2/s3.
+    _val_paths = val_ds._paths
+    _stride = max(1, len(_val_paths) // max(cfg.val_episodes, 1))
+    val_episodes = [load_episode(p) for p in _val_paths[::_stride]][: cfg.val_episodes]
 
     model = SpectreV3Model(
         n_ops=len(vocab.operators),
@@ -263,7 +260,9 @@ def train_v3(
             g["lr"] = _lr_at(epoch, cfg)
         tr = _run_epoch(model, train_loader, device, cfg.within_length_weight, opt)
         va = _run_epoch(model, val_loader, device, 0.0, None)
-        fp = deployed_val_fp(model, val_episodes, vocab, device, spec, cfg.max_tags)
+        fp = deployed_val_fp(
+            model, val_episodes, vocab, device, spec, cfg.max_tags, cfg.select_budget
+        )
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
         # epochs would systematically pick the luckiest one rather than the best model

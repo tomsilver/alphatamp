@@ -71,11 +71,19 @@ def deployed_rollout_v3_traced(
     spec: Optional[DomainSpec] = None,
     max_tags: int = 32,
     mode: DemotionMode = "strict",
+    max_attempts: Optional[int] = None,
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
     ``attempts`` is 1-indexed (the rollout FP reported downstream is ``attempts - 1``).
     ``spec`` defaults to the contract registered for the episode's own ``env_variant``.
+
+    ``max_attempts`` censors the rollout at a fixed budget. Reporting always runs
+    uncensored -- the budget equals the pool cap, so it never binds -- and censoring exists
+    only for *checkpoint selection*, where the metric is recomputed every epoch and the
+    full loop otherwise costs several times the training step it is selecting over. This
+    mirrors the split the project already runs: selection under a budget, reporting
+    without one.
 
     ``mode`` selects how much exactness evidence a failure must carry before it licenses
     demotion. ``strict`` (default) requires positive evidence that the query ran to
@@ -94,8 +102,9 @@ def deployed_rollout_v3_traced(
     step_scores: list[list[float]] = []
     step_dead: list[list[int]] = []
 
-    while len(tried) < n_candidates:
-        example = build_v3_example(
+    budget = n_candidates if max_attempts is None else min(max_attempts, n_candidates)
+    while len(tried) < budget:
+        example, records = build_v3_example(
             episode,
             vocab,
             rng=None,
@@ -105,7 +114,12 @@ def deployed_rollout_v3_traced(
             augment_tags=False,
             spec=spec,
         )
-        batch = collate_v3([example], max_arity=vocab.max_operator_arity).to(device)
+        # Records are passed at deployment too, not just in training. Omitting them here
+        # would deploy a records-trained model blind to its own evidence -- the train/
+        # deploy input mismatch the proposal warns about, and one that degrades silently.
+        batch = collate_v3(
+            [example], max_arity=vocab.max_operator_arity, records=[records]
+        ).to(device)
         logits, _ = model(batch)
         raw = logits[0].detach().cpu().numpy().astype(float)
         step_scores.append([float(x) for x in raw])

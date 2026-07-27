@@ -62,7 +62,7 @@ def _static_scores(model, episode, vocab, device) -> np.ndarray:
     """Empty-context (t = 0) logits -- the ranker's opening opinion."""
     from alphatamp.approaches.spectre.dataset_v3 import build_v3_example, collate_v3
 
-    example = build_v3_example(
+    example, records = build_v3_example(
         episode,
         vocab,
         rng=None,
@@ -70,7 +70,9 @@ def _static_scores(model, episode, vocab, device) -> np.ndarray:
         context_f=frozenset(),
         augment_tags=False,
     )
-    batch = collate_v3([example], max_arity=vocab.max_operator_arity).to(device)
+    batch = collate_v3(
+        [example], max_arity=vocab.max_operator_arity, records=[records]
+    ).to(device)
     with torch.no_grad():
         logits, _ = model(batch)
     return logits[0].detach().cpu().numpy().astype(float)

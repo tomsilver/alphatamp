@@ -104,6 +104,49 @@ def _hint_fact_arrays(
     return type_ids, tier_ids, arg_tags
 
 
+def build_record_arrays(
+    episode: EpisodeRecord,
+    context_f: frozenset[int],
+    tags: dict[str, int],
+    vocab: Vocab,
+    spec: DomainSpec,
+) -> list[tuple[int, list[int], list[int], list[float]]]:
+    """Failure records of the tried candidates, as ``(schema_id, args, culprits, scalars)``.
+
+    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts. Their
+    sound consequence is applied outside the net as demotion; feeding them in as tokens
+    invites the scorer to learn the crude correlate instead ("blocked sets are large, so
+    prefer longer plans"), which measurably wrecked the easy strata in v2.2 until the tiers
+    were split. What reaches the net is evidence the deduction could *not* use.
+
+    Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
+    decoration: backfilled records report whole-attempt effort while instrumented ones
+    report per-step, so the flag tells the net which quantity it is reading instead of
+    letting a re-collection silently redefine the column.
+    """
+    out: list[tuple[int, list[int], list[int], list[float]]] = []
+    for idx in sorted(context_f):
+        skeleton = episode.skeleton_pool[idx]
+        plan_len = max(len(skeleton.operator_seq), 1)
+        for rec in records_for_candidate(episode, idx, spec):
+            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+                continue  # handled structurally by demotion, not learned
+            out.append(
+                (
+                    int(vocab.operators.get(rec.schema, 0)),
+                    [tags[a] for a in rec.args if a in tags][:MAX_RECORD_ARGS],
+                    [tags[c] for c in rec.culprits if c in tags][:MAX_RECORD_CULPRITS],
+                    [
+                        rec.step_index / plan_len,
+                        math.log1p(max(rec.n_step, 0)) / 10.0,
+                        1.0 if rec.exhausted else 0.0,
+                        1.0 if rec.effort_is_total else 0.0,
+                    ],
+                )
+            )
+    return out
+
+
 def build_v3_example(
     episode: EpisodeRecord,
     vocab: Vocab,
@@ -114,8 +157,16 @@ def build_v3_example(
     hide_facts: bool = False,
     augment_tags: bool = True,
     spec: Optional[DomainSpec] = None,
-) -> _V2Example:
+) -> tuple[_V2Example, list[tuple[int, list[int], list[int], list[float]]]]:
     """Tensorize one geometry-carrying episode for the v3 model.
+
+    Returns ``(example, record_arrays)``. The records come back from *here* rather than
+    from a separate call because they must use the same canonicalization and the same tag
+    assignment as the example -- computing them separately would both double the
+    canonicalization cost and risk binding record tags to a different permutation than
+    the scene tags, which is exactly the identity bug that made record tokens carry no
+    object information at all. A caller whose model has no record encoder simply ignores
+    the second element; it costs nothing to produce when the context is empty.
 
     ``spec`` defaults to the contract registered for the episode's own ``env_variant``,
     so a caller cannot accidentally tensorize DD2D under another domain's axioms.
@@ -218,71 +269,35 @@ def build_v3_example(
             )
             overlap[i] = [dead, float(jaccard)]
 
-    return _V2Example(
-        obj_tags,
-        obj_boundary,
-        obj_pose,
-        rel,
-        obj_is_target,
-        op_ids,
-        arg_tags,
-        success,
-        aux,
-        aux.copy(),
-        avail,
-        ftype,
-        ftier,
-        farg,
-        prior,
-        overlap,
+    records = (
+        build_record_arrays(canon, ctx, tags, vocab, spec) if (ctx and not hide) else []
+    )
+
+    return (
+        _V2Example(
+            obj_tags,
+            obj_boundary,
+            obj_pose,
+            rel,
+            obj_is_target,
+            op_ids,
+            arg_tags,
+            success,
+            aux,
+            aux.copy(),
+            avail,
+            ftype,
+            ftier,
+            farg,
+            prior,
+            overlap,
+        ),
+        records,
     )
 
 
 def _sin_cos(theta: float) -> tuple[float, float]:
     return math.sin(theta), math.cos(theta)
-
-
-def build_record_arrays(
-    episode: EpisodeRecord,
-    context_f: frozenset[int],
-    tags: dict[str, int],
-    vocab: Vocab,
-    spec: DomainSpec,
-) -> list[tuple[int, list[int], list[int], list[float]]]:
-    """Failure records of the tried candidates, as ``(schema_id, args, culprits, scalars)``.
-
-    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts. Their
-    sound consequence is applied outside the net as demotion; feeding them in as tokens
-    invites the scorer to learn the crude correlate instead ("blocked sets are large, so
-    prefer longer plans"), which measurably wrecked the easy strata in v2.2 until the tiers
-    were split. What reaches the net is evidence the deduction could *not* use.
-
-    Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
-    decoration: backfilled records report whole-attempt effort while instrumented ones
-    report per-step, so the flag tells the net which quantity it is reading instead of
-    letting a re-collection silently redefine the column.
-    """
-    out: list[tuple[int, list[int], list[int], list[float]]] = []
-    for idx in sorted(context_f):
-        skeleton = episode.skeleton_pool[idx]
-        plan_len = max(len(skeleton.operator_seq), 1)
-        for rec in records_for_candidate(episode, idx, spec):
-            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
-                continue  # handled structurally by demotion, not learned
-            out.append(
-                (
-                    int(vocab.operators.get(rec.schema, 0)),
-                    [tags[a] for a in rec.args if a in tags][:MAX_RECORD_ARGS],
-                    [tags[c] for c in rec.culprits if c in tags][:MAX_RECORD_CULPRITS],
-                    [
-                        rec.step_index / plan_len,
-                        math.log1p(max(rec.n_step, 0)) / 10.0,
-                        1.0 if rec.exhausted else 0.0,
-                        1.0 if rec.effort_is_total else 0.0,
-                    ],
-                )
-            )
-    return out
 
 
 def collate_v3(
