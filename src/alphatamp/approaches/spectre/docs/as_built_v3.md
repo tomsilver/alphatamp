@@ -48,6 +48,21 @@ Unchanged from v2.2 except where stated; shared primitives (SAB/PMA, tags, PL lo
   effort_is_total]` — v2.2 harvested `Fact.scalars` and then dropped them in the tensorizer.
 - **`CrossAttentionScorer`** — candidates attend over scene tokens and the evidence memory;
   `[dead, jaccard]` overlap features concatenated at the head.
+- **`CrossAttentionScorerV3`** (new, gated) — the same, but with a **separate attention
+  channel for evidence**. v2.2 concatenates scene, global and evidence into one memory, so a
+  single softmax must divide its mass between ~10 scene tokens and up to 2045 record tokens;
+  since geometry is reliably useful and evidence noisy, discarding evidence is
+  loss-minimizing, and the model duly learned to. Two channels remove the competition.
+- **`SceneEncoderV3`** (new, gated) — scene tokens gain a 5-scalar per-object summary of the
+  observed failures, so evidence enters through the **tag join** the architecture is built
+  around rather than as free-floating tokens. Column 5 carries proof-tier *culprits*: the
+  identity of an object the refiner reported as blocking, which is the observed counterpart
+  of the `clears` predicate L2 rejected — rejected for being a routine *we* ran, not for the
+  information it carried.
+- **Observed `coverage` / `waste`** (new, gated) — `cand_overlap` widens to 4. These are
+  §5.1's necessity features computed from reported culprits instead of a predicted per-object
+  head; necessity conditioning was cut because the head would have had to predict `p_i` from
+  geometry, and once the refiner reports culprits the same two features need no head at all.
 - **`AuxHead`** — present, **never trained**. No collection has ever populated
   `aux_labels`, so v2.2's masked BCE contributed exactly zero gradient. v3 says so rather
   than implying an aux loss exists. (`as_built_v2.2` §2.4's claim to the contrary is
