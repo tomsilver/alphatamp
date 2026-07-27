@@ -133,6 +133,32 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    **label-agreement gate** before trusting any number: below ~0.95 means the env code
    moved since that collection and in-pool vs off-pool labels disagree.
 
+## SPECTRE v3 (in progress, 2026-07-26)
+
+Migration from v2.2 to v3 per [`docs/SPECTRE_v3_proposal.md`](docs/SPECTRE_v3_proposal.md),
+run as gated increments. **Current substrate is `dd2d_v4`** (grasp-fixed *and*
+refiner-instrumented); dd2d_v2/v3 numbers predate the double-canonicalization fix and must
+not be quoted without regenerating. Gates G0–G6 are done; G7 (overlap 2×2) is next.
+
+- **New modules** (v1/v2 are frozen — D-7): `domain.py` (the whole per-environment
+  contract: per-query `QueryAxioms(monotone, local, exact)` + `min_calls_per_schema`),
+  `failure_record.py`, `proof_demotion_v3.py`, `model_v3.py`, `dataset_v3.py`,
+  `inference_v3.py`, `train_v3.py`, `necessity.py` (built, **unwired**).
+- **D-8, exact-absence:** every v3 feature is config-gated and *off* reproduces v2.2's
+  state dict byte-for-byte, so `test_v3_equivalence.py` keeps loading the v2.2 checkpoint
+  and asserting identical decisions. That oracle is what makes data-path rewrites safe;
+  it runs in `permissive` mode and retires when the position encoding changes (G9).
+- **Necessity conditioning was CUT** (`decisions.md` 2026-07-26): D2 showed the s2 deficit
+  is *within-length*, which it does not address. P-v3-1 is withdrawn; s2 is reported as a
+  characterized limitation.
+- **Untaken lead:** enumeration order is a strong within-length signal (astar
+  length-oracle 5.80 at s2) the deployed model cannot see, because R1 dropped the prior
+  wholesale when only its short-first column was implicated. An index-only prior was never
+  separately ablated.
+
+Findings and numbers live in `docs/notebook.md` / `docs/decisions.md` under 2026-07-26 —
+cite them rather than restating figures.
+
 ## Conventions and invariants
 
 - **Loss:** listwise Plackett-Luce only. Pointwise BCE killed Attempt 2.
@@ -147,12 +173,61 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
   during-training de-risking gates), never the selection criterion. The
   D.1/D.2 atom-sensitivity probes do NOT predict rollout performance —
   diagnostics only, never optimization targets.
-- **Reporting:** every number is mean ± std over ≥ 3 seeds.
+- **Reporting:** paper numbers are mean ± std over ≥ 3 seeds. **Development runs
+  1 seed** (2026-07-26 directive) — with 1 seed "within seed noise" is not
+  measurable, so a gate is accepted by a **paired bootstrap over problems**
+  (`spectre_score_v3.py`, the instrument the P1/P4/P5 gates used); pairing removes
+  the between-problem variance that dominates here.
 - **Doc updates are part of development** — see "Documentation discipline"
   below. Archived specs and snapshots in `docs/archive/` are frozen — never
   edit them; annotations go in `docs/archive/README.md`.
-- Tests: `pytest tests/approaches/spectre/` (slow tests skipped by default;
-  `-m ""` to include).
+- Tests: `pytest tests/approaches/spectre/`. Slow tests are skipped by default and
+  **`-m ""` does NOT include them** — `tests/conftest.py` overrides an empty
+  markexpr back to `not slow`. Use `-m slow` to run them.
+
+## Working practices (hardware, long runs, traps)
+
+**Use the hardware. Parallelise whenever tasks are independent.** Training here is
+**CPU-bound, not GPU-bound** — measured 79% tensorization / 21% GPU, and three
+concurrent arms occupy 3.5 GB of the 5090's 33.7 GB. Run arms, seeds, ablations and
+data collection *concurrently* rather than in sequence whenever they do not depend on
+each other; serial runs leave both the GPU and ~30 CPU threads idle.
+
+- `python experiments/spectre/spectre_sweep.py --preset g6` — concurrent arms, one log
+  each. `--arm "name:args"` for ad-hoc arms, `--seeds 0 1 2` for the paper runs.
+- Keep `max_parallel × (1 + num_workers)` under the core count (32) or the runs contend
+  and wall-clock stops improving. Measured: 38.9 s/epoch serial → ~33 s/epoch with three
+  arms at once (~3.4× throughput).
+- The DD2D collector already parallelises via `--workers`.
+
+**Long runs must be interruptible and must expose an ETA.** Anything over a few
+minutes goes to a named log with periodic heartbeats, so progress and remaining time can
+be checked at any moment without disturbing the run — and so a run that has clearly gone
+wrong can be stopped early instead of discovered at the end.
+
+- Launch via `spectre_run.sh <name> <cmd...>` (or `spectre_sweep.py`), which logs to
+  `data/spectre/logs/<name>.log`.
+- Check with `python experiments/spectre/spectre_status.py` (`--watch` to follow):
+  what is running, latest heartbeat + ETA per job, recently finished checkpoints.
+- When adding a long-running script, emit a periodic heartbeat with elapsed, progress
+  and ETA, and state the expected total up front.
+
+**GPU contention:** LM Studio / `llama-server` (the VLMPlan backend) holds ~30 GB of
+VRAM and will starve training into CUDA OOM warnings. Stop it before a sweep; the
+VLMPlan results are already cached under `compare_cache/vlmplan_*`, so nothing is lost.
+
+**Traps that have each cost real time:**
+- **Stride, never truncate.** Episodes are stored in seed order and the collector fills
+  strata in seed bands, so `paths[:N]` yields only the easy strata. Bit us twice (an
+  equivalence test, then the val selector).
+- **`canonicalize_episode` is not idempotent** — always tensorize from *raw* episodes.
+  Double canonicalization silently changes the object→tag binding and skewed every cached
+  comparison number before 2026-07-26.
+- **Selection metrics must not be censored below the tail that separates models.** A val
+  FP censored at 30 attempts rated v2.2 and v3 equal (11.12 vs 11.40) while they differed
+  by 4 FP uncensored on test.
+- **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is reproducible
+  across processes; expect a fresh sample on any re-collection.
 
 ## Documentation discipline — keep the living docs alive
 

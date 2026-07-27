@@ -70,6 +70,44 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-26 — G6: record tokens beat the fact pathway, but the censored val selector cost more than it saved
+
+- **What:** three v3 arms trained on dd2d_v4 [1-seed dev], scored **uncensored** on the
+  test split with paired-bootstrap CIs over problems (`spectre_score_v3.py`). All three
+  hold `cand_overlap` out where stated so the record increment is not measured against a
+  bar carrying the same set-overlap signal. Trained **in parallel** (16.9 min for three).
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | v3 records + overlap | 18.59 | 0.00 | 4.52 | 30.96 | 38.88 |
+  | v3 records only | 19.15 | 0.00 | 13.12 | 25.52 | 37.96 |
+  | v3 no records (the bar) | 20.95 | 0.00 | 4.80 | 35.48 | 43.52 |
+  | *v2.2 yardstick (reference)* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+- **The record increment PASSES.** records+overlap vs the no-records bar:
+  **−2.36 FP, 95% CI [−4.42, −0.48], excludes 0.** Records-only is −1.80 with CI
+  [−5.38, +1.79] (includes 0), i.e. the overlap features and the record tokens are worth
+  having together. So one canonical record + role-separated tokens is at least as good as
+  the five bespoke fact types it replaced, on strictly less bespoke machinery.
+- **⚠ But every v3 arm underperforms the v2.2 yardstick (18.59 vs 14.66), and the cause is
+  the selector I introduced, not the representation.** The no-records bar (20.95) is
+  already worse than v2.2, so the regression lives in the shared v3 *training* path.
+  Diagnosis: scoring the v2.2 checkpoint on the **same censored val metric v3 selects on**
+  gives **11.12**, against v3's selected 11.40 / 11.79 / 13.01 — indistinguishable. Yet on
+  uncensored test those same models differ by 4+ FP. **Censoring the selector at 30
+  attempts truncates exactly the s2/s3 tail (FP 30–40+) where the models actually differ**,
+  so the selection signal is saturated. Training curves are stable and plateau by ~epoch 12
+  with sensible epoch choice, which rules out selector *noise*; the problem is selector
+  *blindness*.
+- **Takeaway / next:** the censoring was a speed trade (91 s/epoch uncensored vs 35 s) made
+  before parallel training existed. With `spectre_sweep.py` running arms concurrently that
+  trade is no longer worth taking — an uncensored 100-episode selector at ~91 s/epoch is
+  ~45 min for a whole 3-arm sweep. **Re-run G6 with the budget removed before treating
+  18.59 as v3's level**; the increment result stands either way, since both arms shared the
+  handicap. Cheap alternatives if cost returns: run the selector every K epochs, or keep it
+  uncensored but on a strided subsample.
+
 ## 2026-07-26 — G5: one FailureRecord + a declarative certificate rule replaces the five fact types, with a measurable soundness win
 
 - **What:** `failure_record.py` (one canonical record; instrumented on dd2d_v4, backfilled
