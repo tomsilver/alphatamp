@@ -142,16 +142,23 @@ not be quoted without regenerating.
 
 **Gate status.** Done: G0 instrumented refiner + `dd2d_v4`; G1 v3 scaffold + equivalence
 oracle; G2 domain adapter (+ R1 prior removal); G3 yardstick + per-seed harness; G4
-diagnostics (D2/D4); G5 FailureRecord + certificate rule; G6 record tokens. Remaining:
-**G6b re-run G6 uncensored** (blocks trusting v3's absolute level — see below), then G7
-overlap 2×2, G9 length generalization, G10 geometry interface, G11 consolidation. Gate
-*n+1* starts only when *n*'s acceptance passes.
+diagnostics (D2/D4); G5 FailureRecord + certificate rule; G6 record tokens; G6b uncensored
+selector. Remaining: **G7 overlap 2×2**, then G9 length generalization, G10 geometry
+interface, G11 consolidation. Gate *n+1* starts only when *n*'s acceptance passes.
 
-**Open at the pause point:** every v3 arm underperforms the v2.2 yardstick (18.59 vs
-14.66) because the deployed-val-FP selector was censored at 30 attempts, which is blind to
-the s2/s3 tail where models differ — v2.2 scores 11.12 on that metric against v3's 11.40.
-The record increment itself is sound (−2.36 FP, CI excludes 0) since both arms shared the
-handicap. Re-run uncensored before quoting 18.59.
+**Where v3 stands (after G6b).** records+overlap is **16.17** uncensored deployed FP on
+dd2d_v4 test against the v2.2 yardstick's 14.66 — a paired difference of **+1.51, CI
+[−2.29, +5.72], which includes 0**, so v3 currently *matches* v2.2 rather than beating it.
+That is the expected outcome for a consolidation whose claim is "same performance on less
+bespoke machinery", but it is not yet a win. The record increment passes: **−3.37 FP, CI
+[−6.16, −0.64]** against the no-records bar. **G6's levels (18.59/19.15/20.95) are retracted
+— do not quote them**; they came from a censored selector (`decisions.md` 2026-07-26).
+
+**Two open threads G7 should carry** (`notebook.md` 2026-07-26 G6b): records *alone* do not
+beat the bar (+1.70, n.s.) — the G6 increment is really a records×overlap interaction, which
+undercuts G7's premise that `dead` is redundant with the demotion applied outside the net;
+and evidence **hurts s1** (bar 3.64 vs 8.56) while helping s2/s3 substantially, the same
+shape as the v2.2-era "evidence harms s1" problem fixed on 2026-07-19.
 
 - **New modules** (v1/v2 are frozen — D-7): `domain.py` (the whole per-environment
   contract: per-query `QueryAxioms(monotone, local, exact)` + `min_calls_per_schema`),
@@ -238,7 +245,10 @@ VLMPlan results are already cached under `compare_cache/vlmplan_*`, so nothing i
   comparison number before 2026-07-26.
 - **Selection metrics must not be censored below the tail that separates models.** A val
   FP censored at 30 attempts rated v2.2 and v3 equal (11.12 vs 11.40) while they differed
-  by 4 FP uncensored on test.
+  by 4 FP uncensored on test; uncensoring it (G6b) moved v3 from *significantly worse* than
+  v2.2 to indistinguishable. The tell is **dynamic range, not jitter** — the censored
+  curves were stable and picked sensible mid-training epochs, they just spanned ≈6 FP where
+  the uncensored ones span ≈15. Stable curves are not evidence of a good selector.
 - **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is reproducible
   across processes; expect a fresh sample on any re-collection.
 

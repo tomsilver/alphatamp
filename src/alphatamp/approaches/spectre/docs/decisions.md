@@ -6,6 +6,54 @@ not, and why.
 
 ---
 
+## 2026-07-26 — A selection metric may never be censored below the tail that separates the models; v3's selector is uncensored over the whole val split
+
+**Context.** v3 selects checkpoints on *deployed val FP* — the quantity actually reported —
+rather than v2.2's `relrank`, which was miscalibrated on dd2d_v3. But it was computed with
+two economies added for speed, before `spectre_sweep.py` made parallel arms possible: a
+30-attempt budget, and a 50-episode strided subsample. G6 then produced a table in which
+**every** v3 arm, including the no-records bar, underperformed the v2.2 yardstick — which
+located the regression in the shared training path rather than in the increment under test.
+
+**What was measured.** Scoring the *same* G6 checkpoint both ways: **11.66** censored@30 on
+50 episodes versus **19.72** uncensored on 100. And scoring v2.2 on v3's own censored
+selection metric gives **11.12** against v3's selected **11.40** — indistinguishable, while
+the two models are 4+ FP apart uncensored on test. The per-epoch dynamic range tells the
+story directly: censored, `val_fp` spans ≈[11.1, 17.5] across 30 epochs; uncensored,
+≈[17.1, 32.0]. DD2D s2/s3 episodes routinely need 30–40+ attempts, so the budget clipped
+every one of them to the same number.
+
+**Decision.** `TrainV3Config.select_budget` → `None` (run to the pool cap, the uncensored
+convention reporting already uses, `decisions.md` 2026-06-07) and `val_episodes` → 100.
+Stated as a standing rule, because the failure mode is not specific to this metric: **a
+selection statistic must not be censored below the region where the candidates differ.** A
+budget is a ceiling; if the models separate above it, selection is reading noise. Note this
+is *not* the same failure as a noisy selector — the G6 curves were stable and picked
+sensible mid-training epochs (13/10/12). They were blind, not jittery, which is why the
+usual smell test (unstable curves, early-epoch selection) did not fire.
+
+**Consequences.**
+- **G6's arm levels are retracted** (18.59/19.15/20.95 → 16.17/21.24/19.54). Two of its
+  conclusions do not survive: v3 is *not* worse than v2.2 (**+1.51 FP, CI [−2.29, +5.72]**,
+  includes 0, against **+3.93, CI [+0.37, +7.95]** under censoring), and records-*only* does
+  not beat the bar (**+1.70**, n.s., where censored it read −1.80). The record increment
+  itself survives and strengthens: **−3.37, CI [−6.16, −0.64]**.
+- **Cost is real but affordable**: 51 s/epoch versus 17 s, ~50 min for a 3-arm parallel
+  sweep. Both knobs are CLI-exposed (`--select-budget`, `--val-episodes`) so the cheap
+  recoveries stay open — select every K epochs, or uncensored on a stride — but *not*
+  censoring, which is the one economy that cost more than it saved.
+- **The yardstick is now scored by the same instrument.** `spectre_score_v3.py --v2-arm`
+  loads a `train_v2` checkpoint in D-8 compat mode, so v2.2 and v3 rows come from one code
+  path over one set of episodes and can be compared by paired bootstrap instead of by
+  juxtaposing two separately-produced numbers. Verified: it reproduces the published 14.66
+  exactly, and `permissive` ≡ `strict` on dd2d_v4, so demotion mode is not a confound.
+- **Known residual, deliberately not fixed:** the 3-epoch moving average compares epoch 1
+  (a single sample) against later 3-epoch means, which mildly favours early epochs. It did
+  not bite in G6 or G6b (selections landed at 12/13/23), so requiring a full window is left
+  as a change to make when something depends on it, rather than mid-gate.
+
+---
+
 ## 2026-07-26 — Necessity conditioning is cut from v3; s2 becomes a characterized limitation, and the adaptive consolidation is the contribution
 
 **Context.** `SPECTRE_v3_proposal.md` §5 made necessity-conditioned scoring the headline

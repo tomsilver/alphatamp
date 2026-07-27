@@ -70,7 +70,59 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-26 — G6b: uncensoring the selector closes the v2.2 gap; the record increment survives, but records *alone* do not
+
+- **What:** G6 re-run with exactly one change — the checkpoint selector is uncensored
+  (`select_budget` 30 → `None`, i.e. run to the pool cap) and reads the **whole** val split
+  (`val_episodes` 50 → 100). Same data, same recipe, same 30 epochs, same 1 seed, three
+  arms trained in parallel (~50 min). Scored by `spectre_score_v3.py`, which now also
+  loads the v2.2 yardstick in D-8 compat mode (`--v2-arm`), so every row below comes from
+  **one instrument on one set of episodes** and the comparisons are genuinely paired.
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 | sel. epoch |
+  |---|---|---|---|---|---|---|
+  | G6b records + overlap | **16.17** | 0.00 | 8.56 | **22.00** | 34.12 | 12 |
+  | G6b records only | 21.24 | 0.00 | 16.60 | 25.60 | 42.76 | 13 |
+  | G6b no records (the bar) | 19.54 | 0.00 | **3.64** | 33.80 | 40.72 | 23 |
+  | *v2.2 yardstick (reference)* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* | — |
+
+- **The gate PASSES, more strongly than under censoring.** records+overlap vs the bar:
+  **−3.37 FP, 95% CI [−6.16, −0.64]**, excludes 0 (G6 measured −2.36).
+- **The v2.2 gap was the selector, and it is now closed.** records+overlap vs the yardstick
+  is **+1.51 FP, CI [−2.29, +5.72] — includes 0**, i.e. indistinguishable. The *same*
+  comparison for the censored-selector checkpoint is **+3.93, CI [+0.37, +7.95]**, which
+  excludes 0. So under G6 v3 was genuinely worse than v2.2; under G6b it is not. The
+  2026-07-26 G6 open issue is resolved, and 18.59 should not be quoted as v3's level.
+- **Mechanism, measured:** the selector's dynamic range across epochs. Censored@30/n=50 the
+  per-epoch `val_fp` spans ≈ [11.1, 17.5]; uncensored/n=100 it spans ≈ [17.1, 32.0] — about
+  **2.5× the signal**. Censoring did not add noise, it removed range, which is why the G6
+  curves looked stable and still selected badly.
+- **⚠ Unexpected 1 — records *alone* no longer help.** records-only vs the bar is
+  **+1.70, CI [−2.25, +5.81]** (includes 0); under the censored selector it looked like
+  −1.80. Only records **with** `cand_overlap` beat the bar. So the increment attributed to
+  "record tokens" in G6 is really a records×overlap interaction. This lands directly on
+  **G7**, whose 2×2 was designed on the premise that `dead` is redundant with the demotion
+  applied outside the net — that premise now needs testing rather than assuming.
+- **⚠ Unexpected 2 — evidence helps s2/s3 and *hurts* s1.** The no-records bar is the best
+  arm at s1 (**3.64** vs 8.56) while being far worse at s2 (33.80 vs 22.00) and s3 (40.72
+  vs 34.12). This is the same shape as the v2.2-era "evidence harms s1" problem that
+  2026-07-19 fixed by routing proof-tier facts out of the learned pathway; it has
+  reappeared in v3's record-token pathway. At s1 the first attempt often succeeds, so the
+  failure set is mostly noise — plausible, but not yet demonstrated.
+- **Takeaway / next:** G6b unblocks G7. Carry two questions into it: does `jaccard` (not
+  `dead`) explain the interaction above, and can the s1 regression be removed by gating
+  record consumption on |F| rather than by dropping features. v3 currently *matches* v2.2
+  rather than beating it — acceptable for a consolidation gate whose claim is "same
+  performance on less bespoke machinery", but it is not yet a win.
+
 ## 2026-07-26 — G6: record tokens beat the fact pathway, but the censored val selector cost more than it saved
+
+> ⚠️ **Superseded by the G6b entry above (same day).** The arm *levels* here (18.59 / 19.15 /
+> 20.95) were produced by the censored selector diagnosed in this very entry and **must not be
+> quoted** — G6b's 16.17 / 21.24 / 19.54 replace them. Two conclusions here also do not
+> survive: the v2.2 gap is *not* real (it was the selector), and "records-only is −1.80" flips
+> to +1.70 (n.s.). What stands: the record increment passes, and the diagnosis of the selector.
 
 - **What:** three v3 arms trained on dd2d_v4 [1-seed dev], scored **uncensored** on the
   test split with paired-bootstrap CIs over problems (`spectre_score_v3.py`). All three
