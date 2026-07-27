@@ -107,6 +107,15 @@ PRESETS: dict[str, dict[str, str]] = {
         "p5_cov": "--coverage-feats",
         "p5_jac_cov_evattn": "--overlap-mode jaccard --coverage-feats --evidence-attn",
     },
+    # The v3 deployed configuration, as of 2026-07-27. Weakly dominates deployed v2.2 at
+    # every stratum (7.56 vs 14.66; -7.10 FP, CI [-9.52, -4.96]). Run it with
+    # `--seeds 0 1 2` for a reportable number.
+    "v3final": {
+        "v3final": (
+            "--overlap-mode jaccard --coverage-feats "
+            "--aggregate-records --evidence-attn"
+        ),
+    },
     "p4": {
         "p4_evattn": "--evidence-attn",
         "p4_evattn_agg": "--evidence-attn --aggregate-records",
