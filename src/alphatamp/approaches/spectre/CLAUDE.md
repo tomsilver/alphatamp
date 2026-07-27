@@ -138,7 +138,20 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
 Migration from v2.2 to v3 per [`docs/SPECTRE_v3_proposal.md`](docs/SPECTRE_v3_proposal.md),
 run as gated increments. **Current substrate is `dd2d_v4`** (grasp-fixed *and*
 refiner-instrumented); dd2d_v2/v3 numbers predate the double-canonicalization fix and must
-not be quoted without regenerating. Gates G0–G6 are done; G7 (overlap 2×2) is next.
+not be quoted without regenerating.
+
+**Gate status.** Done: G0 instrumented refiner + `dd2d_v4`; G1 v3 scaffold + equivalence
+oracle; G2 domain adapter (+ R1 prior removal); G3 yardstick + per-seed harness; G4
+diagnostics (D2/D4); G5 FailureRecord + certificate rule; G6 record tokens. Remaining:
+**G6b re-run G6 uncensored** (blocks trusting v3's absolute level — see below), then G7
+overlap 2×2, G9 length generalization, G10 geometry interface, G11 consolidation. Gate
+*n+1* starts only when *n*'s acceptance passes.
+
+**Open at the pause point:** every v3 arm underperforms the v2.2 yardstick (18.59 vs
+14.66) because the deployed-val-FP selector was censored at 30 attempts, which is blind to
+the s2/s3 tail where models differ — v2.2 scores 11.12 on that metric against v3's 11.40.
+The record increment itself is sound (−2.36 FP, CI excludes 0) since both arms shared the
+handicap. Re-run uncensored before quoting 18.59.
 
 - **New modules** (v1/v2 are frozen — D-7): `domain.py` (the whole per-environment
   contract: per-query `QueryAxioms(monotone, local, exact)` + `min_calls_per_schema`),
