@@ -433,6 +433,27 @@ Also worth noting against the earlier diagnosis: rollout-aligned context mass, w
 like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
 (−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
 
+### A15 — CI: the pylint debt is real, pre-existing, and I stopped trying to automate it
+
+`pytest --pylint` over the spectre tree reports **371 messages**, dominated by
+`line-too-long` (169), `import-outside-toplevel` (92) and `missing-function-docstring`
+(83). Of these, **58 are in the v3 modules I own**; the rest is pre-existing debt in older
+experiment scripts and tests.
+
+I tried twice to fix the line-length share automatically and reverted both times:
+
+1. Wrapping each long line independently treated `CONST = 4  # trailing comment` as prose
+   and would have dropped the `#` — it broke a test, which is how I caught it.
+2. A paragraph-aware rewrite (only inside docstrings, whole paragraphs at a time) still
+   produced five orphaned lines, because its "is this prose?" heuristic classified a
+   sentence beginning *"class as `failure_action`…"* as code.
+
+**Decision: leave it, documented.** The debt is cosmetic (all pylint `C`), it is mostly not
+mine, and two automated attempts produced subtly mangled prose in exactly the documents this
+project relies on for its reasoning. A deliberate manual pass is the right way to clear it,
+not a regex at 01:00. `./run_ci_checks.sh` is therefore **not green** — this is the honest
+state of G11's CI criterion. mypy is clean (65 files) and all 407 + 19 slow tests pass.
+
 **Process failure to record:** two `p5_jac_cov` processes raced on one checkpoint path after
 I relaunched following a collate crash, so the first reported checkpoint scored 8.57 and then
 8.39 as the second run overwrote it. Same config, so the conclusion is unaffected, but the
