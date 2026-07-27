@@ -403,6 +403,36 @@ Three things worth carrying forward from *how* this was found:
    |F|=0, culprits only from failed candidates in the context, deploy loop breaks on success
    before a successful candidate can enter it. 0 violations.
 
+### A14 — records drive it, but through *features*, not through *tokens*
+
+The ablation that decides how to describe the contribution:
+
+| arm | ALL | s0 | s1 | s2 | s3 | vs v2.2 |
+|---|---|---|---|---|---|---|
+| deployed (coverage + tokens + aggregation + attention) | **7.56** | 0.00 | 1.32 | 15.88 | 13.04 | −7.10 |
+| coverage, **no record tokens at all** | 7.82 | 0.00 | 3.48 | 12.28 | 15.52 | −6.84 |
+| coverage only (no aggregation/attention) | 8.39 | 0.00 | 2.72 | 12.64 | 18.20 | −6.27 |
+| rollout-aligned context, no coverage | 14.34 | 0.00 | 8.04 | 17.48 | 31.84 | −0.32 (n.s.) |
+| *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* | — |
+
+**The per-failure token stream is worth 0.26 FP on top of coverage.** Everything else — the
+whole −6.84 — comes from two scalars per candidate.
+
+This is not "records don't matter". `coverage`/`waste` are computed **from
+`FailureRecord.culprits`**; nothing else in the system can see which object the refiner's
+collision check found blocking. So the record schema is doing the driving. What is marginal
+is the *encoding* of a record as its own attention token.
+
+The honest statement for the writeup: **one canonical `FailureRecord` carries the adaptive
+signal; its most valuable consumption is as compact per-candidate features, with
+per-failure tokens a small further increment.** That is a better result for the
+generality claim than the reverse would have been — features over a reported culprit set
+need no per-environment token vocabulary at all.
+
+Also worth noting against the earlier diagnosis: rollout-aligned context mass, which looked
+like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
+(−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
+
 **Process failure to record:** two `p5_jac_cov` processes raced on one checkpoint path after
 I relaunched following a collate crash, so the first reported checkpoint scored 8.57 and then
 8.39 as the second run overwrote it. Same config, so the conclusion is unaffected, but the
