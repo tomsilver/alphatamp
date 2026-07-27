@@ -279,8 +279,14 @@ coverage = |S(c) ∩ culprits| / |culprits|      waste = |S(c) \ culprits| / |S(
 ```
 
 Both are exactly zero until a failure has been observed, so the first attempt is still
-purely static and the signal accrues as the rollout proceeds — this is the adaptive
-component doing the work, and it is the record schema that carries it. A leakage audit
+purely static and the signal accrues as the rollout proceeds.
+
+**Measured, and it is the sharpest statement of the contribution:** v3 and v2.2 solve the
+*same* 25% of episodes on attempt 1 — identical static quality, as the zero-at-|F|=0
+property requires — while among the episodes that need a second attempt, v3 averages
+**10.00** FP against v2.2's **19.55**. The entire −7 FP appears *after the first observed
+failure*. v3 is not a better static ranker; it is a better **re**-ranker, which is exactly
+what the adaptive component is supposed to buy. A leakage audit
 (features zero at |F|=0; culprits only from candidates in the failure context, all of which
 are failures; the deploy loop breaks on success before a successful candidate can enter the
 context) returned 0 violations.

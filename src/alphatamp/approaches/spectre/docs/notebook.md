@@ -127,6 +127,19 @@ Format:
   `FailureRecord.culprits` — nothing else in the system has access to which object the
   refiner's own collision check found blocking. At |F|=0 both features are identically zero,
   so the first attempt is still purely static; the signal accrues as the rollout observes.
+- **The gain is entirely adaptive, and this is the cleanest demonstration of it.** Because
+  `coverage`/`waste` are identically zero at |F|=0, the *first* attempt is a purely static
+  decision — and both models make it equally well:
+
+  | | solved on attempt 1 | mean FP among the rest |
+  |---|---|---|
+  | v3 deployed | **25%** | **10.00** |
+  | v2.2 yardstick | **25%** | 19.55 |
+
+  Identical static quality; **the whole −7 FP appears after the first failure is observed.**
+  Per stratum, among episodes not solved immediately: s1 1.16 vs 6.20, s2 15.80 vs 26.00,
+  s3 13.04 vs 26.44. This is what "records drive adaptiveness" means operationally — the
+  model is not a better static ranker, it is a better *re*-ranker.
 - **Leakage audit (0 violations)**, run before trusting the number: features are exactly
   zero at |F|=0; the culprit set is built only from candidates in the failure context, all
   of which are failures; and the deployment loop breaks on success before a successful
