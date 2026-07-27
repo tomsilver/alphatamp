@@ -96,6 +96,17 @@ PRESETS: dict[str, dict[str, str]] = {
     # evidence compete with geometry for attention mass, and geometry wins because it is
     # reliably useful. A separate channel removes the competition, so records can drive
     # adaptiveness rather than being ignored.
+    # P5: the s3 fix. G8 showed `dead` is a length proxy -- right at s3, wrong at s1.
+    # Rather than tune the proxy, state the thing it proxies for: at s3 three objects
+    # block and the right candidate removes all three. `coverage`/`waste` say that
+    # directly, from culprits the refiner REPORTED (so no predicted necessity head, and
+    # no geometry routine of ours). Measured separation feasible-vs-infeasible grows with
+    # stratum: coverage 0.139/0.160 at s0 -> 0.412/0.168 at s3.
+    "p5": {
+        "p5_jac_cov": "--overlap-mode jaccard --coverage-feats",
+        "p5_cov": "--coverage-feats",
+        "p5_jac_cov_evattn": "--overlap-mode jaccard --coverage-feats --evidence-attn",
+    },
     "p4": {
         "p4_evattn": "--evidence-attn",
         "p4_evattn_agg": "--evidence-attn --aggregate-records",

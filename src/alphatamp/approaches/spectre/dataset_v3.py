@@ -48,6 +48,7 @@ from alphatamp.approaches.spectre.model_v3 import (
     MAX_RECORD_ARGS,
     MAX_RECORD_CULPRITS,
     N_OBJ_EVIDENCE,
+    N_OVERLAP_V3,
     N_RECORD_SCALARS,
     SpectreV3Batch,
 )
@@ -306,6 +307,7 @@ def build_v3_example(
     spec: Optional[DomainSpec] = None,
     overlap_mode: str = "both",
     aggregate_records: bool = False,
+    coverage_feats: bool = False,
 ) -> tuple[_V2Example, list[tuple[int, list[int], list[int], list[float]]]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
@@ -420,19 +422,37 @@ def build_v3_example(
     # demotion offset, where a wrong weight cannot override it.
     want_dead = overlap_mode in ("both", "dead")
     want_jac = overlap_mode in ("both", "jaccard")
-    overlap = [[0.0, 0.0] for _ in range(k)]
+    want_cov = coverage_feats
+    n_ov = N_OVERLAP_V3 if want_cov else 2
+    overlap = [[0.0] * n_ov for _ in range(k)]
+    culprits: frozenset = frozenset()
     if ctx and not hide:
         blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
         failed = [subsets[f] for f in ctx]
+        if want_cov:
+            _h, _p = records_for_evidence(canon, ctx, spec)
+            culprits = frozenset(o for r in (_h + _p) for o in r.culprits)
         for i, si in enumerate(subsets):
             dead = 1.0 if any(si <= b for b in blocked) else 0.0
             jaccard = max(
                 (len(si & f) / max(len(si | f), 1) for f in failed), default=0.0
             )
-            overlap[i] = [
+            row = [
                 dead if want_dead else 0.0,
                 float(jaccard) if want_jac else 0.0,
             ]
+            if want_cov:
+                # §5.1's `coverage` / `waste`, but grounded in **observed** culprits
+                # instead of a predicted necessity head -- which makes them more C2-legal,
+                # not less: nothing is inferred by us, the refiner reported which objects
+                # blocked. This is the signal `dead` was crudely proxying for. At s3 three
+                # distinct objects block, and the right candidate is the one that removes
+                # all three; a length bias can only ever approximate that.
+                row += [
+                    len(si & culprits) / max(len(culprits), 1),
+                    len(si - culprits) / max(len(si), 1),
+                ]
+            overlap[i] = row
 
     records = (
         build_record_arrays(canon, ctx, tags, vocab, spec, aggregate_records)

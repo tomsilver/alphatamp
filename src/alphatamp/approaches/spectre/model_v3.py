@@ -245,6 +245,17 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
         return logit
 
 
+N_OVERLAP_V3 = 4
+"""``[dead, jaccard, coverage, waste]``.
+
+The last two are §5.1's necessity features computed from **observed** culprits rather than
+a predicted per-object head: ``coverage`` = the fraction of objects seen blocking that this
+candidate removes, ``waste`` = the fraction of what it removes that was never seen blocking.
+Necessity conditioning was cut because its head would have had to *predict* p_i from
+geometry (`decisions.md` 2026-07-26); once the refiner reports culprits, the same two
+features are available by observation and need no head at all.
+"""
+
 N_OBJ_EVIDENCE = 5
 """Per-object evidence summary width; see :class:`SceneEncoderV3`."""
 
@@ -363,6 +374,8 @@ class V3Config:
     # Give evidence its own cross-attention channel instead of making it compete with
     # the scene inside one softmax. See CrossAttentionScorerV3.
     evidence_attn: bool = False
+    # Observed coverage/waste appended to cand_overlap (width 2 -> 4).
+    coverage_feats: bool = False
 
     @classmethod
     def from_v2_checkpoint_cfg(cls, cfg: dict) -> "V3Config":

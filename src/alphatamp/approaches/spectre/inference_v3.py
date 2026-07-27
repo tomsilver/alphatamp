@@ -75,6 +75,7 @@ def deployed_rollout_v3_traced(
     apply_demotion: bool = True,
     overlap_mode: str = "both",
     aggregate_records: bool = False,
+    coverage_feats: bool = False,
     suppress_records: bool = False,
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
@@ -135,6 +136,7 @@ def deployed_rollout_v3_traced(
             spec=spec,
             overlap_mode=overlap_mode,
             aggregate_records=aggregate_records,
+            coverage_feats=coverage_feats,
         )
         # Records are passed at deployment too, not just in training. Omitting them here
         # would deploy a records-trained model blind to its own evidence -- the train/

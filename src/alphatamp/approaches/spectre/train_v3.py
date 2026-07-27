@@ -55,7 +55,11 @@ from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
-from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+from alphatamp.approaches.spectre.model_v3 import (
+    N_OVERLAP_V3,
+    SpectreV3Model,
+    V3Config,
+)
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
@@ -99,6 +103,8 @@ class TrainV3Config:
     use_obj_evidence: bool = False
     # Separate cross-attention channel for evidence (CrossAttentionScorerV3).
     evidence_attn: bool = False
+    # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
+    coverage_feats: bool = False
     # G9: restrict the *training* split to these strata (empty = all). This is experiment
     # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
     # this is neither: it decides which episodes exist during training, exactly as the
@@ -166,6 +172,7 @@ class SpectreV3Dataset(Dataset):
             spec=spec,
             overlap_mode=self.cfg.overlap_mode,
             aggregate_records=self.cfg.aggregate_records,
+            coverage_feats=self.cfg.coverage_feats,
         )
         if not self.cfg.use_records:
             records = []
@@ -211,6 +218,7 @@ def deployed_val_fp(
     budget: Optional[int] = None,
     overlap_mode: str = "both",
     aggregate_records: bool = False,
+    coverage_feats: bool = False,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -233,6 +241,7 @@ def deployed_val_fp(
             max_attempts=budget,
             overlap_mode=overlap_mode,
             aggregate_records=aggregate_records,
+            coverage_feats=coverage_feats,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -316,7 +325,9 @@ def train_v3(
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
         cfg=V3Config(
-            n_overlap_feats=2 if cfg.use_overlap else 0,
+            n_overlap_feats=(
+                (N_OVERLAP_V3 if cfg.coverage_feats else 2) if cfg.use_overlap else 0
+            ),
             n_prior_feats=0,
             max_tags=cfg.max_tags,
             dropout_p=cfg.dropout_p,
@@ -324,6 +335,7 @@ def train_v3(
             sinusoidal_pos=cfg.sinusoidal_pos,
             use_obj_evidence=cfg.use_obj_evidence,
             evidence_attn=cfg.evidence_attn,
+            coverage_feats=cfg.coverage_feats,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -360,6 +372,7 @@ def train_v3(
             cfg.select_budget,
             cfg.overlap_mode,
             cfg.aggregate_records,
+            cfg.coverage_feats,
         )
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
@@ -435,6 +448,12 @@ def main(argv=None) -> int:
         help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
     )
     ap.add_argument(
+        "--coverage-feats",
+        action="store_true",
+        help="append observed coverage/waste to cand_overlap (the §5.1 necessity "
+        "features, grounded in reported culprits instead of a predicted head)",
+    )
+    ap.add_argument(
         "--evidence-attn",
         action="store_true",
         help="give evidence its own cross-attention channel instead of making it "
@@ -482,6 +501,7 @@ def main(argv=None) -> int:
         aggregate_records=a.aggregate_records,
         use_obj_evidence=a.obj_evidence,
         evidence_attn=a.evidence_attn,
+        coverage_feats=a.coverage_feats,
         sinusoidal_pos=a.sinusoidal_pos,
         train_strata=tuple(a.train_strata),
     )
