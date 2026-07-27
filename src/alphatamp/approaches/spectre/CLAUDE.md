@@ -155,19 +155,20 @@ v2.2 at every stratum** [1-seed dev]:
 | v3 deployed | **7.56** | 0.00 | **1.32** | **15.88** | **13.04** |
 | v2.2 yardstick | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
 
-Over **3 seeds**: **7.44 ± 0.23**, **−7.22 FP, 95% CI [−9.69, −5.02]**; per stratum
-0.00 ± 0.00 / 3.79 ± 3.29 / 13.67 ± 1.88 / 12.31 ± 3.68. Reproduce:
+Over **6 seeds**: **7.90 ± 0.61**, **−6.76 FP, 95% CI [−9.43, −4.40]**; per stratum
+0.00 ± 0.00 / 5.60 ± 3.06 / 13.03 ± 1.52 / 12.96 ± 2.46. Reproduce:
 
 ```bash
-python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
+python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2 3 4 5
 python experiments/spectre/spectre_score_v3.py \
-    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 \
+    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 3 4 5 \
     --baseline "v2.2 yardstick:checkpoints_v2_evidence_ov"
 ```
 
-**Caveat: s1 is seed-unstable** (per-seed 1.16 / 2.72 / 7.48 — one seed exceeds the
-yardstick's 6.20). State per-stratum dominance as holding *on average*, not seed-wise; ALL
-is stable (7.50 / 7.63 / 7.19).
+**s0 and s1 TIE; s2 and s3 win by ~2×.** Nothing regresses, so weak dominance holds — but
+**s1 is not a win**: 5.60 ± 3.06 vs 6.20 is 0.20 seed-sd, and only 2 of 6 seeds beat 6.20.
+At 3 seeds s1 read 3.79 and looked decisive; that is the one number a 3-seed report would
+have got wrong. On a wide-spread stratum, check the margin against the seed sd, not the sign.
 
 **What carries it: observed `coverage`/`waste`.** These are §5.1's necessity features with
 per-object necessity **observed** (`FailureRecord.culprits`) instead of **predicted** — so no

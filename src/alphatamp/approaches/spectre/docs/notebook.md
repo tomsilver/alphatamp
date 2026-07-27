@@ -85,19 +85,24 @@ Format:
   Once the refiner reports culprits, the same two features need no head at all — and become
   *more* C2-legal, since nothing is inferred by us. Paired with `--overlap-mode jaccard`,
   which drops the `dead` length proxy that G8 showed was wrong at s1.
-- **Headline, 3 seeds** (mean ± std *across seeds* of the per-stratum mean), deployed
+- **Headline, 6 seeds** (mean ± std *across seeds* of the per-stratum mean), deployed
   config `--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`:
 
   | | ALL | s0 | s1 | s2 | s3 |
   |---|---|---|---|---|---|
-  | **v3 deployed** | **7.44 ± 0.23** | 0.00 ± 0.00 | 3.79 ± 3.29 | **13.67 ± 1.88** | **12.31 ± 3.68** |
+  | **v3 deployed** | **7.90 ± 0.61** | 0.00 ± 0.00 | 5.60 ± 3.06 | **13.03 ± 1.52** | **12.96 ± 2.46** |
   | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
 
-  **−7.22 FP, 95% CI [−9.69, −5.02]** (paired bootstrap on the seed-mean per problem).
-  **Weak per-stratum dominance holds in the mean at every stratum.** ⚠ **s1 is
-  seed-unstable** — per-seed 1.16 / 2.72 / **7.48**, so one seed exceeds the yardstick's
-  6.20. s1 has the smallest FP and so the largest relative spread; ALL is stable
-  (7.50 / 7.63 / 7.19). Say per-stratum dominance holds *on average*, not seed-wise.
+  **−6.76 FP, 95% CI [−9.43, −4.40]** (paired bootstrap on the seed-mean per problem).
+  **Weak dominance holds — nothing regresses — but the strata are not equally won:** s0 and
+  s1 **tie**, s2 and s3 **win by ~2×**.
+
+  ⚠ **s1 is a tie, not a win, and 3 seeds said otherwise.** 5.60 ± 3.06 vs 6.20 is a +0.60
+  margin against a 3.06 seed sd (0.20 sd), and only **2 of 6 seeds** beat 6.20 — per-seed
+  1.16 / 2.72 / 7.48 / 6.68 / 6.28 / 9.28. At 3 seeds s1 read **3.79** and looked like a
+  clear win. This is the one number a 3-seed report would have got wrong, and the reason
+  the extra seeds were run. Overall FP is by contrast stable across seeds
+  (7.50 / 7.63 / 7.19 / 8.05 / 8.08 / 8.94).
 
 - **Ablations, 1-seed dev, same yardstick:**
 
@@ -120,7 +125,7 @@ Format:
 - **This is goal 1 of the v3 proposal**, and the coverage arms are the first all night to
   beat the yardstick at all rather than tie it.
 - **P-v3-1's target is met by a different mechanism than predicted.** The pre-registered
-  bar was s2 ≤ astar-dist's 17.08 *via necessity conditioning*; s2 lands at **13.67 ± 1.88**
+  bar was s2 ≤ astar-dist's 17.08 *via necessity conditioning*; s2 lands at **13.03 ± 1.52**
   via observed coverage. The prediction's *number* is beaten; its *mechanism* was withdrawn.
   Worth stating both ways round rather than claiming P-v3-1 succeeded.
 - **This is records driving adaptiveness, which was the point.** `coverage`/`waste` read
@@ -161,8 +166,8 @@ Format:
 - **Process note.** Two `p5_jac_cov` processes raced on one checkpoint path after a
   crash-relaunch (it scored 8.57, then 8.39 as the second overwrote it). Same config, so
   nothing here changed, but `train_v3` now refuses to start on a directory a live run owns.
-- **Takeaway / next:** the deployed config is recorded as preset `v3final`. Open: s1 seed
-  stability (the widest spread, and the one stratum where a single seed loses); a
+- **Takeaway / next:** the deployed config is recorded as preset `v3final`. Open: **s1**,
+  which is a tie and the widest-spread stratum — the one place v3 does not improve on v2.2; a
   frequency-weighted `coverage` (the observed culprit set over-covers ~2.5×, A12); and
   env-2, without which generality stays architectural.
 

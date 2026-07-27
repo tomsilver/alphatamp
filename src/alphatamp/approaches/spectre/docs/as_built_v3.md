@@ -8,12 +8,11 @@ Numbers cite [`notebook.md`](notebook.md); decisions cite [`decisions.md`](decis
 and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
 
 > **Status (2026-07-27).** All three v3 goals are met on DD2D. Performance: v3 **weakly
-> dominates deployed v2.2 at every stratum** (7.56 vs 14.66 overall; −7.10 FP, CI
-> [−9.52, −4.96]) — §7. Cleanliness and generality: §1, §3, and
-> [`porting_guide.md`](porting_guide.md). **Caveat: every number here is 1-seed development**
-> (a 3-seed run of the deployed configuration was in flight when this was written); and the
-> generality claim is architectural, not yet demonstrated by a transfer to a second
-> environment. §9 lists the limitations.
+> dominates deployed v2.2** — 7.90 ± 0.61 vs 14.66 over 6 seeds (−6.76 FP, CI
+> [−9.43, −4.40]); s2 and s3 win by ~2×, s0 and s1 tie — §7. Cleanliness and generality: §1, §3, and
+> [`porting_guide.md`](porting_guide.md). **Caveats: the deployed config is 6-seed; every ablation is
+> 1-seed and so is the v2.2 yardstick**; and the generality claim is architectural, not yet
+> demonstrated by a transfer to a second environment. §9 lists the limitations.
 
 ---
 
@@ -201,29 +200,39 @@ The sinusoidal encoder is future-proofing for longer-horizon domains and a gener
 
 **Uncensored deployed FP on dd2d_v4 test, n=100.** Lower is better.
 
-**Headline, 3 seeds** (mean ± std *across seeds* of the per-stratum mean):
+**Headline, 6 seeds** (mean ± std *across seeds* of the per-stratum mean):
 
 | method | ALL | s0 | s1 | s2 | s3 |
 |---|---|---|---|---|---|
-| **v3 deployed** (3 seeds) | **7.44 ± 0.23** | 0.00 ± 0.00 | 3.79 ± 3.29 | **13.67 ± 1.88** | **12.31 ± 3.68** |
+| **v3 deployed** (6 seeds) | **7.90 ± 0.61** | 0.00 ± 0.00 | 5.60 ± 3.06 | **13.03 ± 1.52** | **12.96 ± 2.46** |
 | **v2.2 yardstick** (1 seed) | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
 
-**−7.22 FP, 95% CI [−9.69, −5.02]** (paired bootstrap over problems on the seed-mean).
+**−6.76 FP, 95% CI [−9.43, −4.40]** (paired bootstrap over problems on the seed-mean).
 
 Reproduce:
 
 ```bash
-python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
+python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2 3 4 5
 python experiments/spectre/spectre_score_v3.py \
-    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 \
+    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 3 4 5 \
     --baseline "v2.2 yardstick:checkpoints_v2_evidence_ov"
 ```
 
-**Weak per-stratum dominance holds in the mean at every stratum.** One caveat stated
-plainly: **s1 is seed-unstable** — per-seed 1.16 / 2.72 / 7.48, so the third seed *exceeds*
-the yardstick's 6.20. s1 is the smallest-FP stratum, so its relative spread is largest; ALL
-is by contrast very stable (7.50 / 7.63 / 7.19). Dominance at s1 should be described as
-holding on average, not seed-wise.
+**Weak dominance holds — no stratum regresses — but the strata are not equally won**, and
+the honest reading is stratum by stratum:
+
+| stratum | verdict |
+|---|---|
+| s0 | **tie** at 0.00 — every method solves these on the first attempt |
+| s1 | **tie, not a win.** 5.60 ± 3.06 vs 6.20 is a +0.60 margin against a 3.06 seed sd (0.20 sd), and only **2 of 6 seeds** beat 6.20 — per-seed 1.16 / 2.72 / 7.48 / 6.68 / 6.28 / 9.28 |
+| s2 | **win** — 13.03 ± 1.52 vs 26.00, ~2× |
+| s3 | **win** — 12.96 ± 2.46 vs 26.44, ~2× |
+
+**The extra seeds earned their keep, and this is the one number a 3-seed report would have
+got wrong.** At 3 seeds s1 read 3.79 ± 3.29 and looked like a clear win; three more seeds
+moved it to 5.60 and revealed that four of six seeds are *worse* than the yardstick there.
+s1 has the smallest FP and so the largest relative spread. Overall FP is by contrast stable
+(per-seed 7.50 / 7.63 / 7.19 / 8.05 / 8.08 / 8.94).
 
 **Ablations, 1-seed dev**, all against the same yardstick:
 

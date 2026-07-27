@@ -45,16 +45,18 @@ a predicted head, not less. It also does not touch C5: the *deduction* (this sub
 still acts only outside the net as demotion; what the net sees is the *observation*.
 
 **Consequences.**
-- **Weak per-stratum dominance over deployed v2.2, the proposal's goal 1.** Over **3
-  seeds**: **7.44 ± 0.23 vs 14.66**, **−7.22 FP, 95% CI [−9.69, −5.02]**. Per stratum
-  (mean ± std across seeds): s0 0.00 ± 0.00, s1 3.79 ± 3.29, s2 13.67 ± 1.88, s3
-  12.31 ± 3.68 — every one at or below the yardstick's 0.00 / 6.20 / 26.00 / 26.44.
+- **Weak dominance over deployed v2.2, the proposal's goal 1.** Over **6 seeds**:
+  **7.90 ± 0.61 vs 14.66**, **−6.76 FP, 95% CI [−9.43, −4.40]**. Per stratum (mean ± std
+  across seeds): s0 0.00 ± 0.00, s1 5.60 ± 3.06, s2 13.03 ± 1.52, s3 12.96 ± 2.46, against
+  the yardstick's 0.00 / 6.20 / 26.00 / 26.44. Nothing regresses; s2 and s3 win by ~2×.
   Deployed config is `--overlap-mode jaccard --coverage-feats --aggregate-records
   --evidence-attn` (preset `v3final`).
-- **s1 is seed-unstable and the claim there is a mean, not a guarantee.** Per-seed s1 is
-  1.16 / 2.72 / **7.48**, so one seed exceeds the yardstick's 6.20. s1 has the smallest FP
-  and therefore the largest relative spread; ALL is stable (7.50 / 7.63 / 7.19). State
-  per-stratum dominance as holding *on average*.
+- **s1 is a TIE, not a win — and three seeds said otherwise.** 5.60 ± 3.06 vs 6.20 is a
+  +0.60 margin against a 3.06 seed sd (0.20 sd), with only **2 of 6 seeds** beating 6.20
+  (1.16 / 2.72 / 7.48 / 6.68 / 6.28 / 9.28). At 3 seeds it read 3.79 and looked like a clear
+  win. **Consequence for the project's seed discipline:** ≥3 seeds is the stated bar, and on
+  the widest-spread stratum 3 was not enough to avoid an over-claim. Where a per-stratum
+  claim is load-bearing, check the margin against the seed sd, not just the sign.
 - **P-v3-1's number is met, its mechanism is not.** The bar was s2 ≤ 17.08 *via necessity
   conditioning*; s2 lands at 15.88 via observed coverage. Report both halves — the target was
   right, the proposed mechanism was unnecessary.
