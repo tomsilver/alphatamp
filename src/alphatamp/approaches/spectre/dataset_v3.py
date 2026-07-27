@@ -78,7 +78,7 @@ class _V3Example(_V2Example):
 
 def records_for_evidence(
     episode: EpisodeRecord, ctx: frozenset, spec: DomainSpec
-) -> list:
+) -> tuple[list, list]:
     """Split the context's records into ``(hint_tier, proof_tier)``.
 
     The token path consumes only the hint tier, exactly as v2.2 did. The object summary
