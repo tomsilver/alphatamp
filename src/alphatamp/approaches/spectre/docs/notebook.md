@@ -136,10 +136,16 @@ Format:
   | v3 deployed | **25%** | **10.00** |
   | v2.2 yardstick | **25%** | 19.55 |
 
-  Identical static quality; **the whole −7 FP appears after the first failure is observed.**
-  Per stratum, among episodes not solved immediately: s1 1.16 vs 6.20, s2 15.80 vs 26.00,
-  s3 13.04 vs 26.44. This is what "records drive adaptiveness" means operationally — the
-  model is not a better static ranker, it is a better *re*-ranker.
+  **The whole −7 FP appears after the first failure is observed.** Per stratum, among
+  episodes not solved immediately: s1 1.16 vs 6.20, s2 15.80 vs 26.00, s3 13.04 vs 26.44.
+
+  Precise reading, since the coincidence invites over-claiming: that 25% is *exactly* the 25
+  s0 episodes, for both models — neither solves a single s1–s3 episode on the first attempt.
+  So the honest statement is not "the two have equally good static rankers" but "**the first
+  attempt separates them not at all, and every attempt after it does**". Which is still the
+  operational meaning of "records drive adaptiveness": the model is not a better static
+  ranker, it is a better *re*-ranker. It also corroborates the leakage audit independently —
+  a feature leaking feasibility would have lifted the first pick too.
 - **Leakage audit (0 violations)**, run before trusting the number: features are exactly
   zero at |F|=0; the culprit set is built only from candidates in the failure context, all
   of which are failures; and the deployment loop breaks on success before a successful
