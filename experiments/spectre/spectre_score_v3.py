@@ -23,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 from typing import Literal, cast
 
@@ -143,10 +144,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         nargs="+",
         default=None,
-        help="aggregate an arm over several seeds. A subdir may contain '{seed}', which "
-        "is substituted per seed (e.g. checkpoints_v3_v3final_s{seed}); the checkpoint "
-        "path's own seed_<n> component is substituted regardless. Reports mean +- std "
-        "ACROSS SEEDS of the per-stratum mean, which is the spread a gate is judged on.",
+        help="aggregate every arm over these seeds. A subdir may contain '{seed}' when "
+        "the arm writes one directory per seed (e.g. checkpoints_v3_v3final_s{seed}); "
+        "the checkpoint path's own seed_<n> component is substituted regardless, which "
+        "is what lets a single-directory arm aggregate too. Missing seeds are skipped "
+        "with a warning. Reports mean +- std ACROSS SEEDS of the per-stratum mean, "
+        "which is the spread a gate is judged on.",
     )
     ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
     ap.add_argument(
@@ -178,13 +181,27 @@ def main(argv: list[str] | None = None) -> int:
     results: dict[str, list[dict[int, float]]] = {}
     for entry, is_v2 in specs:
         label, _, subdir = entry.partition(":")
-        seeds = a.seeds if (a.seeds and "{seed}" in subdir) else [a.seed]
+        # `--seeds` applies to every arm: the checkpoint path's own `seed_<n>` component
+        # always varies, and `{seed}` in the subdir is substituted as well when the arm
+        # writes one directory per seed. Missing seeds are reported and skipped, so an
+        # arm with fewer seeds than another still aggregates over what exists.
+        seeds = a.seeds or [a.seed]
         for sd in seeds:
             path = subdir.replace("{seed}", str(sd))
             ckpt = data / path / a.env_variant / f"seed_{sd}" / "best.pt"
             if not ckpt.is_file():
                 print(f"!! missing {ckpt}")
                 continue
+            # `train_*` rewrites best.pt every time selection improves, so a checkpoint
+            # from a *running* job is a mid-training model that scores like a bad one.
+            # Reading one silently is how a baseline gets unfairly flattered; it nearly
+            # happened here (a 3-seed v2.2 read 17.56 while two seeds were at epoch 10).
+            age = time.time() - ckpt.stat().st_mtime
+            if age < 120:
+                print(
+                    f"!! {ckpt} was written {age:.0f}s ago — a run may still own it; "
+                    f"this is a MID-TRAINING model, not a result"
+                )
             if is_v2:
                 model, _ = load_v2_checkpoint(ckpt)
                 model = model.eval().to(a.device)
