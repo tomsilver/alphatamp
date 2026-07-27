@@ -272,3 +272,41 @@ Implementation note worth keeping: `_V3Example` **subclasses** `_V2Example` rath
 widening `build_v3_example`'s return, so all three callers keep their two-tuple and
 `collate_v2` flows through untouched. Like `sinusoidal_pos`, enabling it changes a
 projection width and therefore retires the D-8 oracle; default off stays byte-identical.
+
+**User steer, mid-run:** records should be *the primary driver* of v3's adaptiveness, and
+their inertness is to be **fixed, not routed around** — the architecture/training is the
+suspect, not the idea. Note `obj_evidence` is not a route-around: it is computed purely
+from `FailureRecord` fields, so it is a record *consumption* mechanism. But the steer is
+right that the token pathway itself has to be made to work, which is A10.
+
+### A10 — **the root cause: evidence competes with geometry inside one softmax**
+
+`CrossAttentionScorer` builds a single memory and runs one cross-attention over it:
+
+```python
+memory = torch.cat([scene_tok, glob, fact_tok], dim=1)   # (B, N + 1 + F, D)
+attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
+```
+
+With ~10 scene tokens against up to 2045 record tokens, one softmax has to divide a fixed
+attention budget between the geometry that determines feasibility and the evidence. Geometry
+is reliably useful; evidence is noisy. **So discarding evidence is the loss-minimizing
+policy**, and the model duly learned it — which is exactly what A8 measured. Aggregation
+alone does not fix this: it lowers the ratio to ~3:1, still growing with |F|.
+
+This is an architecture defect, not a fact about evidence. The same failure set, presented
+as two compact per-candidate scalars (`cand_overlap`), is worth 5 FP — because those bypass
+the attention entirely and are concatenated straight at the head.
+
+**Decision: `CrossAttentionScorerV3` (`--evidence-attn`)** — a *second, independent*
+cross-attention over the evidence memory, with the head seeing both attended vectors
+(`2*D_MODEL → 3*D_MODEL`). Evidence can now be read **without giving up geometry**, so a
+useful record no longer has to out-compete the scene to be seen. Domain-agnostic: it changes
+how tokens are consumed, not what they are, so it carries to any environment with an
+instrumented refiner.
+
+One implementation trap worth recording: a batch row with **no** records yields an all-True
+key-padding mask, and `nn.MultiheadAttention` returns **NaN** rather than an empty result for
+such a row. Guarded by attending under a mask that always leaves one key live and zeroing
+those rows afterwards — the same guard `model.py` already uses. Verified NaN-free with and
+without records.
