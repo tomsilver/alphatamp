@@ -1,0 +1,155 @@
+"""Run several SPECTRE v3 training configurations concurrently on one GPU.
+
+Training here is **CPU-bound, not GPU-bound**: measured on dd2d_v4, tensorization is ~79%
+of a step and the model needs 173 MB of the card's 32 GB. Running arms one after another
+therefore leaves both the GPU and 30-odd CPU threads idle. This launches them together.
+
+Two knobs matter and they interact:
+
+- ``--max-parallel`` -- how many training processes run at once. Each is its own CUDA
+  context (~300-500 MB of overhead), so VRAM is not the limit; CPU is.
+- ``--num-workers`` -- dataloader workers *inside* each run. Total load is roughly
+  ``max_parallel * (1 + num_workers)`` processes, so keep that under the core count or the
+  runs start fighting each other and the wall-clock stops improving.
+
+Each arm writes to ``data/spectre/logs/<name>.log``, which is where
+``spectre_status.py`` looks, so a sweep stays checkable mid-flight.
+
+Usage::
+
+    python experiments/spectre/spectre_sweep.py --preset g6
+    python experiments/spectre/spectre_sweep.py --preset g7 --max-parallel 4
+    python experiments/spectre/spectre_sweep.py --arm "recA:--no-overlap" --arm "recB:--no-overlap --no-records"
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+LOG_DIR = REPO / "data" / "spectre" / "logs"
+
+#: Named sweeps. Each entry is ``name -> extra CLI args for train_v3``.
+#: G6 holds ``cand_overlap`` out of *both* the record and no-record arms, so the evidence
+#: increment is not measured against a bar contaminated by the same set-overlap signal.
+PRESETS: dict[str, dict[str, str]] = {
+    "g6": {
+        "g6_recON_ovOFF": "--no-overlap",
+        "g6_recOFF_ovOFF": "--no-overlap --no-records",
+        "g6_recON_ovON": "",
+    },
+    # G7's 2x2 isolates `jaccard` (genuinely uncertain) from `dead` (redundant with the
+    # demotion applied outside the net). The demotion half of the 2x2 is an evaluation-time
+    # switch, not a training one, so only the two training arms appear here.
+    "g7": {
+        "g7_ovON": "",
+        "g7_ovOFF": "--no-overlap",
+    },
+}
+
+
+def launch(name: str, extra: str, env: str, seed: int, epochs: int, workers: int):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log = LOG_DIR / f"{name}.log"
+    cmd = [
+        "python",
+        "-m",
+        "alphatamp.approaches.spectre.train_v3",
+        "--env",
+        env,
+        "--seed",
+        str(seed),
+        "--epochs",
+        str(epochs),
+        "--num-workers",
+        str(workers),
+        "--out-suffix",
+        f"_{name}",
+        *extra.split(),
+    ]
+    fh = open(log, "a", encoding="utf-8")
+    fh.write(f"### {name} started {time.strftime('%FT%T')}\n### cmd: {' '.join(cmd)}\n")
+    fh.flush()
+    # stdbuf keeps heartbeats line-buffered so the log is readable while running
+    proc = subprocess.Popen(
+        ["stdbuf", "-oL", "-eL", *cmd],
+        stdout=fh,
+        stderr=subprocess.STDOUT,
+        cwd=REPO,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+    return proc, log, fh
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--preset", choices=sorted(PRESETS))
+    ap.add_argument(
+        "--arm",
+        action="append",
+        default=[],
+        help='extra arm as "name:args", repeatable',
+    )
+    ap.add_argument("--env", default="dd2d_v4")
+    ap.add_argument("--seeds", type=int, nargs="+", default=[0])
+    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--max-parallel", type=int, default=3)
+    ap.add_argument("--num-workers", type=int, default=3)
+    a = ap.parse_args(argv)
+
+    arms: dict[str, str] = dict(PRESETS.get(a.preset, {})) if a.preset else {}
+    for spec in a.arm:
+        name, _, extra = spec.partition(":")
+        arms[name.strip()] = extra.strip()
+    if not arms:
+        ap.error("nothing to run: pass --preset and/or --arm")
+
+    jobs = [
+        (f"{name}_s{seed}" if len(a.seeds) > 1 else name, extra, seed)
+        for seed in a.seeds
+        for name, extra in arms.items()
+    ]
+    load = a.max_parallel * (1 + a.num_workers)
+    print(
+        f"sweep: {len(jobs)} jobs, {a.max_parallel} at a time, "
+        f"{a.num_workers} loader workers each (~{load} procs vs {os.cpu_count()} cores)"
+    )
+    for name, extra, seed in jobs:
+        print(f"  {name:<24} seed={seed} args={extra or '(defaults)'}")
+    print("\ncheck progress: python experiments/spectre/spectre_status.py\n")
+
+    pending = list(jobs)
+    running: list[tuple[str, subprocess.Popen, Path, object]] = []
+    failed: list[str] = []
+    t0 = time.time()
+    while pending or running:
+        while pending and len(running) < a.max_parallel:
+            name, extra, seed = pending.pop(0)
+            proc, log, fh = launch(name, extra, a.env, seed, a.epochs, a.num_workers)
+            running.append((name, proc, log, fh))
+            print(f"[{time.strftime('%T')}] started {name} (pid {proc.pid}) -> {log}")
+        time.sleep(5)
+        for entry in list(running):
+            name, proc, log, fh = entry
+            if proc.poll() is None:
+                continue
+            running.remove(entry)
+            fh.close()
+            status = "ok" if proc.returncode == 0 else f"FAILED rc={proc.returncode}"
+            if proc.returncode != 0:
+                failed.append(name)
+            print(f"[{time.strftime('%T')}] {name}: {status}")
+
+    print(f"\nsweep done in {(time.time() - t0) / 60:.1f} min")
+    if failed:
+        print(f"FAILED arms: {', '.join(failed)} (see their logs)")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

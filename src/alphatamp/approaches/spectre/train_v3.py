@@ -66,6 +66,7 @@ class TrainV3Config:
     select_window: int = 3
     val_episodes: int = 50
     select_budget: int = 30
+    num_workers: int = 4
 
 
 class SpectreV3Dataset(Dataset):
@@ -216,11 +217,23 @@ def train_v3(
     train_ds = SpectreV3Dataset(train_dir, vocab, cfg, spec)
     val_ds = SpectreV3Dataset(val_dir, vocab, cfg, spec)
     collate = _make_collate(vocab.max_operator_arity)
+    # Tensorization is ~79% of a training step (measured) and the model is tiny, so the
+    # loader is the bottleneck, not the GPU. `persistent_workers` stays off on purpose:
+    # workers are re-forked each epoch and so pick up `set_epoch`, which drives both the
+    # tag permutation and the failure-context sampling.
     train_loader = DataLoader(
-        train_ds, batch_size=cfg.batch_size, shuffle=True, collate_fn=collate
+        train_ds,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        collate_fn=collate,
+        num_workers=cfg.num_workers,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=cfg.batch_size, shuffle=False, collate_fn=collate
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=cfg.num_workers,
     )
     # Stride, never truncate. The collector fills strata in seed bands and episodes are
     # stored in seed order, so `[:50]` would hand the selector only strata 0-1 -- the easy
@@ -311,6 +324,7 @@ def main(argv=None) -> int:
     ap.add_argument("--wl-weight", type=float, default=1.0)
     ap.add_argument("--no-records", action="store_true", help="ablate record tokens")
     ap.add_argument("--no-overlap", action="store_true", help="ablate [dead, jaccard]")
+    ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -323,6 +337,7 @@ def main(argv=None) -> int:
         within_length_weight=a.wl_weight,
         use_records=not a.no_records,
         use_overlap=not a.no_overlap,
+        num_workers=a.num_workers,
     )
     sub = "checkpoints_v3"
     if a.no_records:
