@@ -105,6 +105,13 @@ class TrainV3Config:
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
     coverage_feats: bool = False
+    # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
+    # evidence from 30% of the rest, so >half of training carries no evidence -- while a
+    # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
+    # after it. Over-weighting the static case is the same rollout-alignment error as the
+    # |F| cap, on the other axis.
+    p_empty: float = 0.35
+    p_drop_facts: float = 0.3
     # G9: restrict the *training* split to these strata (empty = all). This is experiment
     # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
     # this is neither: it decides which episodes exist during training, exactly as the
@@ -159,7 +166,13 @@ class SpectreV3Dataset(Dataset):
         spec = self.spec or spec_for(episode.provenance.env_variant)
         rng = np.random.default_rng((self.cfg.seed, idx, self.epoch))
         fail_idx = [i for i, o in enumerate(episode.outcomes) if o.outcome == "fail"]
-        ctx, hide = sample_context(fail_idx, rng, tail_max_f=self.cfg.tail_max_f)
+        ctx, hide = sample_context(
+            fail_idx,
+            rng,
+            p_empty=self.cfg.p_empty,
+            p_drop_facts=self.cfg.p_drop_facts,
+            tail_max_f=self.cfg.tail_max_f,
+        )
         example, records = build_v3_example(
             episode,
             self.vocab,
@@ -448,6 +461,18 @@ def main(argv=None) -> int:
         help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
     )
     ap.add_argument(
+        "--p-empty",
+        type=float,
+        default=TrainV3Config.p_empty,
+        help="fraction of training examples with an empty failure context",
+    )
+    ap.add_argument(
+        "--p-drop-facts",
+        type=float,
+        default=TrainV3Config.p_drop_facts,
+        help="evidence dropout rate on the remaining examples",
+    )
+    ap.add_argument(
         "--coverage-feats",
         action="store_true",
         help="append observed coverage/waste to cand_overlap (the §5.1 necessity "
@@ -502,6 +527,8 @@ def main(argv=None) -> int:
         use_obj_evidence=a.obj_evidence,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
+        p_empty=a.p_empty,
+        p_drop_facts=a.p_drop_facts,
         sinusoidal_pos=a.sinusoidal_pos,
         train_strata=tuple(a.train_strata),
     )
