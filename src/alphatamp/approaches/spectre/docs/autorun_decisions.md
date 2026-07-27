@@ -479,11 +479,23 @@ I tried twice to fix the line-length share automatically and reverted both times
    produced five orphaned lines, because its "is this prose?" heuristic classified a
    sentence beginning *"class as `failure_action`…"* as code.
 
-**Decision: leave it, documented.** The debt is cosmetic (all pylint `C`), it is mostly not
-mine, and two automated attempts produced subtly mangled prose in exactly the documents this
-project relies on for its reasoning. A deliberate manual pass is the right way to clear it,
-not a regex at 01:00. `./run_ci_checks.sh` is therefore **not green** — this is the honest
-state of G11's CI criterion. mypy is clean (65 files) and all 407 + 19 slow tests pass.
+**Decision: leave the line-length debt, documented.** It is cosmetic (all pylint `C`), it is
+mostly not mine, and two automated attempts produced subtly mangled prose in exactly the
+documents this project relies on for its reasoning. A deliberate manual pass is the right way
+to clear it, not a regex at 01:00.
+
+**Exact CI state at the end of the run**, so nobody has to re-derive it:
+
+| check | state |
+|---|---|
+| `pytest tests/approaches/spectre/` | **407 pass**, 20 deselected |
+| the same with `-m slow` | **19 pass**, 1 skipped — includes the D-8 equivalence oracle |
+| `mypy src/alphatamp/approaches/spectre/` | **clean**, 65 files |
+| `mypy .` (repo-wide) | **19 errors in 7 files**, all pre-existing — `test_necessity`, `test_v3_equivalence`, `test_domain`, `test_instrumentation_is_observational`, `test_spectre_harvest`, `test_spectre_geometry`, `spectre_d2_s2` |
+| `pytest --pylint` over spectre | **371 messages**, 58 in v3 modules, the rest pre-existing |
+
+So **`./run_ci_checks.sh` is not green** — that is the honest state of G11's CI criterion,
+and the residual is bounded and enumerated rather than vague.
 
 **Process failure to record:** two `p5_jac_cov` processes raced on one checkpoint path after
 I relaunched following a collate crash, so the first reported checkpoint scored 8.57 and then
