@@ -70,6 +70,60 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-27 — **P5: observed coverage/waste — v3 weakly dominates v2.2 at every stratum**
+
+- **What:** two scalars appended to `cand_overlap`, computed from the culprits the refiner
+  *reported* while failing the candidates already tried:
+
+  ```
+  coverage = |S(c) ∩ culprits| / |culprits|      waste = |S(c) \ culprits| / |S(c)|
+  ```
+
+  These are exactly §5.1's necessity features, with one substitution: the per-object
+  necessity `p_i` is **observed** rather than **predicted**. Necessity conditioning was cut
+  (`decisions.md` 2026-07-26) because its head would have had to predict `p_i` from geometry.
+  Once the refiner reports culprits, the same two features need no head at all — and become
+  *more* C2-legal, since nothing is inferred by us. Paired with `--overlap-mode jaccard`,
+  which drops the `dead` length proxy that G8 showed was wrong at s1.
+- **Result — uncensored deployed FP, dd2d_v4 test, n=100 [1-seed dev]:**
+
+  | arm | ALL | s0 | s1 | s2 | s3 |
+  |---|---|---|---|---|---|
+  | **p5 jaccard + coverage** | **8.39** | **0.00** | **2.72** | **12.64** | **18.20** |
+  | p4 evidence-attention | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 |
+  | p4 evattn + aggregate | 15.74 | 0.00 | 4.36 | 24.40 | 34.20 |
+  | p3 object-evidence | 16.12 | 0.00 | 20.84 | 17.80 | 25.84 |
+  | p2 no-records | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 |
+  | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+- **Weak per-stratum dominance is achieved.** s0 ties at 0.00; s1 **2.72 < 6.20**; s2
+  **12.64 < 26.00**; s3 **18.20 < 26.44**. Overall **−6.27 FP, 95% CI [−8.92, −3.74]**,
+  excludes 0. That is goal 1 of the v3 proposal, and it is the first arm all night to beat
+  the yardstick at all rather than tie it.
+- **P-v3-1's target is met by a different mechanism than predicted.** The pre-registered
+  bar was s2 ≤ astar-dist's 17.08 *via necessity conditioning*; s2 lands at **12.64** via
+  observed coverage. The prediction's *number* is beaten; its *mechanism* was withdrawn.
+  Worth stating both ways round rather than claiming P-v3-1 succeeded.
+- **This is records driving adaptiveness, which was the point.** `coverage`/`waste` read
+  `FailureRecord.culprits` — nothing else in the system has access to which object the
+  refiner's own collision check found blocking. At |F|=0 both features are identically zero,
+  so the first attempt is still purely static; the signal accrues as the rollout observes.
+- **Leakage audit (0 violations)**, run before trusting the number: features are exactly
+  zero at |F|=0; the culprit set is built only from candidates in the failure context, all
+  of which are failures; and the deployment loop breaks on success before a successful
+  candidate could ever enter the context.
+- **Ablation context.** Evidence-attention alone (14.92) and object-evidence alone (16.12)
+  are both roughly a tie with v2.2 — the win is specifically the coverage/waste features.
+  Notably object-evidence *does* fix s3 on its own (25.84, beating 26.44) while wrecking s1
+  (20.84), which is the same length-calibration tension G8 found.
+- **Caveat on this specific checkpoint:** two `p5_jac_cov` processes raced on one checkpoint
+  path (relaunches after a collate crash), so this table's checkpoint is of the right config
+  but muddy provenance — it scored 8.57 then 8.39 as the second run overwrote it. A clean
+  3-seed re-run is the reportable number.
+- **Takeaway / next:** 3 seeds of `jaccard + coverage`; ablate whether dropping `dead`
+  is needed once coverage is present; and whether the record *tokens* still add anything on
+  top (`--no-records` with coverage).
+
 ## 2026-07-27 — P2: the missing G6 cell — record *tokens* cost during training even though the deployed model ignores them
 
 - **What:** the cell the G6 ablation never ran — **records OFF, overlap ON** — which is the
