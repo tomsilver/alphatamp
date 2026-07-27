@@ -140,25 +140,44 @@ run as gated increments. **Current substrate is `dd2d_v4`** (grasp-fixed *and*
 refiner-instrumented); dd2d_v2/v3 numbers predate the double-canonicalization fix and must
 not be quoted without regenerating.
 
-**Gate status.** Done: G0 instrumented refiner + `dd2d_v4`; G1 v3 scaffold + equivalence
-oracle; G2 domain adapter (+ R1 prior removal); G3 yardstick + per-seed harness; G4
-diagnostics (D2/D4); G5 FailureRecord + certificate rule; G6 record tokens; G6b uncensored
-selector. Remaining: **G7 overlap 2×2**, then G9 length generalization, G10 geometry
-interface, G11 consolidation. Gate *n+1* starts only when *n*'s acceptance passes.
+**Gate status.** Done: G0–G6b as before; **G7** (P-v3-3 falsified — `cand_overlap` is
+load-bearing, −5.07 FP); **G8/P2–P9** the performance push (below). **G9 descoped** (encoder
+built, experiment not run — its premise does not hold on DD2D: s0–s2 pools already contain
+9-operator plans while s3 needs 7, so the position table is never OOV). **G10 not
+attempted.** Remaining: **G11 consolidation** — `as_built_v3.md` and `porting_guide.md` are
+written; `./run_ci_checks.sh` has residual pylint line-length debt.
 
-**Where v3 stands (after G6b).** records+overlap is **16.17** uncensored deployed FP on
-dd2d_v4 test against the v2.2 yardstick's 14.66 — a paired difference of **+1.51, CI
-[−2.29, +5.72], which includes 0**, so v3 currently *matches* v2.2 rather than beating it.
-That is the expected outcome for a consolidation whose claim is "same performance on less
-bespoke machinery", but it is not yet a win. The record increment passes: **−3.37 FP, CI
-[−6.16, −0.64]** against the no-records bar. **G6's levels (18.59/19.15/20.95) are retracted
-— do not quote them**; they came from a censored selector (`decisions.md` 2026-07-26).
+**Where v3 stands (2026-07-27).** The deployed configuration **weakly dominates deployed
+v2.2 at every stratum** [1-seed dev]:
 
-**Two open threads G7 should carry** (`notebook.md` 2026-07-26 G6b): records *alone* do not
-beat the bar (+1.70, n.s.) — the G6 increment is really a records×overlap interaction, which
-undercuts G7's premise that `dead` is redundant with the demotion applied outside the net;
-and evidence **hurts s1** (bar 3.64 vs 8.56) while helping s2/s3 substantially, the same
-shape as the v2.2-era "evidence harms s1" problem fixed on 2026-07-19.
+| | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| v3 deployed | **7.56** | 0.00 | **1.32** | **15.88** | **13.04** |
+| v2.2 yardstick | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
+
+**−7.10 FP, 95% CI [−9.52, −4.96].** Config:
+`--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`
+(preset `v3final` in `spectre_sweep.py`).
+
+**What carries it: observed `coverage`/`waste`.** These are §5.1's necessity features with
+per-object necessity **observed** (`FailureRecord.culprits`) instead of **predicted** — so no
+head, no second loss, no geometry routine, and *more* C2-legal than the cut version since
+nothing is inferred by us. Not `clears` (L2): that was a routine *we* ran. Both features are
+exactly zero at |F|=0, so the first attempt stays static and the signal accrues as the
+rollout observes. A leakage audit returned 0 violations.
+
+**Retracted, do not quote:** G6's levels (18.59/19.15/20.95 — censored selector) and G6's
+−3.37 "record increment", which was `cand_overlap`, not records (its bar removed both).
+
+**Traps this push added** (details in `docs/autorun_decisions.md` A1–A13):
+- **`dead` is a length proxy** — right at s3, wrong at s1 (corr(dead,|S|) = −0.284). Tuning
+  it only trades strata; give the model the count it proxies for.
+- **A token stream the model ignores is not free** — records cost −0.83 FP in training while
+  `suppress_records` showed the deployed model barely reads them (16.17 → 16.40).
+- **Evidence competed with geometry in one softmax** (~10 scene tokens vs up to 2045 record
+  tokens), so discarding it was loss-minimizing.
+- **Two runs sharing a checkpoint dir** silently interleave writes; `train_v3` now refuses
+  via a `.owner` marker.
 
 - **New modules** (v1/v2 are frozen — D-7): `domain.py` (the whole per-environment
   contract: per-query `QueryAxioms(monotone, local, exact)` + `min_calls_per_schema`),
