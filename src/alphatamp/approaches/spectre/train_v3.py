@@ -95,6 +95,8 @@ class TrainV3Config:
     # emits one per failed *sample*, which lets one unlucky candidate contribute
     # hundreds of tokens; §6.1 defines a record per failing *query*.
     aggregate_records: bool = False
+    # Per-object evidence summary on scene tokens (SceneEncoderV3).
+    use_obj_evidence: bool = False
     # G9: restrict the *training* split to these strata (empty = all). This is experiment
     # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
     # this is neither: it decides which episodes exist during training, exactly as the
@@ -318,6 +320,7 @@ def train_v3(
             dropout_p=cfg.dropout_p,
             use_records=cfg.use_records,
             sinusoidal_pos=cfg.sinusoidal_pos,
+            use_obj_evidence=cfg.use_obj_evidence,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -429,6 +432,11 @@ def main(argv=None) -> int:
         help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
     )
     ap.add_argument(
+        "--obj-evidence",
+        action="store_true",
+        help="summarise failures onto scene tokens via the tag join (SceneEncoderV3)",
+    )
+    ap.add_argument(
         "--aggregate-records",
         action="store_true",
         help="one record token per (schema, args) instead of per failed sample",
@@ -463,6 +471,7 @@ def main(argv=None) -> int:
         overlap_mode=a.overlap_mode,
         tail_max_f=a.tail_max_f,
         aggregate_records=a.aggregate_records,
+        use_obj_evidence=a.obj_evidence,
         sinusoidal_pos=a.sinusoidal_pos,
         train_strata=tuple(a.train_strata),
     )

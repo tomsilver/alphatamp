@@ -34,6 +34,9 @@ from torch import Tensor, nn
 
 from alphatamp.approaches.spectre.model import D_MODEL
 from alphatamp.approaches.spectre.model_v2 import (
+    D_DESCRIPTOR,
+    D_POSE,
+    D_REL,
     D_TAG,
     MAX_TAGS_DEFAULT,
     AuxHead,
@@ -76,6 +79,7 @@ class SpectreV3Batch(SpectreV2Batch):
     rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
     rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
     rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
+    obj_evidence: Optional[Tensor] = None  # (B, N, N_OBJ_EVIDENCE) float
 
     def to(self, device) -> "SpectreV3Batch":
         return SpectreV3Batch(
@@ -149,6 +153,64 @@ def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
     return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
 
+N_OBJ_EVIDENCE = 4
+"""Per-object evidence summary width; see :class:`SceneEncoderV3`."""
+
+
+class SceneEncoderV3(SceneEncoder):
+    """:class:`SceneEncoder` plus a per-object summary of the failures observed so far.
+
+    **Why here, and not as more tokens.** Measured on the G6b checkpoint: deploying a
+    records-trained model with its evidence memory emptied at every step moves it by 0.23
+    FP (16.17 -> 16.40). The model had learned to *ignore* the per-failure tokens. What it
+    does use is `cand_overlap` -- two compact scalars per candidate summarising the same
+    failure set. So the failure is not "evidence is useless" but "free-floating tokens are
+    the wrong shape for this architecture": the scorer's strength is the tag join between
+    objects and candidate arguments, and a record token participates in that join only
+    weakly, through pooled tag slots.
+
+    This routes the same observations onto the objects they *name*, where the tag join
+    already lives. Four scalars per object, all in [0, 1], all zero when no failure has
+    been observed yet:
+
+    ``[frac of failed candidates that manipulate o,
+       frac of hint records naming o as an argument,
+       frac of hint records naming o as a culprit,
+       mean normalized depth of the records naming o]``
+
+    Domain-agnostic by construction -- set membership over record fields, no geometry and
+    no per-environment predicate (C1). Proof-tier records stay excluded exactly as they are
+    from the token path, so nothing here re-imports the "blocked sets are large, prefer
+    longer" correlate that L4 warns about.
+    """
+
+    def __init__(
+        self, max_tags: int = MAX_TAGS_DEFAULT, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__(max_tags, dropout_p)
+        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + D_REL + 1 + N_OBJ_EVIDENCE
+        self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        tag = self.tag_emb(batch.obj_tags)
+        desc = self.footprint(batch.obj_boundary, batch.obj_mask)
+        pose = self.pose_proj(batch.obj_pose)
+        rel = self.rel_proj(batch.obj_rel)
+        tgt = batch.obj_is_target.unsqueeze(-1)
+        ev = getattr(batch, "obj_evidence", None)
+        if ev is None:
+            ev = torch.zeros(
+                *batch.obj_tags.shape,
+                N_OBJ_EVIDENCE,
+                device=tag.device,
+                dtype=tag.dtype,
+            )
+        tok = self.proj(torch.cat([tag, desc, pose, rel, tgt, ev], dim=-1))
+        tok = self.sab1(tok, batch.obj_mask)
+        tok = self.sab2(tok, batch.obj_mask)
+        return tok * batch.obj_mask.unsqueeze(-1)
+
+
 class CandidateEncoderV3(CandidateEncoder):
     """:class:`CandidateEncoder` with the learned absolute position table removed.
 
@@ -203,6 +265,9 @@ class V3Config:
     # on RETIRES the D-8 equivalence oracle (pos_emb leaves the state dict), so it is the
     # last architectural change by design.
     sinusoidal_pos: bool = False
+    # Per-object evidence summary on the scene tokens (see SceneEncoderV3). Changes the
+    # scene projection's input width, so it also retires the D-8 oracle.
+    use_obj_evidence: bool = False
 
     @classmethod
     def from_v2_checkpoint_cfg(cls, cfg: dict) -> "V3Config":
@@ -237,7 +302,8 @@ class SpectreV3Model(nn.Module):
         super().__init__()
         self.cfg = cfg or V3Config()
         c = self.cfg
-        self.scene = SceneEncoder(c.max_tags, c.dropout_p)
+        scene_cls = SceneEncoderV3 if c.use_obj_evidence else SceneEncoder
+        self.scene = scene_cls(c.max_tags, c.dropout_p)
         cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
         self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)

@@ -27,6 +27,7 @@ Three v2.2 features are deliberately *not* carried over:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Optional
 
@@ -46,6 +47,7 @@ from alphatamp.approaches.spectre.model_v2 import D_REL, MAX_FACT_ARGS
 from alphatamp.approaches.spectre.model_v3 import (
     MAX_RECORD_ARGS,
     MAX_RECORD_CULPRITS,
+    N_OBJ_EVIDENCE,
     N_RECORD_SCALARS,
     SpectreV3Batch,
 )
@@ -59,6 +61,71 @@ __all__ = [
     "sample_context",
     "build_record_arrays",
 ]
+
+
+@dataclasses.dataclass
+class _V3Example(_V2Example):
+    """``_V2Example`` plus the per-object evidence summary.
+
+    A subclass rather than a third return value: ``collate_v2`` reads attributes, so a
+    ``_V3Example`` flows through the v2 collation untouched, and every existing caller of
+    ``build_v3_example`` keeps its two-tuple. The field defaults to ``None``, so the
+    compat path is byte-identical (D-8).
+    """
+
+    obj_evidence: Optional[np.ndarray] = None
+
+
+def records_for_evidence(
+    episode: EpisodeRecord, ctx: frozenset, spec: DomainSpec
+) -> list:
+    """Hint-tier records of the context, as objects (the token path returns arrays).
+
+    Same tier filter as :func:`build_record_arrays`: proof-tier records whose deduction
+    actually fired are handled outside the net, so they must not re-enter as features
+    either -- that is the split L4 paid for.
+    """
+    out = []
+    for idx in sorted(ctx):
+        for rec in records_for_candidate(episode, idx, spec):
+            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+                continue
+            out.append(rec)
+    return out
+
+
+def _object_evidence(
+    canon: EpisodeRecord,
+    ctx: frozenset,
+    subsets: list,
+    objects: list,
+    records: list,
+    spec: DomainSpec,
+) -> np.ndarray:
+    """Summarise the observed failures onto the objects they name. See SceneEncoderV3."""
+    ev = np.zeros((len(objects), N_OBJ_EVIDENCE), dtype=np.float32)
+    if not ctx:
+        return ev
+    index = {o: i for i, o in enumerate(objects)}
+    n_ctx = float(len(ctx))
+    for f in ctx:
+        for o in subsets[f]:
+            if o in index:
+                ev[index[o], 0] += 1.0 / n_ctx
+    n_rec = float(len(records)) or 1.0
+    depth_sum = np.zeros(len(objects), dtype=np.float32)
+    depth_cnt = np.zeros(len(objects), dtype=np.float32)
+    for rec in records:
+        for o in rec.args:
+            if o in index:
+                ev[index[o], 1] += 1.0 / n_rec
+                depth_sum[index[o]] += rec.step_index
+                depth_cnt[index[o]] += 1.0
+        for o in rec.culprits:
+            if o in index:
+                ev[index[o], 2] += 1.0 / n_rec
+    ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / 8.0
+    return np.clip(ev, 0.0, 1.0)
 
 
 def sample_context(
@@ -343,8 +410,21 @@ def build_v3_example(
         else []
     )
 
+    obj_evidence = (
+        _object_evidence(
+            canon,
+            ctx,
+            subsets,
+            [o.name for o in geo.objects],
+            records_for_evidence(canon, ctx, spec),
+            spec,
+        )
+        if (ctx and not hide)
+        else None
+    )
+
     return (
-        _V2Example(
+        _V3Example(
             obj_tags,
             obj_boundary,
             obj_pose,
@@ -361,6 +441,7 @@ def build_v3_example(
             farg,
             prior,
             overlap,
+            obj_evidence,
         ),
         records,
     )
@@ -382,6 +463,14 @@ def collate_v3(
     """
     base = collate_v2(examples, max_arity=max_arity)
     batch = SpectreV3Batch(**base.__dict__)
+    evs = [getattr(e, "obj_evidence", None) for e in examples]
+    if any(e is not None for e in evs):
+        n_obj = int(batch.obj_tags.shape[1])
+        stacked = np.zeros((len(examples), n_obj, N_OBJ_EVIDENCE), np.float32)
+        for bi, ev in enumerate(evs):
+            if ev is not None:
+                stacked[bi, : ev.shape[0]] = ev[:n_obj]
+        batch.obj_evidence = torch.as_tensor(stacked)
     if not records or not any(records):
         return batch
 

@@ -75,6 +75,7 @@ def deployed_rollout_v3_traced(
     apply_demotion: bool = True,
     overlap_mode: str = "both",
     aggregate_records: bool = False,
+    suppress_records: bool = False,
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
@@ -101,6 +102,13 @@ def deployed_rollout_v3_traced(
     ``dead`` column is redundant with the rule applied outside the net. The proof state is
     still advanced either way, so the trace's ``step_dead`` stays populated and the two
     arms differ only in whether the offset is applied.
+
+    ``suppress_records=True`` is a **diagnostic**, not a deployment mode: it runs a
+    records-trained model with its evidence memory emptied at every step. Deliberately a
+    train/deploy mismatch, and useful precisely because of that -- it separates "training
+    with records damaged the weights" (still bad with records suppressed) from "the
+    evidence input misleads at deploy" (good with them suppressed). Never report a number
+    produced with it as a method result.
 
     There is no ``demotion_source`` knob: v3 reads the refiner's own report, and the
     geometry-reconstruction alternative is not ported (R2).
@@ -132,7 +140,9 @@ def deployed_rollout_v3_traced(
         # would deploy a records-trained model blind to its own evidence -- the train/
         # deploy input mismatch the proposal warns about, and one that degrades silently.
         batch = collate_v3(
-            [example], max_arity=vocab.max_operator_arity, records=[records]
+            [example],
+            max_arity=vocab.max_operator_arity,
+            records=[[] if suppress_records else records],
         ).to(device)
         logits, _ = model(batch)
         raw = logits[0].detach().cpu().numpy().astype(float)
