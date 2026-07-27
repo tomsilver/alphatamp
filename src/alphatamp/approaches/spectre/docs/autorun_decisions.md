@@ -310,3 +310,32 @@ key-padding mask, and `nn.MultiheadAttention` returns **NaN** rather than an emp
 such a row. Guarded by attending under a mask that always leaves one key live and zeroing
 those rows afterwards — the same guard `model.py` already uses. Verified NaN-free with and
 without records.
+
+### A11 — the missing cell, and a sharper statement than A8
+
+`p2_norec` (records OFF, **overlap ON**) is the cell the G6 ablation never ran, and it is
+the closest v3 analogue of the v2.2 configuration:
+
+| arm | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| p2 `norec` | **15.34** | 0.00 | **4.64** | 26.24 | 30.48 |
+| p2 `agg` (records, aggregated) | 15.80 | 0.00 | 5.96 | 27.88 | **29.36** |
+| G6b rec+ov (raw records) | 16.17 | 0.00 | 8.56 | **22.00** | 34.12 |
+| *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+Two corrections to A8, both worth having:
+
+1. **Records are not merely inert during training — they cost.** −0.83 FP overall against
+   the no-records cell, and **−3.9 FP at s1** (4.64 → 8.56). Yet `suppress_records` showed
+   the *deployed* model barely reads them (0.23 FP). Both are true: the token stream is
+   ignored at inference but still shapes the weights during training. A stream the model
+   learns to discard is not free.
+2. **Aggregation genuinely helps records** (−0.37 vs raw; s1 8.56 → 5.96, s3 34.12 →
+   **29.36**, the best s3 of any arm). So the flood was a real defect, not a red herring —
+   which also means the remaining record pathway is worth fixing rather than abandoning.
+
+**Per stratum the best arms are already spread across configurations**: s1 belongs to
+no-records (4.64 < 6.20), s2 to *raw* records (22.00 < 26.00), s3 to *aggregated* records
+(29.36, still > 26.44). No single arm holds all three, and s3 remains the only stratum where
+nothing v3 does beats the yardstick. That is what P4 (give records their own attention
+channel) and P5 (observed coverage/waste) are for.
