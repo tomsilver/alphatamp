@@ -433,6 +433,37 @@ Also worth noting against the earlier diagnosis: rollout-aligned context mass, w
 like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
 (−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
 
+### A16 — three seeds over-claimed s1; six corrected it
+
+The final headline, and the one place where running more seeds changed a conclusion rather
+than tightening it.
+
+| seed | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| 0 | 7.50 | 0.00 | 1.16 | 15.80 | 13.04 |
+| 1 | 7.63 | 0.00 | 2.72 | 12.24 | 15.56 |
+| 2 | 7.19 | 0.00 | 7.48 | 12.96 | 8.32 |
+| 3 | 8.05 | 0.00 | 6.68 | 11.24 | 14.28 |
+| 4 | 8.08 | 0.00 | 6.28 | 12.88 | 13.16 |
+| 5 | 8.94 | 0.00 | 9.28 | 13.08 | 13.40 |
+| **mean ± sd** | **7.90 ± 0.61** | 0.00 ± 0.00 | **5.60 ± 3.06** | **13.03 ± 1.52** | **12.96 ± 2.46** |
+| *v2.2* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+**−6.76 FP, CI [−9.43, −4.40].** Weak dominance holds — nothing regresses — but:
+
+- **s2 and s3 are genuine wins**, ~2× and stable (sd 1.52 and 2.46).
+- **s1 is a tie.** +0.60 margin against a 3.06 seed sd = 0.20 sd, and **2 of 6 seeds** beat
+  6.20. At 3 seeds it read **3.79 ± 3.29** and I wrote it up as a win.
+
+**The lesson is about the project's own seed rule.** "≥3 seeds to report" is the stated bar,
+and on the widest-spread stratum three seeds produced a confident, wrong claim — not because
+three is unlucky but because the margin (0.60) was a fifth of the spread (3.06) and nobody
+had checked that ratio. **Where a per-stratum claim is load-bearing, compare the margin to
+the seed sd, not merely to the baseline.** A sign is not a result.
+
+Worth noting what did *not* move: overall FP was 7.44 ± 0.23 at three seeds and 7.90 ± 0.61
+at six — the headline was never in doubt, only the per-stratum breakdown.
+
 ### A15 — CI: the pylint debt is real, pre-existing, and I stopped trying to automate it
 
 `pytest --pylint` over the spectre tree reports **371 messages**, dominated by
