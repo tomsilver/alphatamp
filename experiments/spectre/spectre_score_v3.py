@@ -65,6 +65,7 @@ def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, dict
             use_records=bool(cfg.get("use_records")),
             sinusoidal_pos=bool(cfg.get("sinusoidal_pos")),
             use_obj_evidence=bool(cfg.get("use_obj_evidence")),
+            evidence_attn=bool(cfg.get("evidence_attn")),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)

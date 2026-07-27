@@ -82,15 +82,24 @@ PRESETS: dict[str, dict[str, str]] = {
         "p2_agg_tailF": "--aggregate-records --tail-max-f 40",
         "p2_agg_jac_tailF": "--aggregate-records --overlap-mode jaccard --tail-max-f 40",
     },
-    # P3: evidence via the tag join. `suppress_records` showed the trained model ignores
-    # its record tokens (16.17 -> 16.40 with the memory emptied), while cand_overlap --
-    # compact scalars over the same failure set -- is worth 5 FP. So route the records
-    # onto the objects they name. `objev_norec` is the cleanest form of the story: no
-    # free-floating token stream at all, evidence enters only where the tag join lives.
+    # P3: the same record content, routed through the tag join instead of as free tokens
+    # -- `obj_evidence` is computed purely from FailureRecord fields, so it is a record
+    # *consumption* mechanism, not a replacement. `objev_norec` is its cleanest form.
     "p3": {
         "p3_objev": "--obj-evidence",
         "p3_objev_norec": "--obj-evidence --no-records",
         "p3_objev_tailF": "--obj-evidence --tail-max-f 40",
+    },
+    # P4: the records-first fix, and the one that targets the cause directly.
+    # `suppress_records` showed the trained model discards its own record tokens;
+    # CrossAttentionScorerV3 says why -- one softmax over [scene ; global ; records] makes
+    # evidence compete with geometry for attention mass, and geometry wins because it is
+    # reliably useful. A separate channel removes the competition, so records can drive
+    # adaptiveness rather than being ignored.
+    "p4": {
+        "p4_evattn": "--evidence-attn",
+        "p4_evattn_agg": "--evidence-attn --aggregate-records",
+        "p4_evattn_agg_tailF": "--evidence-attn --aggregate-records --tail-max-f 40",
     },
 }
 

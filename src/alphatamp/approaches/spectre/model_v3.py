@@ -32,7 +32,7 @@ from typing import Optional
 import torch
 from torch import Tensor, nn
 
-from alphatamp.approaches.spectre.model import D_MODEL
+from alphatamp.approaches.spectre.model import D_MODEL, FFN_DIM, N_HEADS
 from alphatamp.approaches.spectre.model_v2 import (
     D_DESCRIPTOR,
     D_POSE,
@@ -153,6 +153,98 @@ def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
     return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
 
+class CrossAttentionScorerV3(CrossAttentionScorer):
+    """Scorer with a **separate attention channel for evidence**.
+
+    v2.2 concatenates scene tokens, the global token and the evidence tokens into one
+    memory and runs a single cross-attention over it. That is the architectural reason
+    the record tokens end up inert, and it is a competition the evidence cannot win:
+
+    - **One softmax must split its mass.** With ~10 scene tokens against up to 2045 record
+      tokens, the geometry that actually determines feasibility is outnumbered ~200:1;
+      with aggregation it is still ~3:1 and grows with |F|.
+    - **Geometry is reliably useful, evidence is noisy.** The loss-minimizing policy for a
+      *shared* attention budget is therefore to spend it on geometry and ignore evidence
+      -- exactly what the ``suppress_records`` diagnostic measured (16.17 -> 16.40, i.e.
+      the trained model had already learned to discard its own records).
+
+    Two channels remove the competition: the candidate attends over ``[scene ; global]``
+    and, independently, over the evidence memory, and the head sees both. Evidence can now
+    be attended to *without* giving up geometry, so a useful record no longer has to
+    out-compete the scene to be read.
+
+    Fully domain-agnostic -- it is a change to how tokens are consumed, not to what they
+    are. The head widens from ``2*D_MODEL`` to ``3*D_MODEL``, so enabling it retires the
+    D-8 oracle exactly as the other v3 architecture switches do.
+    """
+
+    def __init__(
+        self,
+        n_overlap_feats: int = 0,
+        n_prior_feats: int = 0,
+        dropout_p: float = DROPOUT,
+    ) -> None:
+        super().__init__(n_overlap_feats, n_prior_feats, dropout_p)
+        self.evid_attn = nn.MultiheadAttention(
+            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        )
+        self.head = nn.Sequential(
+            nn.Linear(3 * D_MODEL + n_overlap_feats + n_prior_feats, FFN_DIM),
+            nn.GELU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(FFN_DIM, 1),
+        )
+
+    def forward(  # type: ignore[override]
+        self,
+        cand_emb: Tensor,
+        scene_tok: Tensor,
+        obj_mask: Tensor,
+        glob_feats: Tensor,
+        overlap: Optional[Tensor] = None,
+        fact_tok: Optional[Tensor] = None,
+        fact_mask: Optional[Tensor] = None,
+        prior: Optional[Tensor] = None,
+    ) -> Tensor:
+        b, k, _ = cand_emb.shape
+        glob = self.glob_proj(glob_feats).unsqueeze(1)
+        memory = torch.cat([scene_tok, glob], dim=1)
+        key_pad = torch.cat(
+            [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
+            dim=1,
+        )
+        attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
+
+        ev = cand_emb.new_zeros(b, k, D_MODEL)
+        if fact_tok is not None and fact_tok.shape[1] > 0 and fact_mask is not None:
+            # A batch row with no records would be an all-True key-padding mask, which
+            # makes MultiheadAttention emit NaN rather than an empty result. Attend under
+            # a mask that always leaves one key live, then zero those rows afterwards --
+            # the same guard the v1 encoder uses.
+            has = fact_mask.any(dim=1)
+            safe = fact_mask.clone()
+            safe[~has, 0] = True
+            out, _ = self.evid_attn(
+                cand_emb, fact_tok, fact_tok, key_padding_mask=~safe
+            )
+            ev = out * has.view(b, 1, 1)
+
+        parts = [cand_emb, attended, ev]
+        if self.n_overlap_feats:
+            parts.append(
+                overlap
+                if overlap is not None
+                else cand_emb.new_zeros(b, k, self.n_overlap_feats)
+            )
+        pr = cand_emb.new_zeros(b, k, self.n_prior_feats) if prior is None else prior
+        if self.n_prior_feats:
+            parts.append(pr)
+        logit = self.head(torch.cat(parts, dim=-1)).squeeze(-1)
+        if self.n_prior_feats:
+            logit = logit + self.prior_gate(pr).squeeze(-1)
+        return logit
+
+
 N_OBJ_EVIDENCE = 5
 """Per-object evidence summary width; see :class:`SceneEncoderV3`."""
 
@@ -268,6 +360,9 @@ class V3Config:
     # Per-object evidence summary on the scene tokens (see SceneEncoderV3). Changes the
     # scene projection's input width, so it also retires the D-8 oracle.
     use_obj_evidence: bool = False
+    # Give evidence its own cross-attention channel instead of making it compete with
+    # the scene inside one softmax. See CrossAttentionScorerV3.
+    evidence_attn: bool = False
 
     @classmethod
     def from_v2_checkpoint_cfg(cls, cfg: dict) -> "V3Config":
@@ -307,9 +402,8 @@ class SpectreV3Model(nn.Module):
         cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
         self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
-        self.scorer = CrossAttentionScorer(
-            c.n_overlap_feats, c.n_prior_feats, c.dropout_p
-        )
+        scorer_cls = CrossAttentionScorerV3 if c.evidence_attn else CrossAttentionScorer
+        self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
         self.aux = AuxHead()
         # Additive by construction: the record encoder only exists when asked for, so a
         # default-config state dict is byte-identical to v2.2's (D-8) and the equivalence
