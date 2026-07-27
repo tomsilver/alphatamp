@@ -12,6 +12,7 @@ budget-exhausted failures, where the refiner named a step it never tested.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -21,6 +22,7 @@ from alphatamp.approaches.spectre.failure_record import (
     records_for_candidate,
 )
 from alphatamp.approaches.spectre.proof_demotion_v3 import (
+    DemotionMode,
     ProofStateV3,
     candidate_queries,
 )
@@ -52,7 +54,8 @@ def _v22_dead(episode, failed: list[int]) -> set[int]:
 
 def _v3_dead(episode, failed: list[int], mode: str) -> set[int]:
     spec = spec_for(episode.provenance.env_variant)
-    state = ProofStateV3(candidate_queries(episode, spec), spec, mode=mode)
+    m = cast(DemotionMode, mode)
+    state = ProofStateV3(candidate_queries(episode, spec), spec, mode=m)
     for idx in failed:
         state.observe(records_for_candidate(episode, idx, spec))
     return set(state.dead)

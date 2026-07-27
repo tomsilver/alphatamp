@@ -18,6 +18,8 @@ live DD2D bug.)
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 
 from alphatamp.approaches.spectre.model_v3 import (
@@ -184,7 +186,7 @@ def test_object_evidence_binds_counts_to_the_right_objects_and_stays_normalized(
     from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
 
     objects = ["a", "b", "c"]
-    subsets = {0: frozenset({"a"}), 1: frozenset({"a", "b"})}
+    subsets = [frozenset({"a"}), frozenset({"a", "b"})]
     recs = [
         _rec("pick", ["a"], step=2, n=1, culprits=["c"]),
         _rec("pick", ["b"], step=4, n=1, culprits=["c"]),
@@ -207,7 +209,8 @@ def test_object_evidence_changes_the_scene_projection_width_only_when_enabled() 
 
     def width(flag: bool) -> int:
         m = SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(use_obj_evidence=flag))
-        return int(m.scene.proj[0].in_features)
+        first = cast(torch.nn.Linear, m.scene.proj[0])
+        return int(first.in_features)
 
     assert width(True) == width(False) + 5
 
@@ -224,7 +227,7 @@ def test_proof_tier_culprits_reach_column_4_and_nothing_else() -> None:
 
     objects = ["a", "b"]
     proof = [_rec("retrieve", ["t"], step=6, n=1, culprits=["b"])]
-    ev = _object_evidence(frozenset({0}), {0: frozenset({"a"})}, objects, [], proof)
+    ev = _object_evidence(frozenset({0}), [frozenset({"a"})], objects, [], proof)
 
     a_row, b_row = ev[0], ev[1]
     assert b_row[4] == 1.0, "'b' was reported as a proof-tier culprit"
