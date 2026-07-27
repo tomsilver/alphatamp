@@ -90,6 +90,16 @@ class TrainV3Config:
     # of 8 never shows the model the |F| ~ 20-40 regime an s3 rollout actually spends
     # most of its attempts in.
     tail_max_f: int = 0
+    sinusoidal_pos: bool = False
+    # Collapse a candidate's failures to one record per (schema, args). The refiner
+    # emits one per failed *sample*, which lets one unlucky candidate contribute
+    # hundreds of tokens; §6.1 defines a record per failing *query*.
+    aggregate_records: bool = False
+    # G9: restrict the *training* split to these strata (empty = all). This is experiment
+    # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
+    # this is neither: it decides which episodes exist during training, exactly as the
+    # proposal's "train s0-s2, deploy s3" protocol (§7.4 A4) requires.
+    train_strata: tuple[int, ...] = ()
 
 
 class SpectreV3Dataset(Dataset):
@@ -113,7 +123,9 @@ class SpectreV3Dataset(Dataset):
         self.spec = spec
         self.epoch = 0
         self._paths = [
-            p for p in list_episodes(split_dir) if _trainable(load_episode(p))
+            p
+            for p in list_episodes(split_dir)
+            if _keep(load_episode(p), cfg.train_strata)
         ]
 
     @property
@@ -149,6 +161,7 @@ class SpectreV3Dataset(Dataset):
             augment_tags=self.cfg.augment,
             spec=spec,
             overlap_mode=self.cfg.overlap_mode,
+            aggregate_records=self.cfg.aggregate_records,
         )
         if not self.cfg.use_records:
             records = []
@@ -161,6 +174,17 @@ def _trainable(ep) -> bool:
         and ep.summary.num_success >= 1
         and len(ep.skeleton_pool) >= 2
     )
+
+
+def _keep(ep, strata: tuple[int, ...]) -> bool:
+    """``_trainable`` plus the optional G9 stratum restriction on the training split."""
+    if not _trainable(ep):
+        return False
+    if not strata:
+        return True
+    from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+
+    return stratum_of(int(ep.provenance.problem_id)) in strata
 
 
 def _make_collate(max_arity: int):
@@ -182,6 +206,7 @@ def deployed_val_fp(
     max_tags: int,
     budget: Optional[int] = None,
     overlap_mode: str = "both",
+    aggregate_records: bool = False,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -203,6 +228,7 @@ def deployed_val_fp(
             mode="permissive",
             max_attempts=budget,
             overlap_mode=overlap_mode,
+            aggregate_records=aggregate_records,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -291,6 +317,7 @@ def train_v3(
             max_tags=cfg.max_tags,
             dropout_p=cfg.dropout_p,
             use_records=cfg.use_records,
+            sinusoidal_pos=cfg.sinusoidal_pos,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -326,6 +353,7 @@ def train_v3(
             cfg.max_tags,
             cfg.select_budget,
             cfg.overlap_mode,
+            cfg.aggregate_records,
         )
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
@@ -400,6 +428,23 @@ def main(argv=None) -> int:
         default=0,
         help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
     )
+    ap.add_argument(
+        "--aggregate-records",
+        action="store_true",
+        help="one record token per (schema, args) instead of per failed sample",
+    )
+    ap.add_argument(
+        "--sinusoidal-pos",
+        action="store_true",
+        help="sinusoidal step positions (G9); retires the D-8 equivalence oracle",
+    )
+    ap.add_argument(
+        "--train-strata",
+        type=int,
+        nargs="*",
+        default=[],
+        help="restrict the TRAINING split to these strata, e.g. --train-strata 0 1 2",
+    )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -417,6 +462,9 @@ def main(argv=None) -> int:
         select_budget=a.select_budget,
         overlap_mode=a.overlap_mode,
         tail_max_f=a.tail_max_f,
+        aggregate_records=a.aggregate_records,
+        sinusoidal_pos=a.sinusoidal_pos,
+        train_strata=tuple(a.train_strata),
     )
     sub = "checkpoints_v3"
     if a.no_records:

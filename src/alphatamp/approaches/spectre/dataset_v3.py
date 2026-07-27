@@ -114,12 +114,49 @@ def _hint_fact_arrays(
     return type_ids, tier_ids, arg_tags
 
 
+def _aggregate_per_query(records: list) -> list:
+    """Collapse a candidate's failures to one record per distinct ``(schema, args)``.
+
+    §6.1 defines a record as *the failing query and its arguments* -- one per query, not
+    one per failed sample. The instrumented refiner emits one per sample, so a candidate
+    whose `place-buffer(o)` was retried across many buffer poses contributes hundreds of
+    near-identical tokens (measured: mean 2.2 per candidate but **max 290**, so a single
+    s1 context at |F|=30 reached ~720 tokens against v2.2's ~40 facts). That is not extra
+    information -- the samples are 99.3% distinct only in *which pose* failed, which the
+    token does not even encode -- but it does dilute the scorer's attention and let one
+    unlucky candidate dominate the evidence memory.
+
+    Aggregation keeps the deepest occurrence (the furthest the plan got), sums effort,
+    and takes the union of culprits, so nothing the token *encodes* is lost.
+    """
+    import dataclasses
+
+    best: dict[tuple, list] = {}
+    for rec in records:
+        key = (rec.schema, rec.args)
+        cur = best.get(key)
+        if cur is None:
+            best[key] = [rec, rec.n_step, set(rec.culprits)]
+            continue
+        cur[1] += rec.n_step
+        cur[2].update(rec.culprits)
+        if rec.step_index > cur[0].step_index:
+            cur[0] = rec
+    out = []
+    for rec, effort, culprits in best.values():
+        out.append(
+            dataclasses.replace(rec, n_step=effort, culprits=tuple(sorted(culprits)))
+        )
+    return out
+
+
 def build_record_arrays(
     episode: EpisodeRecord,
     context_f: frozenset[int],
     tags: dict[str, int],
     vocab: Vocab,
     spec: DomainSpec,
+    aggregate: bool = False,
 ) -> list[tuple[int, list[int], list[int], list[float]]]:
     """Failure records of the tried candidates, as ``(schema_id, args, culprits, scalars)``.
 
@@ -138,7 +175,10 @@ def build_record_arrays(
     for idx in sorted(context_f):
         skeleton = episode.skeleton_pool[idx]
         plan_len = max(len(skeleton.operator_seq), 1)
-        for rec in records_for_candidate(episode, idx, spec):
+        cand_records = records_for_candidate(episode, idx, spec)
+        if aggregate:
+            cand_records = _aggregate_per_query(cand_records)
+        for rec in cand_records:
             if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
                 continue  # handled structurally by demotion, not learned
             out.append(
@@ -168,6 +208,7 @@ def build_v3_example(
     augment_tags: bool = True,
     spec: Optional[DomainSpec] = None,
     overlap_mode: str = "both",
+    aggregate_records: bool = False,
 ) -> tuple[_V2Example, list[tuple[int, list[int], list[int], list[float]]]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
@@ -297,7 +338,9 @@ def build_v3_example(
             ]
 
     records = (
-        build_record_arrays(canon, ctx, tags, vocab, spec) if (ctx and not hide) else []
+        build_record_arrays(canon, ctx, tags, vocab, spec, aggregate_records)
+        if (ctx and not hide)
+        else []
     )
 
     return (

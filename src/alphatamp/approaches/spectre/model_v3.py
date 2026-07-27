@@ -25,6 +25,7 @@ equivalence test is expected to be run in compat mode only.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -129,6 +130,54 @@ class RecordEncoder(nn.Module):
         return self.proj(torch.cat(parts, dim=-1)) * mask.unsqueeze(-1)
 
 
+def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
+    """Standard transformer sinusoidal encoding evaluated at arbitrary integer positions.
+
+    Returns ``(*pos.shape, dim)``. Unlike a learned table this is *defined* at every
+    position, which is the whole point: the absolute ``nn.Embedding(64, D)`` it replaces
+    has untrained rows beyond the longest plan seen in training, so a model trained on
+    s0-s2 (plans of <= 5 operators) and deployed on s3 (7) would read randomly-initialized
+    vectors at steps 5 and 6 -- and the length-generalization experiment would be
+    measuring initialization noise rather than generalization.
+    """
+    half = dim // 2
+    freqs = torch.exp(
+        torch.arange(half, device=pos.device, dtype=torch.float32)
+        * (-math.log(10000.0) / max(half - 1, 1))
+    )
+    ang = pos.unsqueeze(-1).float() * freqs
+    return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
+
+
+class CandidateEncoderV3(CandidateEncoder):
+    """:class:`CandidateEncoder` with the learned absolute position table removed.
+
+    Subclassed rather than edited in place because v2 modules are frozen (D-7). The
+    ``pos_emb`` submodule is *deleted*, not merely bypassed, so it leaves the state dict
+    -- which is exactly why enabling this retires the D-8 equivalence oracle: a v2.2
+    checkpoint can no longer load ``strict=True`` into this model. That is planned (G9 is
+    the last architectural change), not accidental.
+    """
+
+    def __init__(
+        self, n_ops: int, max_tags: int, max_arity: int, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__(n_ops, max_tags, max_arity, dropout_p)
+        del self.pos_emb
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        b, k, ell = batch.cand_op_ids.shape
+        op = self.op_emb(batch.cand_op_ids)
+        pos = sinusoidal_positions(batch.cand_pos, D_MODEL)
+        args = self.tag_emb(batch.cand_arg_tags)
+        args = args.reshape(b, k, ell, self.max_arity * D_TAG)
+        step = self.step_ln(op + pos + self.arg_proj(args))
+        step = step.reshape(b * k, ell, D_MODEL)
+        smask = batch.cand_step_mask.reshape(b * k, ell)
+        emb = self.pool(step, smask).reshape(b, k, D_MODEL)
+        return emb * batch.pool_mask.unsqueeze(-1)
+
+
 @dataclass(frozen=True)
 class V3Config:
     """Architecture switches. Every v3 feature defaults **off**, so the default config
@@ -150,6 +199,10 @@ class V3Config:
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
     use_necessity: bool = False  # G8: necessity head + its candidate features
+    # G9: sinusoidal step positions instead of the learned absolute table. Turning this
+    # on RETIRES the D-8 equivalence oracle (pos_emb leaves the state dict), so it is the
+    # last architectural change by design.
+    sinusoidal_pos: bool = False
 
     @classmethod
     def from_v2_checkpoint_cfg(cls, cfg: dict) -> "V3Config":
@@ -185,7 +238,8 @@ class SpectreV3Model(nn.Module):
         self.cfg = cfg or V3Config()
         c = self.cfg
         self.scene = SceneEncoder(c.max_tags, c.dropout_p)
-        self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
+        cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
+        self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
         self.scorer = CrossAttentionScorer(
             c.n_overlap_feats, c.n_prior_feats, c.dropout_p

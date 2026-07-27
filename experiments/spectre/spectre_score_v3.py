@@ -43,7 +43,7 @@ from alphatamp.approaches.spectre.vocab import Vocab
 REPO = Path(__file__).resolve().parents[2]
 
 
-def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, str]:
+def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, dict]:
     """Rebuild a v3 model from its checkpoint, with dropout off for evaluation.
 
     Returns ``(model, overlap_mode)``: the mode is read back off the checkpoint rather
@@ -63,10 +63,14 @@ def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, str]
             max_tags=int(cfg.get("max_tags", 32)),
             dropout_p=0.0,
             use_records=bool(cfg.get("use_records")),
+            sinusoidal_pos=bool(cfg.get("sinusoidal_pos")),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)
-    return model.eval().to(device), str(cfg.get("overlap_mode", "both"))
+    return model.eval().to(device), {
+        "overlap_mode": str(cfg.get("overlap_mode", "both")),
+        "aggregate_records": bool(cfg.get("aggregate_records")),
+    }
 
 
 def score(
@@ -77,7 +81,7 @@ def score(
     spec,
     mode: Literal["permissive", "strict"],
     apply_demotion: bool = True,
-    overlap_mode: str = "both",
+    deploy: dict | None = None,
 ) -> dict[int, float]:
     """Uncensored deployed FP per problem id."""
     out = {}
@@ -90,7 +94,7 @@ def score(
             spec=spec,
             mode=mode,
             apply_demotion=apply_demotion,
-            overlap_mode=overlap_mode,
+            **(deploy or {}),
         )
         out[int(ep.provenance.problem_id)] = float(attempts) - 1.0
     return out
@@ -164,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         if is_v2:
             model, _ = load_v2_checkpoint(ckpt)
             model = model.eval().to(a.device)
-            ov_mode = "both"
+            ov_mode = {}
         else:
             model, ov_mode = load_v3(ckpt, vocab, a.device)
         # argparse `choices` already constrains this; `cast` tells mypy the same thing

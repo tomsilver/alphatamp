@@ -70,6 +70,18 @@ PRESETS: dict[str, dict[str, str]] = {
         "g8_tailF": "--tail-max-f 40",
         "g8_jac_tailF": "--overlap-mode jaccard --tail-max-f 40",
     },
+    # P2: the missing cell of the G6 ablation, plus record aggregation.
+    # G6's "no records" bar also had overlap off, so it conflated two removals; `norec`
+    # is the honest bar (overlap ON, records OFF) and is the closest v3 analogue of the
+    # v2.2 yardstick, whose FactEncoder is inert on dd2d_v4 (no harvested facts).
+    # `agg` collapses one-record-per-failed-sample to one per (schema, args): -88.7%
+    # tokens, max 2045 -> 37.
+    "p2": {
+        "p2_norec": "--no-records",
+        "p2_agg": "--aggregate-records",
+        "p2_agg_tailF": "--aggregate-records --tail-max-f 40",
+        "p2_agg_jac_tailF": "--aggregate-records --overlap-mode jaccard --tail-max-f 40",
+    },
 }
 
 

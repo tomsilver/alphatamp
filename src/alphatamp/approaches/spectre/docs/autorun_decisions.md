@@ -125,3 +125,58 @@ Also threaded `overlap_mode` through **deployment** and made `spectre_score_v3` 
 back off the checkpoint rather than accept it as an argument: deploying a model under a
 different mode than it trained under is a silent train/deploy mismatch (§6.6), and the
 kind of thing that would quietly invalidate a comparison.
+
+### A6 — **dd2d_v4 carries no post-mortem facts, so the v2.2 yardstick has an inert evidence pathway**
+
+The single most important finding of the run. Counted directly off the collections:
+
+| collection | outcomes | with `post_mortem` facts |
+|---|---|---|
+| dd2d_v2 | 8000 | 6922 |
+| dd2d_v3 | 8000 | 6732 |
+| **dd2d_v4** | **8000** | **0** |
+
+The offline harvest (`spectre_harvest.py`, `decisions.md` 2026-07-19) was **never run on
+dd2d_v4**. So the v2.2 checkpoint used as the v3 yardstick trained and deploys with its
+`FactEncoder` receiving nothing: **v2.2@dd2d_v4 = static + `cand_overlap` + demotion, with
+no evidence tokens at all.**
+
+Three consequences, and they reframe the whole G6/G6b arc:
+
+1. The comparison has never been "facts vs records". It is **"no evidence vs records"**.
+2. G6's ablation was **confounded**: its "no records" bar also had `cand_overlap` off, so
+   the −3.37 attributed to record tokens is really *records + overlap* versus *neither*.
+   G7 then measured overlap with records on in both arms. **The cell nobody ran is
+   `records OFF, overlap ON`** — which is precisely the v2.2 configuration.
+3. Read against that: v2.2 (no evidence + overlap) **14.66** vs v3 (records + overlap)
+   **16.17**. On this evidence the record tokens are **net-harmful by ~1.5 FP**, and the
+   headline v3-vs-v2.2 gap is not a static-representation problem at all.
+
+**Decision: run the missing cell** (`p2_norec`) rather than infer it. If it lands near
+14.66, records are the whole gap and the record pathway needs fixing, not the encoder.
+
+*Not doing:* harvesting facts for dd2d_v4 to make v2.2's pathway live. The user ruled out
+re-deriving v2.2, and it would not help — v3's claim is that records *replace* facts and
+come free from instrumentation, so v3 having evidence where v2.2 has none is v3's
+advantage. The problem is that v3 is losing anyway.
+
+### A7 — one record per failed *sample* is a token flood; §6.1 says one per failed *query*
+
+Measured cause for why records might hurt. The instrumented refiner emits a
+`FailureObservation` per failed sample, so a candidate whose `place-buffer(o)` was retried
+across many buffer poses contributes hundreds of tokens:
+
+```
+records per failed candidate:  mean 2.2, median 1, p90 1, max 290
+at |F|=30:  raw mean 226 tokens, p90 542, max 2045
+            v2.2's fact pathway fed ~40 for the same |F|
+```
+
+Those samples are 99.3% distinct on `(schema, args, step)` — but only in *which pose*
+failed, which the token does not encode. So it is ~50× the tokens for no extra encoded
+information, and one unlucky candidate can dominate the evidence memory.
+
+**Decision: `--aggregate-records`** — collapse to one record per `(schema, args)`, keeping
+the deepest step, summing effort, unioning culprits. Measured: **−88.7% tokens, max
+2045 → 37**, which is v2.2's order of magnitude. This is a *faithfulness* fix, not a
+tuning knob: §6.1 defines the record as the failing query and its arguments.
