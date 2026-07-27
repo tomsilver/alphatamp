@@ -252,11 +252,21 @@ s1 has the smallest FP and so the largest relative spread. Overall FP is by cont
 excluding 0), so the result does not depend on the exact combination. What it depends on is
 `coverage`/`waste`: the one arm without them (rollout-aligned context) is a tie at −0.32.
 
-**Record *tokens* are worth 0.26 FP** on top of coverage (7.56 vs 7.82). That is not
-"records don't matter" — `coverage`/`waste` are computed *from* `FailureRecord.culprits` —
-but it does mean the adaptive signal is carried by compact per-candidate features rather
-than by a per-failure token stream. Good for the generality claim: features over a reported
-culprit set need no per-environment token vocabulary.
+**Both consumptions of the record are load-bearing**, measured at 6 seeds each:
+
+| | ALL | s1 | s2 | s3 |
+|---|---|---|---|---|
+| deployed (**with** record tokens) | **7.90 ± 0.61** | **5.60 ± 3.06** | 13.03 ± 1.52 | 12.96 ± 2.46 |
+| coverage only (**no** tokens) | 9.18 ± 1.41 | 10.78 ± 6.47 | 12.91 ± 0.84 | 13.03 ± 2.00 |
+
+The tokens are worth **1.28 FP**, and their contribution is concentrated entirely at **s1**
+(5.60 vs 10.78 — without them the model is *worse than v2.2* there) while s2 and s3 are
+ties. They also **halve the variance** (overall sd 0.61 vs 1.41). So the method is one
+canonical record consumed *two* ways: compact per-candidate features carrying s2/s3, and a
+per-failure token stream carrying s1 and the stability. Neither alone is the method.
+
+*(An earlier 1-seed comparison put the token contribution at 0.26 FP and is superseded —
+`autorun_decisions.md` A17.)*
 
 **The deployed configuration** is `--overlap-mode jaccard --coverage-feats
 --aggregate-records --evidence-attn`, i.e. four changes to the G6b model, each motivated by

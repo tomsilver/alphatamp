@@ -76,10 +76,13 @@ still acts only outside the net as demotion; what the net sees is the *observati
   `cand_overlap` costs −5.07 FP, CI [−8.56, −1.78]; reinstated per R7's escape clause.
 - **The result does not depend on the exact combination.** Every coverage-bearing arm beats
   the yardstick significantly (−6.3 to −7.2 FP, all CIs excluding 0); the one arm without
-  coverage (rollout-aligned context mass) is a tie at −0.32. Record *tokens* are worth 0.26
-  FP on top of coverage, so the adaptive signal rides on compact per-candidate features
-  rather than a per-failure token stream — which is the better outcome for generality, since
-  features over a reported culprit set need no per-environment token vocabulary.
+  coverage (rollout-aligned context mass) is a tie at −0.32.
+- **The record is consumed two ways and both are load-bearing.** At 6 seeds each, dropping
+  the per-failure token stream costs **1.28 FP** (7.90 ± 0.61 → 9.18 ± 1.41) and the loss is
+  **entirely at s1** (5.60 → 10.78, i.e. worse than v2.2's 6.20) while s2/s3 tie; tokens also
+  halve the overall variance. So: compact features carry s2/s3, tokens carry s1 and
+  stability. An earlier 1-seed reading put the token contribution at 0.26 FP and is
+  superseded (`autorun_decisions.md` A17).
 - **Caveats.** Ablations are 1-seed; only the deployed config is multi-seed. Env-2 remains
   un-attempted, so generality is architectural (`porting_guide.md`), not demonstrated. The
   v2.2 yardstick is itself 1 seed.

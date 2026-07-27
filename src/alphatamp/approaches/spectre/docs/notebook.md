@@ -159,10 +159,11 @@ Format:
   26.44) while wrecking s1 (20.84) — the same length-calibration tension G8 found, which is
   why it is built but **not deployed**. `dead` stops being harmful once coverage is present
   (7.76 with it vs 8.39 without): its harm was a *symptom* of the missing count signal, not
-  intrinsic. And record *tokens* are worth only 0.26 FP on top of coverage (7.56 vs 7.82) —
-  so the adaptive signal rides on compact per-candidate features, not a per-failure token
-  stream. That is the better outcome for generality: features over a reported culprit set
-  need no per-environment token vocabulary.
+  intrinsic. And record *tokens* are worth **1.28 FP** at 6 seeds each (7.90 ± 0.61 with,
+  9.18 ± 1.41 without) — concentrated **entirely at s1** (5.60 vs 10.78; without them the
+  model is worse than v2.2 there) while s2/s3 tie, and they halve the overall variance. A
+  1-seed comparison had put this at 0.26 FP; see `autorun_decisions.md` A17 for the
+  correction and why I should have caught it.
 - **Process note.** Two `p5_jac_cov` processes raced on one checkpoint path after a
   crash-relaunch (it scored 8.57, then 8.39 as the second overwrote it). Same config, so
   nothing here changed, but `train_v3` now refuses to start on a directory a live run owns.

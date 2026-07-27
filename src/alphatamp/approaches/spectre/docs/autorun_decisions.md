@@ -422,8 +422,13 @@ The ablation that decides how to describe the contribution:
 | rollout-aligned context, no coverage | 14.34 | 0.00 | 8.04 | 17.48 | 31.84 | −0.32 (n.s.) |
 | *v2.2 yardstick* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* | — |
 
-**The per-failure token stream is worth 0.26 FP on top of coverage.** Everything else — the
-whole −6.84 — comes from two scalars per candidate.
+> ⚠️ **A14's headline conclusion is WRONG and is corrected in A17.** The 0.26 figure is a
+> 1-seed artifact; at 6 seeds each the tokens are worth **1.28 FP** and halve the variance.
+> The rest of this entry (what the arms are, that coverage carries s2/s3) stands.
+
+**The per-failure token stream looks worth 0.26 FP on top of coverage** — everything else,
+the whole −6.84, appearing to come from two scalars per candidate. **This does not survive
+more seeds; see A17.**
 
 This is not "records don't matter". `coverage`/`waste` are computed **from
 `FailureRecord.culprits`**; nothing else in the system can see which object the refiner's
@@ -439,6 +444,41 @@ need no per-environment token vocabulary at all.
 Also worth noting against the earlier diagnosis: rollout-aligned context mass, which looked
 like a strong lever on paper (53.7% of training carried no evidence), is a **tie** on its own
 (−0.32, n.s.). The measurement was right; the inference that it was limiting was not.
+
+### A17 — **correction to A14: record tokens are worth 1.28 FP, not 0.26**
+
+A14 concluded, from a single seed, that the per-failure token stream contributed almost
+nothing on top of coverage (7.56 with tokens vs 7.82 without) and that the adaptive signal
+rode entirely on the compact features. **Six seeds each say otherwise:**
+
+| | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| deployed (**with** record tokens) | **7.90 ± 0.61** | 0.00 | **5.60 ± 3.06** | 13.03 ± 1.52 | 12.96 ± 2.46 |
+| lean (**coverage only**, no tokens) | 9.18 ± 1.41 | 0.00 | 10.78 ± 6.47 | 12.91 ± 0.84 | 13.03 ± 2.00 |
+| *v2.2* | *14.66* | *0.00* | *6.20* | *26.00* | *26.44* |
+
+- **Tokens are worth 1.28 FP overall**, five times the 1-seed estimate.
+- **They mostly buy s1**: 5.60 vs 10.78 — the lean model is *worse than v2.2* there (6.20).
+- **They halve the variance**: overall sd 0.61 vs 1.41, s1 sd 3.06 vs 6.47. The token stream
+  is not just a small mean improvement, it is what makes the model *stable*.
+- Both configurations still beat v2.2 (lean −5.48, CI [−8.52, −2.53]), so the headline
+  survives either way — but the deployed config is the right one.
+
+**Two lessons, and the second is the uncomfortable one.**
+
+1. **s2 and s3 genuinely do not need the tokens** (12.91 vs 13.03, 13.03 vs 12.96 — both
+   ties). The tokens' entire contribution is at s1, the stratum with the fewest observed
+   failures. That is the opposite of where I predicted a per-failure stream would help, and
+   it is worth understanding rather than filing away.
+2. **I published a wrong conclusion from one seed in the same run in which I had just
+   written up A16 about exactly that failure mode.** A14 was stated as fact ("the per-failure
+   token stream is worth 0.26 FP") on a 0.26 difference — a quarter of what turned out to be
+   the between-seed sd. The rule from A16 (compare the margin to the spread, not to zero)
+   applies to *ablations*, not only to headline strata, and I did not apply it.
+
+**Consequence for the writeup:** the contribution is *one canonical record consumed two
+ways* — compact per-candidate features (`coverage`/`waste`, carrying s2/s3) and a
+per-failure token stream (carrying s1 and the stability). Neither alone is the method.
 
 ### A16 — three seeds over-claimed s1; six corrected it
 

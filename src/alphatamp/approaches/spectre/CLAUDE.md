@@ -170,6 +170,10 @@ python experiments/spectre/spectre_score_v3.py \
 At 3 seeds s1 read 3.79 and looked decisive; that is the one number a 3-seed report would
 have got wrong. On a wide-spread stratum, check the margin against the seed sd, not the sign.
 
+**Both record consumptions matter** (6 seeds each): dropping the per-failure token stream
+costs 1.28 FP (7.90 → 9.18), *entirely at s1* (5.60 → 10.78, worse than v2.2 there) while
+s2/s3 tie, and it doubles the variance. Compact features carry s2/s3; tokens carry s1.
+
 **What carries it: observed `coverage`/`waste`.** These are §5.1's necessity features with
 per-object necessity **observed** (`FailureRecord.culprits`) instead of **predicted** — so no
 head, no second loss, no geometry routine, and *more* C2-legal than the cut version since
