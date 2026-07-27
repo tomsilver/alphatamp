@@ -55,11 +55,18 @@ DD2D anyway (see A-G9 below). G10 is not attempted.
 Each sweep is ~50 min for 3 arms in parallel; arms run concurrently with scoring and with
 each other wherever slots allow (5 concurrent training procs at peak, 20 of 32 cores).
 
-| sweep | arms | question |
-|---|---|---|
-| `g8` | `jac`, `tailF`, `jac_tailF` | does dropping the `dead` feature fix s1, does rollout-aligned |F| fix s3 |
-| `p2` | `norec`, `agg` (+2 staged) | the missing G6 cell; does taming the token flood make records work |
-| `p3` | `objev`, `objev_norec`, `objev_tailF` | does evidence work when routed through the tag join instead of as tokens |
+| sweep | arms | question | outcome |
+|---|---|---|---|
+| `g8` | `jac`, `tailF`, `jac_tailF` | does dropping `dead` fix s1; does rollout-aligned \|F\| fix s3 | s1 **yes** (8.56→4.84); s3 **no** |
+| `p2` | `norec`, `agg` | the missing G6 cell; does taming the token flood help | records cost when trained on; aggregation helps (−0.37) |
+| `p3` | `objev`, `jac_objev` | evidence via the tag join instead of as tokens | ~tie; fixes s3 alone but wrecks s1 |
+| `p4` | `evattn`, `evattn_agg` | give evidence its own attention channel | ~tie (14.92), real but small |
+| `p5` | `jac_cov` | **observed coverage/waste** | **the win** — 8.39, −6.27 |
+| `p6` | `all` | coverage + aggregation + attention + jaccard | **best** — 7.56, −7.10 → the deployed config |
+| `p7` | `recprimary` | rollout-aligned context mass alone | tie (−0.32) |
+| `p9` | `cov_only`, `cov_norec` | is `dead` still harmful? do tokens still add? | `dead` now harmless; tokens worth 0.26 |
+| `v3final` | 6 seeds | the reportable number | 7.90 ± 0.61, −6.76 |
+| `v3lean` | 6 seeds | is the config without record tokens simpler *and* better? | (see below) |
 
 ### A-G9 — the length-generalization premise does not hold on DD2D
 
