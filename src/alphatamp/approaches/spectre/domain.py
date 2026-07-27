@@ -154,6 +154,32 @@ class DomainSpec:
     )
     length_key: Callable[[SkeletonRecord], int] = length_key
 
+    min_calls_per_schema: Mapping[str, int] = field(default_factory=dict)
+    """Minimum sampler calls one grounding of each operator schema can cost.
+
+    Optional, and it buys one specific thing: **exactness evidence for collections that
+    predate refiner instrumentation**. If a whole attempt reports exactly the minimum
+    possible call count, then nothing was re-sampled, so every query it reports really did
+    run -- a sound witness recoverable from stored metadata alone. Where the count exceeds
+    the minimum, the attempt re-sampled and may have stopped on a budget, so the witness
+    correctly declines to fire.
+
+    Declaring it is a cost-model statement of the same epistemic class as the axioms, not
+    an inference routine. Undeclared (the default) simply means pre-instrumentation records
+    cannot reach proof tier in strict mode.
+    """
+
+    def min_calls(self, skeleton: SkeletonRecord) -> Optional[int]:
+        """Minimum possible sampler calls for a straight-through grounding of a plan."""
+        if not self.min_calls_per_schema:
+            return None
+        total = 0
+        for op in skeleton.operator_seq:
+            if op.name not in self.min_calls_per_schema:
+                return None  # an undeclared step makes the total unknowable, not zero
+            total += self.min_calls_per_schema[op.name]
+        return total
+
     def axioms_for(self, schema: Optional[str]) -> QueryAxioms:
         """Declared axioms for a query schema; the safe all-``False`` default if the
         domain said nothing about it."""
@@ -197,12 +223,18 @@ class DomainSpec:
 #: so they cannot affect the grasp), and exact (``has_grasp`` enumerates every grasp cell
 #: rather than sampling). ``pick`` and ``place-buffer`` are sampled, so a failure is
 #: evidence, not proof -- they stay hint-tier and flow through the learned pathway.
+#: ``min_calls_per_schema`` reads off the refiner's own loop: ``pick`` and ``retrieve``
+#: each run one grasp test; ``place-buffer`` costs one pose sample plus one accessibility
+#: test. So a straight-through grounding of ``[pick, place-buffer] * n ++ retrieve`` costs
+#: exactly ``3n + 1`` calls -- measured to hold for 85.76% of dd2d_v3 retrieve failures,
+#: which are therefore provably un-resampled.
 _DD2D = DomainSpec(
     axioms={
         "retrieve": QueryAxioms(monotone=True, local=True, exact=True),
         "pick": QueryAxioms(),
         "place-buffer": QueryAxioms(),
-    }
+    },
+    min_calls_per_schema={"pick": 1, "place-buffer": 2, "retrieve": 1},
 )
 
 #: An environment that declares nothing. Everything is hint-tier and the ranker must

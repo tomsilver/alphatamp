@@ -189,7 +189,7 @@ def rotation_grid(defl_poly: Polygon, r_max: float, delta: float) -> list[float]
     Detects the shape's rotational-symmetry period on the grid (the first grid step whose
     rotation maps the shape to itself within ``_SYMMETRY_TOL``) and keeps one representative
     per period. Circles collapse to a single angle; an exact rectangle/capsule halves the
-    grid; an asymmetric shape (shoe/banana) keeps the full grid. Sound: removed angles are
+    grid; an asymmetric shape (shoe/horseshoe) keeps the full grid. Sound: removed angles are
     congruent copies with identical NFP/IFP.
     """
     angles = grid_angles(r_max, delta)

@@ -188,19 +188,25 @@ def init_inference_state(
     )
 
 
-def select_next_skeleton(
+def score_pool(
     state: InferenceState,
     model: SpectreModel,
     freeze_context: bool = False,
-) -> int:
-    """Return the argmax-index over the remaining pool (spec §10.5).
+) -> torch.Tensor:
+    """Score every pooled skeleton under the current context — ``(K,)`` logits.
 
-    ``freeze_context=True`` is the frozen-context ablation: the context
-    vector fed to σ is forced to the learned empty-F vector ``c_0`` at
-    every step — regardless of ``state.fail_indices`` — by always taking
-    the all-False-mask path through ``encode_context``. Only the context
-    is frozen; the pool still shrinks via ``record_failure``, so the
-    resulting policy is exactly a static ranking by the initial logits.
+    Returned **unmasked**: entries for already-attempted / error skeletons are the
+    model's raw opinion, not ``-inf``. :func:`select_next_skeleton` applies the pool
+    mask via :func:`argmax_in_pool`; callers that want to *record* the row (the traced
+    rollouts, whose traces are JSON-serialised for the comparison notebook) keep the
+    raw values, since ``-inf`` is not representable in strict JSON.
+
+    ``freeze_context=True`` is the frozen-context ablation: the context vector fed to
+    σ is forced to the learned empty-F vector ``c_0`` at every step — regardless of
+    ``state.fail_indices`` — by always taking the all-False-mask path through
+    ``encode_context``. Only the context is frozen; the pool still shrinks via
+    ``record_failure``, so the resulting policy is exactly a static ranking by the
+    initial logits.
     """
     device = state.e_S.device
     if state.fail_indices and not freeze_context:
@@ -219,10 +225,29 @@ def select_next_skeleton(
         e_R = state.e_S.unsqueeze(0)  # (1, K, D)
         priors = state.priors.unsqueeze(0)  # (1, K)
         logits = model.score(e_R, c, priors, prior_dropout=False)  # (1, K)
-        neg_inf = torch.tensor(-float("inf"), dtype=logits.dtype, device=device)
-        logits = torch.where(state.pool_mask.unsqueeze(0), logits, neg_inf)
-        idx = int(logits.argmax(dim=-1).item())
-    return idx
+    return logits[0]
+
+
+def argmax_in_pool(logits: torch.Tensor, pool_mask: torch.Tensor) -> int:
+    """Index of the highest-scoring skeleton still in the pool (``-inf`` elsewhere)."""
+    neg_inf = torch.tensor(-float("inf"), dtype=logits.dtype, device=logits.device)
+    masked = torch.where(pool_mask, logits, neg_inf)
+    return int(masked.argmax(dim=-1).item())
+
+
+def select_next_skeleton(
+    state: InferenceState,
+    model: SpectreModel,
+    freeze_context: bool = False,
+) -> int:
+    """Return the argmax-index over the remaining pool (spec §10.5).
+
+    Thin composition of :func:`score_pool` and :func:`argmax_in_pool` — same single
+    forward pass, same selection, so the split is behaviour-preserving (pinned by
+    ``test_inference.test_select_next_skeleton_matches_score_pool_argmax``). See
+    :func:`score_pool` for the ``freeze_context`` ablation semantics.
+    """
+    return argmax_in_pool(score_pool(state, model, freeze_context), state.pool_mask)
 
 
 def record_failure(state: InferenceState, skeleton_idx: int) -> None:
@@ -241,9 +266,11 @@ def record_failure(state: InferenceState, skeleton_idx: int) -> None:
 # Re-export for convenience; downstream code can ``from inference import *``.
 __all__ = [
     "InferenceState",
+    "argmax_in_pool",
     "init_inference_state",
     "load_checkpoint",
     "load_prior_for_checkpoint",
     "record_failure",
+    "score_pool",
     "select_next_skeleton",
 ]

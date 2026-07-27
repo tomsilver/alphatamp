@@ -20,7 +20,7 @@ of `blocks_tamp` (`skeleton`, `record`/`PIGINetExample`, `RefineResult`/`BoundSt
 
 | File | Role |
 |---|---|
-| `dd2d/shapes.py` | §4 parametric families (can/bowl/box/pillcase + concave dumbbell/shoe/banana) polygonised to **Shapely**, `concave` flag (fam 5–7), size sampling; every shape admits ≥1 isolation grasp (resample). |
+| `dd2d/shapes.py` | §4 parametric families (can/bowl/box/pillcase + concave dumbbell/shoe/horseshoe) polygonised to **Shapely**, `concave` flag (fam 5–7), size sampling; every shape admits ≥1 isolation grasp (resample). |
 | `dd2d/world.py` | `DrawerScene` (drawer + 1.5 cm wall band + buffer strip) + `DrawerWorld` (mutable occupancy, region-local collision) + `sample_buffer_pose` — the §6.3 **compaction-biased** sampler (contact/slide proposals + bottom-left push), shared by the refiner and the labeler. |
 | `dd2d/grasps.py` | §5.3 supporting-line grasp model: `grasp_cells` (18 dirs × 5 slides, aperture 0.5–12 cm, contact-overlap interval), `finger_rects`, `grasp_cfree`, `has_grasp`. |
 | `dd2d/scene.py` | §9.1 forward generator: sample drawer/buffer/fill, central target, settled-clutter loop. |
@@ -139,7 +139,7 @@ enumerator/labeler/refiner are unchanged — they already handle any-size subset
   are geometry-blind and within small `k` only ever propose single-object stagings, masking
   subset-required scenes.
 - **Diverse collar (`--diverse-crowd`):** by default the collar is round cans only, so concave
-  shapes (dumbbell/shoe/banana) only reach the outer clutter and act as distractors, never
+  shapes (dumbbell/shoe/horseshoe) only reach the outer clutter and act as distractors, never
   entering a feasible plan. `--diverse-crowd` draws the collar from **all** families so concave
   shapes join the pincer. The ring is looser (non-round items leave larger angular gaps and fail
   `collar_pose` more often), so the natural subset rate drops — measured **~50% → ~10%** at

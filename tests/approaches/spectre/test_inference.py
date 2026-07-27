@@ -8,9 +8,11 @@ import torch
 from _fixtures import build_toy_episode
 
 from alphatamp.approaches.spectre.inference import (
+    argmax_in_pool,
     init_inference_state,
     load_checkpoint,
     record_failure,
+    score_pool,
     select_next_skeleton,
 )
 from alphatamp.approaches.spectre.io import atomic_write_pickle_gz
@@ -39,6 +41,40 @@ def test_select_next_skeleton_returns_valid_index(tmp_path: Path) -> None:
     idx = select_next_skeleton(state, model)
     assert 0 <= idx < len(ep.skeleton_pool)
     assert state.pool_mask[idx].item() is True
+
+
+def test_select_next_skeleton_matches_score_pool_argmax(tmp_path: Path) -> None:
+    """``select_next_skeleton`` == ``argmax_in_pool(score_pool(...))``, exactly.
+
+    Pins the split that lets the traced rollouts record the score row from the same
+    single forward pass: the composition *is* the selector, at |F|=0 and |F|>0, and
+    under both ``freeze_context`` settings.
+    """
+    ep, vocab = _seed_train_split(tmp_path)
+    model = SpectreModel(vocab)
+    state = init_inference_state(model, ep, vocab, prior=ZeroPrior())
+    for _ in range(2):
+        for freeze in (False, True):
+            row = score_pool(state, model, freeze_context=freeze)
+            assert row.shape == (len(ep.skeleton_pool),)
+            # Unmasked on purpose — a JSON-serialisable row, no -inf sentinels.
+            assert bool(torch.isfinite(row).all())
+            assert argmax_in_pool(row, state.pool_mask) == select_next_skeleton(
+                state, model, freeze_context=freeze
+            )
+        record_failure(state, select_next_skeleton(state, model))
+
+
+def test_score_pool_ignores_masked_out_entries(tmp_path: Path) -> None:
+    """A failed skeleton keeps a raw score but can never be selected again."""
+    ep, vocab = _seed_train_split(tmp_path)
+    model = SpectreModel(vocab)
+    state = init_inference_state(model, ep, vocab, prior=ZeroPrior())
+    first = select_next_skeleton(state, model)
+    record_failure(state, first)
+    row = score_pool(state, model)
+    assert torch.isfinite(row[first])  # still scored...
+    assert argmax_in_pool(row, state.pool_mask) != first  # ...but out of the pool
 
 
 def test_record_failure_moves_skeleton_into_F(tmp_path: Path) -> None:

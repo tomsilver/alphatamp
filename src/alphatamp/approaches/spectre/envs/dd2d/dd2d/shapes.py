@@ -4,7 +4,7 @@ Items come from parametric families whose dimension ranges are anchored to commo
 product sizes; each sampled item draws family + dimensions + small shape noise and is
 polygonised to a **Shapely** ``Polygon`` in its own frame (centroid at the origin, so a
 pose ``(x, y, theta)`` places it by rotate-about-origin then translate). Curved shapes
-are polygonised at 24-32 vertices (spec Section 2). The ``dumbbell``/``shoe``/``banana``
+are polygonised at 24-32 vertices (spec Section 2). The ``dumbbell``/``shoe``/``horseshoe``
 families are concave (a waist / L-corner / C-opening) and carry ``concave=True``; every
 label-dependent result downstream is stratified on this flag (spec Section 4, Section
 11(d)) -- stratified in analysis, never steered in generation.
@@ -29,7 +29,7 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 
 # families whose footprint is non-convex (a waist / L-corner / C-opening feature)
-_CONCAVE_FAMILIES = {"dumbbell", "shoe", "banana"}
+_CONCAVE_FAMILIES = {"dumbbell", "shoe", "horseshoe"}
 
 # sampling weights (boxes/cans slightly upweighted, spec Section 4)
 _FAMILY_WEIGHTS = {
@@ -39,7 +39,7 @@ _FAMILY_WEIGHTS = {
     "pillcase": 1.0,
     "dumbbell": 1.0,
     "shoe": 1.0,
-    "banana": 1.0,
+    "horseshoe": 1.0,
 }
 FAMILIES = tuple(_FAMILY_WEIGHTS)
 
@@ -182,17 +182,33 @@ def _build(family: str, rng: random.Random, shift: float) -> Polygon:
             -arm_v / 2.0 + t / 2.0,
         )
         return unary_union([vert, horiz])
-    if family == "banana":
-        # a C-shape built directly as one simple polygon: outer arc out, inner arc back,
-        # leaving a gap (the C opening) on the +x side (no annulus hole -> always valid).
-        r_out = _u(rng, 5, 7, shift)
-        thick = _u(rng, 2, 3, shift)
-        r_in = max(r_out - thick, 0.5)
-        half = math.radians(rng.uniform(55, 75))  # half-angle of the C opening
-        arc = _lin(half, 2 * math.pi - half, 24)  # body spans everything but the +x gap
-        pts = [(r_out * math.cos(t), r_out * math.sin(t)) for t in arc]
-        pts += [(r_in * math.cos(t), r_in * math.sin(t)) for t in reversed(arc)]
-        return Polygon(pts)
+    if family == "horseshoe":
+        # a blocky, right-angled C: a vertical spine with two equal-length prongs, opening
+        # toward +x, symmetric about y=0. Rectilinear, so a flat finger meeting a prong end
+        # or the spine makes FULL FLAT contact (not a curve's tangent point). Prong
+        # thickness is >= the finger width (2.5 cm, grasps.FINGER_WIDTH) so the whole finger
+        # face lands on material. One simple 8-vertex polygon (no annulus hole, always
+        # valid); the opening height keeps the two lines' contact runs disjoint (concave).
+        spine = _u(
+            rng, 2.2, 3.0, shift
+        )  # spine thickness (x-extent of the vertical bar)
+        prong = _u(rng, 2.5, 3.0, shift)  # prong thickness (>= finger width, full-face)
+        arm = _u(rng, 3.0, 4.2, shift)  # prong length beyond the spine
+        gap = _u(rng, 2.8, 3.8, shift)  # opening height between the two prongs
+        xs, xr = spine, spine + arm  # inner (opening) wall, prong-right wall
+        yt = prong + gap / 2.0  # = H/2, so H = 2*prong + gap
+        return Polygon(
+            [
+                (0.0, -yt),  # bottom-left of the spine
+                (xr, -yt),  # bottom prong, right end
+                (xr, -yt + prong),
+                (xs, -yt + prong),  # into the opening (inner corner, bottom)
+                (xs, yt - prong),  # inner corner, top
+                (xr, yt - prong),
+                (xr, yt),  # top prong, right end
+                (0.0, yt),  # top-left of the spine
+            ]
+        )
     raise ValueError(f"unknown family {family!r}")
 
 

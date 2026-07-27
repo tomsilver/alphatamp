@@ -6,6 +6,58 @@ not, and why.
 
 ---
 
+## 2026-07-26 — Necessity conditioning is cut from v3; s2 becomes a characterized limitation, and the adaptive consolidation is the contribution
+
+**Context.** `SPECTRE_v3_proposal.md` §5 made necessity-conditioned scoring the headline
+revision: a per-object head predicting p_i, aggregated to a difficulty estimate
+`d_hat = sum p_i`, whose `mismatch`/`coverage`/`waste` features would gate the ranker's
+length preference per episode. Pre-registered prediction P-v3-1: dd2d_v3 **s2 ≤ 17.08**.
+Its gate (D2) was explicitly designed to be able to *falsify the premise before the build*.
+
+**What D2 found.** The fork answered **within-length at every stratum**, not just s2
+(`notebook.md` 2026-07-26). Every row is a rollout over the same pool restriction, so
+nothing mixes static-vs-adaptive with restricted-vs-full:
+
+| stratum | v2.2 full | v2.2 length-oracle | astar full | astar length-oracle |
+|---|---|---|---|---|
+| s1 | 6.20 | 5.20 | 2.24 | **1.24** |
+| s2 | 26.00 | **33.92** | 17.08 | **5.80** |
+| s3 | 26.44 | 30.76 | 118.76 | **30.36** |
+
+Handing the model the correct plan length makes it **worse** at s2 and s3, while the same
+restriction makes plain planner order dramatically better. At s3 the model beats astar 4.5×
+on the full pool but *ties* it under the length oracle. So **v2.2's entire measured
+advantage is length calibration; within a plan length it is effectively random at s2 and
+merely par at s3** — which also sits badly with the v2.2 claim that the within-length PL
+loss "forces the geometry signal at every stratum".
+
+**Decision (user call): cut necessity conditioning from v3.** Necessity conditioning
+improves *length* calibration — precisely the thing v2.2 already does well — so it targets
+the wrong deficit. Its residual hope was the *within*-length component (`coverage`/`waste`
+separating same-size subsets), which would first require the head to predict p_i accurately
+from geometry, an unbudgeted investigation. The project's interest is the **consolidation of
+the adaptive component** (one canonical `FailureRecord`, a declarative axiom registry, and
+role-separated record tokens replacing five bespoke fact types), which is where v3's
+cleanliness and generality claims actually live.
+
+**Consequences.**
+- **P-v3-1 is withdrawn.** s2 is reported as a *characterized limitation* with the D2
+  decomposition as evidence, not as a fixed number. That is a stronger scientific position
+  than a mechanism that misses: the decomposition says exactly which capability is missing
+  (within-length discrimination) and shows a non-learned baseline achieving 5.80 there.
+- **Kept as measured groundwork, unwired:** `necessity.py` and its tests, plus the D4
+  finding that `d_hat == stratum` exactly while s3 subset-lattice coverage is only 0.171 —
+  which is itself a caveat any future attempt must carry. `V3Config.use_necessity` remains
+  an explicit `NotImplementedError` so the gap is visible rather than silently absent.
+- **A lead is recorded, not taken:** enumeration order is a strong within-length signal
+  (astar length-oracle 5.80 at s2) that the deployed model cannot see, because R1 removed
+  the prior *wholesale* when only its short-first column was implicated in the dd2d_v3 s3
+  collapse. An index-only prior was never separately ablated. Left as future work.
+- v3's remaining scope: G5 (FailureRecord + axiom registry), G6 (record tokens), G7
+  (overlap 2×2), G9 (length generalization), G10 (geometry interface), G11 (consolidation).
+
+---
+
 ## 2026-07-26 — DD2D's problem generator is `PYTHONHASHSEED`-dependent; `dd2d_v4` ships with the divergence documented rather than fixed
 
 Addendum to the same-day G0–G2 ADR. This one is a *finding about DD2D*, not about v3.

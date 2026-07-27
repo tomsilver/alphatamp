@@ -29,8 +29,14 @@ import torch
 
 from alphatamp.approaches.spectre.dataset_v3 import build_v3_example, collate_v3
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.failure_record import records_for_candidate
 from alphatamp.approaches.spectre.model_v3 import SpectreV3Model
-from alphatamp.approaches.spectre.proof_demotion import ProofState, demote_scores
+from alphatamp.approaches.spectre.proof_demotion import demote_scores
+from alphatamp.approaches.spectre.proof_demotion_v3 import (
+    DemotionMode,
+    ProofStateV3,
+    candidate_queries,
+)
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.vocab import Vocab
 
@@ -64,25 +70,31 @@ def deployed_rollout_v3_traced(
     device: str,
     spec: Optional[DomainSpec] = None,
     max_tags: int = 32,
+    mode: DemotionMode = "strict",
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
     ``attempts`` is 1-indexed (the rollout FP reported downstream is ``attempts - 1``).
     ``spec`` defaults to the contract registered for the episode's own ``env_variant``.
 
+    ``mode`` selects how much exactness evidence a failure must carry before it licenses
+    demotion. ``strict`` (default) requires positive evidence that the query ran to
+    exhaustion, which is what keeps the deduction sound; ``permissive`` reproduces v2.2's
+    semantics and exists so the two can be compared candidate-for-candidate.
+
     There is no ``demotion_source`` knob: v3 reads the refiner's own report, and the
     geometry-reconstruction alternative is not ported (R2).
     """
     model.eval()
     spec = spec or spec_for(episode.provenance.env_variant)
-    subsets = spec.subsets(episode)
+    n_candidates = len(episode.skeleton_pool)
     success = {i for i, o in enumerate(episode.outcomes) if o.outcome == "success"}
-    state = ProofState(subsets=subsets)
+    state = ProofStateV3(candidate_queries(episode, spec), spec, mode=mode)
     tried: list[int] = []
     step_scores: list[list[float]] = []
     step_dead: list[list[int]] = []
 
-    while len(tried) < len(subsets):
+    while len(tried) < n_candidates:
         example = build_v3_example(
             episode,
             vocab,
@@ -107,8 +119,7 @@ def deployed_rollout_v3_traced(
         tried.append(pick)
         if pick in success:
             break
-        if spec.licenses_demotion(episode.outcomes[pick]):
-            state.observe_failure(pick, blocked=True, pack_impossible=False)
+        state.observe(records_for_candidate(episode, pick, spec))
 
     return len(tried), V3Trace(
         order=list(tried), step_scores=step_scores, step_dead=step_dead

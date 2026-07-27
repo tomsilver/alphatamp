@@ -7,6 +7,7 @@ Synthetic episodes only (no data dependency).
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import numpy as np
 import pytest
@@ -132,3 +133,54 @@ def test_evidence_rollout_returns_fp():
     fp_off = EV.evidence_rollout(model, ep, _V(), "cpu", use_facts=False, max_tags=16)
     assert isinstance(fp_on, int) and 0 <= fp_on < len(ep.skeleton_pool)
     assert isinstance(fp_off, int)
+
+
+def test_deployed_rollout_traced_order():
+    """``deployed_rollout_traced`` yields the same count plus the realized order."""
+    ep = _toy_geo_episode_with_pm()
+    model = M.SpectreV2Model(n_ops=2, max_arity=2, max_tags=16)
+    att = EV.deployed_rollout(model, ep, _V(), "cpu", max_tags=16)
+    assert isinstance(att, int) and 1 <= att <= len(ep.skeleton_pool)
+
+    att2, trace = EV.deployed_rollout_traced(model, ep, _V(), "cpu", max_tags=16)
+    assert att2 == att  # deterministic model -> identical path
+    order = trace.order
+    assert isinstance(order, list) and len(order) == att
+    assert len(set(order)) == len(order)  # each pool index tried at most once
+    assert all(0 <= i < len(ep.skeleton_pool) for i in order)
+    # the rollout ends at the first success, so the last attempt is a success.
+    succ = {i for i, o in enumerate(ep.outcomes) if o.outcome == "success"}
+    assert order[-1] in succ
+
+
+def test_deployed_rollout_traced_step_scores_and_dead():
+    """The trace is step-aligned: one raw score row + one dead set per attempt."""
+    ep = _toy_geo_episode_with_pm()
+    k = len(ep.skeleton_pool)
+    model = M.SpectreV2Model(n_ops=2, max_arity=2, max_tags=16)
+    att, trace = EV.deployed_rollout_traced(model, ep, _V(), "cpu", max_tags=16)
+
+    assert len(trace.step_scores) == att
+    assert len(trace.step_dead) == att
+    assert all(len(row) == k for row in trace.step_scores)
+    # Rows are raw: neither this loop's -1e9 tried-mask nor the -1e6 demotion offset
+    # is baked in. The *model* still masks its own failure context, so at step t the
+    # non-finite entries are exactly the candidates attempted before step t.
+    for t, row in enumerate(trace.step_scores):
+        nonfinite = {i for i, x in enumerate(row) if not math.isfinite(x)}
+        assert nonfinite == set(trace.order[:t])
+        assert all(abs(x) < 1e5 for x in row if math.isfinite(x))
+    # Proof-demotion only ever accumulates, so the dead sets are nested.
+    for prev, cur in zip(trace.step_dead, trace.step_dead[1:]):
+        assert set(prev) <= set(cur)
+    # Nothing is demoted before the first failure has been observed.
+    assert trace.step_dead[0] == []
+
+
+def test_deployed_rollout_traced_demotion_is_sound():
+    """A demoted candidate is never one that actually succeeds (proof-demotion)."""
+    ep = _toy_geo_episode_with_pm()
+    model = M.SpectreV2Model(n_ops=2, max_arity=2, max_tags=16)
+    _, trace = EV.deployed_rollout_traced(model, ep, _V(), "cpu", max_tags=16)
+    succ = {i for i, o in enumerate(ep.outcomes) if o.outcome == "success"}
+    assert set(trace.step_dead[-1]).isdisjoint(succ)

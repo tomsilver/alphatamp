@@ -48,10 +48,10 @@ at the origin, so a pose `(x, y, θ)` places it by rotate-about-centroid then tr
 | pillcase | capsule | rectangle + two semicircular end-caps |
 | **dumbbell** | two blocks **∪ bar** | end blocks joined by a thinner/longer bar → **concave waist** |
 | **shoe** | two rects in an **L** | similar-sized rectangles at a right angle → **concave corner** |
-| **banana** | **C**-arc | a thick circular arc with an opening → **concave C** |
+| **horseshoe** | blocky **C** | a spine + two equal-length prongs with an opening → **concave C** |
 
-So the concave shapes (dumbbell/shoe/banana) are produced by **taking the union of simple
-primitives** (or, for the banana, tracing one C-shaped ring), which yields genuinely
+So the concave shapes (dumbbell/shoe/horseshoe) are produced by **taking the union of simple
+primitives** (or, for the horseshoe, one 8-vertex rectilinear C polygon), which yields genuinely
 non-convex footprints. Those three families carry a `concave=True` flag; every downstream result can
 be reported stratified on it. Family choice is weighted (boxes/cans slightly upweighted); dimensions
 and a little shape-noise are sampled per item.
@@ -250,7 +250,7 @@ Everything above serves one principle: **the difficulty is measured on a natural
 not installed into rigged instances.**
 
 - **Objects** are sampled from realistic parametric families (incl. genuinely concave dumbbells/shoes/
-  bananas), with only two honest filters (graspable-in-isolation, not-too-huge).
+  horseshoes), with only two honest filters (graspable-in-isolation, not-too-huge).
 - **Scenes** are built by rejection sampling that *cannot* produce overlaps or out-of-drawer items, so
   "everything fits" is guaranteed by construction, and the crowding prior makes multi-item clearing
   *common* without dictating which items.

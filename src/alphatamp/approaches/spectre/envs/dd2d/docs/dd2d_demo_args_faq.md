@@ -48,9 +48,9 @@ generalization to more crowded, novel drawers. Two things to keep in mind:
   `pyperplan`/`symk` baselines get expensive as items grow (SymK has a hard wall past ~14 total
   objects — `docs/dd2d.md`). For test-time scaling, prefer the `candidates` planner.
 
-**Holding out item *categories* (e.g. no bananas/shoes at train, introduce at test):**
+**Holding out item *categories* (e.g. no horseshoes/shoes at train, introduce at test):**
 **Not currently supported as a general capability.** The shape library has 7 families
-(`can, bowl, box, pillcase, dumbbell, shoe, banana`; `shapes.py:33-44`), but there is no
+(`can, bowl, box, pillcase, dumbbell, shoe, horseshoe`; `shapes.py:33-44`), but there is no
 argument to *exclude* a chosen family at train and *add* it at test. The only built-in
 distribution-shift hook is `--split holdout` (Q4), which does a *fixed* small shift, not an
 arbitrary category holdout. Adding true category holdout is a small change: give `sample_shape`
@@ -151,7 +151,7 @@ blockers and slide them inward — it *introduces* new items positioned to pince
 - Measured effect (`notebook.md`, `docs/dd2d.md`): `--crowd 0` ≈ naturalistic (only ~5–10% of
   problems need a 2+ subset); `--crowd 10` ≈ **~50%** need a 2+ subset. Default is **10**.
 - **`--diverse-crowd`** draws collar items from **all** families (not just round cans), so concave
-  shapes (dumbbell/shoe/banana) join the pincer instead of only landing in the outer clutter as
+  shapes (dumbbell/shoe/horseshoe) join the pincer instead of only landing in the outer clutter as
   distractors. Because non-round items leave larger angular gaps and fail `collar_pose` placement
   more often, the ring is looser: measured effect at `--crowd 10 --lambda 0.6` is the 2+-subset rate
   dropping from **~50% → ~10%**. Pair it with `--require-subset` to restore a high rate by resampling.

@@ -70,6 +70,42 @@ Format:
   **Cause identified later the same day: double canonicalization in the cache builder —
   see the entry below. Not code staleness.**
 
+## 2026-07-26 — G5: one FailureRecord + a declarative certificate rule replaces the five fact types, with a measurable soundness win
+
+- **What:** `failure_record.py` (one canonical record; instrumented on dd2d_v4, backfilled
+  on older collections) + `proof_demotion_v3.py` (the generic rule: demote σ′ if it issues
+  the **same query on the same args** at some j′ with `U(σ′,j′) ⊇ U(σ,j)`, and the domain
+  declares that query monotone + local + exact). Two modes: `permissive` = v2.2 semantics
+  (for the equivalence check), `strict` = requires positive evidence the query ran.
+- **Reduction [verified]:** permissive mode reproduces v2.2's demotions
+  **candidate-for-candidate** on dd2d_v3, checked at four points along the growing failure
+  set for 12 episodes. The generic rule is only allowed to differ *after* it agrees.
+- **Deployed cost: none.** Re-running the deployed v2.2 checkpoint on dd2d_v4 under the v3
+  rule gives **identical per-problem FP on 100/100** — ALL 14.66, s1 6.20, s2 26.00,
+  s3 26.44, exactly the yardstick. The generic rule is a drop-in for the DD2D-specific one.
+- **Soundness win, and the return on instrumentation:**
+
+  | collection | mode | demoted | demoted-but-feasible |
+  |---|---|---|---|
+  | dd2d_v2 | permissive (= v2.2) | 4183 | **12** / 3289 |
+  | dd2d_v2 | strict | 3918 | **0** |
+  | dd2d_v3 | strict | 3784 | 0 |
+  | **dd2d_v4** (instrumented) | permissive | 4029 | 0 |
+  | **dd2d_v4** (instrumented) | strict | **4029** | 0 |
+
+  Strict mode eliminates all 12 dd2d_v2 unsound demotions — the ones v2.2 made by trusting
+  a `retrieve` failure that had actually stopped on the wall-clock budget. On *backfilled*
+  data that soundness costs ~6% of demotions, because exactness has to be derived from a
+  conservative witness (an attempt whose sampler calls equal the minimum possible cannot
+  have re-sampled, so its reported query really ran — declared as
+  `DomainSpec.min_calls_per_schema`, one integer per operator). **On instrumented data it
+  costs nothing**: strict and permissive demote identically, because the refiner reports
+  `exhausted` directly. That is the concrete payoff of the dd2d_v4 re-collection.
+- **Takeaway / next:** the DD2D-specific demotion is gone with no performance cost and a
+  strictly sounder rule. The G1 oracle now runs in `permissive` mode — v2.2's semantics —
+  so an intended improvement can't be mistaken for a regression. Next: G6, replacing the
+  five fact types in the *learned* pathway with role-separated record tokens.
+
 ## 2026-07-26 — D2: SPECTRE v2.2's entire advantage is cross-length calibration; within a length it is at best planner-order
 
 - **What:** the pre-registered s2 fork (`experiments/spectre/spectre_d2_s2.py`), on dd2d_v4

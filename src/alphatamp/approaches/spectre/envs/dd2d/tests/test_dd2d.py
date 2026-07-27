@@ -13,6 +13,7 @@ import random
 
 import pytest
 from shapely import box as shp_box
+from shapely.affinity import rotate
 from shapely.geometry import Point
 
 from alphatamp.approaches.spectre.envs.dd2d.dd2d import enumerate as EN
@@ -20,7 +21,9 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d import label as L
 from alphatamp.approaches.spectre.envs.dd2d.dd2d import scene as SC
 from alphatamp.approaches.spectre.envs.dd2d.dd2d.enumerate import Candidate
 from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+    FINGER_WIDTH,
     direction_admissible,
+    finger_rects,
     grasp_cells,
     has_grasp,
     isolation_graspable,
@@ -84,7 +87,7 @@ def test_every_family_polygonises_and_is_graspable():
         s = sample_shape(random.Random(hash(fam) & 0xFFFF), family=fam)
         assert s.polygon.is_valid and not s.polygon.is_empty and s.area > 0
         assert isolation_graspable(s)
-        assert s.concave == (fam in {"dumbbell", "shoe", "banana"})
+        assert s.concave == (fam in {"dumbbell", "shoe", "horseshoe"})
 
 
 def test_shape_sampling_deterministic():
@@ -96,12 +99,107 @@ def test_shape_sampling_deterministic():
 # --------------------------------------------------------------------------- #
 # grasps
 # --------------------------------------------------------------------------- #
-def test_banana_has_inadmissible_direction():
-    ban = sample_shape(random.Random(3), family="banana")
-    adm = [direction_admissible(ban, math.pi * i / 18)[0] for i in range(18)]
+def test_horseshoe_has_inadmissible_direction():
+    hs = sample_shape(random.Random(3), family="horseshoe")
+    adm = [direction_admissible(hs, math.pi * i / 18)[0] for i in range(18)]
     assert not all(
         adm
     )  # the C-opening gives directions with disjoint L/R contacts (spec Section 5.3)
+
+
+def test_every_grasp_cell_makes_contact():
+    """Core invariant of the contact-run grasp model: every emitted cell has BOTH fingers
+    on material (gap 0), for every family -- no cell closes onto a concavity gap."""
+    tol = 1e-6
+    for fam in FAMILIES:
+        for seed in range(6):
+            shape = sample_shape(random.Random(seed), family=fam)
+            fp = place_polygon(shape.polygon, (0.0, 0.0, 0.0))
+            for g in grasp_cells(shape):
+                left, right = finger_rects(g, (0.0, 0.0, 0.0))
+                assert left.distance(fp) <= tol and right.distance(fp) <= tol, (
+                    fam,
+                    seed,
+                    g.alpha,
+                )
+
+
+def test_horseshoe_grasp_is_full_face():
+    """The blocky horseshoe admits a grasp whose fingers make >= FINGER_WIDTH of flat
+    contact -- full-face, not a curve's tangent point (the reason it replaced the
+    banana)."""
+    for seed in range(6):
+        shape = sample_shape(random.Random(seed), family="horseshoe")
+        fp = place_polygon(shape.polygon, (0.0, 0.0, 0.0))
+        best = 0.0
+        for g in grasp_cells(shape):
+            touch = []
+            for finger in finger_rects(g, (0.0, 0.0, 0.0)):
+                touch.append(finger.intersection(fp.buffer(1e-6)).length)
+            best = max(best, min(touch))
+        assert best >= FINGER_WIDTH - 0.2, (seed, best)
+
+
+def _is_internal_grasp(shape, g, tol=1e-3):
+    """A grasp that pinches an internal feature: ``[xmin, xmax]`` strictly inside the
+    footprint's rotated x-extent (a finger reaches into a concavity)."""
+    b = rotate(shape.polygon, -g.alpha, origin=(0, 0), use_radians=True).bounds
+    return g.xmin > b[0] + tol or g.xmax < b[2] - tol
+
+
+def test_internal_grasp_on_dumbbell_waist():
+    """The gripper can hold the dumbbell's middle bar -- a narrow internal feature, far
+    from the block-to-block envelope width."""
+    for seed in range(6):
+        shape = sample_shape(random.Random(seed), family="dumbbell")
+        internal = [g for g in grasp_cells(shape) if _is_internal_grasp(shape, g)]
+        # the bar is much narrower than the envelope; require a clearly-internal narrow grip
+        assert any(g.width < 4.0 for g in internal), (seed, [g.width for g in internal])
+
+
+def test_internal_grasp_on_horseshoe_spine():
+    """The gripper can reach a finger into the C-opening to grip a prong/spine, with
+    full-face flat contact."""
+    for seed in range(6):
+        shape = sample_shape(random.Random(seed), family="horseshoe")
+        fp = place_polygon(shape.polygon, (0.0, 0.0, 0.0))
+        ok = False
+        for g in grasp_cells(shape):
+            if not _is_internal_grasp(shape, g):
+                continue
+            faces = [
+                finger.intersection(fp.boundary).length
+                for finger in finger_rects(g, (0.0, 0.0, 0.0))
+            ]
+            if min(faces) >= 0.9 * FINGER_WIDTH:
+                ok = True
+                break
+        assert ok, seed
+
+
+def test_fingers_fit_in_isolation():
+    """Every grasp cell's fingers clear the item's *own* material (in isolation) -- an
+    internal grasp is only emitted where the grippers physically fit in the concavity.
+    """
+    for fam in FAMILIES:
+        for seed in range(6):
+            shape = sample_shape(random.Random(seed), family=fam)
+            fp = place_polygon(shape.polygon, (0.0, 0.0, 0.0))
+            for g in grasp_cells(shape):
+                for finger in finger_rects(g, (0.0, 0.0, 0.0)):
+                    assert finger.intersection(fp).area < 1e-3, (fam, seed, g.alpha)
+
+
+def test_convex_families_have_no_internal_grasp():
+    """Convex footprints have no flat internal sub-feature, and the full-face rule
+    excludes curved slivers -- so they only ever grip the outer envelope."""
+    for fam in ["can", "bowl", "box", "pillcase"]:
+        for seed in range(6):
+            shape = sample_shape(random.Random(seed), family=fam)
+            assert not any(_is_internal_grasp(shape, g) for g in grasp_cells(shape)), (
+                fam,
+                seed,
+            )
 
 
 def test_oversized_shape_has_no_grasp_cells():

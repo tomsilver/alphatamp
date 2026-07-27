@@ -1,18 +1,31 @@
-# DD2D — implementation snapshot (2026-07-08)
+# DD2D — implementation snapshot (2026-07-26)
 
 A **standalone, current-state reference** for DD2D (Drawer Decluttering in 2D) as implemented in
-`blocks_tamp/dd2d/`. It describes the objects, the generator, the planners / refiner / heuristics, the
-data-and-record layer, the tooling, the tests, and what is still deferred — enough to understand or run
-the system without reading the source.
+`src/alphatamp/approaches/spectre/envs/dd2d/dd2d/`. It describes the objects, the generator, the grasp
+model, the planners / refiner / heuristics, the packing certificate, the data-and-record layer, the
+tooling, the tests, and what is still deferred — enough to understand or run the system without reading
+the source.
+
+> **Layout note.** DD2D lives at a **double-`dd2d`** path: `envs/dd2d/` is the SPECTRE-integration
+> layer (the `spectre_*` adapters + domain), and `envs/dd2d/dd2d/` is the DD2D **core env** described
+> here. All core modules run as `python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.<module>` (after
+> `source .venv/bin/activate`, from the repo root).
 
 This is a *snapshot*, not the design rationale. For the "why," see [`dd2d.md`](dd2d.md); for the full
 spec, [`dd2d_spec.md`](dd2d_spec.md); for the CLI-argument tutorial, [`dd2d_demo_args_faq.md`](dd2d_demo_args_faq.md).
 Units are **centimetres** throughout.
 
-> **Note vs. older docs:** the shape library was fully replaced (7 families now, three concave), a
-> geometric **A\*/GBF distance-heuristic** search path was added, and a **PIGINet data pipeline**
-> (`record_ext.py`, `collect.py`, `inspect_example.py`, `heuristic_experiment.py`) landed. Anything in
-> older notes referencing families like `bottle/board/mug/spray/spatula/lid` is out of date.
+> **What changed since the 2026-07-08 snapshot.** DD2D was **migrated into the spectre package**
+> (2026-07-12) — the old `blocks_tamp.dd2d.*` paths are gone, replaced by
+> `alphatamp.approaches.spectre.envs.dd2d.dd2d.*`. The **grasp model was made physically realistic**
+> (2026-07-24): fingers now slide on the two supporting lines' *true material contact runs* (no more
+> closing onto air), and a new **internal-grasp** path reaches into concave regions (dumbbell bar,
+> horseshoe opening, shoe corner); the curved `banana` became the blocky right-angled **`horseshoe`**.
+> The **arrangement-complete negative packing certificate** (§8) — listed as *deferred* in the old
+> snapshot — is now **built** (2026-07-18, `certificate.py`). The **collector** now guarantees **exact
+> per-stratum counts**. New core modules: `certificate.py`, `demo_grasp_concave.py`, `harvest.py`. See
+> `decisions.md` 2026-07-12 / 07-18 / 07-24. Anything in older notes referencing `blocks_tamp` paths or
+> families like `bottle/board/mug/spray/spatula/lid` is out of date.
 
 ---
 
@@ -32,25 +45,28 @@ tightness that gap appears (or doesn't).
 
 ---
 
-## 2. Module map (`blocks_tamp/dd2d/`)
+## 2. Module map (`envs/dd2d/dd2d/`)
 
 | File | Role |
 |---|---|
-| `shapes.py` | Parametric shape library (7 families), `sample_shape`, isolation-graspability, holdout split. |
-| `grasps.py` | Top-down parallel-jaw grasp model (`grasp_cells`, `has_grasp`, `finger_rects`, `isolation_graspable`). |
+| `shapes.py` | Parametric shape library (7 families, 3 concave), `sample_shape`, isolation-graspability, holdout split. |
+| `grasps.py` | Top-down parallel-jaw grasp model — **contact-run slides + internal concave grasps** (`grasp_cells`, `has_grasp`, `finger_rects`, `isolation_graspable`). |
 | `world.py` | `DrawerScene` / `DrawerWorld` / `ItemState` / `StreamCounter`; the compaction buffer sampler `sample_buffer_pose`, `settle_pose`, `collar_pose`. |
 | `scene.py` | Forward scene generator `generate_scene` (drawer/buffer geometry, target, collar, settled clutter). |
 | `enumerate.py` | Geometric candidate enumeration (blocker sets → minimal sets → supersets → clearing + extraction re-checks). |
-| `label.py` | Three-valued labeler (`feasible`/`infeasible`/`marginal`) + decision filters F1/F2/F3. |
-| `problem.py` | `DD2DProblem` + `generate_dd2d_problem` (generate → enumerate → label → filter → certify). |
+| `label.py` | Three-valued labeler (`feasible`/`infeasible`/`marginal`) + F1/F2/F3 filters; optional packing-certificate hook (`use_certificate`). |
+| `certificate.py` | **Arrangement-complete negative packing certificate** (`certify_infeasible_by_packing`) — proves a subset cannot pack the buffer (§8). |
+| `problem.py` | `DD2DProblem` + `generate_dd2d_problem` (generate → enumerate → label → filter → refiner-certify). |
 | `refine.py` | `DD2DRefiner` — the shared backjumping refiner over `pick`/`place-buffer`/`retrieve`. |
 | `planning.py` | `DD2DPlanner` (candidate enumerator) + `make_dd2d_planner` (candidates / pyperplan / symk, bfs/gbf/astar, heuristic wiring). |
 | `heuristics.py` | Hand-written geometric **distance heuristic** (`distance_heuristic_factory`, forms `inv`/`avg`/`radius`). |
 | `render.py` | matplotlib `render_scene` + `render_episode` (elevated-carry video) + `DD2DRenderBackend`. |
-| `demo.py` | End-to-end demo CLI (generate → plan → refine → records + videos). |
+| `demo.py` | End-to-end demo CLI (generate → plan → refine → records + videos); stratum-pinned, parallel. |
+| `demo_grasp_concave.py` | **Concave-grasp sanity demo** — the gripper closing on `dumbbell`/`shoe`/`horseshoe` internal features (videos). |
 | `eda.py` | Geometry-blind pyperplan **difficulty EDA** (attempts-until-success + success prob). |
-| `collect.py` | DD2D-native **PIGINet dataset collector** (balanced strata, parallel). |
-| `record_ext.py` | Geometry sidecar over the shared `record.PIGINetExample` (poses, shapes, crops). |
+| `collect.py` | DD2D-native **dataset collector** — balanced strata, parallel, **exact per-stratum counts**. |
+| `record_ext.py` | Geometry sidecar over the shared `record.PIGINetExample` (poses, shapes, boundary rings, crops). |
+| `harvest.py` | Post-mortem **typed-fact harvest** from a failed `RefineResult` (the SPECTRE evidence pathway). |
 | `inspect_example.py` | Single-record visualizer → a PIGINet-input figure. |
 | `heuristic_experiment.py` | 5-arm (bfs / astar-hff / gbf-hff / astar-dist / gbf-dist) first-feasible-rank comparison. |
 | `heuristic_notebook.py` | marimo dashboard for the heuristic experiment. |
@@ -59,11 +75,19 @@ tightness that gap appears (or doesn't).
 | `../domain/drawer_declutter.pddl` | Geometry-blind STRIPS domain (3 actions). |
 | `__init__.py` | Public exports (matplotlib-free: `render` is intentionally *not* imported). |
 
-`__init__.py` exports: `Shape, sample_shape, Grasp, grasp_cells, finger_rects, grasp_cfree, has_grasp,
-isolation_graspable, ItemState, DrawerWorld, place_polygon, sample_buffer_pose, DrawerScene, DD2DProblem,
-generate_dd2d_problem, make_dd2d_problem, DD2DRefiner, DD2DPlanner, make_dd2d_planner`. The heavier
-tooling (`collect`, `record_ext`, `inspect_example`, the notebooks) is run as `python -m
-blocks_tamp.dd2d.<module>`.
+`__init__.py` exports (unchanged, 19 names): `Shape, sample_shape, Grasp, grasp_cells, finger_rects,
+grasp_cfree, has_grasp, isolation_graspable, ItemState, DrawerWorld, place_polygon, sample_buffer_pose,
+DrawerScene, DD2DProblem, generate_dd2d_problem, make_dd2d_problem, DD2DRefiner, DD2DPlanner,
+make_dd2d_planner`. Every module (including the heavier tooling — `collect`, `record_ext`,
+`inspect_example`, `demo_grasp_concave`, the notebooks) runs from the repo root (venv active) as
+`python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.<module>`.
+
+**How DD2D feeds SPECTRE.** One level up, `envs/dd2d/` holds the SPECTRE-integration adapters:
+`spectre_convert.py` (DD2D JSON records → SPECTRE `EpisodeRecord`s), `spectre_geometry.py` (rehydrate
+exact grasp geometry from a stored `SceneGeometry`, *no regeneration*), `spectre_operators.py` (the
+`relational_structs`/`bilevel_planning` substrate operator view), `spectre_render.py` (the shared
+VLM-legible render), and `spectre_harvest.py` (offline post-mortem harvest). Migration provenance:
+`MIGRATION_DD2D.md`. How SPECTRE consumes this data is documented in `docs/as_built_v2.2.md`.
 
 ---
 
@@ -81,14 +105,16 @@ polygon (curved shapes ~24–28 vertices), and is recentred so its centroid is a
 | `pillcase` | convex | length `U(10, 18)` × width `U(2, 4)` | capsule (rect + two semicircular caps) |
 | **`dumbbell`** | **concave** | ends `U(3,5)×U(4,7)`, bar_len `U(4,8)`, bar_t `U(1.5,2.5)` | **waist** (two end blocks + thin bar) |
 | **`shoe`** | **concave** | thickness `U(3,5)`, arms `U(7,11)` each | **L-corner** (two rects) |
-| **`banana`** | **concave** | r_out `U(5,7)`, thick `U(2,3)`, opening half-angle `U(55°,75°)` | **C-opening** (single simple polygon) |
+| **`horseshoe`** | **concave** | spine `U(2.2,3.0)`, prong `U(2.5,3.0)`, arm `U(3.0,4.2)`, opening `U(2.8,3.8)` | **blocky C-opening**, symmetric, equal-length prongs (single 8-vertex polygon) |
 
 Notes:
-- **Concave set** = `{dumbbell, shoe, banana}` (the `concave` flag). These are the "tricky convexity"
+- **Concave set** = `{dumbbell, shoe, horseshoe}` (the `concave` flag). These are the "tricky convexity"
   shapes. They are built to **always be a single valid polygon**: `dumbbell`/`shoe` are Shapely
-  `unary_union`s with a small `_OVERLAP = 0.4` cm so shared edges merge; `banana` is constructed directly
-  as one simple polygon (outer arc out, inner arc back, gap on the +x side — **no annulus hole**, so
-  validity is guaranteed).
+  `unary_union`s with a small `_OVERLAP = 0.4` cm so shared edges merge; `horseshoe` is constructed
+  directly as one simple 8-vertex rectilinear polygon (spine + two equal prongs, opening on +x —
+  **no annulus hole**, so validity is guaranteed). Prong thickness ≥ the finger width (2.5 cm) so a
+  flat finger makes full-face contact (replaced the curved `banana`, whose grasps were only tangent
+  points — see `decisions.md` 2026-07-24).
 - **Sampling weights** (`_FAMILY_WEIGHTS`): `can` = 1.3, `box` = 1.3, all others = 1.0.
 - **Isolation-graspability:** every sampled shape must admit ≥1 grasp *in isolation* (some direction with
   width ≤ 12 cm aperture and a non-empty contact-overlap interval); non-graspable draws are resampled
@@ -98,23 +124,51 @@ Notes:
 - **`split` / holdout:** `sample_shape(rng, family=None, split="train")`. `split="holdout"` scales every
   dimension band by **×1.15** and swaps `bowl → can`. (Wired but not yet used in a formal train/test
   experiment.)
-- Preview the families: `python -m blocks_tamp.dd2d.render_families` → `out/dd2d/shape_families.png`.
+- Preview the families: `python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.render_families` →
+  `out/dd2d/shape_families.png`.
 
 ---
 
 ## 4. Grasp model (`grasps.py`)
 
 A **top-down parallel-jaw grasp** = two finger rectangles pressed flush against opposite sides of an
-item, both collision-free.
+item, both collision-free. The model was **rebuilt 2026-07-24** so the fingers land on *actual
+material* (no closing onto air) and can reach into concave regions (`decisions.md` 2026-07-24).
 
-- Constants: `FINGER_WIDTH = 2.5` (tangential), `FINGER_THICK = 2.0` (normal), aperture `[MIN 0.5, MAX
-  12.0]`, `N_DIRECTIONS = 18` (10° steps over `[0, 180)`), `N_SLIDES = 5`, interior fraction `0.80`.
-- `direction_admissible(shape, α)` → whether a grasp along `α` fits the aperture and has a non-empty
-  contact-overlap interval; `grasp_cells(shape)` enumerates all admissible `(α, slide)` cells (no
-  collision filtering); `finger_rects(g, pose)` gives the world-frame finger rectangles; `grasp_cfree(g,
-  pose, obstacles)` tests them against obstacles; `has_grasp(shape, pose, obstacles)` returns the first
-  collision-free grasp cell (or `None`); `isolation_graspable(shape)` is the resample gate used by the
-  shape sampler.
+**Constants:** `FINGER_WIDTH = 2.5` (tangential, along the supporting line), `FINGER_THICK = 2.0`
+(normal), aperture `[MIN_APERTURE 0.5, MAX_APERTURE 12.0]`, `N_DIRECTIONS = 18` (10° steps over
+`[0, 180)`), `N_SLIDES = 5`, interior fraction `_INTERIOR = 0.80`; and for the internal path
+`_FULL_FACE_FRAC = 0.9`, `_SCAN_STEP = 0.4` cm.
+
+A **`Grasp`** (frozen) is `(alpha, s, xmin, xmax)`: `alpha` = grasp direction (item-frame radians),
+`s` = the finger slide (a `y` in the −`alpha` rotated frame), `xmin`/`xmax` = the two supporting lines
+(finger x-positions); `width = xmax − xmin` is the aperture.
+
+**Contact-run construction (both fingers on material, gap 0).** In the −`alpha` frame the fingers sit
+at the item's x-extremes `xmin`/`xmax`. `direction_admissible(shape, alpha)` returns
+`(ok, xmin, xmax, slide_intervals)`, where `slide_intervals` is the **intersection of the two
+supporting lines' *actual* contact runs** — `_contact_runs_on_line` returns every disconnected `y`-run
+where a vertical line meets the footprint, and `_intersect_runs` keeps the `y` where *both* fingers
+touch material. This replaced the old `y`-*hull*, which let a finger straddle a gap (a C-opening /
+waist) and close onto air. A single tangent point counts (gap 0), so a circle keeps its one valid
+grasp; `_slide_positions` then distributes up to `N_SLIDES` slides across the real runs (interior 80%).
+
+**Internal concave grasps.** Beyond the outer envelope, `_internal_grasps` runs a **scan-line
+antipodal** enumerator (`_SCAN_STEP` horizontal lines) that admits any strictly-*internal* flat
+material segment as a grasp iff **(a) finger-fit** — the finger rects clear the item's own material
+(the grippers fit into the concavity) — and **(b) full-face contact** — each finger inner face lies on
+the boundary for ≥ `_FULL_FACE_FRAC · FINGER_WIDTH` (`_face_contact_len`). Requiring full-face flat
+contact excludes curved-shape *sliver* pinches (a circle gets no internal grasp). `grasp_cells(shape)`
+= the global-envelope grasps **+** internal grasps (the internal path skips the global segment, so
+they never duplicate). Families that gain internal grasps: **dumbbell** (the bar/waist), **horseshoe**
+(spine + into the C-opening between prongs), **shoe** (the L-corner arm); the convex/curved families
+(`can`/`bowl`/`box`/`pillcase`) gain **none**.
+
+**API:** `grasp_cells(shape)` (all `(α, slide)` cells, no collision filtering); `finger_rects(g, pose)`
+(world-frame finger rectangles); `grasp_cfree(g, pose, obstacles)` (boundary-touch allowed, penetration
+not); `has_grasp(shape, pose, obstacles)` (first collision-free cell, or `None`);
+`isolation_graspable(shape)` (the resample gate — true iff some direction is admissible), used by the
+shape sampler; `direction_admissible(shape, alpha)` (the 4-tuple above).
 
 Height stratification is analytic (no z simulated): items are 6 cm prisms, walls 12 cm, fingers descend
 to grasp depth — so every manipulation phase reduces to a 2D collision query.
@@ -238,7 +292,7 @@ seeded ties. A candidate ≡ a staging skeleton `[pick(o); place-buffer(o) …] 
 
 ---
 
-## 8. Labeler (`label.py`) — and the honesty caveat
+## 8. Labeler (`label.py`) + the packing certificate (`certificate.py`)
 
 Every candidate is labeled **`feasible` / `infeasible` / `marginal`**:
 - **feasible** ⇔ an extraction order exists **and** a positive **accessible δ-packing certificate** is
@@ -253,10 +307,27 @@ Every candidate is labeled **`feasible` / `infeasible` / `marginal`**:
 Helpers: `min_feasible_subset_size(candidates)` (smallest `feasible` subset size, `None` if none),
 `decision_filters(scene, candidates)` (F1/F2/F3).
 
-> **Honesty gate:** the spec's **arrangement-complete negative certificate** (§8.4) is **deferred**.
-> Without it, most packing-infeasibilities land in `marginal(budget)` rather than a hard `infeasible`.
-> **No label-dependent research numbers should be reported** until the complete checker replaces this
-> Day-1 fallback. (Disclosed, per spec.)
+### 8.1 The arrangement-complete negative certificate — **now built** (2026-07-18)
+
+The old snapshot listed this as *deferred*; it is now implemented in `certificate.py` (spec §8.4).
+`certify_infeasible_by_packing(scene, subset)` is **three-valued**: `True` = **provably**
+infeasible-by-packing, `False` = a packing was found (⇒ not infeasible), `None` = undecided within
+budget (⇒ stays marginal). It is **sound — zero false-infeasible by design** (any doubt weakens to
+`None`, never to `True`). Pipeline (cheap → expensive): (1) δ/2-deflated shapes; (2) the H1 area bound
+on **exact** deflated areas; (3) for `|S| ≤ MAX_ORDER_ITEMS = 5`, an exact **arrangement DFS** over
+**all** placement orders — exact convex decomposition (Shapely `constrained_delaunay_triangles`, which
+makes the concave families sound), exact NFP/IFP, and a Lipschitz rotation grid `Δθ = δ/(4·r_max)`.
+Budgets `DEFAULT_EGE_BUDGET = 100_000`, `DEFAULT_TIME_BUDGET_S = 5.0` (timeout ⇒ `None`). Verified 0
+false-infeasible over ~730 constructed-feasible packings.
+
+**How it plugs in:** `label.py`'s `label_candidate` / `label_all` take **`use_certificate` (default
+off)**. When on, a provisional `marginal(budget)` is upgraded to **`infeasible(packing)`** if the
+certificate proves it, relabeled **`marginal(inaccessible)`** if it instead finds a packing, or left
+`marginal(budget)` on `None`. It is **off in the default generation and collection paths** (both label
+feasibility via the refiner's real outcomes — see §9), because the generation rejection-loop only needs
+the feasible labels; the certificate is meant for authoritative once-per-candidate (re)labeling. The
+label-side H1 area bound and the `not extractable ⇒ infeasible(extraction)` rule are always on,
+independent of the flag.
 
 ---
 
@@ -288,7 +359,7 @@ backjumps to re-sample the previous placement; `retrieve(target)` needs the targ
 
 ---
 
-## 10. Planners (`planning.py` + generic `blocks_tamp/planning.py`)
+## 10. Planners (`planning.py` + generic `envs/dd2d/planning.py`)
 
 Three planner families, selected via `make_dd2d_planner(prefer=…, order=…, search=…, heuristic=…)`:
 
@@ -369,7 +440,8 @@ Collector-supplied provenance keys: `stratum`, `n_items`, `plan_idx`, `split`, `
 
 ## 14. Tooling / CLIs
 
-All run as `.venv/bin/python -m blocks_tamp.dd2d.<module>`. Key flags + defaults:
+All run from the repo root with the venv active, as
+`python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.<module>`. Key flags + defaults:
 
 ### `demo.py` — end-to-end demo (records + videos)
 `--num-items` (None→9–14), `--lambda` (0.8), `--margin` (1.0), `--split {train,holdout}` (train), `--k`
@@ -380,6 +452,18 @@ All run as `.venv/bin/python -m blocks_tamp.dd2d.<module>`. Key flags + defaults
 `--require-subset`**; require-subset alone = floor 2), `--max-stream-calls` (300), `--retry-cap` (10),
 `--samples-per-step` (15), `--time-budget` (None), `--no-certify` (flag), `--max-videos` (6),
 `--video-format {mp4,gif}` (mp4), `--out-dir` (out_dd2d).
+
+**New flags (2026-07-24):** `--stratum {0,1,2,3}` (pin the exact min-feasible-subset size; overrides
+`--require-subset`/`--min-subset` and resamples until it finds problems of exactly that stratum),
+`--min-blockers` / `--max-blockers` (sample the blocker count from a range instead of `--num-items`),
+and `--workers` (default 1; when > 1, **runs the problems in parallel** via `ProcessPoolExecutor` —
+worker-count-invariant, disjoint seed slots so serial and parallel give the same set).
+
+### `demo_grasp_concave.py` — concave-grasp sanity demo (NEW)
+Renders short videos of the gripper closing on the concave families (`dumbbell` bar, `horseshoe`
+C-opening, `shoe` corner), tagging the internal-region grasps — the visual proof that the 2026-07-24
+grasp model contacts material (no floating fingers) and reaches into concavities. Writes to
+`out_dd2d/grasp_demos/`.
 
 ### `eda.py` — geometry-blind difficulty EDA
 Always pyperplan (no `--planner`). Produces the **attempts-until-success** (first-feasible rank / excess
@@ -398,16 +482,22 @@ geometric. Defaults: `--num-problems` (50), `--lambda` (0.8), `--crowd` (5), `--
 `--max-expansions` (200_000), `--max-scan-seeds` (6000), `--smoke` / `--analyze-only`, `-o/--output`.
 Writes `out_dd2d/heuristic_experiment/results.csv` (+ meta JSON); dashboard `heuristic_notebook.py`.
 
-### `collect.py` — DD2D-native PIGINet dataset collector
-Balanced min-subset **strata (0,1,2,3)**, parallel, planned with **astar + dist**. Per problem:
-generate a requested-stratum instance → plan k skeletons → refine and persist. **`full_pool=True`**
-(default) refines *all k* plans (many positive+negative per problem, no length confound); legacy mode
-stops at first feasible; drops the problem if unsolved within k. Disjoint seed bands per split and
-per-stratum. CLI: `--out-root` (data/dd2d/raw), `--workers` (8), `--target-train` (400), `--target-test`
-(100), `--target-val` (100), `--splits` (train,test,val), `--band` (1_000_000), `--crowd` (5),
-`--lambda` (0.8), `--time-budget` (20.0), `--resume`, `--smoke`. Locked config: `k=200`, `budget=None`
-(time-governed), `diverse_crowd=True`. Output: `<split>/<problem_id>/{images/, scene.png, NNN.json}` +
-per-split `manifest.json` + `attempted.log`.
+### `collect.py` — DD2D-native dataset collector
+Balanced min-subset **strata (0, 1, 2, 3)**, parallel, planned with **astar + dist**. Per problem:
+generate a requested-stratum instance → plan k skeletons → refine and persist. **Exact per-stratum
+counts (2026-07-24):** an **in-flight cap** (`kept + in_flight ≤ target` per stratum) prevents overshoot
+and diverts freed workers to under-target strata, and a `_truncate_to_targets` finalization guarantees
+**exactly** the sub-target — so `--target-train 400` yields **exactly 100/100/100/100** (`decisions.md`
+2026-07-24). **`full_pool=True`** (default) refines *all k* plans (many positive + negative per problem,
+no length confound); legacy mode stops at first feasible and drops unsolved problems. `DD2DCollectConfig`:
+`lam=0.8, margin=1.0, crowd=5, diverse_crowd=True, k=200, budget=None` (time-governed), `retry_cap=10,
+samples_per_step=15, time_budget=20.0, full_pool=True` (stratum 0 forces `crowd=0`). CLI: `--out-root`
+(data/dd2d/raw), `--workers` (8), `--target-train` (400), `--target-test` (100), `--target-val` (100),
+`--splits` (train,test,val), `--band` (1_000_000), `--crowd` (5), `--lambda` (0.8), `--time-budget`
+(20.0), `--resume`, `--smoke` (→ target 3 = 1/stratum, ≤ 2 workers). `k` and `full_pool` are config-only
+(no CLI override). Output: `<split>/<problem_id>/{images/, scene.png, NNN.json}` + per-split
+`manifest.json` + `attempted.log` (the resume log); a `BrokenProcessPool` (OOM) is survived by
+finalizing the split and prompting `--resume`.
 
 ### `inspect_example.py` — single-record visualizer
 Renders one figure mapping a saved `PIGINetExample` 1:1 to PIGINet inputs (initial state, plan, goal +
@@ -439,65 +529,88 @@ matplotlib/PIL/imageio, decoupled from PyBullet.
 
 ## 16. Tests
 
+Under `envs/dd2d/tests/` (collected counts; parametrized tests expand beyond one `def`):
+
 | File | Count | Coverage |
 |---|---|---|
-| `tests/test_dd2d.py` | 46 | shapes/grasps, buffer sampler + world, scene/generation, crowd/collar/subset, candidates/labels, planners (incl. the gbf/astar heuristic arms), refiner, record/render. |
-| `tests/test_dd2d_collect.py` | 12 | full-pool vs legacy collection, drop-unsolvable, exact-stratum rejection, determinism, band disjointness, manifest/disk layout, resume. |
-| `tests/test_dd2d_record_ext.py` | 2 | crop-per-object PNGs, geometry-augmented example round-trip. |
-| `tests/test_dd2d_inspect.py` | 2 | record→figure, record resolution from a split dir. |
+| `test_dd2d.py` | 55 | shapes/grasps (incl. contact-run + internal-grasp invariants), buffer sampler + world, scene/generation, crowd/collar/subset, candidates/labels, planners (incl. the gbf/astar heuristic arms), refiner, record/render. |
+| `test_dd2d_collect.py` | 14 | full-pool vs legacy collection, drop-unsolvable, **exact-per-stratum truncation** + resume, determinism, band disjointness, manifest/disk layout. |
+| `test_certificate.py` | 16 | **(NEW)** the negative packing certificate — soundness (zero false-infeasible, incl. tight/near-threshold batteries), convex-cover exactness, verdict mapping. |
+| `test_demo_grasp_concave.py` | 12 | **(NEW)** every grasp cell makes material contact, full-face horseshoe grasp, internal grasps on dumbbell/horseshoe/shoe, convex families have none. |
+| `test_dd2d_record_ext.py` | 2 | crop-per-object PNGs, geometry-augmented example round-trip. |
+| `test_dd2d_inspect.py` | 2 | record → figure, record resolution from a split dir. |
 
-Run all DD2D tests: `.venv/bin/python -m pytest blocks_tamp/tests/test_dd2d*.py -q`.
+(`test_harvest.py` (5) is adjacent — it tests the post-mortem harvest, not the core env geometry.)
+
+Run all DD2D env tests from the repo root (venv active):
+`python -m pytest src/alphatamp/approaches/spectre/envs/dd2d/tests/` (or select
+`tests/test_dd2d*.py tests/test_certificate.py tests/test_demo_grasp_concave.py`).
 
 ---
 
-## 17. Status — implemented vs. deferred
+## 17. Status — implemented vs. deferred (2026-07-26)
 
-**Implemented (this snapshot):** the world/grasp/label/record/render layer; the forward generator with
-crowd/diverse-crowd/unblocked-target strata and the F1–F4 filters + certification; candidate enumeration;
-the three-valued Day-1 labeler; the shared backjumping refiner; **all three planner families** including
-the new geometric **A\*/GBF distance-heuristic** path; the geometry-blind difficulty **EDA**; the 5-arm
-**heuristic experiment**; the DD2D-native **dataset collector**, geometry **record sidecar**, and record
-**inspector**.
+**Implemented:** the world/grasp/label/record/render layer; the **rebuilt grasp model** (contact-run
+slides + internal concave grasps); the forward generator with crowd/diverse-crowd/unblocked-target
+strata and the F1–F4 filters + refiner-certification; candidate enumeration; the three-valued labeler;
+the **arrangement-complete negative packing certificate** (`certificate.py`, sound + tested — this was
+the schedule-critical deferred item); the shared backjumping refiner; **all three planner families**
+including the geometric **A\*/GBF distance-heuristic** path; the geometry-blind difficulty **EDA**; the
+5-arm **heuristic experiment**; the DD2D-native **dataset collector** (now exact-per-stratum); the
+geometry **record sidecar**, record **inspector**, **concave-grasp demo**, and post-mortem **harvest**.
 
-**Deferred** (see [`dd2d.md`](dd2d.md) "Deferred" + [`dd2d_spec.md`](dd2d_spec.md); roadmap
-[`piginet_dd2d_plan.md`](piginet_dd2d_plan.md) steps 5–8):
-- The **arrangement-complete negative certificate** (§8.4) — the schedule-critical hard item; until it
-  lands, packing-infeasibility is provisional (`marginal(budget)`).
+**Deferred** (see [`dd2d.md`](dd2d.md) "Deferred" + [`dd2d_spec.md`](dd2d_spec.md)):
+- **Enabling the certificate in generation/collection** — it is built and callable but `use_certificate`
+  is **off by default** (§8.1); the shipped collector labels feasibility from the refiner's real
+  outcomes. Turning it on for authoritative once-per-candidate relabeling is the remaining integration.
 - Tier-1 off-the-shelf **PDDLStream + FastDownward** baselines.
 - The full **7-variant two-tier** evaluation protocol beyond the shipped orderings.
 - **Attack suites** — heuristic certificates H2–H4 + Tier-0 learned models.
 - The **buffer-slack λ sweep** with bootstrap CIs (§11).
 - The §9.5 filter-shift / §10.3 coverage audits and the held-out-generator split.
-- The **PIGINet model / training / eval** steps.
 
-> **Research-numbers gate:** because the negative certificate is deferred, **no label-dependent research
-> numbers** are trustworthy yet — the EDA/heuristic outputs are diagnostic.
+> **Label caveat.** The negative-certificate blocker is resolved, but two things bound label-dependent
+> DD2D numbers: (1) the default collector uses **refiner-outcome** labels (a plan is feasible iff the
+> refiner actually solved it — sound, but not the certificate's *proven*-infeasible), and (2) the
+> **2026-07-24 grasp fix shifted feasibility labels**, so any pre-fix collection is stale. The current
+> authoritative grasp-fixed collection is what SPECTRE trains on — see `docs/as_built_v2.2.md` for the
+> downstream results.
 
 ---
 
 ## 18. Quick-start commands
 
 ```shell
-# always use the repo venv
-.venv/bin/python -m blocks_tamp.dd2d.render_families                          # shape gallery -> out/dd2d/
+# from the repo root, activate the venv first
+source .venv/bin/activate
+M=alphatamp.approaches.spectre.envs.dd2d.dd2d          # module prefix
+
+# shape gallery -> out/dd2d/
+python -m $M.render_families
+
+# concave-grasp sanity videos -> out_dd2d/grasp_demos/
+python -m $M.demo_grasp_concave
 
 # end-to-end demo (geometry-informed candidates planner)
-.venv/bin/python -m blocks_tamp.dd2d.demo --lambda 0.6 --crowd 10 --num-problems 2 --max-videos 4
+python -m $M.demo --lambda 0.6 --crowd 10 --num-problems 2 --max-videos 4
 
-# the new A*/GBF geometric-distance heuristic path
-.venv/bin/python -m blocks_tamp.dd2d.demo --planner pyperplan --pyperplan-search astar \
+# stratum-pinned, parallel demo
+python -m $M.demo --stratum 3 --num-problems 4 --workers 4 --max-videos 0
+
+# the A*/GBF geometric-distance heuristic path
+python -m $M.demo --planner pyperplan --pyperplan-search astar \
     --pyperplan-heuristic dist --num-problems 2 --max-videos 0
 
 # geometry-blind difficulty EDA (stratified attempts-until-success + success prob)
-.venv/bin/python -m blocks_tamp.dd2d.eda --episodes 200 --workers 8            # then eda_notebook.py
+python -m $M.eda --episodes 200 --workers 8            # then eda_notebook.py
 
 # 5-arm heuristic experiment (bfs / astar-hff / gbf-hff / astar-dist / gbf-dist)
-.venv/bin/python -m blocks_tamp.dd2d.heuristic_experiment --smoke              # then heuristic_notebook.py
+python -m $M.heuristic_experiment --smoke              # then heuristic_notebook.py
 
-# collect a tiny PIGINet dataset (plumbing check), then inspect one record
-.venv/bin/python -m blocks_tamp.dd2d.collect --smoke --out-root /tmp/dd2d_smoke
-.venv/bin/python -m blocks_tamp.dd2d.inspect_example /tmp/dd2d_smoke/train
+# collect a tiny dataset (plumbing check), then inspect one record
+python -m $M.collect --smoke --out-root /tmp/dd2d_smoke
+python -m $M.inspect_example /tmp/dd2d_smoke/train
 
 # tests
-.venv/bin/python -m pytest blocks_tamp/tests/test_dd2d*.py -q
+python -m pytest src/alphatamp/approaches/spectre/envs/dd2d/tests/ -q
 ```

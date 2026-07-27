@@ -308,6 +308,77 @@ def test_collect_split_balanced_manifest_and_disk(tmp_path, monkeypatch):
     assert manifest["overall"]["kept"] == 4 and manifest["overall"]["n_pos"] == 4
 
 
+def _make_kept_dir(split_dir, seed):
+    """Create a fake kept problem dir (valid problem_id -> parseable seed)."""
+    pid = f"dd2d_n11_l80_c5dc_s{seed}"
+    os.makedirs(os.path.join(split_dir, pid), exist_ok=True)
+    collect._atomic_write(os.path.join(split_dir, pid, "000.json"), "{}")
+    return pid
+
+
+def test_truncate_to_targets(tmp_path):
+    # band (0,400) -> sub-bands [0,100)/[100,200)/[200,300)/[300,400); sub-target 2 each.
+    split_dir = str(tmp_path / "train")
+    os.makedirs(split_dir)
+    seeds = {
+        0: [0, 1, 2],  # over: keep 0,1  drop 2
+        1: [100, 101],  # exact: keep both
+        2: [200],  # under: keep the one (no-op)
+        3: [303, 300, 301, 302],  # over + unordered: keep 300,301 (lowest 2)
+    }
+    for s, ss in seeds.items():
+        for sd in ss:
+            _make_kept_dir(split_dir, sd)
+
+    strata = (0, 1, 2, 3)
+    sub_bands = collect._stratum_bands((0, 400), 4)
+    survivors = collect._truncate_to_targets(split_dir, sub_bands, [2, 2, 2, 2], strata)
+
+    # exact per-stratum counts, lowest-seed survivors, extras rmtree'd
+    assert survivors[0] == ["dd2d_n11_l80_c5dc_s0", "dd2d_n11_l80_c5dc_s1"]
+    assert survivors[2] == ["dd2d_n11_l80_c5dc_s200"]
+    assert survivors[3] == ["dd2d_n11_l80_c5dc_s300", "dd2d_n11_l80_c5dc_s301"]
+    on_disk = {d.name for d in (tmp_path / "train").iterdir() if d.is_dir()}
+    assert "dd2d_n11_l80_c5dc_s2" not in on_disk  # dropped
+    assert (
+        "dd2d_n11_l80_c5dc_s302" not in on_disk
+        and "dd2d_n11_l80_c5dc_s303" not in on_disk
+    )
+    assert len(on_disk) == 2 + 2 + 1 + 2  # exact
+    # idempotent
+    again = collect._truncate_to_targets(split_dir, sub_bands, [2, 2, 2, 2], strata)
+    assert again == survivors
+
+
+def test_collect_split_truncates_overshoot_to_exact(tmp_path, monkeypatch):
+    # A prior (pre-cap) run left 4 s0 dirs; --resume must finalize s0 to EXACTLY its
+    # sub-target (1) by truncation, while the other strata collect their 1 each.
+    train = tmp_path / "train"
+    train.mkdir()
+    for sd in (0, 2, 4, 6):  # even seeds in the s0 sub-band [0,100)
+        _make_kept_dir(str(train), sd)
+
+    monkeypatch.setattr(collect, "_collect_task", _fake_task_factory())  # even=keep
+    summary = collect.collect_split(
+        "train",
+        (0, 400),
+        target=4,  # -> [1,1,1,1]
+        config=CFG,
+        workers=1,
+        out_root=str(tmp_path),
+        resume=True,
+        progress=False,
+    )
+
+    assert [summary["strata"][str(s)]["kept"] for s in (0, 1, 2, 3)] == [1, 1, 1, 1]
+    assert summary["overall"]["kept"] == 4
+    dirs = {d.name for d in train.iterdir() if d.is_dir()}
+    assert len(dirs) == 4  # exact on disk, no overshoot
+    assert "dd2d_n11_l80_c5dc_s0" in dirs  # lowest-seed s0 survivor kept
+    extras = {f"dd2d_n11_l80_c5dc_s{sd}" for sd in (2, 4, 6)}
+    assert not (extras & dirs)  # over-target s0 dirs truncated
+
+
 def test_collect_split_writes_only_kept_dirs(tmp_path, monkeypatch):
     def fake_task(args):
         seed, stratum, config, split_dir = args

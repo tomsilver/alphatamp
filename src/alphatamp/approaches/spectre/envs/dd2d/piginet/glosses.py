@@ -38,7 +38,7 @@ GLOSSES: dict[str, str] = {
     "pillcase": "a long rounded capsule-shaped case",
     "dumbbell": "a dumbbell with two ends and a narrow waist",
     "shoe": "an L-shaped shoe with a concave corner",
-    "banana": "a curved C-shaped banana",
+    "horseshoe": "a blocky C-shaped horseshoe with two prongs",
     # regions
     "drawer": "the drawer interior holding the clutter",
     "buffer": "the staging buffer area beside the drawer",

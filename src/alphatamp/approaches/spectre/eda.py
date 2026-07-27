@@ -1548,6 +1548,11 @@ class ChoiceStep:
     step: int  # 1-based attempt index
     idx: int  # chosen pool index
     outcome: str  # "success" | "fail"
+    # The full ``(K,)`` **unmasked** score row this choice was made from — the
+    # model's opinion of every pooled skeleton under the step's context. Optional
+    # so hand-built traces (ablation tests) and the length-only-context variant,
+    # which never needs it, construct a ChoiceStep with three arguments as before.
+    scores: tuple[float, ...] | None = None
 
 
 def spectre_evaluate_traced(
@@ -1567,6 +1572,11 @@ def spectre_evaluate_traced(
     ``list[ChoiceStep]`` per trainable episode, index-aligned with the
     ``BaselineResult`` arrays. A trace ends at the first success or at the
     budget/pool-exhaustion cut, so ``len(trace) <= attempt_budget``.
+
+    Each step also carries the score row it chose from (``ChoiceStep.scores``).
+    Selection goes through ``score_pool`` + ``argmax_in_pool`` rather than
+    ``select_next_skeleton`` purely to reuse that one forward pass — the composition
+    is the selector, so the chosen index is unchanged.
     """
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre import inference as _inference
@@ -1597,13 +1607,19 @@ def spectre_evaluate_traced(
                 censored[out_idx] = True
                 finished = True
                 break
-            idx = _inference.select_next_skeleton(
-                state, model, freeze_context=freeze_context
-            )
+            row = _inference.score_pool(state, model, freeze_context=freeze_context)
+            idx = _inference.argmax_in_pool(row, state.pool_mask)
             outcome = ep.outcomes[idx]
             steps += 1
             wall += outcome.refinement_wall_clock_s
-            trace.append(ChoiceStep(step=steps, idx=idx, outcome=outcome.outcome))
+            trace.append(
+                ChoiceStep(
+                    step=steps,
+                    idx=idx,
+                    outcome=outcome.outcome,
+                    scores=tuple(float(x) for x in row.tolist()),
+                )
+            )
             if outcome.outcome == "success":
                 attempts[out_idx] = steps
                 censored[out_idx] = False

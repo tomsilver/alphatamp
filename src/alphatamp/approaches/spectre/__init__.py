@@ -9,8 +9,10 @@ data-collection pipeline motivation.
 
 from alphatamp.approaches.spectre.inference import (
     InferenceState,
+    argmax_in_pool,
     init_inference_state,
     record_failure,
+    score_pool,
     select_next_skeleton,
 )
 from alphatamp.approaches.spectre.loss import plackett_luce_loss
@@ -19,8 +21,10 @@ from alphatamp.approaches.spectre.model import SpectreModel
 __all__ = [
     "InferenceState",
     "SpectreModel",
+    "argmax_in_pool",
     "init_inference_state",
     "plackett_luce_loss",
     "record_failure",
+    "score_pool",
     "select_next_skeleton",
 ]

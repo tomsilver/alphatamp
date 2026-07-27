@@ -399,6 +399,13 @@ def main(argv=None) -> int:
     ap.add_argument("--cache-dir", default=os.path.join("out_dd2d", "clip_cache"))
     ap.add_argument("--out", default=os.path.join("out_dd2d", "piginet"))
     ap.add_argument("--arm", default="compare", choices=("compare",) + ARMS)
+    ap.add_argument(
+        "--select",
+        default="rollout_fp",
+        choices=("rollout_fp", "auprc"),
+        help="checkpoint/early-stop metric. rollout_fp = deployment arbiter (default); "
+        "auprc = paper-faithful classification selection.",
+    )
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--k", type=int, default=16, help="max negatives kept per problem")
     ap.add_argument("--batch-problems", type=int, default=8)
@@ -540,6 +547,7 @@ def main(argv=None) -> int:
             dropout=args.dropout,
             feat_noise=args.feat_noise,
             weight_decay=args.weight_decay,
+            select=args.select,
             rank_lambda=args.rank_lambda,
             on_epoch=make_logger(arm),
         )
@@ -554,21 +562,33 @@ def main(argv=None) -> int:
             os.path.join(args.out, f"ckpt_{arm}.pt"),
         )
 
-    # select: lowest val rollout-FP (the arbiter; AUPRC is a poor, anti-correlated metric here)
+    # cross-arm select: by --select. rollout_fp = the deployment arbiter (default);
+    # auprc = paper-faithful classification metric. For a single --arm run the winner
+    # is trivially that arm, so --select only governs the in-arm early-stop above.
     base = results.get("weighted_bce")
-    winner = min(
-        results, key=lambda a: (results[a]["rollout_fp"], -results[a]["auprc"])
-    )
-    if (
-        base
-        and winner != "weighted_bce"
-        and results[winner]["rollout_fp"] > base["rollout_fp"]
-    ):
+    if args.select == "auprc":
+        winner = max(results, key=lambda a: results[a]["auprc"])
+        worse = (
+            base
+            and winner != "weighted_bce"
+            and (results[winner]["auprc"] < base["auprc"])
+        )
+    else:
+        winner = min(
+            results, key=lambda a: (results[a]["rollout_fp"], -results[a]["auprc"])
+        )
+        worse = (
+            base
+            and winner != "weighted_bce"
+            and (results[winner]["rollout_fp"] > base["rollout_fp"])
+        )
+    if worse:
         print(
-            f"# gate: {winner} did not beat weighted_bce on rollout-FP -> fall back to weighted_bce"
+            f"# gate: {winner} did not beat weighted_bce on {args.select} "
+            "-> fall back to weighted_bce"
         )
         winner = "weighted_bce"
-    print(f"\n# SELECTED arm: {winner} (by val rollout-FP)")
+    print(f"\n# SELECTED arm: {winner} (by val {args.select})")
     for a, m in results.items():
         print(
             f"  {a:12s}: AUPRC {m['auprc']:.3f} AUROC {m['auroc']:.3f} "

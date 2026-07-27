@@ -45,7 +45,8 @@ scope. ClutteredStorage2D-b5/b7 and StickButton2D-b5 collections are historical.
 |---|---|
 | Package (model, dataset, collection, EDA) | `src/alphatamp/approaches/spectre/` — do not move; it IS `alphatamp.approaches.spectre` |
 | RT2D environment | `src/alphatamp/approaches/spectre/envs/routedtransport2d/`, registered via `env_registry.py` |
-| DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (env + raw_v2 dataset + `MIGRATION_DD2D.md`); `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter). Wired as env_variant `dd2d_v2`, **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
+| DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (env + raw_v2 dataset + `MIGRATION_DD2D.md`); `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter). Wired as env_variants `dd2d_v2` and `dd2d_v3` (the re-collection after the 2026-07-24 grasp changes), **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
+| VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/vlmplan/` — env-agnostic core + `dd2d_adapter.py` as the only env-aware module; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `docs/decisions.md` 2026-07-24; prompt deviations: `vlmplan/prompts/PROVENANCE.md` |
 | Docs (living proposal, ADR log, lab notebook, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | Hydra entry points + configs + SLURM launchers + analysis notebook | `experiments/spectre/` (configs under `experiments/spectre/conf/`) |
 | Tests | `tests/approaches/spectre/` (RT2D env tests under `envs/routedtransport2d/`) |
@@ -119,6 +120,18 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    drives `eda.py`: EDA gates, B1–B5 brackets, rollout simulation, comparison
    table). Diagnostics:
    `python experiments/spectre/spectre_probe_atom_sensitivity.py env=routedtransport2d_n3_v1 seed=0`.
+6. **VLMPlan baseline** (zero-shot VLM comparison row; two stages, only the first needs a
+   model, so a re-collection re-runs just the second):
+   ```bash
+   lms server start   # or any OpenAI-compatible server (vLLM)
+   export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=lm-studio
+   python experiments/spectre/vlmplan_run.py   env=dd2d_v3 split=train n_problems=5 run=pilot
+   python experiments/spectre/vlmplan_score.py env=dd2d_v3 split=train n_problems=5 run=pilot
+   ```
+   One `cache_subdir` is one method row — give a different `run` its own `cache_subdir`
+   or the rows get averaged together (guarded, not silent). Check the printed
+   **label-agreement gate** before trusting any number: below ~0.95 means the env code
+   moved since that collection and in-pool vs off-pool labels disagree.
 
 ## Conventions and invariants
 

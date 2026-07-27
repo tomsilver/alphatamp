@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -295,6 +296,14 @@ def train_v2(
                 {"state_dict": model.state_dict(), "cfg": asdict(cfg), "n_ops": n_ops},
                 out_dir / "best.pt",
             )
+        # Diagnostic (env-gated, harmless when unset): dump every epoch's checkpoint so a
+        # deployed-FP-vs-epoch curve can be scored offline — used to tell a selection
+        # problem (a good epoch exists but relrank misses it) from a training/data limit.
+        if os.environ.get("SPECTRE_SAVE_ALL_EPOCHS"):
+            torch.save(
+                {"state_dict": model.state_dict(), "cfg": asdict(cfg), "n_ops": n_ops},
+                out_dir / f"epoch_{epoch}.pt",
+            )
         # Periodic heartbeat so a long run is never mistaken for a hang: every 5 epochs,
         # plus the first and last, with losses, the selection metric, gauge, ETA.
         if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
@@ -338,6 +347,12 @@ def main(argv=None) -> int:
         "--wl-weight", type=float, default=1.0, help="within-length PL weight"
     )
     ap.add_argument(
+        "--lr",
+        type=float,
+        default=TrainV2Config.lr,
+        help="peak learning rate (post-warmup, cosine-decayed)",
+    )
+    ap.add_argument(
         "--demotion-source",
         choices=["observed", "computed"],
         default="observed",
@@ -349,6 +364,7 @@ def main(argv=None) -> int:
     cfg = TrainV2Config(
         epochs=a.epochs,
         seed=a.seed,
+        lr=a.lr,
         evidence=a.evidence,
         use_prior=a.use_prior,
         use_overlap=a.use_overlap,
@@ -362,6 +378,12 @@ def main(argv=None) -> int:
         sub += "_ov"
     if a.demotion_source == "computed":
         sub += "_comp"
+    # Config-tagged dirs so a hyperparameter sweep does not collide; the default
+    # (wl=1.0, lr=3e-4) adds nothing, preserving the canonical "_ov" name.
+    if a.wl_weight != 1.0:
+        sub += f"_wl{a.wl_weight:g}"
+    if a.lr != TrainV2Config.lr:
+        sub += f"_lr{a.lr:g}"
     out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v2(
         cfg,

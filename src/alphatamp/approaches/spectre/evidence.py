@@ -124,7 +124,7 @@ def evidence_rollout(
     return fp
 
 
-def _observed_blocked(outcome, demotion_source: str) -> bool:
+def observed_blocked(outcome, demotion_source: str) -> bool:
     """Whether a *failed* candidate is blocked-at-contents, per the demotion signal.
 
     ``observed`` (default) reads the refiner's own failure (``failure_action`` reached
@@ -141,21 +141,47 @@ def _observed_blocked(outcome, demotion_source: str) -> bool:
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class DeployedTrace:
+    """Per-step record of one :func:`deployed_rollout_traced` rollout.
+
+    All three lists are step-aligned and have one entry per *attempt* made.
+
+    - ``order`` — the realized sequence of attempted pool indices (ends at the first
+      success, or at pool exhaustion).
+    - ``step_scores`` — the **raw** ``(K,)`` model logits at each step, *before* this
+      function's already-tried mask and *before* the proof-demotion offset. Raw on
+      purpose: those sentinels (``-1e9`` / ``-1e6``) would swamp the column when this is
+      rendered, and the effective row is exactly reconstructible from ``step_dead`` +
+      ``order``. Note the *model* still masks its own context: entries for candidates
+      already in ``F`` come back ``-inf`` (the batch ``avail_mask``), so at step ``t``
+      the non-finite entries are exactly ``order[:t]``. Serialisers must map those to
+      ``null`` — ``-inf`` is not representable in strict JSON.
+    - ``step_dead`` — the sorted provably-dead indices in force at that step, i.e. the
+      candidates proof-demotion had already ruled out when the pick was made.
+    """
+
+    order: list[int]
+    step_scores: list[list[float]]
+    step_dead: list[list[int]]
+
+
 @torch.no_grad()
-def deployed_rollout(
+def deployed_rollout_traced(
     model: SpectreV2Model,
     episode: EpisodeRecord,
     vocab: Vocab,
     device: str,
     demotion_source: str = "observed",
     max_tags: int = 32,
-) -> int:
-    """The full deployed ranker: model scores + the sound proof-demotion filter (Step 10).
+) -> tuple[int, DeployedTrace]:
+    """:func:`deployed_rollout` plus the per-step :class:`DeployedTrace`.
 
-    Each step scores the pool (facts on), pushes provably-dead candidates (subset ⊆ an
-    observed-blocked set) to the back, tries the argmax, and on a blocked failure updates the
-    demotion state. Returns attempts-to-first-success (1-indexed). The demotion is applied
-    *outside* the network, so it can only reorder — never lose the feasible plan.
+    Same loop and the same attempts count — the trace is recorded alongside, not
+    re-derived — mirroring the ``spectre_evaluate`` / ``spectre_evaluate_traced`` split
+    in ``eda.py``. The comparison cache persists the trace so the notebook's planner
+    inspector can show what the adaptive ranker thought at each step without ever
+    running inference itself.
     """
     from alphatamp.approaches.spectre.proof_demotion import ProofState, demote_scores
 
@@ -169,6 +195,8 @@ def deployed_rollout(
     success = {i for i, o in enumerate(episode.outcomes) if o.outcome == "success"}
     state = ProofState(subsets=subsets)
     tried: list[int] = []
+    step_scores: list[list[float]] = []
+    step_dead: list[list[int]] = []
     while len(tried) < len(subsets):
         ex = build_v2_example(
             episode,
@@ -182,14 +210,48 @@ def deployed_rollout(
         )
         batch = collate_v2([ex], max_arity=vocab.max_operator_arity).to(device)
         logits, _ = model(batch)
-        row = logits[0].detach().cpu().numpy().astype(float)
+        raw = logits[0].detach().cpu().numpy().astype(float)
+        step_scores.append([float(x) for x in raw])
+        step_dead.append(sorted(int(i) for i in state.dead))
+        row = raw.copy()
         if tried:
             row[tried] = -1e9
         row = demote_scores(row, state.dead)
         pick = int(row.argmax())
         tried.append(pick)
         if pick in success:
-            return len(tried)
-        if _observed_blocked(episode.outcomes[pick], demotion_source):
+            break
+        if observed_blocked(episode.outcomes[pick], demotion_source):
             state.observe_failure(pick, blocked=True, pack_impossible=False)
-    return len(tried)
+    return len(tried), DeployedTrace(
+        order=list(tried), step_scores=step_scores, step_dead=step_dead
+    )
+
+
+def deployed_rollout(
+    model: SpectreV2Model,
+    episode: EpisodeRecord,
+    vocab: Vocab,
+    device: str,
+    demotion_source: str = "observed",
+    max_tags: int = 32,
+) -> int:
+    """The full deployed ranker: model scores + the sound proof-demotion filter.
+
+    Step 10. Each step scores the pool (facts on), pushes provably-dead candidates
+    (subset ⊆ an observed-blocked set) to the back, tries the argmax, and on a blocked
+    failure updates the demotion state. Returns attempts-to-first-success (1-indexed).
+    The demotion is applied *outside* the network, so it can only reorder — never lose
+    the feasible plan.
+
+    Use :func:`deployed_rollout_traced` when the per-step trace is wanted too.
+    """
+    attempts, _ = deployed_rollout_traced(
+        model,
+        episode,
+        vocab,
+        device,
+        demotion_source=demotion_source,
+        max_tags=max_tags,
+    )
+    return attempts

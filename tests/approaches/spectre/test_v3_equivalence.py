@@ -150,11 +150,19 @@ def test_v3_rollout_is_bit_identical_to_v2() -> None:
             vocab,
             device,
         )
+        # `permissive` is v2.2's demotion semantics, so this remains an equivalence check
+        # after G5. v3's *default* (`strict`) intentionally demotes less on pre-v3
+        # collections: it requires positive evidence that a query ran to exhaustion, which
+        # backfilled records carry only when the attempt cost exactly its minimum. That
+        # divergence is the point of G5 and is asserted in `test_proof_demotion_v3`;
+        # folding it in here would make a real regression and an intended improvement
+        # look identical.
         a3, t3 = deployed_rollout_v3_traced(
             v3_model,
             episode,
             vocab,
             device,
+            mode="permissive",
         )
         pid = int(episode.provenance.problem_id)
         assert t3.order == t2.order, f"pid {pid}: attempt order diverged"
