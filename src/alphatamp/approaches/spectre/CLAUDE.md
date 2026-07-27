@@ -155,9 +155,19 @@ v2.2 at every stratum** [1-seed dev]:
 | v3 deployed | **7.56** | 0.00 | **1.32** | **15.88** | **13.04** |
 | v2.2 yardstick | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
 
-**−7.10 FP, 95% CI [−9.52, −4.96].** Config:
-`--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`
-(preset `v3final` in `spectre_sweep.py`).
+Over **3 seeds**: **7.44 ± 0.23**, **−7.22 FP, 95% CI [−9.69, −5.02]**; per stratum
+0.00 ± 0.00 / 3.79 ± 3.29 / 13.67 ± 1.88 / 12.31 ± 3.68. Reproduce:
+
+```bash
+python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
+python experiments/spectre/spectre_score_v3.py \
+    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 \
+    --baseline "v2.2 yardstick:checkpoints_v2_evidence_ov"
+```
+
+**Caveat: s1 is seed-unstable** (per-seed 1.16 / 2.72 / 7.48 — one seed exceeds the
+yardstick's 6.20). State per-stratum dominance as holding *on average*, not seed-wise; ALL
+is stable (7.50 / 7.63 / 7.19).
 
 **What carries it: observed `coverage`/`waste`.** These are §5.1's necessity features with
 per-object necessity **observed** (`FailureRecord.culprits`) instead of **predicted** — so no

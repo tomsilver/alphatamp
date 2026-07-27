@@ -198,6 +198,15 @@ The sinusoidal encoder is future-proofing for longer-horizon domains and a gener
 
 **−7.22 FP, 95% CI [−9.69, −5.02]** (paired bootstrap over problems on the seed-mean).
 
+Reproduce:
+
+```bash
+python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
+python experiments/spectre/spectre_score_v3.py \
+    --arm "v3 deployed:checkpoints_v3_v3final_s{seed}" --seeds 0 1 2 \
+    --baseline "v2.2 yardstick:checkpoints_v2_evidence_ov"
+```
+
 **Weak per-stratum dominance holds in the mean at every stratum.** One caveat stated
 plainly: **s1 is seed-unstable** — per-seed 1.16 / 2.72 / 7.48, so the third seed *exceeds*
 the yardstick's 6.20. s1 is the smallest-FP stratum, so its relative spread is largest; ALL
