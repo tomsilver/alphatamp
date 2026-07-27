@@ -187,20 +187,46 @@ The sinusoidal encoder is future-proofing for longer-horizon domains and a gener
 
 ## 7. Results
 
-**Uncensored deployed FP on dd2d_v4 test, n=100.** Lower is better. Acceptance is a paired
-bootstrap over problems (1-seed development; see §9.1 for the seed caveat).
+**Uncensored deployed FP on dd2d_v4 test, n=100.** Lower is better.
+
+**Headline, 3 seeds** (mean ± std *across seeds* of the per-stratum mean):
 
 | method | ALL | s0 | s1 | s2 | s3 |
 |---|---|---|---|---|---|
-| **v3 deployed** | **7.56** | **0.00** | **1.32** | **15.88** | **13.04** |
+| **v3 deployed** (3 seeds) | **7.44 ± 0.23** | 0.00 ± 0.00 | 3.79 ± 3.29 | **13.67 ± 1.88** | **12.31 ± 3.68** |
+| **v2.2 yardstick** (1 seed) | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
+
+**−7.22 FP, 95% CI [−9.69, −5.02]** (paired bootstrap over problems on the seed-mean).
+
+**Weak per-stratum dominance holds in the mean at every stratum.** One caveat stated
+plainly: **s1 is seed-unstable** — per-seed 1.16 / 2.72 / 7.48, so the third seed *exceeds*
+the yardstick's 6.20. s1 is the smallest-FP stratum, so its relative spread is largest; ALL
+is by contrast very stable (7.50 / 7.63 / 7.19). Dominance at s1 should be described as
+holding on average, not seed-wise.
+
+**Ablations, 1-seed dev**, all against the same yardstick:
+
+| method | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| v3 deployed (seed 0) | 7.50 | 0.00 | 1.16 | 15.80 | 13.04 |
+| v3, coverage + `dead` kept | 7.76 | 0.00 | 2.56 | 12.60 | 15.88 |
+| v3, coverage, **no record tokens** | 7.82 | 0.00 | 3.48 | 12.28 | 15.52 |
 | v3, coverage only (no aggregation/attention) | 8.39 | 0.00 | 2.72 | 12.64 | 18.20 |
+| v3, rollout-aligned context, no coverage | 14.34 | 0.00 | 8.04 | 17.48 | 31.84 |
 | v3, evidence-attention only | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 |
 | v3, no records at all | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 |
 | v3 as of G6b (record tokens, shared attention) | 16.17 | 0.00 | 8.56 | 22.00 | 34.12 |
 | **v2.2 yardstick** | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
 
-**Weak per-stratum dominance over deployed v2.2 is achieved**: s0 ties at 0.00, and s1, s2
-and s3 are all won. Overall **−7.10 FP, 95% CI [−9.52, −4.96]**, excluding 0.
+**Every coverage-bearing arm beats the yardstick significantly** (−6.3 to −7.2 FP, all CIs
+excluding 0), so the result does not depend on the exact combination. What it depends on is
+`coverage`/`waste`: the one arm without them (rollout-aligned context) is a tie at −0.32.
+
+**Record *tokens* are worth 0.26 FP** on top of coverage (7.56 vs 7.82). That is not
+"records don't matter" — `coverage`/`waste` are computed *from* `FailureRecord.culprits` —
+but it does mean the adaptive signal is carried by compact per-candidate features rather
+than by a per-failure token stream. Good for the generality claim: features over a reported
+culprit set need no per-environment token vocabulary.
 
 **The deployed configuration** is `--overlap-mode jaccard --coverage-feats
 --aggregate-records --evidence-attn`, i.e. four changes to the G6b model, each motivated by
