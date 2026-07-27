@@ -117,13 +117,11 @@ Format:
   ✱ = CI excludes 0. **Every coverage-bearing arm wins; nothing else does.** The result is
   robust to the exact combination but depends entirely on `coverage`/`waste`.
 
-- **Weak per-stratum dominance is achieved.** s0 ties at 0.00; s1 **2.72 < 6.20**; s2
-  **12.64 < 26.00**; s3 **18.20 < 26.44**. Overall **−6.27 FP, 95% CI [−8.92, −3.74]**,
-  excludes 0. That is goal 1 of the v3 proposal, and it is the first arm all night to beat
-  the yardstick at all rather than tie it.
+- **This is goal 1 of the v3 proposal**, and the coverage arms are the first all night to
+  beat the yardstick at all rather than tie it.
 - **P-v3-1's target is met by a different mechanism than predicted.** The pre-registered
-  bar was s2 ≤ astar-dist's 17.08 *via necessity conditioning*; s2 lands at **12.64** via
-  observed coverage. The prediction's *number* is beaten; its *mechanism* was withdrawn.
+  bar was s2 ≤ astar-dist's 17.08 *via necessity conditioning*; s2 lands at **13.67 ± 1.88**
+  via observed coverage. The prediction's *number* is beaten; its *mechanism* was withdrawn.
   Worth stating both ways round rather than claiming P-v3-1 succeeded.
 - **This is records driving adaptiveness, which was the point.** `coverage`/`waste` read
   `FailureRecord.culprits` — nothing else in the system has access to which object the
@@ -133,17 +131,21 @@ Format:
   zero at |F|=0; the culprit set is built only from candidates in the failure context, all
   of which are failures; and the deployment loop breaks on success before a successful
   candidate could ever enter the context.
-- **Ablation context.** Evidence-attention alone (14.92) and object-evidence alone (16.12)
-  are both roughly a tie with v2.2 — the win is specifically the coverage/waste features.
-  Notably object-evidence *does* fix s3 on its own (25.84, beating 26.44) while wrecking s1
-  (20.84), which is the same length-calibration tension G8 found.
-- **Caveat on this specific checkpoint:** two `p5_jac_cov` processes raced on one checkpoint
-  path (relaunches after a collate crash), so this table's checkpoint is of the right config
-  but muddy provenance — it scored 8.57 then 8.39 as the second run overwrote it. A clean
-  3-seed re-run is the reportable number.
-- **Takeaway / next:** 3 seeds of `jaccard + coverage`; ablate whether dropping `dead`
-  is needed once coverage is present; and whether the record *tokens* still add anything on
-  top (`--no-records` with coverage).
+- **Reading the ablation ladder.** Object-evidence *does* fix s3 on its own (25.84, beating
+  26.44) while wrecking s1 (20.84) — the same length-calibration tension G8 found, which is
+  why it is built but **not deployed**. `dead` stops being harmful once coverage is present
+  (7.76 with it vs 8.39 without): its harm was a *symptom* of the missing count signal, not
+  intrinsic. And record *tokens* are worth only 0.26 FP on top of coverage (7.56 vs 7.82) —
+  so the adaptive signal rides on compact per-candidate features, not a per-failure token
+  stream. That is the better outcome for generality: features over a reported culprit set
+  need no per-environment token vocabulary.
+- **Process note.** Two `p5_jac_cov` processes raced on one checkpoint path after a
+  crash-relaunch (it scored 8.57, then 8.39 as the second overwrote it). Same config, so
+  nothing here changed, but `train_v3` now refuses to start on a directory a live run owns.
+- **Takeaway / next:** the deployed config is recorded as preset `v3final`. Open: s1 seed
+  stability (the widest spread, and the one stratum where a single seed loses); a
+  frequency-weighted `coverage` (the observed culprit set over-covers ~2.5×, A12); and
+  env-2, without which generality stays architectural.
 
 ## 2026-07-27 — P2: the missing G6 cell — record *tokens* cost during training even though the deployed model ignores them
 
