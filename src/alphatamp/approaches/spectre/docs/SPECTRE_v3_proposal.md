@@ -241,6 +241,21 @@ regions in 3D with no new mechanism.
 
 ## 5. Necessity-conditioned scoring (the headline revision) [hypothesis]
 
+> **⚠️ SUPERSEDED 2026-07-27 — necessity is OBSERVED, not predicted.** The *head* described
+> below was **cut** on 2026-07-26 (D2 showed the s2 deficit is within-length, which the head
+> does not address) and is **not built**; `V3Config.use_necessity` raises. But the two
+> candidate **features** it was meant to produce — `coverage` and `waste` in §5.1 — are in the
+> deployed model, computed from the culprits the refiner *reports* rather than from a
+> predicted `p_i`. That needs no head, no second loss and no geometry routine, and it is
+> *more* C2-legal than the predicted version because nothing is inferred by us.
+>
+> They carry the headline result: **7.56 vs deployed v2.2's 14.66, −7.10 FP, CI
+> [−9.52, −4.96]**, weakly dominating at every stratum. §5.3's `clears` defence still applies
+> and is now stronger: `clears` was a geometry routine *we* ran; this is the refiner reporting
+> a collision check it already performed. See [`decisions.md`](decisions.md) 2026-07-27 and
+> [`as_built_v3.md`](as_built_v3.md) §7. Read the rest of this section as the *design intent*
+> that the built system realises differently, not as a description of the code.
+
 **Promotion, not addition:** v2.2's aux head (per-object *necessary/relevant* logits,
 weight-0.2 BCE, training-only) becomes a deployment-consumed **necessity head**.
 
@@ -540,8 +555,10 @@ declared, not assumed); polygon-privilege fairness (parity 2×2); size-control o
 | ID | Prediction | Falsified if |
 |---|---|---|
 | P-v3-1 | With necessity conditioning, dd2d_v3 **s2 ≤ 17.08** (astar-dist), s0/s1/s3 within seed noise of v2.2 | s2 stays > astar-dist despite D2 = "cross-length" |
+| | **Outcome 2026-07-27: number met, mechanism not.** s2 = 15.88 on dd2d_v4 — but via *observed* coverage/waste, not the predicted necessity head, which was cut. | |
 | P-v3-2 | Train s0–s2 / deploy s3 beats same-protocol v2.2; d̂ tracks stratum without receiving it | no improvement, or d̂ uncorrelated |
 | P-v3-3 | The S4 overlap removal is performance-neutral (attention learns soft set-overlap via tags) | evidence increment collapses without `jaccard` — reinstate as one feature, report |
+| | **Outcome 2026-07-27: FALSIFIED.** Removal costs −5.07 FP, CI [−8.56, −1.78]. Reinstated per R7's escape clause. | |
 | P-v3-4 | Env-2, **empty registry**: v3 beats env-2 baselines; declared axioms a measured further increment | learning-is-the-floor fails on env-2 |
 | P-v3-5 | Geometry-interface refactor (Phase 3) is a per-stratum no-op on DD2D | any stratum shifts beyond noise |
 

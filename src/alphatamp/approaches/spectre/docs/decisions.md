@@ -6,6 +6,73 @@ not, and why.
 
 ---
 
+## 2026-07-27 — Necessity is **observed, not predicted**: `coverage`/`waste` from reported culprits; v3 weakly dominates v2.2
+
+Made during an autonomous overnight run (see [`autorun_decisions.md`](autorun_decisions.md)
+for the full A1–A13 chain and everything that did *not* work). This entry records the part
+with lasting consequences for the method.
+
+**Context.** After G6b, v3 *matched* deployed v2.2 but did not beat it (16.17 vs 14.66, CI
+including 0), and the per-stratum picture was a see-saw: whichever configuration won s1 lost
+s3. G8 diagnosed why. The `dead` column of `cand_overlap` is a **length proxy** —
+`corr(dead, |S|) = −0.284`, mean `|S|` 1.38 when dead vs 2.39 when not — so it is *correct*
+at s3, where long plans are needed, and *wrong* at s1, where short ones are. Dropping it took
+s1 from 8.56 to 4.84 and gave s2/s3 back. Every attempt to tune the proxy traded one stratum
+for another, because a length preference is the wrong shape for the underlying quantity: at
+s3, three specific objects block, and the right candidate removes **those three**. That is a
+*count over identified objects*, not a length.
+
+**Decision.** Stop proxying and state it, from data the refiner already reports. `cand_overlap`
+gains two columns computed over the culprits observed while failing the candidates already
+tried:
+
+```
+coverage = |S(c) ∩ culprits| / |culprits|        waste = |S(c) \ culprits| / |S(c)|
+```
+
+**These are §5.1's necessity features with `p_i` observed instead of predicted.** Necessity
+conditioning was cut on 2026-07-26 because its head would have had to predict per-object
+necessity from geometry — an unbudgeted investigation that D2 had shown addressed the wrong
+deficit. Once the refiner *reports* culprits, the same two candidate features fall out of the
+record with **no head, no second loss, and no geometry routine**. The cut stands; what is
+reinstated is the *feature*, on a sounder footing than the version that was cut.
+
+**Why this is legal where `clears` was not (L2/C2).** `clears` was rejected for being a
+per-environment geometric routine *we* ran. This is the refiner reporting a collision check
+it had already performed — the same legality class as `failure_action`, and precisely what
+§6.1 lists `culprits` for. Nothing is inferred by us, which makes it *more* C2-compliant than
+a predicted head, not less. It also does not touch C5: the *deduction* (this subset is dead)
+still acts only outside the net as demotion; what the net sees is the *observation*.
+
+**Consequences.**
+- **Weak per-stratum dominance over deployed v2.2, the proposal's goal 1** [1-seed dev]:
+  **7.56 vs 14.66** overall, **−7.10 FP, 95% CI [−9.52, −4.96]**; s0 ties at 0.00, s1
+  1.32/6.20, s2 15.88/26.00, s3 13.04/26.44. Deployed config is
+  `--overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn`
+  (preset `v3final`).
+- **P-v3-1's number is met, its mechanism is not.** The bar was s2 ≤ 17.08 *via necessity
+  conditioning*; s2 lands at 15.88 via observed coverage. Report both halves — the target was
+  right, the proposed mechanism was unnecessary.
+- **Adaptivity is genuinely record-driven.** Both features are exactly zero until a failure
+  is observed, so the first attempt remains purely static (P-D intact) and the signal accrues
+  as the rollout proceeds. Nothing else in the system can see which object blocked.
+- **A leakage audit is now part of accepting a large effect** — 0 violations here (zero at
+  |F|=0; culprits only from candidates in the failure context, all failures; the deploy loop
+  breaks on success before a successful candidate could enter the context).
+- **Three supporting changes, each individually motivated and individually small**: record
+  aggregation to one token per failing *query* (−88.7% tokens), a separate cross-attention
+  channel for evidence (the shared softmax made ignoring records loss-minimizing), and
+  dropping `dead` from the net while keeping the sound demotion outside it (C5 hygiene).
+  Alone, each is roughly a tie with v2.2; the coverage features carry the result.
+- **Superseded:** G6's arm levels (censored selector) and G6's "−3.37 record increment",
+  which was `cand_overlap` — its bar removed both. **P-v3-3 falsified** (G7): removing
+  `cand_overlap` costs −5.07 FP, CI [−8.56, −1.78]; reinstated per R7's escape clause.
+- **Caveats.** Every number is **1-seed development**; a 3-seed run of the deployed config is
+  the reportable figure. Env-2 remains un-attempted, so generality is architectural
+  (`porting_guide.md`), not demonstrated.
+
+---
+
 ## 2026-07-26 — A selection metric may never be censored below the tail that separates the models; v3's selector is uncensored over the whole val split
 
 **Context.** v3 selects checkpoints on *deployed val FP* — the quantity actually reported —
