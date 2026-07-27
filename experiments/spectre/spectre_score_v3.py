@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         if is_v2:
             model, _ = load_v2_checkpoint(ckpt)
             model = model.eval().to(a.device)
-            ov_mode = {}
+            ov_mode: dict = {}
         else:
             model, ov_mode = load_v3(ckpt, vocab, a.device)
         # argparse `choices` already constrains this; `cast` tells mypy the same thing
