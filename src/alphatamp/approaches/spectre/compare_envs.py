@@ -160,6 +160,16 @@ SB2D = EnvSpec(
         "collection was cut at a wall-clock budget — so the b5 column is substantially "
         "a generalisation result. No method is advantaged; none should be quoted as "
         "trained-on-b5.",
+        "**VLMPlan-32B is scored on a stratified 40-problem subset (10/stratum), not "
+        "the full 100.** The other methods use all 100 test problems. Strata stay "
+        "balanced 10/10/10/10, so the per-stratum means and the stratum-weighted ALL "
+        "are comparable — only the per-cell n (10 vs 25) differs. The subset was a "
+        "deliberate compute choice: VLMPlan-32B's proposals are mostly infeasible on "
+        "b3/b5 (~15 min/problem), so a full run is ~16 h for a row whose shape a "
+        "stratified sample already resolves. Its off-pool proposals are refined for "
+        "real and charged as attempts, so a run of failed guesses can push it *worse* "
+        "than astar-dist and even to a censored 200 on b5 when its junk proposals "
+        "exhaust the attempt budget before the pooled successes are reached.",
         "**§6's `n_proposed` is not comparable to DD2D's.** SB2D generation stops at "
         "the first plan that refines (the 200-plan budget is a ceiling for when they "
         "all fail, not a quota), so the count reads as *plans needed*; DD2D's rows "
