@@ -10,7 +10,7 @@ The encoding is arithmetic on purpose::
     problem_id = split_band * SPLIT_BAND + slot * STRATUM_BAND + index
 
 with ``SPLIT_BAND = 1_000_000`` and ``STRATUM_BAND = 250_000`` taken from
-``dd2d_compare``, so ``dd2d_compare.stratum_of(pid)`` — ``min(3, (pid % SPLIT_BAND) //
+``dd2d_compare``, so ``compare.stratum_of(pid)`` — ``min(3, (pid % SPLIT_BAND) //
 STRATUM_BAND)`` — returns the slot **exactly**. That is what lets fifteen existing call
 sites (``train_v3._keep``, ``spectre_score_v3``'s per-stratum table, the compare cache)
 work on this collection with no change, instead of growing a per-environment branch each.
@@ -33,14 +33,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from alphatamp.approaches.spectre.dd2d_compare import SPLIT_BAND, STRATUM_BAND
+from alphatamp.approaches.spectre.compare import SPLIT_BAND, STRATUM_BAND
 
 Split = Literal["train", "val", "test"]
 
 #: Button counts by stratum index. b10 is absent deliberately: a single A* run cannot
 #: produce prefix-diverse pools at 10 buttons, so 0/20 problems were solvable within the
-#: 200-attempt budget (``docs/autonomous_stickbutton_session.md`` D5). Recovering it needs
-#: diverse plan *generation*, not a better heuristic.
+#: 200-attempt budget (``docs/autonomous_stickbutton_session.md`` D5). Recovering it
+# needs : diverse plan *generation*, not a better heuristic.
 BUTTON_COUNTS: tuple[int, ...] = (1, 2, 3, 5)
 
 SPLIT_BANDS: dict[str, int] = {"train": 0, "val": 1, "test": 2}

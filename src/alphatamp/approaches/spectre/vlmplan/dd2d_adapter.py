@@ -295,9 +295,18 @@ class DD2DAdapter(EnvAdapter):
             for j, sk in enumerate(episode.skeleton_pool)
         }
 
-    def staged_members(self, steps: Sequence[Step]) -> list[str]:
-        """The items staged to the buffer, in staging order."""
+    def discretionary_objects(self, steps: Sequence[Step]) -> list[str]:
+        """The items staged to the buffer, in staging order.
+
+        Renamed from ``staged_members`` on 2026-08-01 when the scorer became
+        env-agnostic: "staged members" is a DD2D noun, and the shared code needed a name
+        that means the same thing on an environment with no buffer.
+        """
         return [args[0] for name, args in steps if name == "place-buffer"]
+
+    # Back-compat alias: `staged_members` is the name the DD2D notebook's diagnostics and
+    # the archived comparison script use.
+    staged_members = discretionary_objects
 
 
 def _as_episode(problem: object) -> EpisodeRecord:

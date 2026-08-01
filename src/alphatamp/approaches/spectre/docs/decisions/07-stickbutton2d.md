@@ -4,6 +4,132 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-comparison-notebook-parameterised-env-registry"></a>
+## 2026-08-01 — Comparison notebook parameterised by an env registry
+
+<!--strip-->
+> **id** `2026-08-01-comparison-notebook-parameterised-env-registry` · **status**
+> active · **tracks** tooling, evaluation
+<!--/strip-->
+
+**Context.** `compare_dd2d_methods.py` is where every method comparison is read. Standing
+StickButton2D up alongside DD2D was done the obvious way first — copy the file to
+`compare_sb2d_methods.py` and edit the constants — which produces two 1400-line notebooks
+that share six sections of analysis and drift apart on the first fix applied to one of
+them. The project already has a rule against exactly this shape of duplication for
+environments (`domain.DomainSpec`, `piginet.PIGINetDomain`, `vlmplan.EnvAdapter`); the
+notebook was the last place still forking.
+
+The DD2D assumptions were not concentrated anywhere. They were a hardcoded `env_variant`,
+a `primary_name="dd2d_v4"` string tagging every loaded row, strata whose labels mean
+min-feasible-subset size, a method list carrying two SPECTRE-v1 rows, `dd2d_*.csv` export
+names, a scene renderer imported from `envs/dd2d`, an `n=100` in a chart title, and an
+`f"s{k}"` stratum label formatter — a dozen small places, each individually too minor to
+notice.
+
+**Decision.** Three files replace the fork:
+
+- `spectre/compare.py` — `dd2d_compare.py` renamed (139 references across 14 files).
+- `spectre/compare_envs.py` — the registry: one `EnvSpec` per environment carrying
+  variant, legacy graft, stratum labels, axis label, which sections apply, an optional
+  scene renderer, and its caveats. **A third environment is one entry.**
+- `experiments/spectre/compare_methods.py` — the single notebook, environment chosen by
+  an `mo.ui.dropdown`.
+
+`stratum_labels` is the important field. SB2D's button count is recovered by DD2D's
+seed-band arithmetic *only because the problem ids were chosen to make that true* — a
+coincidence that was implicit in a formula named for DD2D seeds and is now a declaration.
+
+**Caveats live in the registry, beside the number.** `EnvSpec.caveats` renders under §1's
+summary table. A reader quoting a figure sees what bounds it in the same view, rather than
+in a document they would have to know to open.
+
+**Consequences.**
+
+- **Verified by rendering both environments, not by inspection.** The notebook takes
+  `SPECTRE_COMPARE_ENV` for its initial selection specifically so marimo's script mode can
+  execute it headlessly for *every* registry entry — otherwise only the entry that sorts
+  first is ever smoke-tested. DD2D re-renders unchanged after the rename (7.44 / 17.27 /
+  17.27 / 20.66 / 20.86 / 23.55 / 29.86 / 34.52), which is the check that mattered: 139
+  mechanical edits is exactly where a silent mis-edit hides.
+- Three bugs the fork would have kept: the `collection` column labelled SB2D rows
+  `dd2d_v4`; the CSV export wrote `dd2d_method_*.csv` for both environments, so rendering
+  the second silently overwrote the first; and §4.3 crashed on an empty frame instead of
+  reporting that demotion arms are inapplicable.
+- **§4.3 is inapplicable rather than missing on SB2D**, and now says so. Proof-tier
+  demotion needs provable query axioms; SB2D resolves to `EMPTY_SPEC`, so the demotion-on
+  and demotion-off caches would be bit-identical. Rendering that as an ablation with a
+  0.00 Δ would be the worst outcome — a measurement of nothing that looks like a
+  measurement.
+- Deleted: `compare_dd2d_methods.py`, `compare_sb2d_methods.py`.
+
+---
+
+<a id="2026-08-01-vlmplan-made-env-agnostic-via-labeler-protocol"></a>
+## 2026-08-01 — VLMPlan made env-agnostic via a Labeler protocol
+
+<!--strip-->
+> **id** `2026-08-01-vlmplan-made-env-agnostic-via-labeler-protocol` · **status**
+> active · **tracks** baselines, tooling, env-stickbutton2d
+<!--/strip-->
+
+**Context.** VLMPlan is the **zero-training-data corner** of the data × perception grid
+([`proposal.md`](../proposal.md) §0), so a second environment without it is a grid missing
+a column, not merely a missing row.
+
+`vlmplan/score.py` was already env-agnostic in the parts that matter — budget accounting,
+the published-order fill, `label_agreement` — but it reached past its own abstraction in
+one place: it imported `DD2DRefiner`, `staging_skeleton` and `reconstruct_scene` directly,
+and `REFINER_PRESETS` was keyed by DD2D variant. That import is what makes an *off-pool*
+proposal refinable at all, and it is precisely the thing that differs per environment.
+
+The setting of that refiner is not a detail. VLMPlan's score mixes labels from two
+sources: stored labels for proposals that match a pool candidate, and live refinement for
+the ones that do not. If the live refiner runs at different settings than the collection
+did, the two halves of the same row are drawn from different distributions — off-pool
+proposals get systematically easier or harder labels than in-pool ones, and the arm's
+number moves for a reason that has nothing to do with the model.
+
+**Decision.** Introduce a **`Labeler`** ABC (`vlmplan/adapter.py`) — *given an episode and
+a proposed step sequence, return feasible/infeasible* — with `n_refines` and `flush()`.
+`score_sequence` and `label_agreement` take one as a parameter. DD2D's implementation
+wraps `DD2DRefiner`; SB2D's (`vlmplan/sb2d_label.py`) wraps kinder's `BacktrackingRefiner`
+**at the collection's own settings** — `num_sampling_attempts_per_step=5`,
+`refinement_timeout_s=20`, `max_trajectory_steps=200` — using the collection's
+per-candidate seed rule. `vlmplan/registry.py` dispatches both adapter and labeler on
+`env_variant`.
+
+Memoization moved up into a shared `MemoizingLabeler` base keyed on the canonical step
+tuple, so both environments get it and neither implements it.
+
+**Consequences.**
+
+- The **label-agreement gate is now the acceptance test for a new environment's labeler,
+  not a diagnostic printed after the fact.** SB2D reads **1.000** (35 samples), against
+  DD2D's 0.982. It earned that status by catching three real bugs during bring-up, all of
+  which presented identically — as stored-success → live-fail, i.e. exactly like env
+  drift — at an agreement of 0.571:
+  1. the off-pool derived seed was used for plans that *were* in the pool (fixed by
+     matching against `pool_index` first);
+  2. canonical episode names (`circle_0`) were handed to an env that knows `button0`;
+  3. operators were grounded over env objects but the trajectory was progressed from the
+     *canonical* initial state.
+
+  None would have been visible in the resulting number. All three were visible in the
+  gate.
+- Off-pool seeds derive via `hashlib.blake2b`, not `hash()`. Python's `hash()` is
+  `PYTHONHASHSEED`-salted, so a re-score in a different process would have drawn different
+  labels for the same proposal — the same class of irreproducibility already recorded for
+  the DD2D generator ([2026-07-26](05-v3-migration.md#2026-07-26-dd2d-generator-pythonhashseed-dependent)).
+- **Deviation 8** added to `vlmplan/prompts/PROVENANCE.md`: `_CONTROLLER_NOTE` states the
+  chaining rule (`…FromNothing` vs `…FromButton` depends on where the robot already is).
+  Without it the 32B model used `RobotPressButtonFromNothing` for every press and produced
+  **11/11 precondition violations**; with it, 5/5 valid. This is the same failure the DD2D
+  run hit 28/28 times on a different near-synonymous skill pair, so the mitigation is now
+  a documented part of the template rather than a per-environment rediscovery.
+
+---
+
 <a id="2026-08-01-piginet-lifted-env-agnostic-package-per-env-adapters"></a>
 ## 2026-08-01 — PIGINet lifted to an env-agnostic package with per-env adapters
 

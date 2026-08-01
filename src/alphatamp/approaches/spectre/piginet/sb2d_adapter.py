@@ -1,25 +1,25 @@
 """StickButton2D's :class:`~.domain.PIGINetDomain`.
 
-Answers the same three questions DD2D's adapter does — vocabulary, numeric scales, how to
-enumerate a split — from different storage. StickButton2D has no JSON record tree and no
-rendered PNGs; it has ``EpisodeRecord`` pickles carrying ``scene_geometry``, so examples
-are built from the pool and crops are **rasterised from the stored rings**. That direction
-is required, not preferred: post-hoc geometry comes from stored ``scene_geometry``, never
-from re-running the environment (``decisions/03`` 2026-07-19, *reconstruct, never
-regenerate*).
+Answers the same three questions DD2D's adapter does — vocabulary, numeric scales, how
+to enumerate a split — from different storage. StickButton2D has no JSON record tree and
+no rendered PNGs; it has ``EpisodeRecord`` pickles carrying ``scene_geometry``, so
+examples are built from the pool and crops are **rasterised from the stored rings**.
+That direction is required, not preferred: post-hoc geometry comes from stored
+``scene_geometry``, never from re-running the environment (``decisions/03`` 2026-07-19,
+*reconstruct, never regenerate*).
 
-**The labels are the collection's own.** One example per (episode, candidate), labelled by
-``outcomes[i].outcome == "success"`` — the identical labels SPECTRE v3 trains and is scored
-on. That is what makes the comparison a comparison rather than two numbers produced
-separately.
+**The labels are the collection's own.** One example per (episode, candidate),
+labelled by ``outcomes[i].outcome == "success"`` — the identical labels SPECTRE v3
+trains and is scored on. That is what makes the comparison a comparison rather than two
+numbers produced separately.
 
-**Known limitation, by construction.** Every unpressed button is the same red disc of the
-same radius, so its CLIP crop is pixel-identical to every other button's. The image channel
-can therefore separate only ``{button, stick, robot}`` — information the type literals
-already carry. ``pose`` and ``shape`` work exactly as on DD2D and are where this
-environment's signal actually lives. This is a fact about what perception StickButton2D
-affords, not a defect in the port, and any PIGINet number from it should be read with it in
-view.
+**Known limitation, by construction.** Every unpressed button is the same red disc of
+the same radius, so its CLIP crop is pixel-identical to every other button's. The image
+channel can therefore separate only ``{button, stick, robot}`` — information the type
+literals already carry. ``pose`` and ``shape`` work exactly as on DD2D and are where
+this environment's signal actually lives. This is a fact about what perception
+StickButton2D affords, not a defect in the port, and any PIGINet number from it should
+be read with it in view.
 """
 
 from __future__ import annotations
@@ -36,17 +36,26 @@ from alphatamp.approaches.spectre.piginet.record import PIGINetExample
 
 #: StickButton2D vocabulary -> colloquial NL glosses for the CLIP-text encoder (§IV-A).
 #: Operators and predicates come from kinder's own model
-#: (``kinder_bilevel_planning/env_models``); object arguments (``button3``, ``stick``) are
-#: deliberately absent -- they reach the network through the object channel, not text.
+#: (``kinder_bilevel_planning/env_models``); object arguments (``button3``,
+#: ``stick``) are deliberately absent -- they reach the network through the object
+#: channel, not text.
 GLOSSES: dict[str, str] = {
     # operators (task-plan actions)
     "PickStickFromNothing": "reach down and pick up the stick from the floor",
     "PickStickFromButton": "pick up the stick while standing over a button",
     "PlaceStick": "put the stick back down on the floor",
-    "RobotPressButtonFromNothing": "drive the robot over and press a button with its arm",
-    "RobotPressButtonFromButton": "move from one button to another and press it with the arm",
-    "StickPressButtonFromNothing": "hold out the stick and press a far button with its tip",
-    "StickPressButtonFromButton": "move the held stick from one button to another and press it",
+    "RobotPressButtonFromNothing": (
+        "drive the robot over and press a button with its arm"
+    ),
+    "RobotPressButtonFromButton": (
+        "move from one button to another and press it with the arm"
+    ),
+    "StickPressButtonFromNothing": (
+        "hold out the stick and press a far button with its tip"
+    ),
+    "StickPressButtonFromButton": (
+        "move the held stick from one button to another and press it"
+    ),
     # predicates (init / goal literals)
     "Pressed": "this button has been pushed down and is lit",
     "Grasped": "the robot is holding the long stick",
@@ -64,9 +73,10 @@ GLOSSES: dict[str, str] = {
 
 VOCAB: list[str] = sorted(GLOSSES)
 
-#: Crop window in world units. Fixed rather than per-object so scale is *preserved* across
-#: crops: a button renders as a small dot and the 1.25-long stick as a long bar, which is
-#: the only visual difference the image channel can carry here. Sized to fit the stick.
+#: Crop window in world units. Fixed rather than per-object so scale is *preserved*
+#: across crops: a button renders as a small dot and the 1.25-long stick as a long bar,
+#: which is the only visual difference the image channel can carry here. Sized to fit
+#: the stick.
 _CROP_WORLD = 1.4
 _CROP_PX = 96
 
@@ -111,7 +121,7 @@ def _config_scales() -> tuple[tuple[float, float], np.ndarray]:
 
 
 class SB2DDomain:
-    """StickButton2D: metres, a 3.5x2.5 world, ``EpisodeRecord`` pickles + rasterised crops."""
+    """StickButton2D: metres, a 3.5x2.5 world, pickles + rasterised crops."""
 
     name = "stickbutton2d"
 
@@ -149,8 +159,8 @@ class SB2DDomain:
 
     @staticmethod
     def _problem_id(episode) -> str:
-        # `_s` separator so the cache driver's `pid.split("_s")[-1]` recovers the integer,
-        # which is the convention DD2D's `dd2d_s<seed>` ids already use.
+        # `_s` separator so the cache driver's `pid.split("_s")[-1]` recovers the
+        # integer, which is the convention DD2D's `dd2d_s<seed>` ids already use.
         return f"sb2d_s{episode.provenance.problem_id}"
 
     @staticmethod

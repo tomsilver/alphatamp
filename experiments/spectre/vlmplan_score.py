@@ -2,7 +2,7 @@
 
 Reads what ``vlmplan_run.py`` generated and turns each proposal sequence into the shared
 rollout-FP metric, writing one record per problem in the shape
-``compare_dd2d_methods.py`` reads. No model is involved, so this is cheap to re-run —
+``compare_methods.py`` reads. No model is involved, so this is cheap to re-run —
 which is the point of splitting it out::
 
     python experiments/spectre/vlmplan_score.py env=dd2d_v3 split=train
@@ -33,10 +33,13 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig
 
-from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.vlmplan import runio
 from alphatamp.approaches.spectre.vlmplan import score as score_mod
-from alphatamp.approaches.spectre.vlmplan.dd2d_adapter import DD2DAdapter
+from alphatamp.approaches.spectre.vlmplan.registry import (
+    make_adapter,
+    make_labeler_factory,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -66,7 +69,7 @@ def main(cfg: DictConfig) -> None:
         n_problems=int(cfg.n_problems),
         problem_ids=[int(p) for p in (cfg.problem_ids or [])],
     )
-    adapter = DD2DAdapter(with_images=False)  # scoring never needs the render
+    adapter = make_adapter(env_variant, with_images=False)  # no render needed
 
     summary: dict[str, Any] = {
         "env_variant": env_variant,
@@ -83,6 +86,10 @@ def main(cfg: DictConfig) -> None:
             samples_per_episode=int(cfg.label_agreement_samples),
             seed=int(cfg.seed),
             env_variant=env_variant,
+            # A fresh labeler per episode, and deliberately no memo path: a gate that
+            # read its answers out of the run's memo would be checking the memo, not
+            # the environment.
+            make_labeler=make_labeler_factory(env_variant),
         )
         summary["label_agreement"] = gate
         print(f"label-agreement gate ({env_variant}): {gate}")
@@ -95,9 +102,9 @@ def main(cfg: DictConfig) -> None:
                 "different label functions. Treat results as plumbing only."
             )
 
-    labeler = score_mod.OffPoolLabeler(
-        memo_path=out_root / "offpool_labels.json", env_variant=env_variant
-    )
+    labeler = make_labeler_factory(
+        env_variant, memo_path=out_root / "offpool_labels.json"
+    )()
 
     run_config_path = out_root / "run_config.json"
     run_config: dict[str, Any] = (

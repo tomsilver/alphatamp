@@ -56,7 +56,7 @@ def _(mo):
     import scienceplots  # noqa: F401  (registers the 'science' style)
     import seaborn as sns
 
-    from alphatamp.approaches.spectre import dd2d_compare
+    from alphatamp.approaches.spectre import compare
 
     sns.set_theme(context="notebook", style="whitegrid")
     plt.style.use(["science", "no-latex", "nature"])
@@ -85,7 +85,7 @@ def _(mo):
     ENV_VARIANT = "dd2d_v3"
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / ENV_VARIANT / "compare_cache"
 
-    METHODS = [m for m in dd2d_compare.METHOD_ORDER if not m.startswith("SPECTREv3")]
+    METHODS = [m for m in compare.METHOD_ORDER if not m.startswith("SPECTREv3")]
     COLORS = {
         "astar-dist": "#7f7f7f",
         "PIGINet": "#ff7f0e",
@@ -103,7 +103,7 @@ def _(mo):
 
 @app.cell
 def _(CACHE_DIR, dd2d_compare, pd):
-    df = pd.DataFrame(dd2d_compare.load_fp_records(CACHE_DIR))
+    df = pd.DataFrame(compare.load_fp_records(CACHE_DIR))
     print(df.groupby(["method", "stratum"]).size().unstack())
     return (df,)
 
@@ -123,14 +123,12 @@ def _(CACHE_DIR, dd2d_compare, pd):
         pid: [len(s.operator_seq) for s in ep.skeleton_pool]
         for pid, ep in ep_by_pid.items()
     }
-    fit_df = pd.DataFrame(
-        dd2d_compare.load_length_fit_records(CACHE_DIR, lengths_by_pid)
-    )
+    fit_df = pd.DataFrame(compare.load_length_fit_records(CACHE_DIR, lengths_by_pid))
     pos_df = pd.DataFrame(
-        dd2d_compare.load_position_by_length_records(CACHE_DIR, lengths_by_pid)
+        compare.load_position_by_length_records(CACHE_DIR, lengths_by_pid)
     )
     ladder_df = pd.DataFrame(
-        dd2d_compare.load_adaptive_ladder_records(CACHE_DIR, lengths_by_pid)
+        compare.load_adaptive_ladder_records(CACHE_DIR, lengths_by_pid)
     )
     print(
         f"lengths for {len(lengths_by_pid)} problems; "
@@ -349,7 +347,7 @@ def _(mo):
 @app.cell
 def _(CACHE_DIR, dd2d_compare, df, pd):
     _lc = pd.DataFrame(
-        dd2d_compare.load_named_fp_records(
+        compare.load_named_fp_records(
             CACHE_DIR, "spectre_lenctx", "SPECTRE-adaptive-lenctx"
         )
     )
@@ -538,8 +536,8 @@ def _(mo):
 def _(CACHE_DIR, dd2d_compare, mo, pd):
     # One block per model arm. An arm with no cache is skipped rather than erroring.
     _frames, _blocks = {}, []
-    for _arm, _subdir in dd2d_compare.SEQUENCE_METHODS.items():
-        _rows = dd2d_compare.load_vlmplan_diagnostics(CACHE_DIR, _subdir)
+    for _arm, _subdir in compare.SEQUENCE_METHODS.items():
+        _rows = compare.load_vlmplan_diagnostics(CACHE_DIR, _subdir)
         if not _rows:
             _blocks.append(
                 mo.md(

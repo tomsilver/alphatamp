@@ -34,9 +34,9 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from alphatamp.approaches.spectre.vlmplan import runio
-from alphatamp.approaches.spectre.vlmplan.dd2d_adapter import DD2DAdapter
 from alphatamp.approaches.spectre.vlmplan.loop import LoopConfig, generate_sequence
 from alphatamp.approaches.spectre.vlmplan.models import ModelConfig, make_model
+from alphatamp.approaches.spectre.vlmplan.registry import make_adapter
 from alphatamp.approaches.spectre.vlmplan.template import PromptConfig, build_prompt
 
 REPO = Path(__file__).resolve().parents[2]
@@ -71,8 +71,10 @@ def main(cfg: DictConfig) -> None:
 
     mc = model_config(cfg)
     model = make_model(mc)
-    adapter = DD2DAdapter(
-        with_images=bool(cfg.with_images), image_width_px=int(cfg.image_width_px)
+    adapter = make_adapter(
+        env_variant,
+        with_images=bool(cfg.with_images),
+        image_width_px=int(cfg.image_width_px),
     )
     _loop = OmegaConf.to_container(cfg.loop, resolve=True)
     loop_cfg = LoopConfig(**_loop)  # type: ignore[arg-type]

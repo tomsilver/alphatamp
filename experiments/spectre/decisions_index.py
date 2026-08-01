@@ -1,7 +1,7 @@
 """Maintain SPECTRE's chaptered decision / notebook logs.
 
 Thin CLI over `alphatamp.approaches.spectre.doclog`, following the same
-library-plus-entry-point split as `dd2d_compare.py` / `spectre_v3_table.py`.
+library-plus-entry-point split as `compare.py` / `spectre_v3_table.py`.
 
 Subcommands::
 

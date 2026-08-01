@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.envs.stickbutton2d import strata
 from alphatamp.approaches.spectre.envs.stickbutton2d.heuristic import _is_acyclic
 

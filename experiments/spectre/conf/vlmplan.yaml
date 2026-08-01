@@ -1,4 +1,8 @@
-# VLMPlan baseline — zero-shot VLM plan generation + scoring on DD2D.
+# VLMPlan baseline — zero-shot VLM plan generation + scoring.
+#
+# Environment-agnostic since 2026-08-01: `env` selects the collection and
+# `vlmplan/registry.py` picks the adapter and the off-pool labeler from it. DD2D and
+# StickButton2D are wired; a third environment is a registry entry.
 #
 # Two entry points share this config, and the split between them is deliberate:
 #   vlmplan_run.py    queries the model, writes transcripts + proposal sequences
@@ -35,7 +39,9 @@ model:
   backend: "openai" # openai | openai_responses | gemini
   model_name: "qwen3-vl-8b-instruct"
   cache_kind: "sqlite"
-  cache_path: "data/spectre/derived/dd2d_v3/vlmplan_cache.db"
+  # Per-collection, so two environments' prompt caches never collide. The response
+  # cache is keyed on the prompt, so a re-run of an identical problem is free.
+  cache_path: "data/spectre/derived/${env.env_variant}/vlmplan_cache.db"
   base_url: null # null -> take OPENAI_BASE_URL from the environment
   decode:
     # NOT 0.0: this loop wants diverse plans across rounds, and at temperature 0 a round

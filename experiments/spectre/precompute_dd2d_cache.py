@@ -1,7 +1,7 @@
 """Precompute + cache per-problem test scores for the DD2D method comparison.
 
 Runs each method once on the DD2D test split and writes the *raw per-skeleton
-scores* per problem so ``experiments/spectre/compare_dd2d_methods.py`` can load
+scores* per problem so ``experiments/spectre/compare_methods.py`` can load
 them and derive rollout-FPs (and other metrics) without re-running any inference.
 
 Cache layout under ``data/spectre/derived/<env_variant>/compare_cache/`` (one JSON
@@ -75,7 +75,7 @@ import torch
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from alphatamp.approaches.spectre import eda
-from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.inference import (
     init_inference_state,
     load_checkpoint,
@@ -190,7 +190,20 @@ _V3_ARMS: dict[str, str] = {
 #: deployed config with no `--out-suffix`, so its dir is the bare `checkpoints_v3`;
 #: DD2D's carries the `_unified` tag from the 2026-07-31 definition change.
 _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
-    "stickbutton2d_v1": {"spectre3": "checkpoints_v3"},
+    # StickButton2D's arms were trained by `spectre_sweep.py --preset sb2dabl`, which
+    # writes one directory per (arm, seed) -- hence `{seed}` -- and `train_v3` prefixes
+    # `_norec` onto any `--no-records` run, so two of the six carry it. DD2D's arms
+    # predate that sweep and use their own historical names, which is exactly why this
+    # map is per-variant rather than a string rule.
+    "stickbutton2d_v1": {
+        "spectre3": "checkpoints_v3",
+        "abl_cov_rec": "checkpoints_v3_abl_cov_rec_s{seed}",
+        "abl_cov_norec": "checkpoints_v3_norec_abl_cov_norec_s{seed}",
+        "abl_nocov_rec": "checkpoints_v3_abl_nocov_rec_s{seed}",
+        "abl_nocov_norec": "checkpoints_v3_norec_abl_nocov_norec_s{seed}",
+        "abl_cov_only": "checkpoints_v3_abl_cov_only_s{seed}",
+        "abl_waste_only": "checkpoints_v3_abl_waste_only_s{seed}",
+    },
 }
 
 
@@ -291,9 +304,7 @@ def _configure_paths(env_variant: str) -> None:
     # instead of the whole driver refusing to start.
     _v2_sub = _V2_CKPT_SUBDIR.get(env_variant)
     V2_CKPT_DIR = (
-        None
-        if _v2_sub is None
-        else REPO / "data" / "spectre" / _v2_sub / env_variant
+        None if _v2_sub is None else REPO / "data" / "spectre" / _v2_sub / env_variant
     )
     PIGINET_CKPT = piginet.get("ckpt")
     PIGINET_DATA = piginet.get("data")
@@ -1032,9 +1043,19 @@ def main() -> None:
             arms = {"spectre3": _v3_arm_dir("spectre3", ENV_VARIANT)}
             suppress, nodemo = {}, {}
         else:
-            arms = dict(_V3_ARMS)
+            # Through `_v3_arm_dir`, so a collection whose arms live under different run
+            # names gets them. Reading `_V3_ARMS` raw here was the bug that made
+            # StickButton2D's six trained arms invisible to the cache.
+            arms = {a: _v3_arm_dir(a, ENV_VARIANT) for a in _V3_ARMS}
             suppress = dict(_V3_SUPPRESS_ARMS)
             nodemo = dict(_V3_DEMOTION_ARMS)
+            if ENV_VARIANT.startswith("stickbutton2d"):
+                # Proof-tier demotion was cut from the method, and StickButton2D resolves
+                # to EMPTY_SPEC, so `licenses_demotion` is always False -- a demotion arm
+                # would be bit-identical to its base. Skipped as vacuous, not overlooked.
+                # `suppress` needs a `v3final`-named checkpoint this collection never
+                # trained, so it goes too.
+                suppress, nodemo = {}, {}
         _assert_same_selector({**arms, **suppress, **nodemo})
         _warn_if_undertrained({**arms, **suppress, **nodemo})
         cache_spectre3(args.force, args.device, arms)

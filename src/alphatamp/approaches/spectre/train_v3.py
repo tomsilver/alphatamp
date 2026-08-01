@@ -256,7 +256,7 @@ def _keep(ep, strata: tuple[int, ...]) -> bool:
         return False
     if not strata:
         return True
-    from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+    from alphatamp.approaches.spectre.compare import stratum_of
 
     return stratum_of(int(ep.provenance.problem_id)) in strata
 

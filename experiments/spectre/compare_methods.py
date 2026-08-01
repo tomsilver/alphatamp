@@ -13,92 +13,25 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""# DD2D — SPECTRE v3 vs v2, PIGINet, VLMPlan and pure planning
+    mo.md(r"""# Method comparison — SPECTRE vs the low-level and zero-shot baselines
 
-          Compares plan-feasibility methods on the **held-out DD2D test split** (n = 100)
-          by **rollout false-positives (FP)** — failed refinement attempts before the first
-          success. Lower is better.
+          Compares plan-feasibility methods on a held-out **test split** by **rollout
+          false-positives (FP)** — failed refinement attempts before the first success.
+          Lower is better.
 
-          > **Three seeds per learned method**, all trained natively on `dd2d_v4`. Three
-          > because that is what every learned method has: v2.2 was trained at exactly 3,
-          > and PIGINet gained a seed axis for this comparison. It is a protocol set by
-          > the weakest-covered method, not a subset chosen after the fact — SPECTREv3
-          > has 6 trained seeds, and at 6 it reads **8.23 ± 1.36** against the 7.20 ± 0.62
-          > below (`as_built_v3.md` §7.1).
+          **Pick the environment below.** Everything after it — strata labels, method
+          list, caveats, the scene render in §5, whether §4's ablations exist — comes
+          from that environment's entry in `spectre/compare_envs.py`. A third
+          environment is a new `EnvSpec` there, not a copy of this file.
+          """
 
-          **Methods.**
 
-          - **astar-dist** — the non-learned planner-order baseline (score = −plan_idx).
-          - **PIGINet** — low-level predictor (CLIP + transformer over object image
-            features + literals), **trained with BCE** (the original-paper baseline loss),
-            AUPRC-selected. Static one-shot ranking.
-          <!-- commented out 2026-07-27 (notebook trim); uncomment with the SPECTRE-v1
-               entries in LEGACY_ONLY below to restore the v1 rows everywhere
-          - **SPECTRE-adaptive / -static** (v1) — the abstract-only re-ranker in its two
-            deployment modes.
-          -->
-          - **SPECTREv2-adaptive / -static** — added in geometry and typed evidence.
-          - **SPECTREv3-adaptive / -static** — v3: one `FailureRecord` per failure,
-            **observed `coverage`/`waste`** on candidates, and the record's **abstract
-            state delta** (`s_j` relative to `s_0`). **Purely learned** — proof-tier
-            demotion was cut on 2026-07-30, so nothing outside the network touches its
-            ordering (§4.3 prices that at 0.23 FP). v2.2 *keeps* its demotion, so the
-            comparison handicaps v3 rather than flattering it.
-          - **VLMPlan-8B / -32B** — the zero-shot VLM baseline (KinDER convention): the
-            zero-training-data corner of the data × perception grid. Two arms of the same
-            family, `Qwen3-VL-{8B,32B}-Instruct`, so the pair is a **scale** comparison.
-
-          <!--
-          > Reads **`dd2d_v4`**; only VLMPlan has no v4 row and is carried over from
-          > `dd2d_v3` (marked **†** on the §2 chart).
-          -->
-
-          <!-- commented out 2026-07-27 (notebook trim); uncomment to restore the full
-               cross-collection rationale
-          
-          > ### Two collections, read this before comparing rows
-          >
-          > **SPECTRE v3 only exists on `dd2d_v4`**, the refiner-instrumented re-collection
-          > — its `coverage`/`waste` features need the culprits the instrumented refiner
-          > reports, which no earlier collection carries. So this notebook reads
-          > **`dd2d_v4` as primary** and grafts the methods that have no v4 row
-          > (**PIGINet**, **VLMPlan-8B/32B**, **SPECTRE v1**) from **`dd2d_v3`**. Every row
-          > is labelled with its collection.
-          >
-          > This is sound but not exact. The two collections share their **test problem-id
-          > set exactly** (100/100), and agree on **99.2% of scenes** and **94.6% of
-          > problems' full 200-candidate label vectors** (0.08% of candidate labels differ)
-          > — `decisions.md` 2026-07-26. So a per-problem join is well defined and the
-          > grafted rows are measured on near-identical problems.
-          >
-          > **The load-bearing comparison never crosses collections.** v3 and v2.2 are both
-          > native to `dd2d_v4`, so the headline v3-vs-v2 margin is exactly paired. Treat
-          > grafted rows as accurate to well within their own seed noise, not as
-          > bit-comparable.
-          -->
-
-          <!--
-          > **1 seed per method** (seed 0). v3 has 6 trained seeds and v2.2 has 3; the
-          > multi-seed pass is separate. The published multi-seed figure is
-          > **7.90 ± 0.61 vs 14.66** (`decisions.md` 2026-07-27).
-
-          > **VLMPlan is scored differently, on purpose.** Every other method *reorders*
-          > the shared 200-candidate pool, so its FP counts only in-pool attempts. VLMPlan
-          > *generates* its own plans, and most multi-item stagings are not in the pool at
-          > all, so its FP **counts off-pool attempts too** (labelled by a live refiner on
-          > the reconstructed scene). It can reach plans the pool does not contain — an
-          > edge at s3 — while paying for every wrong guess.
-
-          Retired sections (T0 length fits, T1 length-only context, the length-bias
-          explorer, VLMPlan diagnostics) live in
-          **`compare_dd2d_methods_archive.py`**, which still reads `dd2d_v3`.
-          -->
-          """)
-    return
+             )
 
 
 @app.cell
 def _(mo):
+    import os
     from pathlib import Path
 
     import matplotlib.pyplot as plt
@@ -107,7 +40,7 @@ def _(mo):
     import scienceplots  # noqa: F401  (registers the 'science' style)
     import seaborn as sns
 
-    from alphatamp.approaches.spectre import dd2d_compare
+    from alphatamp.approaches.spectre import compare, compare_envs
 
     sns.set_theme(context="notebook", style="whitegrid")
     plt.style.use(["science", "no-latex", "nature"])
@@ -131,26 +64,39 @@ def _(mo):
 
     _nb = mo.notebook_dir()
     REPO = (_nb / ".." / "..").resolve() if _nb is not None else Path("..").resolve()
-    # dd2d_v4 is the refiner-instrumented collection and the only one with v3
-    # checkpoints; dd2d_v3 supplies the methods that were never retrained on v4.
-    ENV_VARIANT = "dd2d_v4"
-    LEGACY_VARIANT = "dd2d_v3"
+
+    # The environment picker. Everything below keys off it; changing it re-renders the
+    # whole notebook against another collection.
+    #
+    # `SPECTRE_COMPARE_ENV` sets the initial selection. In the browser it is just a
+    # default, but in marimo's script mode a UI element reads back its default, so this
+    # is the only way to exercise a non-first environment headlessly -- which is how the
+    # notebook gets smoke-tested for every registry entry rather than only the one that
+    # happens to sort first.
+    _default_env = os.environ.get("SPECTRE_COMPARE_ENV", next(iter(compare_envs.ENVS)))
+    env_picker = mo.ui.dropdown(
+        options=list(compare_envs.ENVS),
+        value=_default_env,
+        label="environment",
+    )
+    return REPO, compare, compare_envs, env_picker
+
+
+@app.cell(hide_code=True)
+def _(env_picker, mo):
+    mo.md(f"### Environment\n\n{env_picker}")
+    return
+
+
+@app.cell
+def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
+    ENV = compare_envs.get(env_picker.value)
+    ENV_VARIANT = ENV.env_variant
+    LEGACY_VARIANT = ENV.legacy_variant or ENV.env_variant
+    LEGACY_ONLY = list(ENV.legacy_only)
     DERIVED = REPO / "data" / "spectre" / "derived"
     CACHE_DIR = DERIVED / ENV_VARIANT / "compare_cache"
     LEGACY_CACHE = DERIVED / LEGACY_VARIANT / "compare_cache"
-    # Methods with no dd2d_v4 row, grafted from dd2d_v3. Only VLMPlan is left: PIGINet
-    # was retrained natively on v4 at three seeds on 2026-07-28, and regenerating VLMPlan
-    # is two model arms x 100 problems (~10.5 h) to move a row that cannot plausibly shift
-    # on a 0.08% label change.
-    # Dropping a name here removes it from §1, §2 and §3 at once -- METHODS derives from
-    # the loaded frame -- so the two SPECTRE-v1 entries are the single point of restore.
-    LEGACY_ONLY = [
-        # commented out 2026-07-27 (notebook trim); uncomment to restore SPECTRE v1
-        # "SPECTRE-adaptive",
-        # "SPECTRE-static",
-        "VLMPlan-8B",
-        "VLMPlan-32B",
-    ]
 
     COLORS = {
         "astar-dist": "#7f7f7f",
@@ -164,18 +110,25 @@ def _(mo):
         "VLMPlan-8B": "#9467bd",
         "VLMPlan-32B": "#c5b0d5",
     }
-    STRATA = [0, 1, 2, 3]
-    print(f"primary: {CACHE_DIR}\nlegacy:  {LEGACY_CACHE}")
+    STRATA = sorted(ENV.stratum_labels)
+    SLAB = ENV.stratum_labels
+    # Read off the cache rather than hardcoded: the DD2D notebook said "n=100" in a title
+    # even when a subset was loaded, which is the sort of caption that quietly becomes
+    # wrong.
+    N_PROBLEMS = len({p.stem for p in (CACHE_DIR / "astar").glob("*.json")}) or 0
+    print(f"env={ENV.key}\nprimary: {CACHE_DIR}\nlegacy:  {LEGACY_CACHE}")
     return (
         CACHE_DIR,
         COLORS,
+        ENV,
         ENV_VARIANT,
         LEGACY_CACHE,
         LEGACY_ONLY,
         LEGACY_VARIANT,
-        REPO,
+        N_PROBLEMS,
+        SLAB,
         STRATA,
-        dd2d_compare,
+        compare,
         np,
         pd,
         plt,
@@ -185,7 +138,8 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## Load
+    mo.md(\
+          r"""## Load
 
           Reads precomputed per-problem scores from both caches and grafts the methods
           that have no dd2d_v4 row. Nothing here runs inference — build the caches with:
@@ -211,14 +165,14 @@ def _(mo):
 
 
 @app.cell
-def _(CACHE_DIR, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, dd2d_compare, pd):
-    _primary = dd2d_compare.load_fp_records_per_seed(CACHE_DIR)
-    _legacy = dd2d_compare.load_fp_records_per_seed(LEGACY_CACHE)
-    merged = dd2d_compare.merge_collections(
+def _(CACHE_DIR, ENV_VARIANT, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, compare, pd):
+    _primary = compare.load_fp_records_per_seed(CACHE_DIR)
+    _legacy = compare.load_fp_records_per_seed(LEGACY_CACHE)
+    merged = compare.merge_collections(
         _primary,
         _legacy,
         LEGACY_ONLY,
-        primary_name="dd2d_v4",
+        primary_name=ENV_VARIANT,
         legacy_name=LEGACY_VARIANT,
     )
     df_seeds = pd.DataFrame(merged)
@@ -234,7 +188,7 @@ def _(CACHE_DIR, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, dd2d_compare, pd):
         .astype({"problem_id": int, "stratum": int})
     )
     COLLECTION = dict(zip(df["method"], df["collection"]))
-    METHODS = [m for m in dd2d_compare.METHOD_ORDER if m in set(df["method"])]
+    METHODS = [m for m in compare.METHOD_ORDER if m in set(df["method"])]
 
     print("method                seeds  collection   n")
     for _m in METHODS:
@@ -274,12 +228,12 @@ def _(mo):
 
 
 @app.cell
-def _(COLLECTION, METHODS, dd2d_compare, df, df_seeds, merged, mo, pd):
+def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
     # `build_table` is the shared implementation (also behind `spectre_v3_table.py`), so
     # this table and the CLI reporter cannot drift apart. It takes the PER-SEED records
     # -- feeding it the collapsed frame would silently give the across-problem spread of
     # a seed-mean, which is the bug this section previously had.
-    summary_header, summary_rows, summary_tidy = dd2d_compare.build_table(merged)
+    summary_header, summary_rows, summary_tidy = compare.build_table(merged)
     summary_df = pd.DataFrame(summary_tidy)
 
     print("mean FP (ALL), lower is better:")
@@ -299,7 +253,17 @@ def _(COLLECTION, METHODS, dd2d_compare, df, df_seeds, merged, mo, pd):
             f"  {_m:<20s} {_e['mean_fp']:6.2f}{_sd:<9s} "
             f"[{COLLECTION[_m]}, {_seeds if _seeds else '-'} seed(s)]"
         )
-    mo.md(dd2d_compare.render_markdown(summary_header, summary_rows))
+    mo.md(
+        compare.render_markdown(summary_header, summary_rows)
+        + "\n\n"
+        + ENV.stratum_meaning
+        + (
+            "\n\n**Read before quoting a number:**\n"
+            + "\n".join(f"- {c}" for c in ENV.caveats)
+            if ENV.caveats
+            else ""
+        )
+    )
     return summary_df, summary_tidy
 
 
@@ -310,9 +274,10 @@ def _(COLLECTION, METHODS, dd2d_compare, df, df_seeds, merged, mo, pd):
 # def _(mo):
 #     mo.md(r"""### Across-seed spread
 #
-#           The same table computed over **every cached seed**, where `±` is the spread of
-#           the per-stratum mean *across seeds* rather than across problems. With one seed
-#           cached it reads `--`; it fills in automatically once `precompute_dd2d_cache.py
+#           The same table computed over **every cached seed**, where `±` is the
+#           spread of the per-stratum mean *across seeds* rather than across problems.
+#           With one seed cached it reads `--`; it fills in automatically once
+#           `precompute_dd2d_cache.py
 #           --seeds 0 1 2 ...` has run. Kept visible so the distinction between the two
 #           spreads is never implicit.
 #           """)
@@ -320,13 +285,13 @@ def _(COLLECTION, METHODS, dd2d_compare, df, df_seeds, merged, mo, pd):
 
 
 # @app.cell
-# def _(CACHE_DIR, dd2d_compare, mo):
-#     _all_seeds = dd2d_compare.load_fp_records_per_seed(CACHE_DIR)
-#     _header, _rows, _tidy = dd2d_compare.build_table(_all_seeds)
+# def _(CACHE_DIR, compare, mo):
+#     _all_seeds = compare.load_fp_records_per_seed(CACHE_DIR)
+#     _header, _rows, _tidy = compare.build_table(_all_seeds)
 #     mo.md(
 #         f"*{CACHE_DIR.parent.name} only (native rows); "
 #         f"± = across seeds of the per-stratum mean.*\n\n"
-#         + dd2d_compare.render_markdown(_header, _rows)
+#         + compare.render_markdown(_header, _rows)
 #     )
 #     return
 
@@ -349,12 +314,24 @@ def _(mo):
 
 
 @app.cell
-def _(COLLECTION, COLORS, ENV_VARIANT, METHODS, STRATA, np, plt, summary_tidy):
+def _(
+    COLLECTION,
+    COLORS,
+    ENV,
+    ENV_VARIANT,
+    METHODS,
+    N_PROBLEMS,
+    SLAB,
+    STRATA,
+    np,
+    plt,
+    summary_tidy,
+):
     # One source of truth with §1: read the means and across-seed stds straight out of
     # `build_table`'s tidy output rather than recomputing from a frame, which is how a
     # chart and the table above it end up disagreeing.
     _by = {(t["method"], t["stratum"]): t for t in summary_tidy}
-    _groups = [str(k) for k in STRATA] + ["ALL"]
+    _groups = [SLAB.get(k, str(k)) for k in STRATA] + ["ALL"]
     _x = np.arange(len(_groups))
     # Bar width and offset derive from the method count so the group stays centred as
     # methods are added or a cache is absent.
@@ -387,10 +364,10 @@ def _(COLLECTION, COLORS, ENV_VARIANT, METHODS, STRATA, np, plt, summary_tidy):
     _ax.set_xticks(_x)
     _ax.set_xticklabels(_groups)
     _ax.set_ylim(bottom=0)
-    _ax.set_xlabel("min-feasible-subset stratum")
+    _ax.set_xlabel(ENV.stratum_axis_label)
     _ax.set_ylabel("rollout FP (fails before first success)")
     _ax.set_title(
-        f"Mean rollout FP by stratum ({ENV_VARIANT} test, n=100)\n"
+        f"Mean rollout FP by stratum ({ENV_VARIANT} test, n={N_PROBLEMS})\n"
         "error bars = ± across-seed std · no cap = single run · † = grafted from dd2d_v3"
     )
     _ax.legend(ncol=2, fontsize=7)
@@ -417,7 +394,7 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, METHODS, STRATA, df_seeds, np, plt):
+def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
     def _cdf(vals, ks):
         vals = np.asarray(vals)
         return [np.mean(vals <= k) for k in ks]
@@ -442,7 +419,7 @@ def _(COLORS, METHODS, STRATA, df_seeds, np, plt):
         for _m in METHODS:
             _v = _sub[_sub.method == _m]
             _ax.plot(_ks, _mean_cdf(_v, _ks), label=_m, color=COLORS[_m])
-        _ax.set_title("ALL strata" if _k == "ALL" else f"stratum {_k}")
+        _ax.set_title("ALL strata" if _k == "ALL" else SLAB.get(_k, f"stratum {_k}"))
         _ax.set_xlabel("failed attempts k")
         _ax.set_ylim(0, 1.02)
         _ax.grid(True, alpha=0.3)
@@ -468,33 +445,34 @@ def _(mo):
           failing the candidates already tried:
 
           ```
-          coverage = |S(c) ∩ culprits| / |culprits|     waste = |S(c) \ culprits| / |S(c)|
+          coverage = |S(c) ∩ culprits| / |culprits|
+          waste    = |S(c) \ culprits| / |S(c)|
           ```
 
           <!--
-          These are §5.1's necessity features with per-object necessity **observed rather
-          than predicted** — no head, no second loss, no geometry routine. They replaced
-          `dead`, which was a *length* proxy (corr(dead,|S|) = −0.284): right at s3 where
-          long plans are needed, wrong at s1 where short ones are, so tuning it only traded
-          strata.
+          These are §5.1's necessity features with per-object necessity **observed
+          rather than predicted** — no head, no second loss, no geometry routine. They
+          replaced `dead`, which was a *length* proxy (corr(dead,|S|) = −0.284): right
+          at s3 where long plans are needed, wrong at s1 where short ones are, so tuning
+          it only traded strata.
 
           
-          **Record tokens** — one token per failing query, carrying the schema, arguments
-          and observed culprits of each failure, attended over by a dedicated evidence
-          channel.
+          **Record tokens** — one token per failing query, carrying the schema,
+          arguments and observed culprits of each failure, attended over by a dedicated
+          evidence channel.
 
           All arms below are held at the **same matched setting** — `--overlap-mode
-          jaccard`, no record aggregation, no evidence-attention — so each contrast varies
-          only what it names. The *deployed* row also carries record aggregation and
-          evidence-attention — two smaller implementation switches, not part of the
+          jaccard`, no record aggregation, no evidence-attention — so each contrast
+          varies only what it names. The *deployed* row also carries record aggregation
+          and evidence-attention — two smaller implementation switches, not part of the
           contrast under test.
 
           > **1 seed per arm — unlike §1–§3, which are 3-seed.** Only the deployed
           > configuration was ever trained at more than one seed; these component arms
           > are a frozen seed-0 study. They are accepted by **paired bootstrap over
           > problems** (the project's stated 1-seed convention): pairing removes the
-          > between-problem variance that otherwise dominates. Everything here, including
-          > the v2.2 baseline the Δ column is measured against, is seed 0.
+          > between-problem variance that otherwise dominates. Everything here,
+          > including the v2.2 baseline the Δ column is measured against, is seed 0.
 
           > **The `deployed` row post-dates the component arms.** It now carries the
           > state delta (`decisions.md` 2026-07-28); the six component arms predate it
@@ -511,20 +489,20 @@ def _(mo):
           > Switching both off does **not** leave a static ranker. Three things still
           > respond to the failure set, and only the first two are model inputs:
           >
-          > 1. **`avail_mask`** — already-tried candidates are forced to `-inf`. This is the
-          >    "just the previously tried skeletons" channel, but it only *removes* them
-          >    from the argmax; it cannot re-rank the survivors.
+          > 1. **`avail_mask`** — already-tried candidates are forced to `-inf`. This is
+          >    the "just the previously tried skeletons" channel, but it only *removes*
+          >    them from the argmax; it cannot re-rank the survivors.
           > 2. **`jaccard`** — `cand_overlap[:, 1]`, the max Jaccard overlap between a
-          >    candidate's manipulated set and any already-failed candidate's set. This is
-          >    the one *learned* adaptive feature left. (Column 0, `dead`, is zeroed by
-          >    `--overlap-mode jaccard`.)
+          >    candidate's manipulated set and any already-failed candidate's set. This
+          >    is the one *learned* adaptive feature left. (Column 0, `dead`, is zeroed
+          >    by `--overlap-mode jaccard`.)
           > 3. ~~**Proof-demotion**~~ — **cut from the method on 2026-07-30**, so on the
           >    deployed model there is no longer a third channel: `avail_mask` and
-          >    `jaccard` are all that remain when both components are off. §4.3 prices the
-          >    cut. On this floor arm the offset was worth **1.09 FP** (15.47 → 16.56) —
-          >    roughly *all* of the arm's remaining adaptivity — against only **0.23** on
-          >    the deployed model (7.20 → 7.44, 3 seeds), which is what made it affordable
-          >    to remove.
+          >    `jaccard` are all that remain when both components are off. §4.3 prices
+          >    the cut. On this floor arm the offset was worth **1.09 FP** (15.47 →
+          >    16.56) — roughly *all* of the arm's remaining adaptivity — against only
+          >    **0.23** on the deployed model (7.20 → 7.44, 3 seeds), which is what made
+          >    it affordable to remove.
           >
           > On `dd2d_v4` there is no fourth channel: the model falls back to v2.2's
           > hint-tier fact tokens when records are off, but **that collection has no
@@ -536,7 +514,7 @@ def _(mo):
 
 
 @app.cell
-def _(CACHE_DIR, dd2d_compare, pd):
+def _(CACHE_DIR, compare, pd):
     # Ablation arms live in their own cache dirs, not in SPECTRE_FAMILIES: an ablation is
     # one method's components switched off, not a method in the comparison.
     # Every arm stays loaded even when a table below does not show it -- `cov+waste,
@@ -569,9 +547,7 @@ def _(CACHE_DIR, dd2d_compare, pd):
             continue
         _rows += [
             {**r, "arm": _label}
-            for r in dd2d_compare.load_named_fp_records_per_seed(
-                CACHE_DIR, _subdir, _label
-            )
+            for r in compare.load_named_fp_records_per_seed(CACHE_DIR, _subdir, _label)
         ]
     abl_df = pd.DataFrame(_rows)
     # PINNED TO SEED 0, explicitly. Only the deployed arm has more than one trained seed,
@@ -695,13 +671,13 @@ def _(mo):
           r"""### 4.2 · `coverage` vs `waste`, separated
 
           The two columns have only ever been switched on together. `--coverage-mode`
-          zeroes one of them (rather than narrowing the tensor, so the state-dict shape and
-          the exact-absence equivalence oracle are untouched), which isolates each.
+          zeroes one of them (rather than narrowing the tensor, so the state-dict shape
+          and the exact-absence equivalence oracle are untouched), which isolates each.
 
-          They ask different questions: **`coverage`** is "does this candidate remove the
-          objects the refiner reported as blocking", **`waste`** is "does it also remove
-          objects that were never implicated". `no cov/waste, tokens` is the floor with
-          neither column.
+          They ask different questions: **`coverage`** is "does this candidate remove
+          the objects the refiner reported as blocking", **`waste`** is "does it also
+          remove objects that were never implicated". `no cov/waste, tokens` is the
+          floor with neither column.
           """
              )
     return
@@ -758,34 +734,35 @@ def _(mo):
 
           **Proof-tier demotion was cut from the method on 2026-07-30**
           (`decisions.md`). SPECTREv3 as reported everywhere above is a **purely learned
-          ranker**: nothing outside the network touches its ordering. This section is the
-          price of that choice.
+          ranker**: nothing outside the network touches its ordering. This section is
+          the price of that choice.
 
-          The offset it gives up: when an observed failure *proves* a candidate dead, its
-          score was pushed back by a finite amount — never to `-inf`, so a wrong proof
-          could only reorder, never lose the feasible plan (C5 / P-E). Sound, and now
-          off. The machinery is kept and one flag away (`apply_demotion=True`), which is
-          what the `+ demotion` rows below run.
+          The offset it gives up: when an observed failure *proves* a candidate dead,
+          its score was pushed back by a finite amount — never to `-inf`, so a wrong
+          proof could only reorder, never lose the feasible plan (C5 / P-E). Sound, and
+          now off. The machinery is kept and one flag away (`apply_demotion=True`),
+          which is what the `+ demotion` rows below run.
 
-          Both arms are **exactly paired** — same weights, same seeds, same episodes, and
-          the proof state is advanced either way, so they differ only in the offset. It is
-          a deploy-time switch; no retraining is involved.
+          Both arms are **exactly paired** — same weights, same seeds, same episodes,
+          and the proof state is advanced either way, so they differ only in the offset.
+          It is a deploy-time switch; no retraining is involved.
 
           Read the two rows against each other: the gap between them is how much of the
-          sound rule's value the *learned* components had already absorbed, and it is why
-          the cut is affordable.
+          sound rule's value the *learned* components had already absorbed, and it is
+          why the cut is affordable.
 
-          > **The learned signal is a correlate, not a proof**, so this is a real trade and
-          > not a free simplification — on a domain whose proofs fire more often than
-          > DD2D's 6% it would go the other way. A Δ of exactly 0.00 would instead mean the
-          > switch never took effect, which is why the two cache dirs are asserted to differ.
+          > **The learned signal is a correlate, not a proof**, so this is a real trade
+          > and not a free simplification — on a domain whose proofs fire more often
+          > than DD2D's 6% it would go the other way. A Δ of exactly 0.00 would instead
+          > mean the switch never took effect, which is why the two cache dirs are
+          > asserted to differ.
           """
              )
     return
 
 
 @app.cell
-def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
+def _(CACHE_DIR, ENV_VARIANT, STRATA, compare, mo, np, pd):
     from alphatamp.approaches.spectre import eda as _eda3
 
     # Own frame, deliberately NOT `abl_df`: that one is pinned to seed 0 so §4.1/§4.2's
@@ -804,20 +781,17 @@ def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
             "abl_nocov_norec_adaptive",
         ),
     ]
-
     def _by_seed(subdir):
         """``{seed: {pid: fp}}`` for one cached arm, or None when it is absent."""
         if not (CACHE_DIR / subdir).is_dir():
             return None
         out = {}
-        for r in dd2d_compare.load_named_fp_records_per_seed(CACHE_DIR, subdir, "x"):
+        for r in compare.load_named_fp_records_per_seed(CACHE_DIR, subdir, "x"):
             out.setdefault(r["seed"], {})[r["problem_id"]] = r["fp"]
         return out
 
     def _mean_over(seed_map, pids, stratum=None):
-        sel = [
-            p for p in pids if stratum is None or dd2d_compare.stratum_of(p) == stratum
-        ]
+        sel = [p for p in pids if stratum is None or compare.stratum_of(p) == stratum]
         if not sel:
             return float("nan")
         per_seed = [np.mean([m[p] for p in sel]) for m in seed_map.values()]
@@ -867,7 +841,19 @@ def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
             )
     if _missing:
         print(f"!! not cached, omitted from §4.3: {_missing}")
-    demotion_ablation = pd.DataFrame(_rows).set_index("arm")
+    # Both arms absent is the normal case off DD2D, not a failure: demotion needs a
+    # `DomainSpec` with provable axioms, and an environment resolving to `EMPTY_SPEC`
+    # can never license it, so the ablation would be two bit-identical caches. Render
+    # the reason instead of crashing on an empty frame.
+    if not _rows:
+        demotion_ablation = mo.md(
+            f"*§4.3 does not apply to `{ENV_VARIANT}`: no demotion arms are cached. "
+            "Proof-tier demotion needs a domain with provable query axioms; an "
+            "environment resolving to `EMPTY_SPEC` never licenses it, so switching it "
+            "on would produce a cache identical to switching it off.*"
+        )
+    else:
+        demotion_ablation = pd.DataFrame(_rows).set_index("arm")
     demotion_ablation
     return (demotion_ablation,)
 
@@ -884,7 +870,8 @@ def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
 #           A **deploy-time** diagnostic on the deployed checkpoint: run it with the
 #           evidence memory emptied at every step. Deliberately a train/deploy mismatch,
 #           and useful precisely because of that — it separates *"training with records
-#           shaped the weights"* from *"the model reads the tokens at inference"*. A small
+#           shaped the weights"* from *"the model reads the tokens at inference"*. A
+#           small
 #           gap means the tokens are largely inert at deploy even though training on them
 #           mattered.
 #
@@ -946,7 +933,7 @@ def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
 #     _ax.set_xticklabels(_groups)
 #     _ax.set_ylim(bottom=0)
 #     _ax.set_ylabel("mean rollout FP")
-#     _ax.set_xlabel("min-feasible-subset stratum")
+#     _ax.set_xlabel(ENV.stratum_axis_label)
 #     _ax.set_title("v3 ablation: coverage × record tokens (matched settings, 1 seed)")
 #     _ax.legend(fontsize=7)
 #     _ = COLORS
@@ -956,56 +943,54 @@ def _(CACHE_DIR, STRATA, dd2d_compare, np, pd):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(\
-          r"""## 5 · Planner inspector — scene + ordered plans
+def _(ENV, ENV_VARIANT, LEGACY_VARIANT, mo):
+    mo.md(f"""## 5 · Planner inspector — scene + ordered plans
 
           Step through test problems with **◀ / ▶** (or the dropdown). Three panels:
 
-          - **Scene** — the initial DD2D drawer, drawn from the episode's stored geometry.
-            The **red** item is the retrieval target; blue items are concave; the dark
-            frame is the wall band; the dashed box is the buffer. Labels are the item index
-            (`item_5` → `5`), so they match the `stage {…}` sets in the plan table.
-          - **Every method on this problem** — rollout FP and first-feasible rank, so they
-            can be compared without toggling. **Independent of the method dropdown.**
+          - **Scene** — {ENV.scene_legend}
+          - **Every method on this problem** — rollout FP and first-feasible rank, so
+            they can be compared without toggling. **Independent of the method
+            dropdown.**
           - **Ordered plans** for the *selected* method — top-ranked → bottom-ranked.
 
           For a `*-adaptive` method the toggle switches between its **realized attempt
-          order** and its **t=0 score order**. In realized order the table also carries the
-          *static twin's* rank and score, so `Δrank` shows exactly which plans adaptivity
-          promoted (`+`) or demoted (`−`), and `demoted@t` names the failure whose proof
-          killed a candidate outright.
+          order** and its **t=0 score order**. In realized order the table also carries
+          the *static twin's* rank and score, so `Δrank` shows exactly which plans
+          adaptivity promoted (`+`) or demoted (`−`), and `demoted@t` names the failure
+          whose proof killed a candidate outright.
 
-          > **Only `dd2d_v4`-native methods appear here.** A grafted method's cached scores
-          > index the **dd2d_v3** candidate pool, while the scene and plan list rendered
-          > below come from the **dd2d_v4** episode. On the ~5% of problems whose pools
-          > differ, its rank column would be quietly wrong — so PIGINet, VLMPlan and
-          > SPECTRE v1 are excluded from this section rather than shown with a subtly
-          > incorrect ordering. Their FP appears in §1–§3.
+          > **Only `{ENV_VARIANT}`-native methods appear here.** A grafted method's
+          > cached scores index the **{LEGACY_VARIANT}** candidate pool, while the scene
+          > and plan list rendered below come from the **{ENV_VARIANT}** episode. Where
+          > the two pools differ (~5% of DD2D problems), its rank column would be
+          > quietly wrong — so grafted methods are excluded from this section rather
+          > than shown with a subtly incorrect ordering. Their FP appears in §1–§3.
+          > (With no graft configured the two names are the same, and nothing is
+          > excluded.)
 
-          > An adaptive ranker re-scores the pool after **every** failure, so no candidate
-          > has a single score. The cache stores the whole per-step matrix; `ad.score`
-          > reports the step each candidate was *picked* on — the opinion the rollout acted
-          > on.
+          > An adaptive ranker re-scores the pool after **every** failure, so no
+          > candidate has a single score. The cache stores the whole per-step matrix;
+          > `ad.score` reports the step each candidate was *picked* on — the opinion the
+          > rollout acted on.
 
           > **`demoted@t` no longer changes anything for v3.** Proof-demotion was cut on
-          > 2026-07-30, so for SPECTREv3 that column reads as *"a proof would have killed
-          > this candidate at attempt t"* — the deduction is still computed and recorded,
-          > it just no longer moves the ordering. For SPECTREv2, which keeps its demotion,
-          > it is still causal.
+          > 2026-07-30, so for SPECTREv3 that column reads as *"a proof would have
+          > killed this candidate at attempt t"* — the deduction is still computed and
+          > recorded, it just no longer moves the ordering. For SPECTREv2, which keeps
+          > its demotion, it is still causal.
 
-          > **This section shows seed 0**, while §1–§3 report 3-seed means. It renders one
-          > checkpoint's per-step score matrix, which has no multi-seed analogue — an
-          > averaged attempt order is not an order any model ran. The `FP` column in the
-          > overview table *is* the 3-seed mean, so it will not generally equal the
+          > **This section shows seed 0**, while §1–§3 report 3-seed means. It renders
+          > one checkpoint's per-step score matrix, which has no multi-seed analogue —
+          > an averaged attempt order is not an order any model ran. The `FP` column in
+          > the overview table *is* the 3-seed mean, so it will not generally equal the
           > `1st-feasible rank` of the seed-0 ordering beside it.
-          """
-             )
+          """)
     return
 
 
 @app.cell
-def _(CACHE_DIR, REPO, dd2d_compare, np):
+def _(CACHE_DIR, REPO, compare, np):
     # method -> (kind, static-scores dir, adaptive dir | None). Both modes of a SPECTRE
     # family share one checkpoint, so an adaptive method's "static twin" scores are its
     # own t=0 (c₀) logits. Restricted to dd2d_v4-native methods -- see the section note.
@@ -1031,9 +1016,9 @@ def _(CACHE_DIR, REPO, dd2d_compare, np):
     def insp_load(method, pid):
         """``(static scores | None, AdaptiveTrace | None)`` for one method+problem."""
         _kind, sdir, adir = INSPECT_SPEC[method]
-        rec = dd2d_compare.load_static_scores(CACHE_DIR, sdir, pid) if sdir else None
+        rec = compare.load_static_scores(CACHE_DIR, sdir, pid) if sdir else None
         scores = np.asarray(rec["scores"], float) if rec else None
-        trace = dd2d_compare.load_adaptive_trace(CACHE_DIR, adir, pid) if adir else None
+        trace = compare.load_adaptive_trace(CACHE_DIR, adir, pid) if adir else None
         return scores, trace
 
     def insp_effective(trace, step):
@@ -1160,7 +1145,7 @@ def _(
     INSPECT_METHODS,
     INSPECT_PIDS,
     REPO,
-    dd2d_compare,
+    compare,
     df,
     get_pid,
     insp_order,
@@ -1171,10 +1156,6 @@ def _(
     plt,
 ):
     from alphatamp.approaches.spectre import eda as eda_mod
-    from alphatamp.approaches.spectre.envs.dd2d.spectre_geometry import (
-        reconstruct_scene as _reconstruct_scene,)
-    from alphatamp.approaches.spectre.envs.dd2d.spectre_render import (
-        scene_figure as _scene_fig,)
 
     _ = (plt, CACHE_DIR)  # keep deps explicit for marimo
 
@@ -1219,8 +1200,14 @@ def _(
         show_column_summaries=False,
     )
 
+    # The renderer comes from the environment registry, so the inspector shows the same
+    # picture the VLMPlan prompt attached -- a reviewer comparing them is comparing like
+    # with like. An environment with no renderer degrades to a note rather than an error.
     try:
-        _scene = mo.as_html(_scene_fig(_reconstruct_scene(_ep.scene_geometry)))
+        if ENV.render_scene is None:
+            _scene = mo.md(f"*(no scene renderer registered for {ENV.key})*")
+        else:
+            _scene = mo.image(ENV.render_scene(_ep))
     except Exception as _e:  # noqa: BLE001 — geometry render is best-effort in the UI
         _scene = mo.md(f"*(scene render unavailable: {_e})*")
 
@@ -1228,7 +1215,7 @@ def _(
         [
             mo.md(
                 f"### problem **{_pid}**"
-                f" &nbsp;·&nbsp; stratum **{dd2d_compare.stratum_of(_pid)}**"
+                f" &nbsp;·&nbsp; stratum **{compare.stratum_of(_pid)}**"
                 f" &nbsp;·&nbsp; pool **{_k}** &nbsp;·&nbsp; feasible "
                 f"**{sum(_feas)}/{_k}**"
                 f" &nbsp;·&nbsp; shortest feasible plan **{_fmin}** ops"
@@ -1238,8 +1225,9 @@ def _(
                 [_scene, inspect_overview], widths=[1.35, 1], gap=1, align="start"
             ),
             mo.md(
-                "<sub>`FP` is the cached headline metric; for a static method it differs "
-                "from `1st-feasible rank` only by `rollout_fp`'s half-credit on exact "
+                "<sub>`FP` is the cached headline metric; for a static method it "
+                "differs from `1st-feasible rank` only by `rollout_fp`'s half-credit "
+                "on exact "
                 "score ties. `attempts` is blank for methods that never run a "
                 "rollout.</sub>"
             ),
@@ -1362,7 +1350,8 @@ def _(
             "`attempt` = the step the rollout actually ran it — it stops at the first "
             f"success, so those are exactly ranks 0…{_ff}; blank rows were **never "
             "tried** and are ordered by the final-step opinion. "
-            "`ad.score` = the score at the step the candidate was **picked** (an adaptive "
+            "`ad.score` = the score at the step the candidate was **picked** (an "
+            "adaptive "
             "ranker re-scores after every failure, so there is no single score); "
             "never-attempted rows use the final, most-informed step. "
             "`st.*` is the same checkpoint's **t=0** (`c₀`) ranking, so "
@@ -1402,10 +1391,10 @@ def _(mo):
 
 
 @app.cell
-def _(COLORS, LEGACY_CACHE, STRATA, dd2d_compare, np, pd, plt):
+def _(COLORS, ENV, LEGACY_CACHE, SLAB, STRATA, compare, np, pd, plt):
     _arms, _frames = [], {}
-    for _arm, _subdir in dd2d_compare.SEQUENCE_METHODS.items():
-        _rows = dd2d_compare.load_vlmplan_diagnostics(LEGACY_CACHE, _subdir)
+    for _arm, _subdir in compare.SEQUENCE_METHODS.items():
+        _rows = compare.load_vlmplan_diagnostics(LEGACY_CACHE, _subdir)
         if not _rows:
             continue
         _v = pd.DataFrame(_rows)
@@ -1416,7 +1405,7 @@ def _(COLORS, LEGACY_CACHE, STRATA, dd2d_compare, np, pd, plt):
         _frames[_arm] = _v
         _arms.append(_arm)
 
-    _groups = [f"s{k}" for k in STRATA] + ["ALL"]
+    _groups = [SLAB.get(k, str(k)) for k in STRATA] + ["ALL"]
     _x = np.arange(len(_groups))
     _w = 0.8 / max(len(_arms), 1)
     _off = (len(_arms) - 1) / 2
@@ -1445,34 +1434,46 @@ def _(COLORS, LEGACY_CACHE, STRATA, dd2d_compare, np, pd, plt):
             )
         )
     if not _arms:
-        _ax.text(0.5, 0.5, "no VLMPlan cache", ha="center", transform=_ax.transAxes)
+        _ax.text(
+            0.5,
+            0.5,
+            f"no VLMPlan cache for {ENV.key}",
+            ha="center",
+            transform=_ax.transAxes,
+        )
     _ax.set_xticks(_x)
     _ax.set_xticklabels(_groups)
     _ax.set_ylim(bottom=0)
-    _ax.set_xlabel("min-feasible-subset stratum")
+    _ax.set_xlabel(ENV.stratum_axis_label)
     _ax.set_ylabel("usable plans generated (n_proposed)")
     _ax.set_title(
         "VLMPlan: unique valid plans produced per problem\n"
         "(plan budget 200; higher = less reliance on the fallback)"
     )
     # upper-left is the one corner no bar reaches; "best" lands it on top of s3/ALL.
-    _ax.legend(loc="upper left")
+    if _arms:
+        _ax.legend(loc="upper left")
     plt.tight_layout()
     plt.gca()
     return
 
 
 @app.cell
-def _(df_seeds, mo, summary_df):
+def _(ENV_VARIANT, df_seeds, mo, summary_df):
     # Two files, because they answer different questions: the per-(method, seed, problem)
     # rows for anything that wants to re-aggregate, and the summary table exactly as §1
     # rendered it (mean + across-seed std + seed count per stratum).
     _dir = mo.notebook_dir()
-    df_seeds.to_csv(_dir / "dd2d_method_comparison.csv", index=False)
-    summary_df.to_csv(_dir / "dd2d_method_summary.csv", index=False)
+    # Named for the collection: these two files used to be `dd2d_*` unconditionally, so
+    # rendering the notebook for a second environment silently overwrote the first one's
+    # export with rows that still said `dd2d` in the filename.
+    _comparison = _dir / f"{ENV_VARIANT}_method_comparison.csv"
+    _summary = _dir / f"{ENV_VARIANT}_method_summary.csv"
+    df_seeds.to_csv(_comparison, index=False)
+    summary_df.to_csv(_summary, index=False)
     print(
-        f"wrote {_dir / 'dd2d_method_comparison.csv'}  ({len(df_seeds)} rows)\n"
-        f"wrote {_dir / 'dd2d_method_summary.csv'}     ({len(summary_df)} rows)"
+        f"wrote {_comparison}  ({len(df_seeds)} rows)\n"
+        f"wrote {_summary}     ({len(summary_df)} rows)"
     )
     return
 

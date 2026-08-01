@@ -13,12 +13,29 @@ ignore=CVS,venv,.venv,kb
 # Vendored DD2D env (migrated from envsearch, see envs/dd2d/MIGRATION_DD2D.md):
 # skip linting like lib/ vendoring. The negative lookahead keeps SPECTRE's own
 # adapter (spectre_operators.py / spectre_convert.py) linted.
+#
+# The PIGINet baseline is the same kind of code: a port of an external
+# implementation, kept close to its original. It used to live under envs/dd2d/
+# and was covered by the rule above; lifting it to spectre/piginet/ on
+# 2026-08-01 must not silently change what CI checks, so the exemption follows
+# it -- but by explicit module list, so the three files written *here*
+# (domain.py, record.py, sb2d_adapter.py) stay linted.
 ignore-paths=.*/envs/dd2d/(?!spectre_).*
 
 # Add files or directories matching the regex patterns to the blacklist. The
 # regex matches against base names, not paths.
-# analyze_spectre.py is a marimo notebook (not standard source); skip linting it.
-ignore-patterns=analyze_spectre\.py$|compare_dd2d_methods(_archive)?\.py$|precompute_dd2d_cache\.py$
+# analyze_spectre.py and compare_methods.py are marimo notebooks (not standard
+# source); skip linting them.
+#
+# The PIGINet baseline is a port of an external implementation, kept close to its
+# original. It lived under envs/dd2d/ and was covered by ignore-paths above;
+# lifting it to spectre/piginet/ on 2026-08-01 must not silently change what CI
+# checks, so the exemption follows it -- by negative lookahead, so the files
+# written *here* (domain.py, record.py, sb2d_adapter.py) stay linted.
+# NOTE: pytest-pylint reads `ignore` and `ignore-patterns` only, never
+# `ignore-paths` -- see pytest_pylint/util.py:should_include_file. A path rule put
+# in ignore-paths is silently ignored under `pytest --pylint`.
+ignore-patterns=analyze_spectre\.py$|compare_(dd2d_)?methods(_archive)?\.py$|precompute_dd2d_cache\.py$,.*/piginet/(?!domain|record|sb2d_adapter)[a-z0-9_]+\.py$
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().

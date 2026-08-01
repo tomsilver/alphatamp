@@ -2,15 +2,15 @@
 
 One :class:`PIGINetExample` is exactly the tuple the PIGINet paper feeds its feasibility
 predictor ``f(I, pi, G)`` (paper lines 67-76, 197, 223): objects ``O``, initial literals
-``I``, goal literals ``G``, a task plan ``pi`` (the skeleton with continuous args omitted
--- paper Table II), per-object segmented images, and a feasibility label.
+``I``, goal literals ``G``, a task plan ``pi`` (the skeleton with continuous args
+omitted -- paper Table II), per-object segmented images, and a feasibility label.
 
 These two dataclasses moved here from ``envs/dd2d/record.py`` on 2026-08-01 when the
 PIGINet stack was lifted out of the DD2D tree to take a second environment. They were
 always domain-neutral -- what is DD2D-specific is the *builders* that fill them
 (``extract_init_literals``, ``object_table``, ``build_dd2d_example``), which stay in
-``envs/dd2d/record.py``. Field-by-field mapping to the original ``fastamp`` contract is in
-``docs/piginet_record_schema.md``.
+``envs/dd2d/record.py``. Field-by-field mapping to the original ``fastamp`` contract is
+in ``docs/piginet_record_schema.md``.
 """
 
 from __future__ import annotations

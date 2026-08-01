@@ -103,8 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     train = eda.load_split_episodes(root / "train")
     test = eda.load_split_episodes(root / a.split)
     if not train.episodes or not test.episodes:
-        print(f"missing episodes under {root} (train={len(train.episodes)},"
-              f" {a.split}={len(test.episodes)})")
+        print(
+            f"missing episodes under {root} (train={len(train.episodes)},"
+            f" {a.split}={len(test.episodes)})"
+        )
         return 2
 
     print(
@@ -118,9 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     per_stratum_train = _split_by_stratum(train)
     for nb in sorted(per_stratum_test):
         if nb in per_stratum_train:
-            rows[f"b{nb}"] = _run(
-                per_stratum_train[nb], per_stratum_test[nb], a.budget
-            )
+            rows[f"b{nb}"] = _run(per_stratum_train[nb], per_stratum_test[nb], a.budget)
 
     names = list(rows["ALL"])
     header = f"{'stratum':<10}" + "".join(f"{n:<20}" for n in names)

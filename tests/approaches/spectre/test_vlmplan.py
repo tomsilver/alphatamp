@@ -544,8 +544,8 @@ def test_loop_counts_a_backend_failure_as_a_stalled_round(
 class _ExplodingLabeler(score_mod.OffPoolLabeler):
     """Fails loudly if the scorer ever live-refines something it should read off disk."""
 
-    def label(self, episode, target, members):  # type: ignore[no-untyped-def]
-        raise AssertionError(f"refiner called for in-pool plan {members}")
+    def label(self, episode, steps):  # type: ignore[no-untyped-def]
+        raise AssertionError(f"refiner called for in-pool plan {steps}")
 
 
 def test_in_pool_proposals_use_stored_labels_and_never_refine(episode, adapter) -> None:
@@ -581,7 +581,7 @@ def test_off_pool_proposal_costs_an_attempt(episode, adapter) -> None:
     """
 
     class _AlwaysFail(score_mod.OffPoolLabeler):
-        def label(self, episode, target, members):  # type: ignore[no-untyped-def]
+        def label(self, episode, steps):  # type: ignore[no-untyped-def]
             self.n_refines += 1
             return "fail"
 
@@ -617,16 +617,14 @@ def test_censoring_when_no_success_is_reachable(episode, adapter) -> None:
 def test_off_pool_labels_are_memoised_to_disk(episode, tmp_path) -> None:
     """An off-pool label is computed once, then served from the memo and from disk."""
     memo = tmp_path / "memo.json"
+    plan = _steps(["item_2"])
     labeler = score_mod.OffPoolLabeler(memo_path=memo, env_variant="dd2d_v3")
-    first = labeler.label(episode, TARGET, ["item_2"])
+    first = labeler.label(episode, plan)
     assert labeler.n_refines == 1
-    assert labeler.label(episode, TARGET, ["item_2"]) == first
+    assert labeler.label(episode, plan) == first
     assert labeler.n_refines == 1  # served from the memo, not re-refined
     labeler.flush()
-    assert (
-        score_mod.OffPoolLabeler(memo_path=memo).label(episode, TARGET, ["item_2"])
-        == first
-    )
+    assert score_mod.OffPoolLabeler(memo_path=memo).label(episode, plan) == first
 
 
 def test_refiner_preset_is_per_collection() -> None:

@@ -112,3 +112,50 @@ class EnvAdapter(abc.ABC):
     @abc.abstractmethod
     def published_order(self, problem: object) -> list[tuple[Step, ...]]:
         """The planner's own ordering — the fallback an exhausted episode degrades to."""
+
+    # --- scoring support -------------------------------------------------------
+    # These were DD2D-only helpers that `score.py` reached for directly until
+    # 2026-08-01; promoting them here is what lets the scorer be env-agnostic.
+
+    @abc.abstractmethod
+    def pool_index(self, problem: object) -> dict[tuple[object, ...], int]:
+        """``canonical_key`` -> pool index, for matching proposals against stored labels.
+
+        A proposal that hits this map is labelled from the stored ``OutcomeRecord``
+        and is **never** re-refined, so VLMPlan sees byte-identical labels to every
+        other method.
+        """
+
+    @abc.abstractmethod
+    def discretionary_objects(self, steps: Sequence[Step]) -> list[str]:
+        """The objects this plan chose to act on, in order — for diagnostics only.
+
+        DD2D: the items staged to the buffer. StickButton2D: the press order. Never used
+        to decide a label, only to make an attempt legible in the record.
+        """
+
+
+class Labeler(abc.ABC):
+    """Feasibility for a proposal the candidate pool does not contain.
+
+    Off-pool proposals are **refined for real** rather than dropped: silently discarding
+    them would hand VLMPlan free attempts and flatter it. That refinement is heavyweight
+    and env-specific, which is why it is a separate object from :class:`EnvAdapter` and
+    off the generation path entirely — a run can be re-scored after a re-collection
+    without re-querying the model.
+
+    **The refiner settings must be the collection's own.** Off-pool labels are computed
+    now; in-pool labels came off disk. They are drawn from the same distribution only if
+    the refiner matches the one the collection ran, seed rule included.
+    ``label_agreement``
+    in ``score.py`` is the gate that measures whether that held.
+    """
+
+    n_refines: int = 0
+
+    @abc.abstractmethod
+    def label(self, episode: object, steps: Sequence[Step]) -> str:
+        """``"success"`` or ``"fail"`` for one off-pool proposal."""
+
+    def flush(self) -> None:
+        """Persist any memo. Default: nothing to persist."""

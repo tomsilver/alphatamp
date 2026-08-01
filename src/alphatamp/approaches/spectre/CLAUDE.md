@@ -47,7 +47,9 @@ scope. ClutteredStorage2D-b5/b7 and StickButton2D-b5 collections are historical.
 | RT2D environment | `src/alphatamp/approaches/spectre/envs/routedtransport2d/`, registered via `env_registry.py` |
 | DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (env + raw_v2 dataset + `MIGRATION_DD2D.md`); `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter). Wired as env_variants `dd2d_v2` and `dd2d_v3` (the re-collection after the 2026-07-24 grasp changes), **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
 | **StickButton2D** — the second evaluation environment | `src/alphatamp/approaches/spectre/envs/stickbutton2d/` — thin adapters over kinder's own env and refiner: `heuristic.py` (geometry-aware A* + the acyclic pool filter), `scene_geometry.py`, `sampler.py`/`instrumented_refiner.py` (class-2 evidence), `strata.py` (pooled-variant problem ids), `geometry.py`, `diagnostics.py`. Collected as env_variant **`stickbutton2d_v1`** (b1/b2/b3/b5 pooled, button count = stratum; b10 dropped). Entry points `experiments/spectre/sb2d_{collect,baselines,rerank_gate}.py` + `sb2d_finalize.sh` |
-| VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/vlmplan/` — env-agnostic core + `dd2d_adapter.py` as the only env-aware module; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `docs/decisions.md` 2026-07-24; prompt deviations: `vlmplan/prompts/PROVENANCE.md` |
+| VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/vlmplan/` — env-agnostic core; per-env `{dd2d,sb2d}_adapter.py` (prompt + grounding) and `sb2d_label.py` (off-pool labeler), dispatched by `registry.py`; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `decisions/04` 2026-07-24; env-agnostic refactor: `decisions/07` 2026-08-01; prompt deviations: `vlmplan/prompts/PROVENANCE.md` |
+| PIGINet baseline (low-level predictor) | `src/alphatamp/approaches/spectre/piginet/` — env-agnostic core behind a `PIGINetDomain` protocol; per-env `{dd2d,sb2d}_adapter.py`. `decisions/07` 2026-08-01 |
+| **Method comparison** — one notebook, N environments | `experiments/spectre/compare_methods.py` (marimo) over `compare.py` (loaders, rollout sim, bootstrap) and `compare_envs.py` (**the env registry — a new environment is one `EnvSpec`**). `decisions/07` 2026-08-01 |
 | Docs (living proposal, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | **ADR log** and **lab notebook** — chaptered by era, newest first | `docs/decisions/` and `docs/notebook/`, each with a **generated `README.md`** (chapter list, full entry ledger, by-track index, ID-resolution table, do-not-quote ledger, legacy date→entry map). Pre-split monoliths frozen in `docs/archive/*_monolithic.md`; `docs/decisions.md` / `docs/notebook.md` are stubs. Tooling: `doclog.py` + `experiments/spectre/decisions_index.py` |
 | Hydra entry points + configs + SLURM launchers + analysis notebook | `experiments/spectre/` (configs under `experiments/spectre/conf/`) |
@@ -129,11 +131,28 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=lm-studio
    python experiments/spectre/vlmplan_run.py   env=dd2d_v3 split=train n_problems=5 run=pilot
    python experiments/spectre/vlmplan_score.py env=dd2d_v3 split=train n_problems=5 run=pilot
+   # StickButton2D: a named config, because the 32B arm needs max_tokens=12288
+   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_32b
+   python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_32b
    ```
+   Adapter *and* off-pool labeler are dispatched on `env_variant` by `vlmplan/registry.py`;
+   a new environment is an `EnvAdapter` + a `Labeler`, both registered there.
    One `cache_subdir` is one method row — give a different `run` its own `cache_subdir`
    or the rows get averaged together (guarded, not silent). Check the printed
    **label-agreement gate** before trusting any number: below ~0.95 means the env code
-   moved since that collection and in-pool vs off-pool labels disagree.
+   moved since that collection and in-pool vs off-pool labels disagree. (DD2D 0.982,
+   SB2D 1.000.)
+   **Pilot on explicit problem ids, not `n_problems=N`.** `n_problems` takes the first N in
+   sorted problem-id order, and ids are banded by stratum — so on SB2D any `n_problems=N`
+   subset is *all b1*, the 2-candidate stratum every method ties on. Same trap as *stride,
+   never truncate*.
+7. **Method comparison table:** `marimo edit experiments/spectre/compare_methods.py` —
+   one notebook for every environment, picked from a dropdown. Adding an environment is
+   adding an `EnvSpec` to `compare_envs.py`; no notebook edit. Rebuild its cache with
+   `python experiments/spectre/precompute_dd2d_cache.py --env-variant <variant>`
+   (`--force` if the arm moved — `_dir_complete` skips a full directory, which is how
+   DD2D's v3 row went stale). Render headlessly for any entry with
+   `SPECTRE_COMPARE_ENV=<key> python experiments/spectre/compare_methods.py`.
 
 ## SPECTRE v3 (in progress, 2026-07-26)
 
@@ -264,7 +283,7 @@ Chapter [`07-stickbutton2d`](docs/decisions/07-stickbutton2d.md) holds the ADRs.
 **The dataset is `stickbutton2d_v1`**: b1/b2/b3/b5 pooled into one env_variant with
 **button count as the stratum** (b10 dropped — 0/20 solvable, and the cause is pool prefix
 homogeneity needing diverse plan *generation*, not a better heuristic). Problem ids encode
-`split · 10⁶ + slot · 250000 + index` precisely so the existing `dd2d_compare.stratum_of`
+`split · 10⁶ + slot · 250000 + index` precisely so the existing `compare.stratum_of`
 returns the slot, which is what lets ~15 call sites work unchanged. **Strata are
 contiguous pid bands, so *stride, never truncate* is load-bearing here** — `paths[:N]` is
 all b1.

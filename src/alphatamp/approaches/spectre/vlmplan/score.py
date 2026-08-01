@@ -56,7 +56,7 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
 from alphatamp.approaches.spectre.envs.dd2d.spectre_geometry import reconstruct_scene
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 
-from .adapter import Step
+from .adapter import EnvAdapter, Labeler, Step
 from .dd2d_adapter import DD2DAdapter
 
 logger = logging.getLogger(__name__)
@@ -164,33 +164,31 @@ class ScoreResult:
         }
 
 
-class OffPoolLabeler:
-    """Live refiner for proposals the pool does not contain, with a persistent memo.
+class MemoizingLabeler(Labeler):
+    """A :class:`~.adapter.Labeler` with a persistent memo. Subclasses do the refining.
 
-    The memo is keyed by ``(problem_id, member tuple)`` and written to disk, so
+    The memo is keyed by ``(problem_id, canonical step tuple)`` and written to disk, so
     re-scoring a run — after a code change, or to regenerate the cache — never re-refines
     a plan it has already labelled.
     """
 
-    def __init__(
-        self,
-        memo_path: Path | None = None,
-        env_variant: str = DEFAULT_VARIANT,
-    ) -> None:
+    def __init__(self, memo_path: Path | None = None) -> None:
         self._memo_path = memo_path
         self._memo: dict[str, str] = {}
         if memo_path is not None and memo_path.is_file():
             self._memo = json.loads(memo_path.read_text(encoding="utf-8"))
-        self._refiner = DD2DRefiner(**refiner_kwargs_for(env_variant))
         self.n_refines = 0
 
     @staticmethod
-    def _key(problem_id: int, members: Sequence[str]) -> str:
-        return f"{problem_id}|{','.join(members)}"
+    def _key(problem_id: int, steps: Sequence[Step]) -> str:
+        return f"{problem_id}|" + ";".join(
+            f"{name}({','.join(args)})" for name, args in steps
+        )
 
-    def label(self, episode: EpisodeRecord, target: str, members: Sequence[str]) -> str:
-        """Feasibility of staging ``members`` in order, memoised."""
-        key = self._key(int(episode.provenance.problem_id), members)
+    def label(self, episode: object, steps: Sequence[Step]) -> str:
+        """Feasibility of one off-pool proposal, memoised."""
+        assert isinstance(episode, EpisodeRecord)
+        key = self._key(int(episode.provenance.problem_id), steps)
         cached = self._memo.get(key)
         if cached is not None:
             return cached
@@ -199,13 +197,13 @@ class OffPoolLabeler:
                 f"episode {episode.provenance.problem_id} has no scene_geometry; "
                 "off-pool proposals cannot be labelled without it"
             )
-        scene = reconstruct_scene(episode.scene_geometry)
-        skeleton = staging_skeleton(target, list(members))
-        result = self._refiner.refine(skeleton, scene, seed=stable_seed(skeleton.key()))
+        label = self._refine(episode, steps)
         self.n_refines += 1
-        label = "success" if result.feasible else "fail"
         self._memo[key] = label
         return label
+
+    def _refine(self, episode: EpisodeRecord, steps: Sequence[Step]) -> str:
+        raise NotImplementedError
 
     def flush(self) -> None:
         """Persist the memo so a re-score never re-refines a labelled plan."""
@@ -217,12 +215,41 @@ class OffPoolLabeler:
         tmp.replace(self._memo_path)
 
 
+class OffPoolLabeler(MemoizingLabeler):
+    """DD2D: reconstruct the scene from stored geometry and run ``DD2DRefiner``.
+
+    The memo key changed on 2026-08-01 from the staged-member tuple to the full canonical
+    step sequence, because the generic signature no longer carries "members". Existing
+    memo files therefore miss and are re-refined once -- a cost, not a correctness
+    problem, since the refiner is deterministic at fixed settings.
+    """
+
+    def __init__(
+        self,
+        memo_path: Path | None = None,
+        env_variant: str = DEFAULT_VARIANT,
+        adapter: DD2DAdapter | None = None,
+    ) -> None:
+        super().__init__(memo_path)
+        self._refiner = DD2DRefiner(**refiner_kwargs_for(env_variant))
+        self._adapter = adapter or DD2DAdapter()
+
+    def _refine(self, episode: EpisodeRecord, steps: Sequence[Step]) -> str:
+        assert episode.scene_geometry is not None  # `label` checks it before calling
+        target = self._adapter.target_name(episode)
+        members = self._adapter.discretionary_objects(steps)
+        scene = reconstruct_scene(episode.scene_geometry)
+        skeleton = staging_skeleton(target, list(members))
+        result = self._refiner.refine(skeleton, scene, seed=stable_seed(skeleton.key()))
+        return "success" if result.feasible else "fail"
+
+
 def score_sequence(
     episode: EpisodeRecord,
     proposals: Sequence[tuple[tuple[Step, ...], int]],
-    adapter: DD2DAdapter,
+    adapter: EnvAdapter,
     stratum: int,
-    labeler: OffPoolLabeler | None = None,
+    labeler: Labeler | None = None,
     attempt_budget: int = ATTEMPT_BUDGET,
     fill_from_published: bool = True,
     env_variant: str = DEFAULT_VARIANT,
@@ -234,7 +261,6 @@ def score_sequence(
     """
     pool = adapter.pool_index(episode)
     stored = [o.outcome for o in episode.outcomes]
-    target = adapter.target_name(episode)
     labeler = labeler or OffPoolLabeler(env_variant=env_variant)
 
     sequence: list[tuple[tuple[Step, ...], str, int | None]] = [
@@ -256,13 +282,13 @@ def score_sequence(
     )
     for steps, source, round_index in sequence[:attempt_budget]:
         pool_idx = pool.get(adapter.canonical_key(steps))
-        members = adapter.staged_members(steps)
+        members = adapter.discretionary_objects(steps)
         label: str
         if pool_idx is not None:
             label = stored[pool_idx]
         else:
             result.n_offpool += 1
-            label = labeler.label(episode, target, members)
+            label = labeler.label(episode, steps)
         if source == "fill":
             result.n_fill_used += 1
         result.attempts.append(
@@ -301,10 +327,11 @@ def published_order_fp(
 
 def label_agreement(
     episodes: Sequence[EpisodeRecord],
-    adapter: DD2DAdapter,
+    adapter: EnvAdapter,
     samples_per_episode: int = 6,
     seed: int = 0,
     env_variant: str = DEFAULT_VARIANT,
+    make_labeler: Callable[[], Labeler] | None = None,
 ) -> dict[str, Any]:
     """Re-label stored pool plans live and report agreement with the stored outcome.
 
@@ -318,10 +345,10 @@ def label_agreement(
     agree = 0
     stored_fail_live_success = 0
     stored_success_live_fail = 0
+    _new_labeler = make_labeler or (lambda: OffPoolLabeler(env_variant=env_variant))
     for episode in episodes:
-        target = adapter.target_name(episode)
         pool = adapter.published_order(episode)
-        labeler = OffPoolLabeler(env_variant=env_variant)
+        labeler = _new_labeler()
         indices = rng.sample(range(len(pool)), min(samples_per_episode, len(pool)))
         successes = [
             j for j, o in enumerate(episode.outcomes) if o.outcome == "success"
@@ -329,8 +356,7 @@ def label_agreement(
         if successes:  # always include a positive; the pool is mostly negatives
             indices.append(successes[0])
         for j in indices:
-            members = adapter.staged_members(pool[j])
-            live = labeler.label(episode, target, members)
+            live = labeler.label(episode, pool[j])
             stored = episode.outcomes[j].outcome
             if live == stored:
                 agree += 1

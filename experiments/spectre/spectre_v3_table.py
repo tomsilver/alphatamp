@@ -27,7 +27,7 @@ import argparse
 import csv
 from pathlib import Path
 
-from alphatamp.approaches.spectre.dd2d_compare import (
+from alphatamp.approaches.spectre.compare import (
     build_table,
     load_fp_records_per_seed,
     render_markdown,

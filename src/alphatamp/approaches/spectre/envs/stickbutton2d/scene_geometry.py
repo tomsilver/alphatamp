@@ -2,15 +2,15 @@
 
 ``EpisodeRecord.scene_geometry`` is optional in the schema and ``None`` for every kinder
 collection to date, which is a silent trap rather than a gap: ``train_v3._trainable``
-filters every geometry-less episode, so ``n_train`` reaches 0, ``deployed_val_fp`` returns
-``inf``, ``improved = inf < inf`` is never true, and the run finishes with exit code 0 and
-no ``best.pt``. A collection without this module produces a training run that fails
-successfully.
+filters every geometry-less episode, so ``n_train`` reaches 0, ``deployed_val_fp``
+returns ``inf``, ``improved = inf < inf`` is never true, and the run finishes with exit
+code 0 and no ``best.pt``. A collection without this module produces a training run that
+fails successfully.
 
 **Everything here is read from kinder, not re-derived.**
-:func:`kinder.envs.utils.object_to_multibody2d` is the same function the renderer and the
-collision checker consume, so the geometry recorded cannot drift from the geometry the
-refiner actually enforced. The only judgement this module makes is how to project a
+:func:`kinder.envs.utils.object_to_multibody2d` is the same function the renderer and
+the collision checker consume, so the geometry recorded cannot drift from the geometry
+the refiner actually enforced. The only judgement this module makes is how to project a
 multibody onto the schema's one-ring-per-object shape, and there is exactly one object
 where that bites -- see :func:`_robot_geometry`.
 
@@ -36,9 +36,9 @@ from alphatamp.approaches.spectre.schema import (
     SceneGeometry,
 )
 
-#: Points used to polygonalize a disc. ``dataset_v2.resample_ring`` re-samples every ring
-#: to ``N_BOUNDARY_POINTS`` (32) by arc length anyway, so this only has to be fine enough
-#: that the arc-length parameterisation is not visibly faceted.
+#: Points used to polygonalize a disc. ``dataset_v2.resample_ring`` re-samples every
+# ring : to ``N_BOUNDARY_POINTS`` (32) by arc length anyway, so this only has to be fine
+# enough : that the arc-length parameterisation is not visibly faceted.
 _CIRCLE_POINTS = 32
 
 
@@ -71,11 +71,11 @@ def _centred(
 def _robot_geometry(obj: Any, state: Any) -> ObjectGeometry:
     """The robot's footprint: its **base disc**, not the union of its bodies.
 
-    ``crv_robot_to_multibody2d`` returns three bodies -- ``base`` (a disc, ``ZOrder.ALL``)
-    plus ``arm`` and ``gripper`` (thin rectangles, ``ZOrder.SURFACE``). Only the base
-    participates in the collisions that constrain where the robot can be: the arm and
-    gripper sweep *over* the table rather than into it, which is the whole reason a
-    far-side button needs the stick (``geometry.robot_reach_max_y``).
+    ``crv_robot_to_multibody2d`` returns three bodies -- ``base`` (a disc,
+    ``ZOrder.ALL``) plus ``arm`` and ``gripper`` (thin rectangles, ``ZOrder.SURFACE``).
+    Only the base participates in the collisions that constrain where the robot can be:
+    the arm and gripper sweep *over* the table rather than into it, which is the whole
+    reason a far-side button needs the stick (``geometry.robot_reach_max_y``).
 
     The arm is also *configuration*, not shape -- ``arm_joint`` and ``theta`` change it
     within an episode, while ``scene_geometry`` records one static footprint. Storing a
@@ -114,9 +114,9 @@ def _body_geometry(obj: Any, state: Any) -> ObjectGeometry:
     assert isinstance(geom, Rectangle), f"unhandled geom {type(geom).__name__}"
     # `Rectangle(x, y, w, h, theta)` takes the **lower-left corner** -- upstream has a
     # separate `from_center` for the other convention -- so `state.get(obj, "x")` is not
-    # the pose the schema wants. Reading it as a centroid would displace the stick by half
-    # its 1.25 length. `.center` and `.vertices` are upstream's own, so the two cannot
-    # disagree.
+    # the pose the schema wants. Reading it as a centroid would displace the stick by
+    # half its 1.25 length. `.center` and `.vertices` are upstream's own, so the two
+    # cannot disagree.
     centre = (float(geom.center[0]), float(geom.center[1]))
     ring = _centred(geom.vertices, centre)
     return ObjectGeometry(
@@ -141,10 +141,10 @@ def build_scene_geometry(
     ``is_target`` stays ``False`` on every object: DD2D's target is the one item being
     retrieved, and StickButton2D has no analogue. The consequence is visible rather than
     hidden -- ``dataset_v3`` falls back to ``(0, 0)`` for the target pose, so its
-    ``rel`` block degrades from target-relative offsets to absolute world coordinates and
-    its area ratio becomes a raw area. That is acceptable here because the world is a
-    fixed 3.5 x 2.5 frame, so absolute coordinates are themselves meaningful; it would not
-    be in a domain with a moving reference frame.
+    ``rel`` block degrades from target-relative offsets to absolute world coordinates
+    and its area ratio becomes a raw area. That is acceptable here because the world is
+    a fixed 3.5 x 2.5 frame, so absolute coordinates are themselves meaningful; it would
+    not be in a domain with a moving reference frame.
     """
     cfg = config if config is not None else StickButton2DEnvConfig()
     objects: list[ObjectGeometry] = []

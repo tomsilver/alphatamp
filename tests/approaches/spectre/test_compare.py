@@ -8,27 +8,27 @@ from pathlib import Path
 
 import pytest
 
-from alphatamp.approaches.spectre import dd2d_compare
+from alphatamp.approaches.spectre import compare
 
 
 def test_rollout_fp_basic_and_ties() -> None:
     """FP counts negatives above the best positive, half-credit on exact ties."""
     # Best positive is top-scored -> 0 FP.
-    assert dd2d_compare.rollout_fp([3.0, 1.0, 2.0], [1, 0, 0]) == 0.0
+    assert compare.rollout_fp([3.0, 1.0, 2.0], [1, 0, 0]) == 0.0
     # Two negatives outrank the single positive.
-    assert dd2d_compare.rollout_fp([3.0, 2.0, 1.0], [0, 0, 1]) == 2.0
+    assert compare.rollout_fp([3.0, 2.0, 1.0], [0, 0, 1]) == 2.0
     # One negative ties the best positive -> half credit.
-    assert dd2d_compare.rollout_fp([2.0, 2.0, 1.0], [0, 1, 0]) == 0.5
+    assert compare.rollout_fp([2.0, 2.0, 1.0], [0, 1, 0]) == 0.5
     # No feasible skeleton -> None.
-    assert dd2d_compare.rollout_fp([1.0, 2.0], [0, 0]) is None
+    assert compare.rollout_fp([1.0, 2.0], [0, 0]) is None
 
 
 def test_stratum_of_bands() -> None:
     """Stratum comes from the seed band, clamped to [0, 3]."""
-    assert dd2d_compare.stratum_of(1_000_000) == 0
-    assert dd2d_compare.stratum_of(1_250_000) == 1
-    assert dd2d_compare.stratum_of(1_500_000) == 2
-    assert dd2d_compare.stratum_of(1_999_999) == 3
+    assert compare.stratum_of(1_000_000) == 0
+    assert compare.stratum_of(1_250_000) == 1
+    assert compare.stratum_of(1_500_000) == 2
+    assert compare.stratum_of(1_999_999) == 3
 
 
 def test_stratum_of_is_split_agnostic() -> None:
@@ -40,16 +40,16 @@ def test_stratum_of_is_split_agnostic() -> None:
     how ``s-4`` appeared in a train-split VLMPlan run.
     """
     # train band [0, 1M)
-    assert dd2d_compare.stratum_of(0) == 0
-    assert dd2d_compare.stratum_of(250_017) == 1
-    assert dd2d_compare.stratum_of(500_032) == 2
-    assert dd2d_compare.stratum_of(750_063) == 3
+    assert compare.stratum_of(0) == 0
+    assert compare.stratum_of(250_017) == 1
+    assert compare.stratum_of(500_032) == 2
+    assert compare.stratum_of(750_063) == 3
     # val band [2M, 3M)
-    assert dd2d_compare.stratum_of(2_000_000) == 0
-    assert dd2d_compare.stratum_of(2_750_000) == 3
+    assert compare.stratum_of(2_000_000) == 0
+    assert compare.stratum_of(2_750_000) == 3
     # test band unchanged vs the historical formula, so published numbers cannot move
     for seed in range(1_000_000, 2_000_000, 9_973):
-        assert dd2d_compare.stratum_of(seed) == min(3, (seed - 1_000_000) // 250_000)
+        assert compare.stratum_of(seed) == min(3, (seed - 1_000_000) // 250_000)
 
 
 def _dump(path: Path, obj: dict) -> None:
@@ -91,7 +91,7 @@ def test_load_fp_records_aggregates_and_averages(tmp_path: Path) -> None:
         {"problem_id": pid, "stratum": 2, "fp": 6.0},
     )
 
-    recs = dd2d_compare.load_fp_records(cache)
+    recs = compare.load_fp_records(cache)
     by_method = {r["method"]: r for r in recs}
     # v2 family is absent from this fixture -> gracefully skipped (v1-only cache).
     assert set(by_method) == {
@@ -129,7 +129,7 @@ def test_load_fp_records_includes_v2_family(tmp_path: Path) -> None:
         cache / "spectre2_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 3.0, "order": [1, 0]},
     )
-    by_method = {r["method"]: r["fp"] for r in dd2d_compare.load_fp_records(cache)}
+    by_method = {r["method"]: r["fp"] for r in compare.load_fp_records(cache)}
     assert by_method["SPECTREv2-static"] == 1.0  # neg (2.0) outranks pos (1.0)
     assert by_method["SPECTREv2-adaptive"] == 3.0
     assert "SPECTRE-static" not in by_method  # v1 family absent
@@ -138,7 +138,7 @@ def test_load_fp_records_includes_v2_family(tmp_path: Path) -> None:
 def test_missing_cache_raises(tmp_path: Path) -> None:
     """A missing cache directory raises with the precompute command in the message."""
     with pytest.raises(FileNotFoundError, match="precompute_dd2d_cache.py"):
-        dd2d_compare.load_fp_records(tmp_path / "nope")
+        compare.load_fp_records(tmp_path / "nope")
 
 
 def test_load_adaptive_trace_reads_step_fields(tmp_path: Path) -> None:
@@ -157,7 +157,7 @@ def test_load_adaptive_trace_reads_step_fields(tmp_path: Path) -> None:
             "step_dead": [[], [1]],
         },
     )
-    tr = dd2d_compare.load_adaptive_trace(cache, "spectre2_adaptive", pid)
+    tr = compare.load_adaptive_trace(cache, "spectre2_adaptive", pid)
     assert tr is not None
     assert tr.problem_id == pid and tr.stratum == 2 and tr.fp == 1.0
     assert tr.order == [1, 0]
@@ -180,7 +180,7 @@ def test_load_adaptive_trace_legacy_record_has_no_step_scores(tmp_path: Path) ->
         cache / "spectre_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 3.0, "order": [2, 1, 0, 4]},
     )
-    tr = dd2d_compare.load_adaptive_trace(cache, "spectre_adaptive", pid)
+    tr = compare.load_adaptive_trace(cache, "spectre_adaptive", pid)
     assert tr is not None
     assert tr.order == [2, 1, 0, 4]
     assert tr.step_scores is None
@@ -194,10 +194,8 @@ def test_single_problem_accessors_return_none_when_absent(tmp_path: Path) -> Non
     SPECTRE family, so the inspector skips rather than raises.
     """
     cache = tmp_path / "compare_cache"
-    assert (
-        dd2d_compare.load_adaptive_trace(cache, "spectre2_adaptive", 1_600_000) is None
-    )
-    assert dd2d_compare.load_static_scores(cache, "piginet", 1_600_000) is None
+    assert compare.load_adaptive_trace(cache, "spectre2_adaptive", 1_600_000) is None
+    assert compare.load_static_scores(cache, "piginet", 1_600_000) is None
 
 
 def test_load_static_scores_roundtrip(tmp_path: Path) -> None:
@@ -206,7 +204,7 @@ def test_load_static_scores_roundtrip(tmp_path: Path) -> None:
     pid = 1_600_000
     rec = {"problem_id": pid, "stratum": 2, "scores": [1.0, 2.0], "labels": [0, 1]}
     _dump(cache / "piginet" / f"{pid}.json", rec)
-    assert dd2d_compare.load_static_scores(cache, "piginet", pid) == rec
+    assert compare.load_static_scores(cache, "piginet", pid) == rec
 
 
 def test_load_named_fp_records_seed_averages(tmp_path: Path) -> None:
@@ -221,7 +219,7 @@ def test_load_named_fp_records_seed_averages(tmp_path: Path) -> None:
         cache / "spectre_lenctx" / "seed_1" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 6.0, "order": [0, 2]},
     )
-    recs = dd2d_compare.load_named_fp_records(
+    recs = compare.load_named_fp_records(
         cache, "spectre_lenctx", "SPECTRE-adaptive-lenctx"
     )
     assert len(recs) == 1
@@ -241,7 +239,7 @@ def test_length_fit_pure_length_function() -> None:
     # scores depend only on length; same-length plans share a score exactly.
     scores = [10.0, 10.0, 5.0, 5.0, 5.0, 2.0]
     lengths = [1, 1, 3, 3, 3, 5]
-    fit = dd2d_compare.length_fit(scores, lengths)
+    fit = compare.length_fit(scores, lengths)
     assert fit["eta2"] == pytest.approx(1.0)
     assert fit["within_frac"] == pytest.approx(0.0)
     assert fit["n_len"] == 3 and fit["n"] == 6
@@ -253,17 +251,17 @@ def test_length_fit_within_length_signal() -> None:
     """Same-length plans that differ in score -> eta2 < 1, within_frac > 0."""
     scores = [10.0, 8.0, 5.0, 4.0]  # length 1 and 3 groups each vary
     lengths = [1, 1, 3, 3]
-    fit = dd2d_compare.length_fit(scores, lengths)
+    fit = compare.length_fit(scores, lengths)
     assert 0.0 < fit["eta2"] < 1.0
     assert fit["within_frac"] == pytest.approx(1.0 - fit["eta2"])
 
 
 def test_length_fit_r2_and_pearson_linear() -> None:
     """A score linear in length -> R² = pearson² ≈ 1; pearson sign = preference."""
-    up = dd2d_compare.length_fit([1.0, 3.0, 5.0, 7.0], [1, 3, 5, 7])
+    up = compare.length_fit([1.0, 3.0, 5.0, 7.0], [1, 3, 5, 7])
     assert up["pearson"] == pytest.approx(1.0)
     assert up["r2"] == pytest.approx(1.0)
-    down = dd2d_compare.length_fit([7.0, 5.0, 3.0, 1.0], [1, 3, 5, 7])
+    down = compare.length_fit([7.0, 5.0, 3.0, 1.0], [1, 3, 5, 7])
     assert down["pearson"] == pytest.approx(-1.0)
     assert down["r2"] == pytest.approx(1.0)
 
@@ -277,14 +275,14 @@ def test_length_fit_nonmonotone_r2_below_eta2() -> None:
     """
     scores = [5.0, 5.0, 1.0, 1.0, 5.0, 5.0]  # V-shape over lengths 1/3/5
     lengths = [1, 1, 3, 3, 5, 5]
-    fit = dd2d_compare.length_fit(scores, lengths)
+    fit = compare.length_fit(scores, lengths)
     assert fit["eta2"] == pytest.approx(1.0)
     assert fit["r2"] < 0.2
 
 
 def test_length_fit_constant_scores_nan() -> None:
     """No score variance -> eta2/within/spearman undefined (NaN), not a crash."""
-    fit = dd2d_compare.length_fit([1.0, 1.0, 1.0], [1, 3, 5])
+    fit = compare.length_fit([1.0, 1.0, 1.0], [1, 3, 5])
     assert math.isnan(fit["eta2"]) and math.isnan(fit["within_frac"])
     assert math.isnan(fit["spearman"])
     assert math.isnan(fit["r2"]) and math.isnan(fit["pearson"])
@@ -293,10 +291,10 @@ def test_length_fit_constant_scores_nan() -> None:
 def test_spearman_sign_via_length_fit() -> None:
     """length_fit's Spearman is +1 when longer plans score higher, -1 otherwise."""
     # score increases with length -> prefers longer -> +1.
-    up = dd2d_compare.length_fit([10.0, 20.0, 30.0, 40.0], [1, 3, 5, 7])
+    up = compare.length_fit([10.0, 20.0, 30.0, 40.0], [1, 3, 5, 7])
     assert up["spearman"] == pytest.approx(1.0)
     # score decreases with length -> prefers shorter -> -1.
-    down = dd2d_compare.length_fit([40.0, 30.0, 20.0, 10.0], [1, 3, 5, 7])
+    down = compare.length_fit([40.0, 30.0, 20.0, 10.0], [1, 3, 5, 7])
     assert down["spearman"] == pytest.approx(-1.0)
 
 
@@ -305,7 +303,7 @@ def test_mean_position_by_length_short_first() -> None:
     # score = -length -> shortest tried first.
     lengths = [1, 3, 3, 5]
     scores = [-x for x in lengths]
-    pos = dd2d_compare.mean_position_by_length(scores, lengths)
+    pos = compare.mean_position_by_length(scores, lengths)
     assert pos[1] < pos[3] < pos[5]
     assert pos[1] == pytest.approx(0.0)  # the single shortest plan is tried first
 
@@ -313,13 +311,13 @@ def test_mean_position_by_length_short_first() -> None:
 def test_length_ladder_climb_and_slope() -> None:
     """A realized order that moves to longer plans -> positive spearman/slope."""
     # attempt indices [0,1,2] with lengths [1,3,5] -> climbs.
-    lad = dd2d_compare.length_ladder([0, 1, 2], [1, 3, 5])
+    lad = compare.length_ladder([0, 1, 2], [1, 3, 5])
     assert lad["spearman"] == pytest.approx(1.0)
     assert lad["slope"] == pytest.approx(2.0)
     assert lad["n_steps"] == 3
     assert lad["first_len"] == 1.0 and lad["last_len"] == 5.0
     # a single-step trace has no defined trend but still reports endpoints.
-    solo = dd2d_compare.length_ladder([2], [1, 3, 5])
+    solo = compare.length_ladder([2], [1, 3, 5])
     assert solo["n_steps"] == 1 and math.isnan(solo["spearman"])
     assert solo["first_len"] == 5.0 and solo["last_len"] == 5.0
 
@@ -370,7 +368,7 @@ def test_load_length_fit_records_and_ladder(tmp_path: Path) -> None:
         {"problem_id": pid, "stratum": 2, "fp": 2.0, "order": [0, 2, 3]},
     )
 
-    fit_recs = dd2d_compare.load_length_fit_records(cache, lengths_by_pid)
+    fit_recs = compare.load_length_fit_records(cache, lengths_by_pid)
     by_method = {r["method"]: r for r in fit_recs}
     # adaptive is intentionally absent from the static-score loader; v2 family
     # is absent from this fixture (gracefully skipped).
@@ -378,14 +376,14 @@ def test_load_length_fit_records_and_ladder(tmp_path: Path) -> None:
     assert by_method["SPECTRE-static"]["eta2"] == pytest.approx(1.0)
     assert by_method["SPECTRE-static"]["within_frac"] == pytest.approx(0.0)
 
-    pos_recs = dd2d_compare.load_position_by_length_records(cache, lengths_by_pid)
+    pos_recs = compare.load_position_by_length_records(cache, lengths_by_pid)
     # SPECTRE-static scores by length (9,4,4,1) -> length 1 tried first, 5 last.
     stat_pos = {
         r["length"]: r["mean_pos"] for r in pos_recs if r["method"] == "SPECTRE-static"
     }
     assert stat_pos[1] < stat_pos[3] < stat_pos[5]
 
-    ladder_recs = dd2d_compare.load_adaptive_ladder_records(cache, lengths_by_pid)
+    ladder_recs = compare.load_adaptive_ladder_records(cache, lengths_by_pid)
     assert len(ladder_recs) == 1
     rec = ladder_recs[0]
     assert rec["method"] == "SPECTRE-adaptive" and rec["problem_id"] == pid
@@ -411,9 +409,9 @@ def test_vlmplan_absent_is_skipped_not_fatal(tmp_path: Path) -> None:
     """The notebook must load with no VLMPlan cache — the arm is optional."""
     cache = tmp_path / "compare_cache"
     _base_cache(cache, 1_600_000)
-    methods = {r["method"] for r in dd2d_compare.load_fp_records(cache)}
+    methods = {r["method"] for r in compare.load_fp_records(cache)}
     assert not any(m.startswith("VLMPlan") for m in methods)
-    assert not dd2d_compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen8b")
+    assert not compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen8b")
 
 
 def test_vlmplan_fp_is_read_verbatim_not_derived(tmp_path: Path) -> None:
@@ -445,14 +443,12 @@ def test_vlmplan_fp_is_read_verbatim_not_derived(tmp_path: Path) -> None:
             "loop": {"plans_per_round": 10},
         },
     )
-    rows = [
-        r for r in dd2d_compare.load_fp_records(cache) if r["method"] == "VLMPlan-8B"
-    ]
+    rows = [r for r in compare.load_fp_records(cache) if r["method"] == "VLMPlan-8B"]
     assert rows == [
         {"problem_id": pid, "stratum": 2, "method": "VLMPlan-8B", "fp": 7.0}
     ]
-    assert "VLMPlan-8B" in dd2d_compare.METHOD_ORDER
-    assert "VLMPlan-32B" in dd2d_compare.METHOD_ORDER
+    assert "VLMPlan-8B" in compare.METHOD_ORDER
+    assert "VLMPlan-32B" in compare.METHOD_ORDER
 
 
 def test_vlmplan_diagnostics_expose_the_reported_fields(tmp_path: Path) -> None:
@@ -482,7 +478,7 @@ def test_vlmplan_diagnostics_expose_the_reported_fields(tmp_path: Path) -> None:
             "loop": {"plans_per_round": 10},
         },
     )
-    (row,) = dd2d_compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen8b")
+    (row,) = compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen8b")
     assert row["first_success_source"] == "fill"
     assert row["n_offpool"] == 1
     assert row["n_vlm_attempts"] == 2
@@ -514,7 +510,7 @@ def test_load_fp_records_per_seed_preserves_the_seed_axis(tmp_path: Path) -> Non
             {"problem_id": pid, "stratum": 2, "fp": fp},
         )
 
-    records = dd2d_compare.load_fp_records_per_seed(cache)
+    records = compare.load_fp_records_per_seed(cache)
     adaptive = sorted(
         (r for r in records if r["method"] == "SPECTRE-adaptive"),
         key=lambda r: r["seed"],
@@ -524,9 +520,7 @@ def test_load_fp_records_per_seed_preserves_the_seed_axis(tmp_path: Path) -> Non
 
     # the collapsing loader still reports the mean, so existing callers are unaffected
     collapsed = [
-        r
-        for r in dd2d_compare.load_fp_records(cache)
-        if r["method"] == "SPECTRE-adaptive"
+        r for r in compare.load_fp_records(cache) if r["method"] == "SPECTRE-adaptive"
     ]
     assert len(collapsed) == 1 and collapsed[0]["fp"] == 6.0
 
@@ -552,14 +546,15 @@ def test_static_cache_layout_is_detected_not_assumed(tmp_path: Path) -> None:
         cache / "astar" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "scores": [0.0, -1.0], "labels": [0, 1]},
     )
-    # PIGINet, seeded: seed 0 ranks the positive first (FP 0), seed 1 ranks it last (FP 1)
+    # PIGINet, seeded: seed 0 ranks the positive first (FP 0), seed 1 ranks it last
+    # (FP 1)
     for seed, scores in ((0, [5.0, 1.0]), (1, [1.0, 5.0])):
         _dump(
             cache / "piginet" / f"seed_{seed}" / f"{pid}.json",
             {"problem_id": pid, "stratum": 2, "scores": scores, "labels": [1, 0]},
         )
 
-    records = dd2d_compare.load_fp_records_per_seed(cache)
+    records = compare.load_fp_records_per_seed(cache)
     piginet = sorted(
         (r for r in records if r["method"] == "PIGINet"), key=lambda r: r["seed"]
     )
@@ -568,13 +563,11 @@ def test_static_cache_layout_is_detected_not_assumed(tmp_path: Path) -> None:
     assert {r["seed"] for r in records if r["method"] == "astar-dist"} == {None}
 
     # and the collapsing loader averages the seeds, exactly as it does for SPECTRE
-    collapsed = [
-        r for r in dd2d_compare.load_fp_records(cache) if r["method"] == "PIGINet"
-    ]
+    collapsed = [r for r in compare.load_fp_records(cache) if r["method"] == "PIGINet"]
     assert len(collapsed) == 1 and collapsed[0]["fp"] == 0.5
 
     # build_table then reports a real between-seed spread rather than a bare mean
-    _header, rows, _tidy = dd2d_compare.build_table(records)
+    _header, rows, _tidy = compare.build_table(records)
     by_method = {r[0]: r for r in rows}
     assert by_method["PIGINet"][1] == "2"  # the `seeds` column
     assert by_method["astar-dist"][1] == "-"
@@ -653,13 +646,13 @@ def test_load_fp_records_includes_v3_family(tmp_path: Path) -> None:
         cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 4.0, "order": [1, 0]},
     )
-    by_method = {r["method"]: r["fp"] for r in dd2d_compare.load_fp_records(cache)}
+    by_method = {r["method"]: r["fp"] for r in compare.load_fp_records(cache)}
     assert by_method["SPECTREv3-static"] == 1.0  # neg (2.0) outranks pos (1.0)
     assert by_method["SPECTREv3-adaptive"] == 4.0
     assert "SPECTREv2-static" not in by_method
     assert "SPECTRE-static" not in by_method
     # and it is ordered for display
-    assert "SPECTREv3-adaptive" in dd2d_compare.METHOD_ORDER
+    assert "SPECTREv3-adaptive" in compare.METHOD_ORDER
 
 
 def test_load_named_fp_records_per_seed_keeps_the_seed_axis(tmp_path: Path) -> None:
@@ -671,13 +664,11 @@ def test_load_named_fp_records_per_seed_keeps_the_seed_axis(tmp_path: Path) -> N
             cache / "abl_thing_adaptive" / f"seed_{seed}" / f"{pid}.json",
             {"problem_id": pid, "stratum": 2, "fp": fp, "order": [0]},
         )
-    rows = dd2d_compare.load_named_fp_records_per_seed(
-        cache, "abl_thing_adaptive", "thing"
-    )
+    rows = compare.load_named_fp_records_per_seed(cache, "abl_thing_adaptive", "thing")
     assert {(r["seed"], r["fp"]) for r in rows} == {(0, 4.0), (1, 6.0)}
     assert {r["method"] for r in rows} == {"thing"}
     # the averaging sibling collapses the same data to one row
-    avg = dd2d_compare.load_named_fp_records(cache, "abl_thing_adaptive", "thing")
+    avg = compare.load_named_fp_records(cache, "abl_thing_adaptive", "thing")
     assert [r["fp"] for r in avg] == [5.0]
 
 
@@ -685,7 +676,7 @@ def test_load_named_fp_records_per_seed_missing_dir_raises(tmp_path: Path) -> No
     """A missing ablation arm raises: a 2x2 silently rendering as 2x1 over-reads."""
     (tmp_path / "compare_cache").mkdir(parents=True)
     with pytest.raises(FileNotFoundError, match="precompute_dd2d_cache.py"):
-        dd2d_compare.load_named_fp_records_per_seed(
+        compare.load_named_fp_records_per_seed(
             tmp_path / "compare_cache", "abl_absent", "absent"
         )
 
@@ -702,7 +693,7 @@ def test_merge_collections_grafts_only_the_named_methods() -> None:
         _rec("SPECTREv2-adaptive", 1, 13.0),  # exists in primary -> must NOT be taken
         _rec("VLMPlan-8B", 1, 29.0),
     ]
-    out = dd2d_compare.merge_collections(
+    out = compare.merge_collections(
         primary, legacy, ["PIGINet", "VLMPlan-8B", "SPECTREv2-adaptive"], "v4", "v3"
     )
     by_method = {r["method"]: r for r in out}
@@ -727,7 +718,7 @@ def test_select_seed_prefers_seed_zero_and_reports_it() -> None:
         _rec("m", 1, 9.0, seed=1),
         _rec("astar-dist", 1, 34.0, seed=None),
     ]
-    kept, chosen = dd2d_compare.select_seed(records, prefer=0)
+    kept, chosen = compare.select_seed(records, prefer=0)
     assert chosen == {"m": 0, "astar-dist": None}
     assert [r["fp"] for r in kept if r["method"] == "m"] == [5.0]
     assert [r["fp"] for r in kept if r["method"] == "astar-dist"] == [34.0]
@@ -741,7 +732,7 @@ def test_select_seed_falls_back_to_the_best_seed() -> None:
         _rec("m", 1, 3.0, seed=2),
         _rec("m", 2, 5.0, seed=2),  # seed 2 mean 4.0 < seed 1 mean 9.0
     ]
-    kept, chosen = dd2d_compare.select_seed(records, prefer=0)
+    kept, chosen = compare.select_seed(records, prefer=0)
     assert chosen == {"m": 2}
     assert sorted(r["fp"] for r in kept) == [3.0, 5.0]
 
@@ -756,7 +747,7 @@ def test_build_table_reports_across_seed_spread_not_across_problem() -> None:
         _rec("m", 2, 4.0, seed=1),
         _rec("solo", 1, 1.0, seed=0),
     ]
-    header, rows, tidy = dd2d_compare.build_table(records)
+    header, rows, tidy = compare.build_table(records)
     assert header[:3] == ["method", "seeds", "ALL"]
     by_method = {r[0]: r for r in rows}
     # across-seed sd of (2.0, 4.0) is sqrt(2) ~ 1.41 -- NOT the across-problem sd

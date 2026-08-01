@@ -68,8 +68,8 @@ def _rollout(episode, arm: str, ground_ops, universal) -> Optional[int]:
     """Failed attempts before the first success, under one ordering policy.
 
     Mirrors ``unified_probe._rollout``: the context grows with each failure, the pool is
-    re-scored from scratch each step, and ties fall back to pool order so the arms differ
-    only in their key.
+    re-scored from scratch each step, and ties fall back to pool order so the arms
+    differ only in their key.
     """
     labels = [o.outcome == "success" for o in episode.outcomes]
     if not any(labels):

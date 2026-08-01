@@ -279,7 +279,8 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
     for method, subdir in STATIC_METHODS.items():
         # Unlike `load_fp_records`, a missing static baseline is skipped rather than
         # fatal: a newly-onboarded collection has SPECTRE checkpoints before it has a
-        # retrained PIGINet (which trains on the native JSON with its own CLIP cache), and
+        # retrained PIGINet (which trains on the native JSON with its own CLIP cache),
+        # and
         # the yardstick row does not depend on it. Absent arms are *reported*, never
         # silently dropped -- a comparison table quietly missing a baseline is worse than
         # one that says so.
@@ -288,12 +289,7 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
             missing.append(method)
             continue
         if sorted(parent.glob("seed_*")):
-            rows = [
-                (seed, pid, stratum, fp)
-                for seed, pid, stratum, fp in _spectre_per_seed(
-                    parent, is_adaptive=False
-                )
-            ]
+            rows = list(_spectre_per_seed(parent, is_adaptive=False))
         else:
             rows = [
                 (None, pid, stratum, fp)  # type: ignore[misc]
@@ -483,7 +479,9 @@ def select_seed(
                 )
                 for s in seeds
             }
-            chosen[method] = min(means, key=lambda s: means[s])
+            # `means.get`, not `lambda s: means[s]`: the lambda closes over the loop
+            # variable, so it would read whichever `means` existed when it was *called*.
+            chosen[method] = min(means, key=means.__getitem__)
     return [r for r in records if r["seed"] == chosen[r["method"]]], chosen
 
 

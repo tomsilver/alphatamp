@@ -92,7 +92,8 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # P4: the records-first fix, and the one that targets the cause directly.
     # `suppress_records` showed the trained model discards its own record tokens;
-    # CrossAttentionScorerV3 says why -- one softmax over [scene ; global ; records] makes
+    # CrossAttentionScorerV3 says why -- one softmax over [scene ; global ; records]
+    # makes
     # evidence compete with geometry for attention mass, and geometry wins because it is
     # reliably useful. A separate channel removes the competition, so records can drive
     # adaptiveness rather than being ignored.
@@ -136,8 +137,51 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # `v3delta` is FOLDED INTO `v3final` above -- it is the same flag set, and keeping a
     # second name for the deployed config is how two "current" arms end up on disk. Its
-    # checkpoints (`checkpoints_v3_v3delta_s{0..5}`, 6 seeds) are what the comparison
+    # checkpoints (`checkpoints_v3_v3final_s{0..5}`, 6 seeds) are what the comparison
     # cache reads; `_V3_ARMS["spectre3"]` in `precompute_dd2d_cache.py` points at them.
+    #
+    # StickButton2D's ablation set, mirroring the six arms the DD2D notebook's section 4
+    # reads. Each is the deployed config with exactly one thing toggled, so a
+    # difference is
+    # attributable. Run as:
+    #
+    #     python experiments/spectre/spectre_sweep.py --preset sb2dabl \
+    #         --env stickbutton2d_v1 --seeds 0 1 2
+    #
+    # The **demotion arms are deliberately absent.** Proof-tier demotion was cut from the
+    # method on 2026-07-30, and StickButton2D resolves to `EMPTY_SPEC`, so
+    # `licenses_demotion` is always False there and a demotion arm would be bit-identical
+    # to its base. Omitted because it is vacuous on this environment, not overlooked.
+    "sb2dabl": {
+        # coverage x records, 2x2. `abl_cov_rec` is the deployed config itself; it is
+        # trained under its own name so section 4's grid has all four cells from one
+        # sweep
+        # rather than three cells plus a cross-reference.
+        "abl_cov_rec": (
+            "--overlap-mode jaccard --coverage-feats "
+            "--aggregate-records --evidence-attn --state-delta"
+        ),
+        "abl_cov_norec": (
+            "--overlap-mode jaccard --coverage-feats "
+            "--aggregate-records --evidence-attn --state-delta --no-records"
+        ),
+        "abl_nocov_rec": (
+            "--overlap-mode jaccard --aggregate-records --evidence-attn --state-delta"
+        ),
+        "abl_nocov_norec": (
+            "--overlap-mode jaccard --aggregate-records --evidence-attn "
+            "--state-delta --no-records"
+        ),
+        # coverage vs waste, separated by zeroing one column (shape unchanged).
+        "abl_cov_only": (
+            "--overlap-mode jaccard --coverage-feats --coverage-mode coverage "
+            "--aggregate-records --evidence-attn --state-delta"
+        ),
+        "abl_waste_only": (
+            "--overlap-mode jaccard --coverage-feats --coverage-mode waste "
+            "--aggregate-records --evidence-attn --state-delta"
+        ),
+    },
 }
 
 

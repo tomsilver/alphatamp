@@ -62,6 +62,29 @@ editing the file above.
    domain in words. It says nothing about *which* items to stage or in what order, which is
    the actual decision under test.
 
+8. **The StickButton2D chaining rule** (`sb2d_adapter._CONTROLLER_NOTE`). Same class as
+   deviation 7, on the second environment, and measured the same way. StickButton2D's
+   operators come in `...FromNothing` / `...FromButton` pairs whose difference is a
+   precondition on where the robot is standing: pressing a button leaves the robot on it,
+   so only the *first* press of a plan can be the `FromNothing` variant.
+
+   Left to infer that from the names, `qwen3-vl-32b-instruct` wrote `FromNothing` for
+   every press. Measured on train problem 500000 (b3): **11/11 parsed plans violated a
+   precondition, every one of them this one** — a 100% invalidity rate carrying no
+   information about the model's planning ability. The note now states the rule and gives
+   one correct three-press example.
+
+   As with deviation 7 this **removes a handicap rather than granting an advantage**: the
+   rule is a precondition the PDDL domain already states, and every other method in the
+   comparison reads it from that domain for free — SPECTRE and PIGINet never even see an
+   inapplicable candidate, because their pools come from the planner. It says nothing
+   about *which* buttons to press or in what order, which is the decision under test.
+
+   The same block also discloses the reach limit and the sweep-on-approach rule, for the
+   same reason the DD2D block discloses geometry: StickButton2D's symbolic model is
+   reach-blind, so a prompt without it describes a problem where every plan is equally
+   good.
+
 ## Decode settings (part of reproducing a run)
 
 `temperature = 1.0` and `max_tokens = 8192`, recorded into every cache record via

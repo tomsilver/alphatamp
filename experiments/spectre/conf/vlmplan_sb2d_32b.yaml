@@ -1,0 +1,37 @@
+# VLMPlan-32B on StickButton2D. Overlay over `vlmplan.yaml`:
+#
+#   pilot (train, validates the adapter/prompt/labelling for ~15 min):
+#     python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_32b \
+#         split=train n_problems=5 run=sb2d_32b_pilot
+#     python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_32b \
+#         split=train n_problems=5 run=sb2d_32b_pilot cache_subdir=vlmplan_pilot
+#
+#   the reported run (test, all 100 problems, ~5 h of exclusive GPU):
+#     python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_32b
+#     python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_32b
+#
+# Start the server first and give it a >= 32768 context (see `max_tokens` below):
+#   lms server start
+#   export OPENAI_BASE_URL=http://localhost:1234/v1 OPENAI_API_KEY=lm-studio
+#
+# It holds ~21 GB of the 32 GB card, so stop any training sweep before running this
+# (spectre CLAUDE.md, "GPU contention").
+defaults:
+  - vlmplan
+  - override env: stickbutton2d_v1
+  - _self_
+
+split: "test"
+n_problems: 0 # 0 = the whole split (100 test problems)
+run: "sb2d_qwen32b"
+cache_subdir: "vlmplan_qwen32b"
+
+model:
+  model_name: "qwen3-vl-32b-instruct"
+  decode:
+    temperature: 1.0
+    # 12288, not the shared 8192. The pilot truncated 1-3 completions per b3 problem at
+    # 8192 -- the same silent plan-loss the DD2D run hit at 4096 -- because StickButton2D
+    # prompts invite longer reasoning (reach, sweep order, chaining). The prompt is ~2.3k
+    # tokens against a 32768 context, so there is ample room. Watch `n_truncated`.
+    max_tokens: 12288

@@ -4,6 +4,74 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-sb2d-ablation-arms-training-not-reproducible-from-seed"></a>
+## 2026-08-01 — SB2D v3 ablation arms: training is not reproducible from the seed alone
+
+<!--strip-->
+> **id** `2026-08-01-sb2d-ablation-arms-training-not-reproducible-from-seed` · **status** active
+> · **tracks** evaluation, baselines, env-stickbutton2d
+<!--/strip-->
+
+**What.** Train the six v3 component arms on StickButton2D so §4 of the comparison
+notebook — the coverage × record-tokens 2×2 plus the single-column split — has something
+to render on the second environment. Same flags as DD2D's arms, `spectre_sweep.py --preset
+sb2dabl`, one seed each (the project's 1-seed dev convention), cached via
+`precompute_dd2d_cache.py --env-variant stickbutton2d_v1`.
+
+The demotion pair was deliberately omitted: SB2D resolves to `EMPTY_SPEC`, so
+`licenses_demotion` is always false and the two caches would be bit-identical. Vacuous
+here, not overlooked.
+
+**Result — the arms, seed 0, mean rollout FP on the 100-problem test split.**
+
+| arm | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| deployed (`spectre3`) | **1.76** | 0.08 | 0.32 | 1.00 | 5.64 |
+| cov+waste, no tokens | 1.77 | 0.08 | 0.36 | 1.20 | 5.44 |
+| waste column only | 1.92 | 0.08 | 0.32 | 1.32 | 5.96 |
+| coverage column only | 2.13 | 0.08 | 0.40 | 1.28 | 6.76 |
+| no cov/waste, tokens | 2.53 | 0.08 | 0.48 | 1.60 | 7.96 |
+| **cov+waste, tokens** (`abl_cov_rec`) | **2.78** | 0.08 | 0.24 | 2.92 | 7.88 |
+| neither (no cols, no tokens) | 2.89 | 0.08 | 0.40 | 1.40 | 9.68 |
+
+**Result — the finding, which is about the instrument and not the arms.** `deployed` and
+`abl_cov_rec` are **the same flags at the same seeds**. They were trained twice by
+accident — the deployed arm from the sweep, the ablation arm from the `sb2dabl` preset —
+and they read **1.76 vs 2.78** at seed 0, a gap of **1.02 FP**. Over three seeds the pair
+reads 1.69 ± 0.26 vs 2.00 ± 0.28.
+
+Every ablation gap in the table above is smaller than 1.02.
+
+**Takeaway — SB2D's §4 does not separate, and the table must be read against run-to-run
+noise rather than against the seed sd.** Three things follow.
+
+1. **No arm ordering in the SB2D 2×2 should be quoted.** The accidental duplicate is a
+   free null-effect control: it measures what the pipeline reports for a contrast that is
+   *known* to be zero, and it reports 1.02 FP. The largest real contrast here (`neither` −
+   `deployed` = 1.13) barely clears its own noise floor.
+2. **The seed sd understates the uncertainty.** ±0.26 across three seeds is the spread of
+   *one* training run per seed; it does not contain the between-run variance at fixed seed,
+   which is roughly four times larger. This is a sharper version of the standing rule that
+   a load-bearing per-stratum margin is compared to the seed sd
+   ([`decisions/06`](../decisions/06-v3-performance.md#2026-07-27-margin-must-be-compared-to-seed-sd)):
+   on this environment even the seed sd is the wrong yardstick.
+3. **Training is not reproducible from the seed alone.** Not diagnosed further — likely
+   CUDA nondeterminism in the tensorization/backward path, which the project has already
+   seen at ~2e-4 on inference scores. What is established is the *magnitude of its
+   consequence* on a low-FP environment: where DD2D's means sit near 6–17 FP, SB2D's sit
+   near 2, so the same absolute jitter is an order of magnitude more of the signal.
+
+The finding is recorded in `compare_envs.SB2D.caveats`, so it renders under §1 of the
+notebook rather than living only here.
+
+**Next.** The DD2D §4 numbers are *not* retroactively suspect — DD2D's contrasts run
+1–5 FP against means near 15, and its own arms were never duplicated so no null control
+exists there. Establishing whether the same jitter applies at DD2D's scale would need one
+deliberate duplicate run, which is ~17 min and is the cheapest thing that would firm up
+every 1-seed ablation the project has published.
+
+---
+
 <a id="2026-08-01-sb2d-comparison-v3-piginet-indistinguishable-adaptivity"></a>
 ## 2026-08-01 — SB2D comparison: v3 and PIGINet are indistinguishable; adaptivity is the only separation
 

@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from alphatamp.approaches.spectre.dd2d_compare import stratum_of
+from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.domain import spec_for
 from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode

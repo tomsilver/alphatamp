@@ -10,17 +10,17 @@ baseline. This follows those.
 
 **The normalisers are the reason this is a class and not a pair of imports.** PIGINet
 divides poses by a frame extent and shapes by a per-field maximum so both land in
-``[-1, 1]``. DD2D's are in centimetres over a ~50x40 drawer; StickButton2D's are in metres
-over a 3.5x2.5 world with objects two orders of magnitude smaller. Leave them as module
-constants and every StickButton2D feature underflows to ~0 -- the model then reads as
-hopeless, and the conclusion "the low-level predictor loses on this environment" is a unit
-bug wearing a result's clothes. Making them domain state is what makes that
-unrepresentable.
+``[-1, 1]``. DD2D's are in centimetres over a ~50x40 drawer; StickButton2D's are in
+metres over a 3.5x2.5 world with objects two orders of magnitude smaller. Leave them as
+module constants and every StickButton2D feature underflows to ~0 -- the model then
+reads as hopeless, and the conclusion "the low-level predictor loses on this
+environment" is a unit bug wearing a result's clothes. Making them domain state is what
+makes that unrepresentable.
 
-An adapter supplies three things: the vocabulary (glosses), the numeric scales, and how to
-enumerate a split -- because the two environments store their data differently (DD2D a
-tree of per-record JSON plus rendered PNGs, StickButton2D ``EpisodeRecord`` pickles with
-geometry to render from). What it does *not* supply is any part of the model, the
+An adapter supplies three things: the vocabulary (glosses), the numeric scales, and how
+to enumerate a split -- because the two environments store their data differently (DD2D
+a tree of per-record JSON plus rendered PNGs, StickButton2D ``EpisodeRecord`` pickles
+with geometry to render from). What it does *not* supply is any part of the model, the
 tokenizer's structure, or the losses.
 """
 
@@ -34,7 +34,10 @@ from alphatamp.approaches.spectre.piginet.record import PIGINetExample
 
 
 class PIGINetDomain(Protocol):
-    """The per-environment contract. See the module docstring for why each part is here."""
+    """The per-environment contract.
+
+    See the module docstring for why each part is here.
+    """
 
     name: str
 
@@ -50,9 +53,9 @@ class PIGINetDomain(Protocol):
     def gloss(self, word: str) -> str:
         """The colloquial English phrase for a domain word (paper §IV-A).
 
-        PIGINet feeds domain words through a frozen language model as phrases rather than
-        raw tokens, because "rephrasing helps the network deal with out-of-distribution
-        names". Unglossed words fall back to themselves.
+        PIGINet feeds domain words through a frozen language model as phrases rather
+        than raw tokens, because "rephrasing helps the network deal with
+        out-of-distribution names". Unglossed words fall back to themselves.
         """
 
     # -- numeric scales ------------------------------------------------------
