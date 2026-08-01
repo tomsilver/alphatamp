@@ -85,7 +85,10 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
 DD2D = REPO / "src" / "alphatamp" / "approaches" / "spectre" / "envs" / "dd2d"
-SEEDS = [0]
+# StickButton2D keeps its PIGINet artifacts beside its other derived data rather than
+# in a vendored env tree, so the paths below need the derived root at module scope.
+DERIVED_ROOT = REPO / "data" / "spectre" / "derived"
+SEEDS = [0, 1, 2]
 DEFAULT_ENV_VARIANT = "dd2d_v2"
 
 # PIGINet reads its own native DD2D JSON (not the SPECTRE EpisodeRecord pickles) and
@@ -111,6 +114,17 @@ _PIGINET_PATHS = {
         "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4",
         "cache": DD2D / "out_dd2d" / "clip_cache_v4",
+    },
+    # StickButton2D, 2026-08-01. `data` is the SPECTRE data root rather than a record
+    # tree: this collection has no PIGINet JSON on disk, so `SB2DDomain` builds the
+    # examples from the same `EpisodeRecord` pickles SPECTRE trains on -- which is what
+    # makes the two methods' labels identical by construction rather than by agreement.
+    # `domain` selects the adapter; absent, the reader keeps its DD2D default.
+    "stickbutton2d_v1": {
+        "ckpt": DERIVED_ROOT / "stickbutton2d_v1" / "piginet_bce_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v1" / "clip_cache",
+        "domain": "stickbutton2d",
     },
 }
 
@@ -155,6 +169,10 @@ _V3_ARMS: dict[str, str] = {
     # **Re-cache with `--force`**: `_dir_complete` skips a full directory, so without it
     # the row silently keeps the previous definition's rollout.
     "spectre3": "checkpoints_v3_unified",
+    # ^ DD2D's deployed dir. Per-variant overrides live in `_V3_ARM_OVERRIDES` below:
+    # a second environment trains the same arm under a different run name, and silently
+    # scoring the wrong directory (or, as happened first, skipping the arm entirely with
+    # a "missing checkpoint" line buried in a log) is not a failure worth repeating.
     # coverage x record-tokens 2x2
     # NOT `checkpoints_v3_p8_cov_final_s{seed}`, despite autorun_decisions A15 naming it
     # "the clean 3-seed re-run": all three of those runs stopped at **epoch 5 of 30**, so
@@ -168,6 +186,19 @@ _V3_ARMS: dict[str, str] = {
     "abl_cov_only": "checkpoints_v3_abl_cov_only",
     "abl_waste_only": "checkpoints_v3_abl_waste_only",
 }
+#: Per-variant checkpoint-dir overrides for the v3 arms. StickButton2D trained the
+#: deployed config with no `--out-suffix`, so its dir is the bare `checkpoints_v3`;
+#: DD2D's carries the `_unified` tag from the 2026-07-31 definition change.
+_V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
+    "stickbutton2d_v1": {"spectre3": "checkpoints_v3"},
+}
+
+
+def _v3_arm_dir(arm: str, env_variant: str) -> str:
+    """Checkpoint sub-dir for one v3 arm on one collection."""
+    return _V3_ARM_OVERRIDES.get(env_variant, {}).get(arm, _V3_ARMS[arm])
+
+
 # Deploy-time diagnostic: the deployed checkpoint with its evidence memory emptied at
 # every step. Not a method result -- it is a train/deploy mismatch on purpose, to
 # separate "training with records damaged the weights" from "the model ignores them".
@@ -213,6 +244,9 @@ V2_CKPT_DIR = (
 PIGINET_CKPT = _PIGINET_PATHS[DEFAULT_ENV_VARIANT]["ckpt"]
 PIGINET_DATA = _PIGINET_PATHS[DEFAULT_ENV_VARIANT]["data"]
 PIGINET_CACHE = _PIGINET_PATHS[DEFAULT_ENV_VARIANT]["cache"]
+# Which adapter supplies PIGINet's vocabulary, normalisers and split.
+# `None` = DD2D, so the historical defaults below stay literal.
+PIGINET_DOMAIN = _PIGINET_PATHS[DEFAULT_ENV_VARIANT].get("domain")
 CACHE_DIR = (
     REPO / "data" / "spectre" / "derived" / DEFAULT_ENV_VARIANT / "compare_cache"
 )
@@ -233,11 +267,13 @@ def _count_test_problems(test_dir: Path) -> int:
 def _configure_paths(env_variant: str) -> None:
     """(Re)bind every env-variant-dependent module global from ``env_variant``."""
     global ENV_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
-    global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, CACHE_DIR, N_PROBLEMS
-    if env_variant not in _V2_CKPT_SUBDIR:
+    global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
+    global CACHE_DIR, N_PROBLEMS
+    known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)
+    if env_variant not in known:
         raise SystemExit(
-            f"unknown --env-variant {env_variant!r}; known: {sorted(_V2_CKPT_SUBDIR)} "
-            "(add a _V2_CKPT_SUBDIR entry to onboard a new collection)"
+            f"unknown --env-variant {env_variant!r}; known: {sorted(known)} "
+            "(add a _V2_CKPT_SUBDIR or _PIGINET_PATHS entry to onboard a collection)"
         )
     # PIGINet is optional per variant: it trains on the *native* DD2D JSON with its own
     # CLIP cache, so onboarding a collection for the SPECTRE methods does not
@@ -250,10 +286,19 @@ def _configure_paths(env_variant: str) -> None:
         REPO / "data" / "spectre" / "derived" / env_variant / "train_vocab.json"
     )
     CKPT_DIR = REPO / "data" / "spectre" / "checkpoints" / env_variant
-    V2_CKPT_DIR = REPO / "data" / "spectre" / _V2_CKPT_SUBDIR[env_variant] / env_variant
+    # A collection with no SPECTRE v2.2 checkpoint (StickButton2D: v2 was scoped out) gets
+    # `None` rather than a KeyError, so `--methods spectre2` fails on that method alone
+    # instead of the whole driver refusing to start.
+    _v2_sub = _V2_CKPT_SUBDIR.get(env_variant)
+    V2_CKPT_DIR = (
+        None
+        if _v2_sub is None
+        else REPO / "data" / "spectre" / _v2_sub / env_variant
+    )
     PIGINET_CKPT = piginet.get("ckpt")
     PIGINET_DATA = piginet.get("data")
     PIGINET_CACHE = piginet.get("cache")
+    PIGINET_DOMAIN = piginet.get("domain")
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / env_variant / "compare_cache"
     N_PROBLEMS = _count_test_problems(SPECTRE_TEST)
 
@@ -332,7 +377,7 @@ def cache_piginet(force: bool, device: str) -> None:
         raise SystemExit(
             f"--methods piginet requested but {ENV_VARIANT!r} has no _PIGINET_PATHS "
             "entry. PIGINet trains on the native DD2D JSON with its own CLIP cache, so a "
-            "new collection needs it retrained first (envs/dd2d/piginet/train.py), then "
+            "new collection needs it retrained first (piginet/train.py), then "
             "an entry added here."
         )
     seeded = "{seed}" in str(PIGINET_CKPT)
@@ -351,11 +396,21 @@ def cache_piginet(force: bool, device: str) -> None:
             print(f"[{tag}] !! missing {ckpt}; skipping", flush=True)
             continue
         # Local import: vendored piginet stack (pulls in open_clip / CLIP).
-        from alphatamp.approaches.spectre.envs.dd2d.piginet.eval import score_split
+        from alphatamp.approaches.spectre.piginet.eval import score_split
 
         print(f"[{tag}] running fresh inference on test split ...")
+        domain = None
+        if PIGINET_DOMAIN == "stickbutton2d":
+            from alphatamp.approaches.spectre.piginet.sb2d_adapter import SB2DDomain
+
+            domain = SB2DDomain(str(PIGINET_DATA), ENV_VARIANT)
         rows, _thr, _temp = score_split(
-            str(ckpt), str(PIGINET_DATA), str(PIGINET_CACHE), "test", device=device
+            str(ckpt),
+            str(PIGINET_DATA),
+            str(PIGINET_CACHE),
+            "test",
+            device=device,
+            domain=domain,
         )
         by_pid: dict[str, list[tuple[int, int, float]]] = {}
         for pid, _stratum, plan_idx, _length, label, score in rows:
@@ -925,8 +980,13 @@ def main() -> None:
     parser.add_argument(
         "--env-variant",
         default=DEFAULT_ENV_VARIANT,
-        choices=sorted(_V2_CKPT_SUBDIR),
-        help="Which DD2D collection to score (repoints test split, vocab, checkpoints, "
+        # The union of the per-variant maps, not `_V2_CKPT_SUBDIR` alone. That was the
+        # implicit definition until 2026-08-01 and it means "collections with a SPECTRE
+        # v2.2 checkpoint" -- so StickButton2D, where v2.2 was deliberately never trained,
+        # was rejected at the CLI even though it has PIGINet and v3 rows. A variant is
+        # runnable if *any* method map knows it; a method it lacks fails on its own.
+        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)),
+        help="Which collection to score (repoints test split, vocab, checkpoints, "
         "PIGINet artifacts, and the cache dir).",
     )
     parser.add_argument(
@@ -969,7 +1029,8 @@ def main() -> None:
             suppress: dict[str, str] = {}
             nodemo: dict[str, str] = {}
         elif args.no_ablations:
-            arms, suppress, nodemo = {"spectre3": _V3_ARMS["spectre3"]}, {}, {}
+            arms = {"spectre3": _v3_arm_dir("spectre3", ENV_VARIANT)}
+            suppress, nodemo = {}, {}
         else:
             arms = dict(_V3_ARMS)
             suppress = dict(_V3_SUPPRESS_ARMS)

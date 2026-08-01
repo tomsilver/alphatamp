@@ -88,6 +88,12 @@ exclude = [
     # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
     # spectre_convert.py) type-checked.
     "src/alphatamp/approaches/spectre/envs/dd2d/(?!spectre_)",
+    # The PIGINet re-implementation, lifted out of envs/dd2d/ on 2026-08-01 to take a
+    # second environment. It was covered by the exclusion above for its whole life, so
+    # it is carried here rather than newly type-checked -- moving a file is not the
+    # moment to impose strict typing on it. `domain.py`, `record.py` and the per-env
+    # adapters are ours and stay checked.
+    "src/alphatamp/approaches/spectre/piginet/(?!domain|record|.*_adapter)",
     # Untracked sibling reference checkout (see .gitignore /kb/). Not part of
     # alphatamp; excluded from repo-wide `mypy .`.
     "^kb/",

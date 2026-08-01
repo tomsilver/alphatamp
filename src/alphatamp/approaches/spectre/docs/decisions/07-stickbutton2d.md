@@ -1,9 +1,75 @@
 # SPECTRE Decisions — StickButton2D as a second environment
 
-2 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
+3 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-piginet-lifted-env-agnostic-package-per-env-adapters"></a>
+## 2026-08-01 — PIGINet lifted to an env-agnostic package with per-env adapters
+
+<!--strip-->
+> **id** `2026-08-01-piginet-lifted-env-agnostic-package-per-env-adapters` ·
+> **status** active · **tracks** baselines, tooling, env-stickbutton2d
+<!--/strip-->
+
+**Context.** The DD2D comparison notebook's headline is SPECTRE v3 against **PIGINet** —
+the low-level predictor over concrete state. That row is the whole representation
+question: "what should a feasibility predictor represent skeletons and problems over?"
+StickButton2D had SPECTRE v3 and the B1–B5 bracket but no PIGINet, so the second
+environment could not answer the question the project exists to ask.
+
+PIGINet lived at `envs/dd2d/piginet/` and was DD2D-specific in five places: a gloss table
+imported at module scope, `_SHAPE_MAX` in centimetres, a `drawer_wh` key read out of
+`provenance`, a `dd2d_*` directory glob, and its paths in the cache driver. Individually
+reasonable; together they make a second environment a rewrite.
+
+**Decision.** Lift the package to `spectre/piginet/` behind a `PIGINetDomain` protocol,
+with one adapter per environment — the shape `vlmplan/` already established here, and the
+same move `domain.DomainSpec` made for SPECTRE v3 itself.
+
+- **The normalisers become domain state, not module constants.** This is the reason the
+  abstraction is a class rather than two more imports. PIGINet divides poses by a frame
+  extent and shapes by per-field maxima so both land in `[-1, 1]`. DD2D's are centimetres
+  over a ~50×40 drawer; StickButton2D is metres over 3.5×2.5 with objects two orders of
+  magnitude smaller. Measured: SB2D shape features read `|mean| 0.372` against their own
+  divisors and **`|mean| 0.0061`, max 0.05** against DD2D's — a channel 60× flatter, i.e.
+  effectively dead. The conclusion "the low-level predictor loses on StickButton2D" was
+  available as a *unit bug* wearing a result's clothes, and nothing would have raised.
+- `PIGINetExample` / `ImageRef` move to `piginet/record.py`; DD2D's `record.py` keeps its
+  builders and re-exports them, so every existing import resolves.
+- `SB2DDomain` builds examples from the **same `EpisodeRecord` pickles SPECTRE trains on**
+  — so the two methods' labels are identical by construction, not by agreement — and
+  rasterises crops from stored `scene_geometry` (*reconstruct, never regenerate*).
+- The cache driver's `--env-variant` choices came from `_V2_CKPT_SUBDIR`, i.e. "collections
+  with a SPECTRE v2.2 checkpoint". StickButton2D deliberately has none, so it was rejected
+  at the CLI despite having PIGINet and v3 rows. Now the union of the method maps, with a
+  missing method failing on its own rather than blocking the driver.
+
+**Consequences.**
+
+- **DD2D is unmoved, verified on the metric rather than on bytes.** Re-running the dd2d_v4
+  PIGINet cache gives rollout FP **17.0500 before and after**, per-problem identical on all
+  100 problems, with labels and rank order identical. Scores drift by ≤2.3e-4 — CUDA float
+  nondeterminism in CLIP inference. The plan's stated bar was "byte-identical", and that
+  bar was **wrong for a GPU inference path**: it cannot be met by any re-run, refactor or
+  not. The right criterion for this class of change is identical labels, identical rank
+  order and an identical derived metric.
+- **`at-pose` literals are synthesised for StickButton2D.** Its abstract initial state is
+  two atoms and names no positions, so a faithful port had to add one pose literal per
+  object, exactly as DD2D's records carry natively. Without it PIGINet receives object
+  identities with no coordinates — it would stop being a *low-level* predictor, which is
+  the only reason it is in the comparison. This is our construction, not stored data.
+- **The image channel is degenerate on StickButton2D and stays in anyway.** Every unpressed
+  button is the same red disc, so CLIP separates only {button, stick, robot} — which the
+  type literals already give. Crops share one fixed world window so relative scale at least
+  survives (the stick renders as a bar, a button as a dot). Reported as a bound on what
+  this environment's PIGINet row can be claimed to show, not silently absorbed.
+- The lifted package keeps its mypy exclusion. It was covered by the vendored-DD2D
+  exclusion for its whole life; moving a file is not the moment to impose strict typing on
+  it. `domain.py`, `record.py` and the adapters are ours and stay checked.
+
+---
+
 <a id="2026-08-01-both-evidence-classes-stay-wired-stickbutton2d"></a>
 ## 2026-08-01 — Both evidence classes stay wired; StickButton2D has only class 2
 

@@ -1,9 +1,86 @@
 # SPECTRE Notebook — StickButton2D as a second environment
 
-2 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
+3 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-sb2d-comparison-v3-piginet-indistinguishable-adaptivity"></a>
+## 2026-08-01 — SB2D comparison: v3 and PIGINet are indistinguishable; adaptivity is the only separation
+
+<!--strip-->
+> **id** `2026-08-01-sb2d-comparison-v3-piginet-indistinguishable-adaptivity` ·
+> **status** active · **tracks** baselines, evaluation, method, env-stickbutton2d
+<!--/strip-->
+
+**What.** Stand PIGINet up on StickButton2D and reproduce the DD2D comparison notebook
+there — the representation contrast (low-level predictor vs abstract-first re-ranker) on
+the second environment. Three seeds each, BCE arm, AUPRC-selected, same 267/90 train/val
+and same 100-problem test split as SPECTRE v3, same labels.
+
+**Result — the comparison table.** Mean rollout FP on the test split (n = 100), uncensored;
+`sd` is across the three seeds.
+
+| method | ALL | sd | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|---|
+| astar-dist (planner order) | 16.29 | — | 0.08 | 0.56 | 2.96 | 61.56 |
+| PIGINet | 2.02 | 0.19 | 0.08 | 0.32 | **1.31** | 6.39 |
+| SPECTREv3-static | 1.98 | 0.28 | 0.08 | 0.32 | 1.52 | 5.99 |
+| SPECTREv3-adaptive | **1.69** | 0.26 | 0.08 | 0.24 | 1.13 | **5.29** |
+
+Paired bootstrap over the 100 test problems (seed-averaged per problem, 10 000 resamples):
+
+| comparison | Δ | 95% CI | separates |
+|---|---|---|---|
+| v3-adaptive − PIGINet | −0.337 | [−0.723, +0.053] | **no** |
+| v3-static − PIGINet | −0.047 | [−0.437, +0.353] | **no** |
+| v3-adaptive − v3-static | −0.290 | [−0.517, −0.073] | **yes** |
+| PIGINet − astar-dist | −14.267 | [−21.383, −7.970] | **yes** |
+
+**Takeaway — on StickButton2D the representation advantage does not reproduce; adaptivity
+is the only thing that separates.** Two readings, and the second is the load-bearing one.
+
+1. Both learned methods crush the planner order (−14.3 FP for PIGINet alone). The
+   feasibility-prediction problem is real here and learning solves a lot of it.
+2. **SPECTRE v3 and PIGINet are statistically indistinguishable**, in *both* deployment
+   modes. The abstract-first representation buys nothing measurable over the low-level one
+   on this environment (v3-static − PIGINet = −0.05, CI spanning zero). What *is*
+   significant is the adaptive increment within SPECTRE: −0.29 FP, CI excluding zero.
+
+That inverts DD2D's attribution. There the static representation carried ~73% of the margin
+and adaptivity ~27% (`notebook/01` 2026-06-06). Here the static representation carries
+**none** of it and adaptivity carries all of it. The pivot's framing — "abstract-first is
+the leading candidate, adaptivity is a secondary composable increment" — survives DD2D and
+does not survive this environment unchanged.
+
+**Three caveats, all of which cut in PIGINet's favour and none of which rescue the claim.**
+
+- **PIGINet's image channel is degenerate here by construction.** Every unpressed button is
+  the same red disc, so CLIP separates only {button, stick, robot} — information the type
+  literals already carry. PIGINet matches v3 *despite* getting nothing from pixels; its
+  pose/shape channels are doing the work. An environment with informative perception would,
+  if anything, favour it more.
+- **`at-pose` literals are synthesised by our adapter**, not stored. SB2D's abstract initial
+  state names no positions, so a low-level predictor would otherwise receive none. This is
+  a deliberate construction to make PIGINet a fair comparator rather than a strawman; it is
+  also the single largest discretionary choice in the port.
+- **b5's train split is 17 episodes** for both methods. Its column is substantially a
+  generalisation number. Both share the split, so neither is advantaged — but the b5 gap
+  (5.29 vs 6.39) is the least trustworthy cell in the table.
+
+**Sample size, stated rather than glossed.** v3-adaptive − PIGINet is −0.337 with CI
+[−0.723, +0.053] — *nearly* separating. This is "indistinguishable at n = 100 and 3 seeds",
+not "equal". A larger test split or more seeds could resolve it either way, and that is the
+cheapest experiment that would sharpen this row.
+
+**Takeaway/next.** The honest cross-environment statement today is: *the abstract
+representation wins on DD2D and ties on StickButton2D, while the adaptive increment is
+positive on both.* Before that goes in a paper: (1) finish the b3/b5 train splits so b5 is
+not a 17-episode extrapolation; (2) decide whether the near-miss CI warrants more seeds;
+(3) note that DD2D's own PIGINet row and this one now come from the same code, verified
+unchanged at FP 17.0500.
+
+---
+
 <a id="2026-08-01-sb2d-collection-b1-b5-bracket-v3-1"></a>
 ## 2026-08-01 — SB2D collection, B1-B5 bracket, and v3 at 1.69 FP
 

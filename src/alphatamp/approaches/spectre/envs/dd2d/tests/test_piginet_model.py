@@ -13,10 +13,10 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.envs.dd2d.piginet.dataset import record_tokens
-from alphatamp.approaches.spectre.envs.dd2d.piginet.encoders import Encoders
-from alphatamp.approaches.spectre.envs.dd2d.piginet.model import PIGINet
-from alphatamp.approaches.spectre.envs.dd2d.piginet.tokenize import PIGINetTokenizer
+from alphatamp.approaches.spectre.piginet.dataset import record_tokens
+from alphatamp.approaches.spectre.piginet.encoders import Encoders
+from alphatamp.approaches.spectre.piginet.model import PIGINet
+from alphatamp.approaches.spectre.piginet.tokenize import PIGINetTokenizer
 from alphatamp.approaches.spectre.envs.dd2d.record import PIGINetExample
 
 

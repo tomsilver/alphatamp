@@ -189,6 +189,41 @@ Three things that are easy to get silently wrong:
 the consequence is that the target-relative feature block degrades to absolute world
 coordinates, which is fine in a fixed world frame and is not fine in a moving one.
 
+## 5. Porting the *comparator*, not just SPECTRE
+
+Everything above ports the re-ranker. A new environment is only a *result* once the
+low-level baseline runs there too — otherwise the representation question has no second
+side. `piginet/` is env-agnostic since 2026-08-01; an adapter answers three questions
+(`piginet/domain.py`) and nothing else:
+
+| | what it supplies | DD2D | StickButton2D |
+|---|---|---|---|
+| vocabulary | glosses + a stable word order | 21 words | 17 words |
+| numeric scales | `frame_extent`, `shape_max` | cm, 50×40 drawer | m, 3.5×2.5 world |
+| data | `problems(split)`, `crops(split, pid)` | JSON tree + PNGs | `EpisodeRecord` + rasteriser |
+
+**The scales are the part that will bite you, and it fails silently.** PIGINet divides
+poses by the frame and shapes by per-field maxima so both land in `[-1, 1]`. Ported against
+another domain's constants, StickButton2D's shape features read `|mean| 0.0061` (max 0.05)
+instead of `0.372` — a channel ~60× flatter, i.e. off. Nothing raises; the baseline just
+looks hopeless, and "the low-level predictor loses here" is then a unit bug you are about
+to publish. **Print the normalised feature distributions before training anything.**
+
+Two more things the StickButton2D port needed that are not obvious:
+
+- **Synthesise pose literals if your abstract initial state has none.** SB2D's `s_0` is two
+  atoms and names no coordinates. A low-level predictor that receives no positions is not
+  one, so the adapter emits an `at-pose` literal per object, mirroring what DD2D's records
+  carry natively. Without it the comparison is rigged in the abstraction's favour.
+- **Build the examples from the same records SPECTRE trains on.** Then the two methods'
+  labels are identical *by construction* rather than by agreement, and any gap between them
+  is about representation rather than about two separately-produced label sets.
+
+Ask early whether your environment's perception is informative at all. On SB2D every
+unpressed button renders identically, so PIGINet's image channel separates only
+{button, stick, robot} — which the type literals already give. That does not invalidate the
+row, but it bounds what it shows, and it is much better known before the run than after.
+
 ---
 
 ## What you do **not** provide

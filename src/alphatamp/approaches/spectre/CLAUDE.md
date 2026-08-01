@@ -284,6 +284,27 @@ mean over unbalanced strata as a method comparison.
 | B4 adaptive-historical | 22.56 | 0.08 | 0.24 | 26.88 | 63.04 |
 | B1 random | 21.04 | 0.24 | 5.22 | 47.79 | 30.90 |
 
+**The comparison row, and the result that matters most.** PIGINet is env-agnostic since
+2026-08-01 (`piginet/` + per-env adapters), so SB2D has the representation contrast:
+
+| method | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+| PIGINet (low-level) | 2.02 ± 0.19 | 0.08 | 0.32 | 1.31 | 6.39 |
+| SPECTREv3-static | 1.98 ± 0.28 | 0.08 | 0.32 | 1.52 | 5.99 |
+| SPECTREv3-adaptive | **1.69 ± 0.26** | 0.08 | 0.24 | 1.13 | 5.29 |
+
+**On SB2D the representation advantage does not reproduce.** Paired bootstrap over the 100
+test problems: v3-static − PIGINet = −0.05, CI [−0.44, +0.35]; v3-adaptive − PIGINet =
+−0.34, CI [−0.72, +0.05] — **neither separates**. What does is the adaptive increment
+within SPECTRE (−0.29, CI [−0.52, −0.07]). That *inverts* DD2D's attribution, where the
+static representation carried ~73% and adaptivity ~27%. Honest cross-environment statement:
+**the abstract representation wins on DD2D and ties on SB2D; the adaptive increment is
+positive on both.** Read it with the caveats in
+[`notebook/07`](docs/notebook/07-stickbutton2d.md) — PIGINet's image channel is degenerate
+here yet it still matches v3, and the `at-pose` literals it reads are synthesised by our
+adapter, not stored.
+
 **Three things to quote together, not separately** — all in
 [`notebook/07`](docs/notebook/07-stickbutton2d.md):
 

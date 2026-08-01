@@ -28,7 +28,6 @@ import torch
 import torch.nn as nn
 
 from .encoders import D, Encoders
-from .glosses import gloss
 
 
 def _sinusoidal_pe(n: int, d: int, device) -> torch.Tensor:

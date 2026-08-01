@@ -1,76 +1,41 @@
-"""PIGINet training-example record schema + construction.
+"""DD2D's builders for the PIGINet training-example schema.
 
-One :class:`PIGINetExample` is exactly the tuple the PIGINet paper feeds its
-feasibility predictor f(I, pi, G) (paper lines 67-76, 197, 223):
+The schema itself (:class:`PIGINetExample`, :class:`ImageRef`) moved to
+``spectre/piginet/record.py`` on 2026-08-01, when the PIGINet stack was lifted out of the
+DD2D tree to take a second environment. Those dataclasses were always domain-neutral; what
+is DD2D-specific is everything below -- reading literals, objects and images out of a
+:class:`SortingProblem` -- and that stays here. They are re-exported so every existing
+``from ...record import PIGINetExample`` keeps resolving.
 
-    objects O, initial literals I, goal literals G, a task plan pi (the skeleton
-    with continuous args omitted -- paper Table II), per-object segmented images,
-    and a noisy feasibility label (positive iff refinement found a binding).
-
-This is the artefact a re-implemented PIGINet will consume. Field-by-field mapping
-to the original ``fastamp`` contract (``get_facts_goals_visuals`` and the ``PVT``
-checker in ``pybullet_planning/pigi_tools/feasibility_checkers.py``) is documented
-in ``docs/piginet_record_schema.md``.
-
-Image *pixels* are deferred (see ``rendering.py``), but the image schema is fully
-present: each entry names an object, a viewpoint, an optional file path, a
-segmentation id, and a bounding box, so wiring real crops later is mechanical.
+Field-by-field mapping to the original ``fastamp`` contract (``get_facts_goals_visuals``
+and the ``PVT`` checker in ``pybullet_planning/pigi_tools/feasibility_checkers.py``) is
+documented in ``docs/piginet_record_schema.md``.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, field
 from typing import Any
+
+from alphatamp.approaches.spectre.piginet.record import (
+    SCHEMA_VERSION,
+    ImageRef,
+    PIGINetExample,
+)
 
 from .problem import SortingProblem
 from .refine import RefineResult
 from .skeleton import Skeleton
 
-SCHEMA_VERSION = "1.0"
-
-
-@dataclass
-class ImageRef:
-    """A reference to one per-object segmented image (pixels optional)."""
-
-    object: str
-    view: str  # "topdown" | "oblique" | ...
-    seg_id: int | None = None  # segmentation id within the rendered frame
-    bbox: list[int] | None = None  # [row_min, col_min, row_max, col_max]
-    path: str | None = None  # file path once pixels are rendered; None = deferred
-
-
-@dataclass
-class PIGINetExample:
-    problem_id: str
-    objects: list[dict]  # {name, category, color, size, is_blocker, start_table}
-    init_literals: list[list[str]]  # I
-    goal_literals: list[list[str]]  # G
-    task_plan: list[list[str]]  # pi: [operator, *args] per step, no continuous args
-    label: bool  # feasibility (positive iff refined within budget)
-    label_source: str  # how the label was decided
-    refine: dict  # refinement diagnostics
-    images: list[dict] = field(default_factory=list)  # list[ImageRef-as-dict]
-    provenance: dict = field(default_factory=dict)
-    schema_version: str = SCHEMA_VERSION
-
-    # -- serialisation -------------------------------------------------------
-    def to_json(self, indent: int | None = 2) -> str:
-        return json.dumps(asdict(self), indent=indent)
-
-    @classmethod
-    def from_json(cls, text: str) -> "PIGINetExample":
-        return cls(**json.loads(text))
-
-    def save(self, path: str) -> None:
-        with open(path, "w") as f:
-            f.write(self.to_json())
-
-    @classmethod
-    def load(cls, path: str) -> "PIGINetExample":
-        with open(path) as f:
-            return cls.from_json(f.read())
+__all__ = [
+    "SCHEMA_VERSION",
+    "ImageRef",
+    "PIGINetExample",
+    "extract_init_literals",
+    "extract_goal_literals",
+    "object_table",
+    "build_image_refs",
+    "build_example",
+]
 
 
 # --------------------------------------------------------------------------- #

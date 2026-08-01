@@ -42,19 +42,25 @@ def _rollout_fp_group(scores, labels) -> float | None:
 
 
 @torch.no_grad()
-def score_split(ckpt_path, data_root, cache_dir, split, device="cpu"):
+def score_split(ckpt_path, data_root, cache_dir, split, device="cpu", domain=None):
+    """Per-candidate logits for one split.
+
+    ``domain`` selects the environment adapter; ``None`` keeps DD2D, so every pre-lift
+    call site scores exactly what it scored before.
+    """
     ckpt = torch.load(ckpt_path, map_location=device)
     enc = Encoders(
         device=device,
         obj_channels=tuple(ckpt.get("obj_channels", ("img", "pose", "shape"))),
+        domain=domain,
     )
     model = PIGINet(enc, device=device, n_max=int(ckpt.get("n_max", 64)))
     # strict=False: slimmed ckpts omit the frozen CLIP params (enc.clip.*), which the fresh
     # Encoders already restored from the pretrained weights. Full (legacy) ckpts also load fine.
     model.load_state_dict(ckpt["state_dict"], strict=False)
     model.eval()
-    precompute_clip_cache(data_root, split, enc, cache_dir)
-    ds = PIGINetDataset(data_root, split, cache_dir, subsample_k=0)
+    precompute_clip_cache(data_root, split, enc, cache_dir, domain=domain)
+    ds = PIGINetDataset(data_root, split, cache_dir, subsample_k=0, domain=domain)
     rows = []  # (pid, stratum, plan_idx, length, label, score)
     for g in ds.groups:
         logits, _, _ = model([g])

@@ -23,7 +23,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .glosses import VOCAB, gloss
+from .dd2d_adapter import DD2DDomain
 
 CLIP_DIM = 512
 D = 256
@@ -34,9 +34,13 @@ VALUE_LENS = {"pose": 3, "shape": 4}
 _SUM_L = sum(VALUE_LENS.values())  # 7
 _VAL_IN = len(VALUE_TYPES) + _SUM_L  # one-hot(2) + padded(7) = 9
 
-# fixed domain normalisers (cm; DD2D shapes.py / scene.py ranges) so shape values land ~[-1,1]
-_SHAPE_MAX = np.array([25.0, 25.0, 150.0, 1.0], dtype=np.float32)  # w, h, area, concave
 _TWO_PI = 2.0 * np.pi
+
+# The normalisers used to live here as module constants in DD2D centimetres
+# (`_SHAPE_MAX = [25, 25, 150, 1]`, pose divisor defaulting to `(50, 40)`). They are now
+# `domain.shape_max` / `domain.frame_extent`, because a second environment measured in
+# metres would silently underflow every feature to ~0 against them -- see `domain.py`.
+# `DD2DDomain` carries the identical values, so DD2D checkpoints are unaffected.
 
 
 def _mlp(d_in: int, d_out: int) -> nn.Sequential:
@@ -53,10 +57,15 @@ class Encoders(nn.Module):
         obj_channels: tuple[str, ...] = ("img", "pose", "shape"),
         clip_name: str = "ViT-B-32",
         pretrained: str = "laion2b_s34b_b79k",
+        domain=None,
     ) -> None:
         super().__init__()
         import open_clip
 
+        # Defaults to DD2D so every existing call site -- tests, `eval.score_split`, the
+        # cache driver -- keeps constructing exactly the encoder it constructed before the
+        # package was lifted out of `envs/dd2d/`.
+        self.domain = domain if domain is not None else DD2DDomain()
         self.d = d
         self.device = torch.device(device)
         assert all(c in ("img", "pose", "shape") for c in obj_channels) and obj_channels
@@ -88,13 +97,15 @@ class Encoders(nn.Module):
 
         # precompute CLIP-text of every gloss once (fixed vocab)
         self.register_buffer("_text_cache", self._build_text_cache(), persistent=False)
-        self._word_index = {w: i for i, w in enumerate(VOCAB)}
+        self._word_index = {w: i for i, w in enumerate(self.domain.vocab)}
         self.to(self.device)
 
     # -- CLIP-text cache -----------------------------------------------------
     @torch.no_grad()
     def _build_text_cache(self) -> torch.Tensor:
-        toks = self.tokenizer([gloss(w) for w in VOCAB]).to(self.device)
+        toks = self.tokenizer([self.domain.gloss(w) for w in self.domain.vocab]).to(
+            self.device
+        )
         feats = self.clip.encode_text(toks).float()  # (|VOCAB|, 512)
         return feats
 
@@ -107,14 +118,14 @@ class Encoders(nn.Module):
     def _norm_values(self, vtype: str, values, drawer_wh=None) -> np.ndarray:
         v = np.asarray(values, dtype=np.float32)
         if vtype == "pose":
-            W, D_ = drawer_wh or (50.0, 40.0)
+            W, D_ = drawer_wh or self.domain.frame_extent
             x, y, th = v
             return np.array(
                 [2.0 * x / W - 1.0, 2.0 * y / D_ - 1.0, (th % _TWO_PI) / np.pi - 1.0],
                 dtype=np.float32,
             )
         if vtype == "shape":
-            return (v / _SHAPE_MAX).astype(np.float32)
+            return (v / self.domain.shape_max).astype(np.float32)
         raise ValueError(vtype)  # pragma: no cover
 
     def _typed_padded(self, vtype: str, norm: np.ndarray) -> torch.Tensor:
@@ -159,7 +170,7 @@ class Encoders(nn.Module):
     def value_feat_batch(self, vtype: str, values, drawer_wh=None) -> torch.Tensor:
         v = np.asarray(values, dtype=np.float32).reshape(-1, VALUE_LENS[vtype])
         if vtype == "pose":
-            W, D_ = drawer_wh or (50.0, 40.0)
+            W, D_ = drawer_wh or self.domain.frame_extent
             norm = np.stack(
                 [
                     2.0 * v[:, 0] / W - 1.0,
@@ -169,7 +180,7 @@ class Encoders(nn.Module):
                 axis=1,
             ).astype(np.float32)
         else:  # shape
-            norm = (v / _SHAPE_MAX).astype(np.float32)
+            norm = (v / self.domain.shape_max).astype(np.float32)
         return self.mlp_val(self._typed_padded_batch(vtype, norm))  # (n, d)
 
     def object_feat_batch(self, clip512, pose, shape, drawer_wh=None) -> torch.Tensor:

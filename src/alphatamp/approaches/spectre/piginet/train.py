@@ -126,20 +126,26 @@ def _rollout_fp_by_stratum(logits, labels, pids, strata) -> dict:
     return {st: float(np.mean(v)) for st, v in per_stratum.items() if v}
 
 
-def reference_baselines(data_root, split) -> dict:
+def reference_baselines(data_root, split, domain=None) -> dict:
     """Non-learned rollout-FP baselines the model must beat, from the full-pool records:
 
     astar-order (the collection order = the deployment Baseline), and the plan-length
     heuristic (the confound). Computed once; printed as the honest bar.
-    """
-    import glob
 
+    Reads through the domain rather than globbing a record tree, so an environment whose
+    examples are built in memory from `EpisodeRecord` pickles gets its bar printed too --
+    and gets it from the *same* examples the model trains on, not a parallel path.
+    """
+    if domain is None:
+        from .dd2d_adapter import DD2DDomain
+
+        domain = DD2DDomain(data_root)
     by = defaultdict(list)
-    for r in glob.glob(os.path.join(data_root, split, "*", "[0-9]*.json")):
-        ex = json.load(open(r))
-        by[ex["problem_id"]].append(
-            (ex["provenance"]["plan_idx"], len(ex["task_plan"]), int(ex["label"]))
-        )
+    for pid, examples in domain.problems(split):
+        for ex in examples:
+            by[pid].append(
+                (ex.provenance["plan_idx"], len(ex.task_plan), int(ex.label))
+            )
 
     def rfp(scorer):
         fps = []
@@ -391,11 +397,42 @@ def _slim_state_dict(model) -> dict:
     }
 
 
+def _build_domain(args):
+    """The environment adapter this run trains against.
+
+    DD2D is the default so every existing command line is unchanged. The adapters differ
+    in more than data location: their value normalisers are in different units, and using
+    the wrong one silently collapses every shape feature toward zero rather than raising
+    (measured: StickButton2D shapes read |mean| 0.006 against DD2D's centimetre divisors,
+    0.372 against its own).
+    """
+    if args.domain == "stickbutton2d":
+        from .sb2d_adapter import SB2DDomain
+
+        return SB2DDomain(args.data_root, args.env_variant)
+    from .dd2d_adapter import DD2DDomain
+
+    return DD2DDomain(args.data_root)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--data-root", default=os.path.join("data", "dd2d", "raw"))
+    ap.add_argument(
+        "--domain",
+        default="dd2d",
+        choices=("dd2d", "stickbutton2d"),
+        help="which environment's adapter supplies the vocabulary, the value "
+        "normalisers and the split. Defaults to dd2d, so every pre-2026-08-01 command "
+        "line trains exactly what it trained before.",
+    )
+    ap.add_argument(
+        "--env-variant",
+        default="stickbutton2d_v1",
+        help="collection the stickbutton2d domain reads (ignored for dd2d)",
+    )
     ap.add_argument("--cache-dir", default=os.path.join("out_dd2d", "clip_cache"))
     ap.add_argument("--out", default=os.path.join("out_dd2d", "piginet"))
     ap.add_argument("--arm", default="compare", choices=("compare",) + ARMS)
@@ -444,10 +481,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 
-    enc = Encoders(device=args.device)
+    domain = _build_domain(args)
+    enc = Encoders(device=args.device, domain=domain)
+    print(
+        f"# domain={domain.name} frame={domain.frame_extent} "
+        f"shape_max={list(domain.shape_max)}"
+    )
     print("# precomputing CLIP caches (frozen, one-time) …")
     for sp in ("train", "val"):
-        precompute_clip_cache(args.data_root, sp, enc, args.cache_dir)
+        precompute_clip_cache(args.data_root, sp, enc, args.cache_dir, domain=domain)
 
     if args.tiny:
         import glob
@@ -490,14 +532,24 @@ def main(argv=None) -> int:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     tds = PIGINetDataset(
-        args.data_root, "train", args.cache_dir, subsample_k=args.k, seed=args.seed
+        args.data_root,
+        "train",
+        args.cache_dir,
+        subsample_k=args.k,
+        seed=args.seed,
+        domain=domain,
     )
     vds = PIGINetDataset(
-        args.data_root, "val", args.cache_dir, subsample_k=0, seed=args.seed
+        args.data_root,
+        "val",
+        args.cache_dir,
+        subsample_k=0,
+        seed=args.seed,
+        domain=domain,
     )
     pw = _pos_weight(tds)
     print(f"# train groups {len(tds)} | val groups {len(vds)} | pos_weight {pw:.1f}")
-    base = reference_baselines(args.data_root, "val")
+    base = reference_baselines(args.data_root, "val", domain)
     print(
         f"# VAL rollout-FP baselines to beat: astar-order {base['astar_order']:.2f} | "
         f"length-long {base['length_long']:.2f} | length-short {base['length_short']:.2f} | "
