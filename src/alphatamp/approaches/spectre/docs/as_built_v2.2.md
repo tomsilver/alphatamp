@@ -25,7 +25,7 @@ other file to understand the architecture; the other docs are provenance.
 > short-first prior on the easier data**; dropping the prior restores **SPECTREv2-adaptive
 > to best overall (13.68, s3 fixed 23.92)**. PIGINet is now retrained (BCE/AUPRC) — P2 is
 > no longer deferred — and a zero-shot **VLMPlan** baseline was added. Details:
-> `decisions.md`/`notebook.md` 2026-07-24/25. The v2.2 *system architecture* (model_v2 /
+> `decisions.md`/[`notebook.md` 2026-07-24](notebook/README.md)/25. The v2.2 *system architecture* (model_v2 /
 > dataset_v2 / proof-demotion / losses) is unchanged; what changed is the dataset, the
 > deployed config (prior off for v3), and the comparison landscape.
 
@@ -395,7 +395,7 @@ PIGINet 18.60).
 **The prior artifact (why the first v3 run "reversed").** The 2026-07-24 rebuild showed
 SPECTREv2-adaptive collapsing to 24.96 (s3 **85.52**, *worse than v1*) and PIGINet "winning" —
 impossible on merit, since v2 has strictly more information than v1. Diagnosis
-(`decisions.md` / `notebook.md` 2026-07-25): the pipeline was faithful (rescoring the *surviving*
+(`decisions.md` / [`notebook.md` 2026-07-25](notebook/README.md)): the pipeline was faithful (rescoring the *surviving*
 original dd2d_v2 checkpoint reproduces 17.09 exactly) and the recipe/code byte-identical; the
 failure was **training divergence into the short-first length shortcut** — the `--use-prior`
 residual `[−index, −len]` over-biases cross-length ordering on the easier v3 data, buries the
@@ -437,7 +437,7 @@ The core of the proposal was executed faithfully:
 |---|---|---|---|
 | 1 | **Harvest** replays the refiner's deepest bound prefix (`bound_plan`) into a fresh `DrawerWorld`; harvests refiner-trace facts incl. `extracted-ok`/`packed-ok`; writes `harvest_prefix` + a replayable `state_hash` (§6.2). | Harvest **reconstructs** facts from *stored geometry* (`blocked-at-contents`, `grasp-witness`, `pack-impossible`) + reads hints off *stored `refiner_metadata`* (`extraction-failed`, `pack-exhausted`). **No re-refinement.** Refiner-trace-only facts and `harvest_prefix`/`state_hash` are **deferred/empty**. | The definitive collection deliberately dropped `bound_plan` (decoupled the expensive certificate/harvest from the multi-hour collection). Re-refinement would require regenerating the scene — the exact bug the *reconstruct-don't-regenerate* rule forbids. The metadata hints (`failure_action` ≈ 93% `pick` at λ=0.8) are what keep the hint tier non-empty. |
 | 2 | Step 4 picked **λ* = 0.5** (max oracle−GBDT gap). | **λ* = 0.8.** `choose_lambda_star` gained an `operating_range=(0.7, 0.95)` constraint. | 0.5 is off-design (tighter than DD2D was built for); at 0.5 stratum-3 is nearly ungenerable (~18 h for a balanced 125). 0.8 is the design default where s3 generates, feasibility is highest, and within-length degradation still holds. |
-| 3 | Domain-flavored static scalars stay **harness-side** as null models the encoder must beat; schema-generic scalars *may* be model inputs (§7). | A **default-order prior** `[−index/K, −len/max_len]` is folded into the model as an **additive residual** (init-toward-default-order). **Data-dependent (2026-07-25): dropped for the deployed dd2d_v3 model.** | index/length are schema-generic planner signals (not DD2D geometry), so this is within the spec's allowance — and it realizes the P2 caveat ("fold the distance/default prior in as a feature") *early*. It was load-bearing for the dd2d_v2 length-bias fix, **but the prior is not universal**: its short-first bias over-biases cross-length ordering on the easier grasp-fixed dd2d_v3 (buries the long s3 feasibles → s3 collapse + training divergence), so the deployed v3 model **drops it**, chosen on val (§3.7; `decisions.md` 2026-07-25). |
+| 3 | Domain-flavored static scalars stay **harness-side** as null models the encoder must beat; schema-generic scalars *may* be model inputs (§7). | A **default-order prior** `[−index/K, −len/max_len]` is folded into the model as an **additive residual** (init-toward-default-order). **Data-dependent (2026-07-25): dropped for the deployed dd2d_v3 model.** | index/length are schema-generic planner signals (not DD2D geometry), so this is within the spec's allowance — and it realizes the P2 caveat ("fold the distance/default prior in as a feature") *early*. It was load-bearing for the dd2d_v2 length-bias fix, **but the prior is not universal**: its short-first bias over-biases cross-length ordering on the easier grasp-fixed dd2d_v3 (buries the long s3 feasibles → s3 collapse + training divergence), so the deployed v3 model **drops it**, chosen on val (§3.7; [`decisions.md` 2026-07-25](decisions/README.md)). |
 | 4 | Computed overlap features: witness-overlap counts (max/mean), coverage flags, proven-dead flag, proven-prefix credit (§7). | Reduced to `[dead = subset ⊆ blocked, max-Jaccard-with-failed]`. | The `dead` flag (sound proof-demotion) + a mild Jaccard hint were sufficient to fix the evidence-harm; prefix-credit facts depend on the deferred trace harvest (#1). |
 | 5 | — (not in the proposal) | **within-length PL loss**, **rollout-based difficulty-normalized selection**, and the **`demotion_source` observed/computed flag** were added. | The post-Step-11 length-bias arc. The within-length loss removes length as a shortcut cue; difficulty-normalized selection stops hard episodes dominating checkpoint choice; the observed default makes proof-demotion hard-coding-free (the computed predicate becomes an opt-in worth a measured ~14%). |
 | 6 | **Wall-clock is the primary metric** (§10.1), FP secondary. | On DD2D, **FP is primary in practice**; wall-clock falls back to an EGE/`n_attempts` proxy. | The DD2D converter sets `refinement_wall_clock_s = 0` — per-skeleton refine time isn't in the raw JSON. Full timing would need a collector change. Disclosed; wall-clock remains primary on native-collection envs (RT2D). |
@@ -453,7 +453,7 @@ The core of the proposal was executed faithfully:
 - **VLMPlan zero-shot baseline** — **added** (2026-07-24/25, separate work): a
   zero-training-data VLM planner (`vlmplan/`, KinDER convention) occupying the data-axis
   endpoint, run on the dd2d_v3 test split (two model arms). Protocol: `decisions.md`
-  2026-07-24; v3 test run: `decisions.md` 2026-07-25. Not a v2.2 module — noted for the
+  2026-07-24; v3 test run: [`decisions.md` 2026-07-25](decisions/README.md). Not a v2.2 module — noted for the
   comparison landscape.
 - **Step 12 — shape-family shift / P3** (the registered "larger evidence
   increment under shift" test): no experiment/test; only render-family fragments

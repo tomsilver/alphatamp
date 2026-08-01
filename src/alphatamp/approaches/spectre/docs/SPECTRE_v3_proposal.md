@@ -252,7 +252,7 @@ regions in 3D with no new mechanism.
 > They carry the headline result: **7.56 vs deployed v2.2's 14.66, −7.10 FP, CI
 > [−9.52, −4.96]**, weakly dominating at every stratum. §5.3's `clears` defence still applies
 > and is now stronger: `clears` was a geometry routine *we* ran; this is the refiner reporting
-> a collision check it already performed. See [`decisions.md`](decisions.md) 2026-07-27 and
+> a collision check it already performed. See [`decisions.md` 2026-07-27](decisions/README.md) and
 > [`as_built_v3.md`](as_built_v3.md) §7. Read the rest of this section as the *design intent*
 > that the built system realises differently, not as a description of the code.
 
@@ -322,6 +322,20 @@ instrumentation — recording computations that already ran (C2's "things we wou
 anyway") — yields:
 
 ### 6.1 The record
+
+> **`s_j` was built 2026-07-28** (`--state-delta`, off by default) — the schema's last
+> unimplemented field. It is carried as the **delta from `s_0`** — which atoms the prefix
+> added, which it deleted — because `s_0` already reaches the scorer through the scene
+> tokens. It lives on `FailureRecord` as `state_delta`, derived by STRIPS progression over
+> the candidate's own plan, so it needs **no new instrumentation**: any environment that
+> can supply an `EpisodeRecord` gets it free.
+>
+> **On DD2D it ties** the deployed config at 6 seeds (8.23 ± 1.36 vs 7.90 ± 0.61, CI
+> [−0.30, +1.07]) with the feature demonstrably consumed, so it is kept and left off. Two
+> measured DD2D properties bound what it could show there and are *not* properties of the
+> mechanism: the delta's object set equals `all_objects − unmoved` on 946,063/946,063
+> records, and under `aggregate_records` ~48% of tokens (55% at s2/s3) carry an empty
+> delta. See `as_built_v3.md` §4 and [`decisions.md` 2026-07-28](decisions/README.md).
 
 ```
 FailureRecord(σ):

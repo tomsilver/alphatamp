@@ -59,3 +59,51 @@ def test_preserves_outcomes_and_summary() -> None:
     assert canon.outcomes == ep.outcomes
     assert canon.summary == ep.summary
     assert canon.provenance == ep.provenance
+
+
+def test_class2_deviation_object_names_are_renamed() -> None:
+    """Object names *inside* ``dev_added``/``dev_deleted`` follow the renaming.
+
+    This is the nested case of the trap ``_remap_refiner_metadata`` exists for: if the
+    arguments of a serialized deviation atom keep their raw names, they stop resolving
+    against the canonical scene tags and every class-2 record degenerates to "some
+    failure of some schema" -- silently, because nothing raises on an unresolved tag.
+    """
+    ep = build_toy_episode(num_blocks=4, outcomes=("fail", "fail", "fail", "success"))
+    raw_name = next(n for n, t in ep.object_registry.items() if t == "block")
+    ep.outcomes[0].refiner_metadata["failures"] = [
+        {
+            "step_index": 0,
+            "schema": "pick",
+            "args": [raw_name],
+            "culprits": [],
+            "dev_added": [["Pressed", [raw_name]], ["AboveNoButton", []]],
+            "dev_deleted": [["Holding", [raw_name, raw_name]]],
+            "dev_blame": [raw_name],
+        }
+    ]
+
+    # A permutation makes the mapping non-trivial, so a pass-through would be visible.
+    canon = canonicalize_episode(ep, rng=np.random.default_rng(3))
+    entry = canon.outcomes[0].refiner_metadata["failures"][0]
+    canonical = entry["args"][0]
+    assert canonical in canon.object_registry
+    # The deviation must follow the *same* mapping as the flat `args` list; any other
+    # name here is a tag that will not resolve against the scene tokens.
+    assert entry["dev_added"] == [["Pressed", [canonical]], ["AboveNoButton", []]]
+    assert entry["dev_deleted"] == [["Holding", [canonical, canonical]]]
+    assert entry["dev_blame"] == [canonical]
+
+
+def test_metadata_without_deviation_keys_is_untouched() -> None:
+    """Exact absence: a DD2D-shaped entry gains no keys it did not have."""
+    ep = build_toy_episode(outcomes=("fail", "success"))
+    ep.outcomes[0].refiner_metadata["failures"] = [
+        {"step_index": 0, "schema": "retrieve", "args": [], "culprits": ["__wall__"]}
+    ]
+    entry = (
+        canonicalize_episode(ep, rng=None).outcomes[0].refiner_metadata["failures"][0]
+    )
+    assert "dev_added" not in entry and "dev_blame" not in entry
+    # A non-object sentinel stays visible as itself rather than being dropped.
+    assert entry["culprits"] == ["__wall__"]

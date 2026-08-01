@@ -18,7 +18,7 @@ ignore-paths=.*/envs/dd2d/(?!spectre_).*
 # Add files or directories matching the regex patterns to the blacklist. The
 # regex matches against base names, not paths.
 # analyze_spectre.py is a marimo notebook (not standard source); skip linting it.
-ignore-patterns=analyze_spectre\.py$|compare_dd2d_methods\.py$|precompute_dd2d_cache\.py$
+ignore-patterns=analyze_spectre\.py$|compare_dd2d_methods(_archive)?\.py$|precompute_dd2d_cache\.py$
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().

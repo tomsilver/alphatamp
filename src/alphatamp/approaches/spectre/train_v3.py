@@ -107,6 +107,20 @@ class TrainV3Config:
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
     coverage_feats: bool = False
+    # Which of the pair the net sees, by zeroing the other column: both | coverage |
+    # waste. They have only ever been measured together, so this isolates them.
+    coverage_mode: str = "both"
+    unified_coverage: bool = True
+    """Compute coverage/waste by the unified definitions rather than the deployed
+    ``S(c) = args \\ goal_objects`` formula.
+
+    Default since 2026-07-31: measured -1.66 FP against the 7.44 baseline on dd2d_v4
+    over 3 seeds, CI [-2.71, -0.71], with every seed beating every baseline seed.
+    """
+    # §6.1's `s_j`: each record token also carries the abstract state at its failing
+    # step,
+    # as the delta from s_0 (which atoms the prefix added, which it deleted).
+    use_state_delta: bool = False
     # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
     # evidence from 30% of the rest, so >half of training carries no evidence -- while a
     # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
@@ -188,6 +202,9 @@ class SpectreV3Dataset(Dataset):
             overlap_mode=self.cfg.overlap_mode,
             aggregate_records=self.cfg.aggregate_records,
             coverage_feats=self.cfg.coverage_feats,
+            coverage_mode=self.cfg.coverage_mode,
+            unified_coverage=self.cfg.unified_coverage,
+            state_delta=self.cfg.use_state_delta,
         )
         if not self.cfg.use_records:
             records = []
@@ -206,7 +223,8 @@ def _claim_out_dir(out_dir: Path) -> None:
     """Refuse to start if another live run already owns this checkpoint directory.
 
     Two runs of the same arm silently interleave their writes to ``best.pt``, so the file
-    ends up from whichever finished last and the checkpoint's provenance is unrecoverable.
+    ends up from whichever finished last and the checkpoint's provenance is
+    unrecoverable.
     That happened during the 2026-07-27 push: a relaunch after a crash left two processes
     on one path, and the same config scored 8.57 then 8.39 as the second overwrote the
     first. The conclusion survived because the config was identical; it would not have if
@@ -243,11 +261,16 @@ def _keep(ep, strata: tuple[int, ...]) -> bool:
     return stratum_of(int(ep.provenance.problem_id)) in strata
 
 
-def _make_collate(max_arity: int):
+def _make_collate(max_arity: int, max_pred_arity: int = 1):
     def _collate(items):
         examples = [e for e, _ in items]
         records = [r for _, r in items]
-        return collate_v3(examples, max_arity=max_arity, records=records)
+        return collate_v3(
+            examples,
+            max_arity=max_arity,
+            records=records,
+            max_pred_arity=max_pred_arity,
+        )
 
     return _collate
 
@@ -264,13 +287,23 @@ def deployed_val_fp(
     overlap_mode: str = "both",
     aggregate_records: bool = False,
     coverage_feats: bool = False,
+    coverage_mode: str = "both",
+    unified_coverage: bool = False,
+    state_delta: bool = False,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
-    The demotion rule is pinned to ``permissive`` so the selector measures the *model*,
-    not whichever rule a gate happens to deploy with. ``budget=None`` runs to the pool
-    cap, i.e. uncensored -- the same convention reporting uses, and the only setting
-    under which this statistic can see the s2/s3 tail where models actually differ.
+    ``apply_demotion=False`` is passed **explicitly**, not inherited: proof-demotion was
+    cut from the deployed method on 2026-07-30, and the selector has to measure what is
+    deployed. Spelling it out means a future change to the library default cannot move
+    the selection criterion silently -- and a selector that quietly disagrees with
+    deployment is the failure mode R8 and the censoring lesson were both about.
+
+    ``mode`` is therefore now inert here (it only gates the offset), but is left pinned
+    to ``permissive`` so re-enabling demotion cannot change the selector underneath a
+    comparison. ``budget=None`` runs to the pool cap, i.e. uncensored -- the same
+    convention reporting uses, and the only setting under which this statistic can see
+    the s2/s3 tail where models actually differ.
     """
     model.eval()
     fps = []
@@ -283,10 +316,14 @@ def deployed_val_fp(
             spec=spec,
             max_tags=max_tags,
             mode="permissive",
+            apply_demotion=False,
             max_attempts=budget,
             overlap_mode=overlap_mode,
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
+            coverage_mode=coverage_mode,
+            unified_coverage=unified_coverage,
+            state_delta=state_delta,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -341,7 +378,7 @@ def train_v3(
 
     train_ds = SpectreV3Dataset(train_dir, vocab, cfg, spec)
     val_ds = SpectreV3Dataset(val_dir, vocab, cfg, spec)
-    collate = _make_collate(vocab.max_operator_arity)
+    collate = _make_collate(vocab.max_operator_arity, vocab.max_predicate_arity)
     # Tensorization is ~79% of a training step (measured) and the model is tiny, so the
     # loader is the bottleneck, not the GPU. `persistent_workers` stays off on purpose:
     # workers are re-forked each epoch and so pick up `set_epoch`, which drives both the
@@ -382,6 +419,9 @@ def train_v3(
             use_obj_evidence=cfg.use_obj_evidence,
             evidence_attn=cfg.evidence_attn,
             coverage_feats=cfg.coverage_feats,
+            use_state_delta=cfg.use_state_delta,
+            n_predicates=len(vocab.predicates),
+            max_pred_arity=vocab.max_predicate_arity,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -393,6 +433,7 @@ def train_v3(
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
         f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
         f"tail_max_f={cfg.tail_max_f or 'off'} "
+        f"state_delta={cfg.use_state_delta} "
         f"selection=deployed-val-FP(ma{cfg.select_window}, "
         f"n={len(val_episodes)}, "
         f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
@@ -408,17 +449,26 @@ def train_v3(
             g["lr"] = _lr_at(epoch, cfg)
         tr = _run_epoch(model, train_loader, device, cfg.within_length_weight, opt)
         va = _run_epoch(model, val_loader, device, 0.0, None)
+        # Keyword, not positional: the selector must see exactly the inputs training
+        # feeds,
+        # and a parameter inserted into this list would otherwise shift every switch
+        # after
+        # it by one -- silently selecting under a different configuration than it
+        # trained.
         fp = deployed_val_fp(
             model,
             val_episodes,
             vocab,
             device,
             spec,
-            cfg.max_tags,
-            cfg.select_budget,
-            cfg.overlap_mode,
-            cfg.aggregate_records,
-            cfg.coverage_feats,
+            max_tags=cfg.max_tags,
+            budget=cfg.select_budget,
+            overlap_mode=cfg.overlap_mode,
+            aggregate_records=cfg.aggregate_records,
+            coverage_feats=cfg.coverage_feats,
+            coverage_mode=cfg.coverage_mode,
+            unified_coverage=cfg.unified_coverage,
+            state_delta=cfg.use_state_delta,
         )
         log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
@@ -512,6 +562,24 @@ def main(argv=None) -> int:
         "features, grounded in reported culprits instead of a predicted head)",
     )
     ap.add_argument(
+        "--legacy-coverage",
+        action="store_false",
+        dest="unified_coverage",
+        default=TrainV3Config.unified_coverage,
+        help="compute coverage/waste by the pre-2026-07-31 deployed formula "
+        "(S(c)=args\\goal_objects) instead of the unified definitions of "
+        "docs/unified_culprits_coverage_waste.md. Same two columns and the same tensor "
+        "shape either way; only the scalars change. Kept so the older arm stays "
+        "reproducible -- it measures 1.66 FP worse",
+    )
+    ap.add_argument(
+        "--coverage-mode",
+        default=TrainV3Config.coverage_mode,
+        choices=["both", "coverage", "waste"],
+        help="which of the coverage/waste pair the net sees; the other column is "
+        "zeroed (shape unchanged). Only meaningful with --coverage-feats",
+    )
+    ap.add_argument(
         "--evidence-attn",
         action="store_true",
         help="give evidence its own cross-attention channel instead of making it "
@@ -531,6 +599,12 @@ def main(argv=None) -> int:
         "--sinusoidal-pos",
         action="store_true",
         help="sinusoidal step positions (G9); retires the D-8 equivalence oracle",
+    )
+    ap.add_argument(
+        "--state-delta",
+        action="store_true",
+        help="each record token also carries s_j as the delta from s_0 (§6.1): which "
+        "atoms the failing prefix added and which it deleted",
     )
     ap.add_argument(
         "--train-strata",
@@ -560,6 +634,9 @@ def main(argv=None) -> int:
         use_obj_evidence=a.obj_evidence,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
+        coverage_mode=a.coverage_mode,
+        unified_coverage=a.unified_coverage,
+        use_state_delta=a.state_delta,
         p_empty=a.p_empty,
         p_drop_facts=a.p_drop_facts,
         sinusoidal_pos=a.sinusoidal_pos,
@@ -570,6 +647,11 @@ def main(argv=None) -> int:
         sub += "_norec"
     if a.no_overlap:
         sub += "_noov"
+    if not a.unified_coverage:
+        # Distinct directory: the two definitions produce different features, so a run
+        # must never land on top of a checkpoint trained under the other one. The
+        # *default* (unified) keeps the clean name; the legacy arm is the one marked.
+        sub += "_legacycov"
     sub += a.out_suffix
     out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v3(

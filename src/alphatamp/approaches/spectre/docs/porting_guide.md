@@ -1,14 +1,25 @@
 # Porting SPECTRE v3 to a new environment
 
-The generality claim, stated as a checklist. **Three things are required, and none of them
-is a predicate, a feature, or a fact vocabulary.** DD2D is the worked example throughout;
-its entire environment-specific content is reproduced below and is eight lines.
+The generality claim, stated as a checklist. **Two things are required, and neither is a
+predicate, a feature, or a fact vocabulary**: a converter (§1) and refiner instrumentation
+(§2). The `DomainSpec` (§3) is still read, but since proof-tier demotion was cut from the
+method on 2026-07-30 its **axiom declarations are optional** — nothing consumes a proof
+unless you opt back in. DD2D is the worked example throughout.
 
-> **Status.** This is the *architectural* generality claim — the contract is small and the
-> fallback path is measured. It has **not** yet been demonstrated by an actual transfer:
-> env-2 (Khodeir-style 3D sorting on drake-tamp, `SPECTRE_v3_proposal.md` §7.6) was not
-> attempted. Read it as "here is the interface and here is what it costs", not as
-> "transfer is verified".
+> **Status, updated 2026-08-01.** A transfer has now been attempted: **StickButton2D**,
+> via kinder's own env and refiner rather than a bespoke one. It found **two places where
+> the contract as written below was wrong**, both now fixed and both recorded in §2b and
+> §4:
+>
+> 1. §2's observation schema assumed the refiner can *name* the objects it failed on
+>    (`culprits`). StickButton2D structurally cannot — kinder's collision check returns a
+>    bool — so the port needed a second evidence class, not a second fact type.
+> 2. §1's table lists `scene_geometry` as required but says nothing about what happens
+>    without it: the answer was a training run that exits 0 having written no checkpoint.
+>
+> The env-2 originally planned here (Khodeir-style 3D sorting on drake-tamp,
+> `SPECTRE_v3_proposal.md` §7.6) is still not attempted. Read the cost numbers as
+> "measured once, on an environment that shares the substrate", not as fully general.
 
 ---
 
@@ -24,7 +35,7 @@ One `EpisodeRecord` = one problem, and must carry:
 |---|---|---|
 | `skeleton_pool` | the candidate plans | `operator_seq` of ground operators |
 | `outcomes` | per-candidate `success` / `fail` | plus `refiner_metadata` (below) |
-| `scene_geometry` | per-object boundary ring + pose | the model is geometry-aware; without it the episode is skipped |
+| `scene_geometry` | per-object boundary ring + pose | **required — see §4**; without it the episode is silently skipped |
 | `goal_atoms` | goal literals | `goal_objects` is derived from these |
 | `provenance` | `env_variant`, `problem_id` | `env_variant` selects the `DomainSpec` |
 
@@ -60,7 +71,60 @@ it legal (C2) where computing it ourselves would not be (L2's `clears`).
 If you cannot emit observations at all, the system still runs — records are backfilled from
 `failure_action`-style metadata, more weakly. See `failure_record.py`.
 
-## 3. A `DomainSpec`: per-query axioms, and nothing else
+## 2b. If your refiner cannot *name* what it failed on — the second evidence class
+
+The schema above assumes `culprits`: the refiner's validity check knows which objects it
+rejected on. **That is a property of the refiner, not a given.** StickButton2D has no such
+channel at all — kinder's motion model declines a colliding transition by silently not
+moving, and its collision predicate returns a bool without naming anything. A port that
+only implemented §2 would emit records with an empty `culprits` list, `coverage` and
+`waste` would be identically zero, and v3 would quietly degrade to a static ranker while
+reporting no error whatsoever.
+
+The generalisation (`unified_evidence.py`, §2 of the design doc) is that there are **two**
+ways a refinement can fail, and an environment may afford either:
+
+| class | what it is | what it emits |
+|---|---|---|
+| 1 | a validity check rejects the sample **before** a successor state exists | `culprits` — the objects it named |
+| 2 | the sample **executes** and the trace check finds observed ≠ predicted | `dev_added` / `dev_deleted` — the deviating atoms |
+
+DD2D is entirely class 1; StickButton2D is entirely class 2. Emit whichever your refiner
+affords, in `refiner_metadata["failures"]`; **both keys are always read, and an empty
+channel is inert by construction**, so no consumer branches on the environment. Class 2
+costs nothing extra to produce if your sampler already compares the achieved abstract state
+against the planned one to decide accept-or-reject — which any exact-acceptance sampler
+does. Ours simply keeps what that comparison threw away
+(`envs/stickbutton2d/instrumented_refiner.py`).
+
+Two traps that cost real time here:
+
+- **Serialize deviations as `(predicate, [arg, ...])` name pairs, and rename them in
+  `canonicalize_episode`.** They live in a free-form dict, so nothing type-checks them; if
+  the *nested* argument names are not remapped alongside `args`/`culprits`, every record's
+  tags silently fail to resolve and the whole stream degenerates to "some failure of some
+  schema".
+- **Blame derived from a class-2 deviation is not a culprit.** It is stored in its own
+  `dev_blame` field, because a culprit was named by the environment and this was inferred
+  by us; conflating them would let a model trained where the signal is observed be deployed
+  where it is inferred with nothing recording the difference.
+
+**You do not emit `state_delta`.** The record's abstract-state field (`--state-delta`,
+§6.1's `s_j`) is derived by STRIPS progression over the candidate's own `operator_seq` from
+`initial_abstract_state`, both of which the converter above already supplies. It costs a new
+environment nothing, and its predicate vocabulary comes from the same `train_vocab.json`
+every other component reads.
+
+## 3. A `DomainSpec` — and its axioms are now optional
+
+> **Changed 2026-07-30.** Proof-tier demotion was cut from the deployed method
+> (`decisions.md`), so **"learning is the floor" is the configuration, not the fallback**.
+> The `DomainSpec` is still read — it derives `manipulated`, `goal_objects` and
+> `length_key` from your operator schema, which the loss and the candidate features need —
+> but the `axioms` block below only affects (a) which records are held out of the token
+> path as proof-tier and (b) the opt-in `apply_demotion=True` path. **You can port with
+> `axioms={}`.** On DD2D the offset was worth 0.23 FP and fired on 6% of rollouts; declare
+> the axioms and switch it on if your domain's proofs fire more often.
 
 ```python
 _DD2D = DomainSpec(
@@ -92,6 +156,39 @@ path, not a special case.
 `min_calls_per_schema` is only used to derive the conservative exactness witness for
 *backfilled* records; with real instrumentation it is unused.
 
+## 4. `scene_geometry` — and the way it fails if you forget
+
+Not optional in practice, and its absence is the single most expensive failure mode in this
+guide because **nothing reports it**. `train_v3._trainable()` filters every episode without
+geometry, so `n_train` reaches 0, `deployed_val_fp` returns `inf`, `improved = inf < inf` is
+never true, and the run terminates with **exit code 0 and no `best.pt`** — after however
+many hours the collection took.
+
+Build it from whatever your environment already exposes, and prefer *its own* geometry
+helper to re-deriving shapes; `envs/stickbutton2d/scene_geometry.py` calls kinder's
+`object_to_multibody2d`, the same function its renderer and collision checker use, so the
+recorded footprint cannot drift from the one the refiner enforced. Every key of
+`object_registry` needs an entry (invariant I5).
+
+Three things that are easy to get silently wrong:
+
+- **Pose convention.** kinder's `Rectangle(x, y, w, h, theta)` takes the **lower-left
+  corner**; the schema wants the centroid, and the ring wants to be centred on it. Reading
+  one as the other displaced the 1.25-long stick by 0.625 world units, with nothing to
+  notice.
+- **Multibody objects.** Record the part that is actually a static footprint. The
+  StickButton2D robot is base + arm + gripper; the arm is *configuration*, and only the
+  base collides with the table, so the base disc is what is stored.
+- **The normalization frame.** `dataset_v3` divides poses by a frame width read from
+  `SceneGeometry.frame`. Those keys were DD2D literals (`drawer_w`/`drawer_d`); they now
+  accept generic `frame_w`/`frame_d` as well. Write one spelling or the other — **an
+  absent frame silently means `scale = 1.0`**, i.e. unnormalized coordinates, which is a
+  distribution shift rather than an error.
+
+`is_target` has no analogue in every domain. Leaving it `False` everywhere is supported;
+the consequence is that the target-relative feature block degrades to absolute world
+coordinates, which is fine in a fixed world frame and is not fine in a moving one.
+
 ---
 
 ## What you do **not** provide
@@ -116,5 +213,7 @@ is the largest piece and is entirely about *your* data format.
 
 The part that does not transfer for free is the **`local` axiom**: it is a claim about world
 layout, and it is the one place where a wrong declaration produces wrong (though never
-unrecoverable — demotion is a finite offset, never removal) behaviour. Prefer not declaring
-it and measuring what you lose.
+unrecoverable — demotion is a finite offset, never removal) behaviour. **Since 2026-07-30
+the default resolves this by not declaring anything**: demotion is off, so a wrong `local`
+cannot cost you anything unless you opt in. Prefer measuring what the offset would buy
+before declaring it.

@@ -107,13 +107,26 @@ PRESETS: dict[str, dict[str, str]] = {
         "p5_cov": "--coverage-feats",
         "p5_jac_cov_evattn": "--overlap-mode jaccard --coverage-feats --evidence-attn",
     },
-    # The v3 deployed configuration, as of 2026-07-27. Weakly dominates deployed v2.2 at
-    # every stratum (7.56 vs 14.66; -7.10 FP, CI [-9.52, -4.96]). Run it with
-    # `--seeds 0 1 2` for a reportable number.
+    # THE v3 deployed configuration (2026-07-28). Beats deployed v2.2 at every stratum:
+    # 7.20 +/- 0.62 vs 17.27 +/- 3.02 over 3 seeds, -10.06 FP, CI [-12.83, -7.59].
+    # Run with `--seeds 0 1 2` for the reportable number.
+    #
+    # `--state-delta` joined on 2026-07-28 (proposal §6.1's `s_j`). It is a TIE with the
+    # pre-delta config, not a win -- 7.20 +/- 0.62 vs 7.44 +/- 0.23 at 3 seeds, and
+    # 8.23 +/- 1.36 vs 7.90 +/- 0.61 at 6 -- and it is deployed because it completes the
+    # record schema at no cost in a new environment, not because it improved the number.
+    # `decisions.md` 2026-07-28. The pre-delta checkpoints survive as
+    # `checkpoints_v3_v3final_s{0..5}`; this preset now writes over that name, so use
+    # `--out-suffix` if you need both on disk at once.
+    # 2026-07-31: coverage/waste now use the **unified** definitions by default
+    # (`TrainV3Config.unified_coverage=True`), so this preset needs no extra flag and a
+    # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above. Pass
+    # `--legacy-coverage` to train the older definition; it lands in a `_legacycov`
+    # directory so the two can never overwrite each other.
     "v3final": {
         "v3final": (
             "--overlap-mode jaccard --coverage-feats "
-            "--aggregate-records --evidence-attn"
+            "--aggregate-records --evidence-attn --state-delta"
         ),
     },
     "p4": {
@@ -121,6 +134,10 @@ PRESETS: dict[str, dict[str, str]] = {
         "p4_evattn_agg": "--evidence-attn --aggregate-records",
         "p4_evattn_agg_tailF": "--evidence-attn --aggregate-records --tail-max-f 40",
     },
+    # `v3delta` is FOLDED INTO `v3final` above -- it is the same flag set, and keeping a
+    # second name for the deployed config is how two "current" arms end up on disk. Its
+    # checkpoints (`checkpoints_v3_v3delta_s{0..5}`, 6 seeds) are what the comparison
+    # cache reads; `_V3_ARMS["spectre3"]` in `precompute_dd2d_cache.py` points at them.
 }
 
 

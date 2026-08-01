@@ -124,7 +124,7 @@ failure (if any) rests on the separate information argument — in fully-observa
 deterministic TAMP, within-episode refinement failures add no information beyond x₀
 (every skeleton's outcome is a deterministic function of x₀), so a failure close to the
 feasible set and one far from it both present identically as `FAIL`
-(`decisions.md` 2026-06-25(e)). This audit settles H6 and the preconditions; it does
+([`decisions.md` 2026-06-25](decisions/02-pivot.md#2026-06-25-direction-pivot-representation-question)(e)). This audit settles H6 and the preconditions; it does
 **not** by itself resolve H2's learnability, which is an information question, not a
 canonicalization one.
 
@@ -229,7 +229,7 @@ non-empty in `rollout_fp`, so all four methods score **exactly the same 124 prob
   → `rollout_fp` never returns `None`; **0 problems excluded** — all four methods report
   **n = 124** (confirmed from `dd2d_method_comparison.csv`).
 - Budget 200 = pool cap → **uncensored** (mirrors the RT2D "budget = pool cap" discipline,
-  `decisions.md` 2026-06-07). Max observed FP by method: astar **199**, PIGINet **129**,
+  [`decisions.md` 2026-06-07](decisions/README.md)). Max observed FP by method: astar **199**, PIGINet **129**,
   SPECTRE-adaptive **145.67**, SPECTRE-static **159.67** — all `< 200`, so the
   `attempt_budget + 1` censoring **never fires**. (astar's 199 is a genuine uncensored
   FP — the lone feasible ranked last in a 200-pool — not a censor cap.)

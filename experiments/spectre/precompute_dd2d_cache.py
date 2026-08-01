@@ -28,6 +28,20 @@ the cache dir together:
     spectre2_adaptive/seed_<s>/<pid>.json{problem_id, stratum, fp, order,
                                           step_scores, step_dead}
         (SPECTRE v2.2 deployed_rollout, observed proof-demotion)
+    spectre3_static/seed_<s>/<pid>.json  {problem_id, stratum, scores, labels}
+    spectre3_adaptive/seed_<s>/<pid>.json{problem_id, stratum, fp, order,
+                                          step_scores, step_dead}
+        (SPECTRE v3 deployed ranker: observed coverage/waste + record tokens + the
+        record state delta. **No proof-demotion** -- cut from the method 2026-07-30, so
+        nothing outside the network touches the ordering. ``step_dead`` is still recorded
+        and now reads as "what a proof would have demoted".)
+    abl_<arm>_adaptive/seed_<s>/<pid>.json
+        (one dir per v3 ablation arm -- see ``_V3_ARMS``; adaptive shape only)
+    abl_with_demotion_adaptive/…, abl_floor_with_demotion_adaptive/…
+        (the same checkpoints re-scored with the proof-demotion offset switched back ON --
+        see ``_V3_DEMOTION_ARMS``. Demotion is OFF in the deployed method as of
+        2026-07-30, so this is the ablation; pair them with ``spectre3_adaptive`` and
+        ``abl_nocov_norec_adaptive`` respectively)
     spectre_lenctx/seed_<s>/<pid>.json   {problem_id, stratum, fp, order}
         (T1 length-only-context intervention: adaptive rollout with identity-
         scrambled same-length failure contexts; fp = mean over surrogate draws)
@@ -38,6 +52,9 @@ Usage::
     python experiments/spectre/precompute_dd2d_cache.py --force
     python experiments/spectre/precompute_dd2d_cache.py --methods piginet spectre2
     python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v3 --force
+    # v3 + its ablation arms (dd2d_v4 is the only collection with v3 checkpoints)
+    python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v4 \
+        --methods spectre3
 
 This is a bridge driver: it imports the vendored ``piginet.eval`` scorer, so it is
 excluded from strict mypy/pylint like the marimo notebook it feeds.
@@ -49,6 +66,8 @@ import argparse
 import json
 import math
 import os
+import re
+import time
 from pathlib import Path
 
 import torch
@@ -84,6 +103,15 @@ _PIGINET_PATHS = {
         "data": REPO / "data" / "dd2d" / "raw_v3",  # the repo-root re-collection
         "cache": DD2D / "out_dd2d" / "clip_cache_v3",
     },
+    # dd2d_v4 is the first collection where PIGINet has a real seed axis: `train.py`
+    # gained `--seed` on 2026-07-28, so `{seed}` appears in the checkpoint path and the
+    # cache is written per seed. Earlier variants have one deterministic run each and
+    # keep their flat, seedless cache layout -- the reader detects which it is looking at.
+    "dd2d_v4": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4",
+    },
 }
 
 # Which SPECTRE-v2 deployed checkpoint a collection uses. The training run name encodes
@@ -98,6 +126,68 @@ _V2_CKPT_SUBDIR = {
     # this row is the v3 migration's *yardstick* -- the deployed v2.2 model every v3 gate
     # is measured against -- so it must be the same recipe, not a re-tuned one.
     "dd2d_v4": "checkpoints_v2_evidence_ov",
+}
+
+# SPECTRE v3 arms: cache sub-dir prefix -> checkpoint sub-dir ({seed} substituted).
+#
+# `spectre3` is the deployed method and is the only one that also gets a *static* row.
+# The rest are the ablation, all held at the SAME matched setting -- `--overlap-mode
+# jaccard`, no `--aggregate-records`, no `--evidence-attn` -- so the 2x2 varies only what
+# it names. Deployed differs from `abl_cov_rec` by exactly those two consumption
+# switches, which is why the headline record-token number is "tokens + machinery" and the
+# 2x2's is tokens alone.
+#
+# Every arm here post-dates G6b, so all were selected by the uncensored whole-split
+# selector. Mixing in a `g6_*` arm (censored at 30 attempts, 50 val episodes) would
+# compare checkpoints chosen by two different instruments -- `_assert_same_selector`
+# enforces this rather than trusting the directory name.
+_V3_ARMS: dict[str, str] = {
+    # The deployed model. Repointed 2026-07-28 from `checkpoints_v3_v3final_s{seed}` to
+    # the state-delta arm, which is now the deployed configuration (`decisions.md`
+    # 2026-07-28). **Re-cache with `--force`**: `spectre3_{static,adaptive}/seed_0` was
+    # written from the pre-delta checkpoint and `_dir_complete` skips any full directory,
+    # so without it seed 0 stays pre-delta while seeds 1-2 are the delta model -- one
+    # method row silently mixing two generations.
+    # 2026-07-31: repointed to the unified coverage/waste definition, which is now the
+    # deployed default. 5.78 +/- 0.10 against the previous arm's 7.44 +/- 0.76 --
+    # -1.66 FP, CI [-2.71, -0.71], every seed beating every baseline seed. One directory
+    # holding all three seeds, so no `{seed}` substitution here.
+    # **Re-cache with `--force`**: `_dir_complete` skips a full directory, so without it
+    # the row silently keeps the previous definition's rollout.
+    "spectre3": "checkpoints_v3_unified",
+    # coverage x record-tokens 2x2
+    # NOT `checkpoints_v3_p8_cov_final_s{seed}`, despite autorun_decisions A15 naming it
+    # "the clean 3-seed re-run": all three of those runs stopped at **epoch 5 of 30**, so
+    # their best.pt is a mid-training stub that scores 26.97 (s0 36.64, where every other
+    # arm gets 0.00). Retrained here at identical flags. See notebook.md 2026-07-27.
+    "abl_cov_rec": "checkpoints_v3_abl_cov_rec",
+    "abl_cov_norec": "checkpoints_v3_norec_p9_cov_norec",
+    "abl_nocov_rec": "checkpoints_v3_g8_jac",
+    "abl_nocov_norec": "checkpoints_v3_norec_abl_jac_norec_nocov",
+    # coverage vs waste, split apart by --coverage-mode
+    "abl_cov_only": "checkpoints_v3_abl_cov_only",
+    "abl_waste_only": "checkpoints_v3_abl_waste_only",
+}
+# Deploy-time diagnostic: the deployed checkpoint with its evidence memory emptied at
+# every step. Not a method result -- it is a train/deploy mismatch on purpose, to
+# separate "training with records damaged the weights" from "the model ignores them".
+_V3_SUPPRESS_ARMS: dict[str, str] = {
+    "abl_suppress_records": "checkpoints_v3_v3final_s{seed}",
+}
+# The proof-demotion ablation, INVERTED on 2026-07-30: demotion was cut from the deployed
+# method, so every arm above now runs without it and the *diagnostic* is switching it back
+# ON. Prices what the deployed model gives up by being purely learned.
+#
+# These need their own registry rather than `--v3-arm` because `--v3-arm` carries only
+# `prefix:ckpt_subdir` and leaves `apply_demotion` at its default: pointing it at the
+# deployed checkpoint would write a **byte-identical copy of `spectre3_adaptive`** under a
+# name asserting demotion is on, i.e. render the ablation as exactly 0.00 with nothing
+# looking wrong. Pair each entry with its demotion-OFF twin:
+#   abl_with_demotion       <-> spectre3          (the deployed model)
+#   abl_floor_with_demotion <-> abl_nocov_norec   (jaccard only, no coverage, no tokens)
+_V3_DEMOTION_ARMS: dict[str, str] = {
+    "abl_with_demotion": "checkpoints_v3_v3delta_s{seed}",
+    "abl_floor_with_demotion": "checkpoints_v3_norec_abl_jac_norec_nocov",
 }
 
 # Env-variant-dependent path globals. The cache functions read these as module globals
@@ -228,7 +318,16 @@ def cache_astar(force: bool) -> None:
 
 @torch.no_grad()
 def cache_piginet(force: bool, device: str) -> None:
-    """PIGINet (BCE-trained, paper baseline): fresh inference; cache logits + labels."""
+    """PIGINet (BCE-trained, paper baseline): fresh inference; cache logits + labels.
+
+    **Seeded only where the checkpoint path says so.** A variant whose ``ckpt`` contains
+    ``{seed}`` has one trained model per seed and gets the per-seed layout
+    (``piginet/seed_<n>/``); a variant without it has a single deterministic run and
+    keeps the flat ``piginet/<pid>.json`` layout it was written with. PIGINet only
+    gained a ``--seed`` flag on 2026-07-28, so dd2d_v2/v3 are legitimately seedless --
+    inventing a ``seed_0`` directory for them would claim a seed axis that was never
+    sampled.
+    """
     if PIGINET_CKPT is None:
         raise SystemExit(
             f"--methods piginet requested but {ENV_VARIANT!r} has no _PIGINET_PATHS "
@@ -236,46 +335,56 @@ def cache_piginet(force: bool, device: str) -> None:
             "new collection needs it retrained first (envs/dd2d/piginet/train.py), then "
             "an entry added here."
         )
-    out = CACHE_DIR / "piginet"
-    if _dir_complete(out) and not force:
-        print("[piginet] complete; skipping")
-        return
-    # Local import: vendored piginet stack (pulls in open_clip / CLIP).
-    from alphatamp.approaches.spectre.envs.dd2d.piginet.eval import score_split
-
-    print("[piginet] running fresh inference on test split ...")
-    rows, _thr, _temp = score_split(
-        str(PIGINET_CKPT),
-        str(PIGINET_DATA),
-        str(PIGINET_CACHE),
-        "test",
-        device=device,
-    )
-    by_pid: dict[str, list[tuple[int, int, float]]] = {}
-    for pid, _stratum, plan_idx, _length, label, score in rows:
-        by_pid.setdefault(pid, []).append((int(plan_idx), int(label), float(score)))
-    n = 0
-    for pid_str, triples in by_pid.items():
-        triples.sort(key=lambda t: t[0])  # order by plan_idx
-        pid = int(pid_str.split("_s")[-1])
-        n += _write(
-            out / f"{pid}.json",
-            {
-                "problem_id": pid,
-                "stratum": stratum_of(pid),
-                "scores": [t[2] for t in triples],
-                "labels": [t[1] for t in triples],
-            },
-            force,
+    seeded = "{seed}" in str(PIGINET_CKPT)
+    for seed in SEEDS if seeded else [None]:
+        out = (
+            CACHE_DIR / "piginet"
+            if seed is None
+            else CACHE_DIR / "piginet" / f"seed_{seed}"
         )
-    print(f"[piginet] wrote {n} problems -> {out}")
+        tag = "piginet" if seed is None else f"piginet seed {seed}"
+        if _dir_complete(out) and not force:
+            print(f"[{tag}] complete; skipping")
+            continue
+        ckpt = Path(str(PIGINET_CKPT).replace("{seed}", str(seed)))
+        if not ckpt.is_file():
+            print(f"[{tag}] !! missing {ckpt}; skipping", flush=True)
+            continue
+        # Local import: vendored piginet stack (pulls in open_clip / CLIP).
+        from alphatamp.approaches.spectre.envs.dd2d.piginet.eval import score_split
+
+        print(f"[{tag}] running fresh inference on test split ...")
+        rows, _thr, _temp = score_split(
+            str(ckpt), str(PIGINET_DATA), str(PIGINET_CACHE), "test", device=device
+        )
+        by_pid: dict[str, list[tuple[int, int, float]]] = {}
+        for pid, _stratum, plan_idx, _length, label, score in rows:
+            by_pid.setdefault(pid, []).append((int(plan_idx), int(label), float(score)))
+        n = 0
+        for pid_str, triples in by_pid.items():
+            triples.sort(key=lambda t: t[0])  # order by plan_idx
+            pid = int(pid_str.split("_s")[-1])
+            n += _write(
+                out / f"{pid}.json",
+                {
+                    "problem_id": pid,
+                    "stratum": stratum_of(pid),
+                    "scores": [t[2] for t in triples],
+                    "labels": [t[1] for t in triples],
+                },
+                force,
+            )
+        print(f"[{tag}] wrote {n} problems -> {out}")
 
 
 @torch.no_grad()
 def cache_spectre(force: bool, device: str) -> None:
     """SPECTRE adaptive (rollout FP) + static (empty-context logits) per seed."""
     vocab = Vocab.from_json(VOCAB_PATH)
-    test = eda.load_split_episodes(SPECTRE_TEST)
+    # RAW: `init_inference_state` canonicalizes, so a pre-canonicalized split would be
+    # canonicalized twice -- see `_RawSplit`. This was wrong until 2026-07-27; the v1
+    # rows in any cache built before then are stale by ~1.5 FP and need `--force`.
+    test = _RawSplit(SPECTRE_TEST)
     for seed in SEEDS:
         adir = CACHE_DIR / "spectre_adaptive" / f"seed_{seed}"
         sdir = CACHE_DIR / "spectre_static" / f"seed_{seed}"
@@ -362,11 +471,19 @@ class _RawSplit:
 
     ``eda.load_split_episodes`` canonicalizes on load, which is right for the EDA
     baselines (they key on canonical skeletons) but wrong for anything that then calls a
-    tensorizer, because ``build_v2_example`` canonicalizes again and
+    tensorizer, because ``build_v2_example`` / ``build_v3_example`` /
+    ``inference.init_inference_state`` all canonicalize again and
     ``canonicalize_episode`` is not idempotent. Double canonicalization silently changes
     the object->tag binding relative to training, which loads raw.
 
-    Exposes only ``.episodes`` -- the attribute the model cache functions use.
+    **Every model cache function must load through this**, v1 included. Measured on
+    dd2d_v3, feeding v1 pre-canonicalized episodes moved its mean FP 21.41 -> 22.93 and
+    changed per-problem FP on 39/100 problems; the same defect is why the dd2d_v3 v2
+    number (13.68) was retracted (``decisions.md`` 2026-07-26). Training loads raw, so
+    raw is what makes evaluation match training.
+
+    Exposes ``.episodes`` -- the only attribute the cache functions and
+    ``eda.spectre_evaluate_traced`` (via ``_trainable_episodes``) actually read.
     """
 
     def __init__(self, split_dir: Path) -> None:
@@ -484,6 +601,248 @@ def cache_spectre2(force: bool, device: str) -> None:
         print(f"[spectre2-adaptive seed {seed}] wrote {na} -> {adir}")
 
 
+def _v3_ckpt(ckpt_subdir: str, seed: int) -> Path:
+    """Resolve a v3 arm's checkpoint for ``seed``.
+
+    v3 multi-seed arms write **one top-level directory per seed**
+    (``checkpoints_v3_v3final_s3/dd2d_v4/seed_3/best.pt``), which the v1/v2
+    ``<dir>/<env>/seed_<n>`` pattern cannot express -- so ``{seed}`` in the sub-dir is
+    substituted as well as the path component, exactly as ``spectre_score_v3.py`` does.
+    """
+    return (
+        REPO
+        / "data"
+        / "spectre"
+        / ckpt_subdir.replace("{seed}", str(seed))
+        / ENV_VARIANT
+        / f"seed_{seed}"
+        / "best.pt"
+    )
+
+
+def _warn_if_undertrained(arms: dict[str, str]) -> None:
+    """Flag arms whose training log never reached the configured epoch count.
+
+    A killed run leaves a complete-looking ``best.pt`` from whatever epoch it had reached,
+    and nothing downstream can tell it from a finished model: it loads, it scores, it
+    fills a cache directory. Three ``p8_cov_final`` seeds were killed at epoch 5 of 30 and
+    were cited for months as "the clean 3-seed re-run"; the stub scores 26.97 against the
+    ~8 the finished config gets, and its s0 is 36.64 where every other arm gets 0.00.
+
+    The log is the only record of how far a run actually got -- the checkpoint carries the
+    *configured* epoch count, not the reached one -- so this reads the log, and warns
+    rather than raises so a deliberately short run stays cacheable.
+    """
+    logs = REPO / "data" / "spectre" / "logs"
+    for prefix, subdir in arms.items():
+        ckpt = _v3_ckpt(subdir, SEEDS[0])
+        if not ckpt.is_file():
+            continue
+        cfg = torch.load(ckpt, map_location="cpu", weights_only=False)["cfg"]
+        total = int(cfg.get("epochs", 0))
+        # arm name = the checkpoint dir minus the checkpoints_v3[_norec][_noov]_ prefix
+        name = subdir.replace("{seed}", str(SEEDS[0]))
+        for junk in (
+            "checkpoints_v3_norec_noov_",
+            "checkpoints_v3_norec_",
+            "checkpoints_v3_noov_",
+            "checkpoints_v3_",
+        ):
+            if name.startswith(junk):
+                name = name[len(junk) :]
+                break
+        log = logs / f"{name}.log"
+        if not log.is_file() or not total:
+            continue
+        reached = [
+            int(m) for m in re.findall(r"epoch (\d+)/", log.read_text(errors="ignore"))
+        ]
+        if reached and max(reached) < total:
+            print(
+                f"!! {prefix}: {log.name} stops at epoch {max(reached)}/{total} — "
+                f"{ckpt.name} is a MID-TRAINING stub, not a finished model"
+            )
+
+
+def _assert_same_selector(arms: dict[str, str]) -> None:
+    """Refuse to cache arms whose checkpoints were selected by different instruments.
+
+    G6 ran the selector censored at 30 attempts on a 50-episode val subsample; G6b
+    retracted that, because DD2D s2/s3 episodes routinely need 30-40+ attempts, so the
+    censored statistic clipped exactly the tail that separates models (``decisions.md``
+    2026-07-26). An ablation table mixing the two generations is comparing checkpoints
+    chosen by two different instruments, and the difference would be read as the feature
+    under test. Cheap to check, and invisible in the directory name -- so check it.
+    """
+    seen: dict[tuple, list[str]] = {}
+    for prefix, subdir in arms.items():
+        ckpt = _v3_ckpt(subdir, SEEDS[0])
+        if not ckpt.is_file():
+            continue
+        cfg = torch.load(ckpt, map_location="cpu", weights_only=False)["cfg"]
+        key = (cfg.get("select_budget"), cfg.get("val_episodes"))
+        seen.setdefault(key, []).append(prefix)
+    if len(seen) > 1:
+        detail = "; ".join(
+            f"budget={k[0]} val_episodes={k[1]}: {', '.join(v)}"
+            for k, v in sorted(seen.items(), key=lambda kv: str(kv[0]))
+        )
+        raise SystemExit(
+            "refusing to cache arms selected by different instruments -- "
+            f"{detail}. See decisions.md 2026-07-26 (censored selectors)."
+        )
+
+
+def _is_mid_training(ckpt: Path) -> bool:
+    """True if a live training run still owns this checkpoint directory.
+
+    ``train_v3`` writes ``best.pt`` the first time selection improves -- at epoch 1 of 30
+    -- so the file existing says nothing about the run being finished. Caching it
+    produces a full, complete-looking directory of numbers from a half-trained model,
+    and because ``_dir_complete`` then skips it, a later run without ``--force`` leaves
+    the bad row in place silently. This is the failure the scorer's mtime warning was
+    meant to catch, but a warning in a buffered log is not a guard.
+
+    ``train_v3._claim_out_dir`` writes a ``.owner`` pid marker for exactly this class of
+    problem, so read it: a live owner means skip, a stale one means the run died and the
+    checkpoint is the last good one. Falls back to an mtime heuristic for ``train_v2``
+    checkpoints, which predate the marker.
+    """
+    marker = ckpt.parent / ".owner"
+    if marker.is_file():
+        try:
+            owner = int(marker.read_text().strip())
+            os.kill(owner, 0)  # signal 0 = liveness probe, sends nothing
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
+            return False  # stale marker -> the run is gone, checkpoint is final
+        return True
+    return (time.time() - ckpt.stat().st_mtime) < 120
+
+
+@torch.no_grad()
+def cache_spectre3(
+    force: bool,
+    device: str,
+    arms: dict[str, str],
+    static_arms: frozenset[str] = frozenset({"spectre3"}),
+    suppress_records: bool = False,
+    apply_demotion: bool = False,
+) -> None:
+    """SPECTRE v3 adaptive (deployed rollout) + static (empty-context logits) per seed.
+
+    ``arms`` maps *cache sub-dir prefix* -> *checkpoint sub-dir* (which may contain
+    ``{seed}``). The deployed method writes ``spectre3_{static,adaptive}``; every other
+    arm is an ablation and writes ``<prefix>_adaptive`` only -- the ablation table is an
+    FP table and needs no static row.
+
+    Feature switches are read back off each checkpoint by ``load_v3_checkpoint`` and
+    splatted into both the tensorizer and the rollout, so an arm cannot be deployed
+    under a different ``overlap_mode``/``coverage_mode`` than it trained under.
+
+    ``suppress_records`` and ``apply_demotion`` are the two *deploy-time* diagnostics, and
+    they are deliberately NOT read off the checkpoint: they are properties of how a run is
+    scored, not of how it was trained. Both are train/deploy mismatches on purpose. Note
+    ``apply_demotion`` defaults to **False**, matching the deployed method since
+    2026-07-30: v3 is a purely learned ranker and nothing outside the network touches its
+    ordering. An arm cached with ``apply_demotion=True`` differs from its demotion-OFF twin
+    only in the ranking offset -- same weights, same seeds, same episodes -- so the pair is
+    exactly paired and a *zero* difference means the switch never took effect rather than
+    that the offset is worthless.
+    """
+    from alphatamp.approaches.spectre.dataset_v3 import build_v3_example, collate_v3
+    from alphatamp.approaches.spectre.domain import spec_for
+    from alphatamp.approaches.spectre.inference_v3 import (
+        deployed_rollout_v3_traced,
+        load_v3_checkpoint,
+    )
+
+    vocab = Vocab.from_json(VOCAB_PATH)
+    spec = spec_for(ENV_VARIANT)
+    test = _RawSplit(SPECTRE_TEST)  # raw: `build_v3_example` canonicalizes
+    episodes = [ep for ep in test.episodes if ep.scene_geometry is not None]
+
+    for prefix, ckpt_subdir in arms.items():
+        want_static = prefix in static_arms
+        for seed in SEEDS:
+            adir = CACHE_DIR / f"{prefix}_adaptive" / f"seed_{seed}"
+            sdir = CACHE_DIR / f"{prefix}_static" / f"seed_{seed}"
+            need_a = force or not _dir_complete(adir)
+            need_s = want_static and (force or not _dir_complete(sdir))
+            if not need_a and not need_s:
+                print(f"[{prefix} seed {seed}] complete; skipping")
+                continue
+            ckpt = _v3_ckpt(ckpt_subdir, seed)
+            if not ckpt.is_file():
+                print(f"[{prefix} seed {seed}] !! missing {ckpt}; skipping")
+                continue
+            if _is_mid_training(ckpt):
+                print(
+                    f"[{prefix} seed {seed}] !! SKIPPING — {ckpt} is still owned by a "
+                    f"live training run; re-run with --force once it finishes",
+                    flush=True,
+                )
+                continue
+            model, deploy = load_v3_checkpoint(ckpt, vocab, device)
+
+            na = ns = 0
+            for ep in episodes:
+                pid = int(ep.provenance.problem_id)
+                if need_s:
+                    ex, recs = build_v3_example(
+                        ep,
+                        vocab,
+                        rng=None,
+                        evidence=True,
+                        context_f=frozenset(),  # F=∅ is the deployment start
+                        augment_tags=False,
+                        spec=spec,
+                        **deploy,
+                    )
+                    batch = collate_v3(
+                        [ex], max_arity=vocab.max_operator_arity, records=[recs]
+                    ).to(device)
+                    logits, _ = model(batch)
+                    ns += _write(
+                        sdir / f"{pid}.json",
+                        {
+                            "problem_id": pid,
+                            "stratum": stratum_of(pid),
+                            "scores": [float(x) for x in logits[0].cpu().numpy()],
+                            "labels": [
+                                1 if o.outcome == "success" else 0 for o in ep.outcomes
+                            ],
+                        },
+                        force,
+                    )
+                if need_a:
+                    attempts, trace = deployed_rollout_v3_traced(
+                        model,
+                        ep,
+                        vocab,
+                        device,
+                        spec=spec,
+                        mode="strict",
+                        suppress_records=suppress_records,
+                        apply_demotion=apply_demotion,
+                        **deploy,
+                    )
+                    na += _write(
+                        adir / f"{pid}.json",
+                        {
+                            "problem_id": pid,
+                            "stratum": stratum_of(pid),
+                            "fp": float(attempts) - 1.0,
+                            "order": trace.order,
+                            "step_scores": _round_rows(trace.step_scores),
+                            "step_dead": trace.step_dead,
+                        },
+                        force,
+                    )
+            if want_static:
+                print(f"[{prefix}-static seed {seed}] wrote {ns} -> {sdir}")
+            print(f"[{prefix}-adaptive seed {seed}] wrote {na} -> {adir}")
+
+
 @torch.no_grad()
 def cache_lenctx(force: bool, device: str, repeats: int = 3) -> None:
     """T1 length-only-context intervention: adaptive rollout with identity-
@@ -496,7 +855,7 @@ def cache_lenctx(force: bool, device: str, repeats: int = 3) -> None:
     skeleton identity (H2).
     """
     vocab = Vocab.from_json(VOCAB_PATH)
-    test = eda.load_split_episodes(SPECTRE_TEST)
+    test = _RawSplit(SPECTRE_TEST)  # raw, for the reason in `_RawSplit`
     for seed in SEEDS:
         out = CACHE_DIR / "spectre_lenctx" / f"seed_{seed}"
         if _dir_complete(out) and not force:
@@ -546,7 +905,20 @@ def main() -> None:
         "--methods",
         nargs="+",
         default=["astar", "piginet", "spectre", "spectre2"],
-        choices=["astar", "piginet", "spectre", "spectre2", "lenctx"],
+        choices=["astar", "piginet", "spectre", "spectre2", "spectre3", "lenctx"],
+    )
+    parser.add_argument(
+        "--v3-arm",
+        action="append",
+        default=[],
+        help='"cache_subdir_prefix:ckpt_subdir" to cache one v3 arm instead of the '
+        "default registry; the checkpoint sub-dir may contain {seed}. Repeatable.",
+    )
+    parser.add_argument(
+        "--no-ablations",
+        action="store_true",
+        help="with --methods spectre3, cache only the deployed arm (skip the ablation "
+        "arms and the suppress-records diagnostic)",
     )
     parser.add_argument("--force", action="store_true", help="Recompute cached files")
     parser.add_argument("--device", default="cpu")
@@ -591,6 +963,40 @@ def main() -> None:
         cache_spectre(args.force, args.device)
     if "spectre2" in args.methods:
         cache_spectre2(args.force, args.device)
+    if "spectre3" in args.methods:
+        if args.v3_arm:
+            arms = dict(a.split(":", 1) for a in args.v3_arm)
+            suppress: dict[str, str] = {}
+            nodemo: dict[str, str] = {}
+        elif args.no_ablations:
+            arms, suppress, nodemo = {"spectre3": _V3_ARMS["spectre3"]}, {}, {}
+        else:
+            arms = dict(_V3_ARMS)
+            suppress = dict(_V3_SUPPRESS_ARMS)
+            nodemo = dict(_V3_DEMOTION_ARMS)
+        _assert_same_selector({**arms, **suppress, **nodemo})
+        _warn_if_undertrained({**arms, **suppress, **nodemo})
+        cache_spectre3(args.force, args.device, arms)
+        if suppress:
+            cache_spectre3(
+                args.force,
+                args.device,
+                suppress,
+                static_arms=frozenset(),
+                suppress_records=True,
+            )
+        if nodemo:
+            # Separate call, exactly as `suppress` is: the diagnostic is a property of the
+            # scoring run, so it cannot ride in the arms dict without changing what every
+            # other arm means. Demotion is OFF everywhere else, so THIS is the arm that
+            # turns it on.
+            cache_spectre3(
+                args.force,
+                args.device,
+                nodemo,
+                static_arms=frozenset(),
+                apply_demotion=True,
+            )
     if "lenctx" in args.methods:
         cache_lenctx(args.force, args.device, repeats=args.lenctx_repeats)
 

@@ -424,6 +424,14 @@ def main(argv=None) -> int:
     ap.add_argument("--weight-decay", type=float, default=2e-2)
     ap.add_argument("--device", default="cpu")
     ap.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="training seed: torch init + the dataset's negative subsampling. Without "
+        "it every run is identical, so a multi-seed spread would be fabricated rather "
+        "than measured.",
+    )
+    ap.add_argument(
         "--tiny", action="store_true", help="20-problem overfit sanity gate"
     )
     # W&B (opt-in; auth via WANDB_API_KEY env var, never stored in the repo)
@@ -475,8 +483,18 @@ def main(argv=None) -> int:
         )
         return 0
 
-    tds = PIGINetDataset(args.data_root, "train", args.cache_dir, subsample_k=args.k)
-    vds = PIGINetDataset(args.data_root, "val", args.cache_dir, subsample_k=0)
+    # Both sources of randomness, seeded together: torch's parameter init and the
+    # dataset's choice of which negatives to keep. `vds` keeps every candidate
+    # (`subsample_k=0`), so its seed is inert -- passed anyway so the two constructions
+    # do not diverge if that default ever changes.
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    tds = PIGINetDataset(
+        args.data_root, "train", args.cache_dir, subsample_k=args.k, seed=args.seed
+    )
+    vds = PIGINetDataset(
+        args.data_root, "val", args.cache_dir, subsample_k=0, seed=args.seed
+    )
     pw = _pos_weight(tds)
     print(f"# train groups {len(tds)} | val groups {len(vds)} | pos_weight {pw:.1f}")
     base = reference_baselines(args.data_root, "val")
@@ -603,6 +621,7 @@ def main(argv=None) -> int:
         json.dump(
             {
                 "selected": winner,
+                "seed": args.seed,
                 "arms": results,
                 "baseline_rollout_fp": results[winner]["baseline_fp"],
             },

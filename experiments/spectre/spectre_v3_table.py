@@ -25,96 +25,15 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
-from collections import defaultdict
 from pathlib import Path
 
 from alphatamp.approaches.spectre.dd2d_compare import (
-    METHOD_ORDER,
+    build_table,
     load_fp_records_per_seed,
+    render_markdown,
 )
 
 REPO = Path(__file__).resolve().parents[2]
-
-
-def _mean(xs: list[float]) -> float:
-    return sum(xs) / len(xs) if xs else float("nan")
-
-
-def _std(xs: list[float]) -> float:
-    """Sample standard deviation; ``nan`` below two observations.
-
-    ``nan`` rather than ``0.0`` on a single seed on purpose -- a zero would read as
-    "this method is perfectly stable" when the truth is "nobody measured".
-    """
-    if len(xs) < 2:
-        return float("nan")
-    m = _mean(xs)
-    return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
-
-
-def _fmt(mean: float, std: float) -> str:
-    if math.isnan(mean):
-        return "--"
-    return f"{mean:.2f}" if math.isnan(std) else f"{mean:.2f} ± {std:.2f}"
-
-
-def build_table(records: list[dict]) -> tuple[list[str], list[list[str]], list[dict]]:
-    """Return ``(header, rows, tidy)`` for the per-stratum FP table."""
-    strata = sorted({r["stratum"] for r in records})
-    by_method_seed: dict[tuple[str, object, object], list[float]] = defaultdict(list)
-    for r in records:
-        by_method_seed[(r["method"], r["seed"], r["stratum"])].append(r["fp"])
-        by_method_seed[(r["method"], r["seed"], "ALL")].append(r["fp"])
-
-    methods = [m for m in METHOD_ORDER if any(r["method"] == m for r in records)]
-    methods += sorted({r["method"] for r in records} - set(methods))
-
-    header = ["method", "seeds", "ALL"] + [f"s{s}" for s in strata]
-    rows: list[list[str]] = []
-    tidy: list[dict] = []
-    for method in methods:
-        seeds = sorted(
-            {r["seed"] for r in records if r["method"] == method},
-            key=lambda s: (s is None, s),
-        )
-        row = [method, "-" if seeds == [None] else str(len(seeds))]
-        for stratum in ["ALL"] + list(strata):
-            # per seed: mean over that seed's problems; then spread across seeds
-            per_seed = [
-                _mean(by_method_seed[(method, s, stratum)])
-                for s in seeds
-                if by_method_seed[(method, s, stratum)]
-            ]
-            mean, std = _mean(per_seed), _std(per_seed)
-            row.append(_fmt(mean, std))
-            tidy.append(
-                {
-                    "method": method,
-                    "stratum": stratum,
-                    "n_seeds": len(per_seed),
-                    "mean_fp": mean,
-                    "std_fp_across_seeds": std,
-                }
-            )
-        rows.append(row)
-    return header, rows, tidy
-
-
-def render_markdown(header: list[str], rows: list[list[str]]) -> str:
-    widths = [
-        max(len(header[i]), max((len(r[i]) for r in rows), default=0))
-        for i in range(len(header))
-    ]
-    out = [
-        "| " + " | ".join(h.ljust(w) for h, w in zip(header, widths)) + " |",
-        "|" + "|".join("-" * (w + 2) for w in widths) + "|",
-    ]
-    out += [
-        "| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |"
-        for row in rows
-    ]
-    return "\n".join(out)
 
 
 def main(argv: list[str] | None = None) -> int:

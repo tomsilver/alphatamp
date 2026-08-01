@@ -320,7 +320,13 @@ def test_apply_demotion_false_withholds_only_the_offset() -> None:
     _paths = list_episodes(_V4)
     for path in _paths[:: max(1, len(_paths) // 12)][:12]:
         episode = load_episode(path)
-        on = deployed_rollout_v3_traced(model, episode, vocab, "cpu")[1]
+        # BOTH arms are explicit. `apply_demotion` defaults to False since the offset was
+        # cut from the deployed method (2026-07-30), so relying on the default here would
+        # compare demotion-off against demotion-off -- which is exactly what the
+        # `diverged > 0` guard below caught when the default flipped.
+        on = deployed_rollout_v3_traced(
+            model, episode, vocab, "cpu", apply_demotion=True
+        )[1]
         off = deployed_rollout_v3_traced(
             model, episode, vocab, "cpu", apply_demotion=False
         )[1]

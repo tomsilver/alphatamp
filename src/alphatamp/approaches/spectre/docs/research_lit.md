@@ -285,7 +285,7 @@ it. The active comparison is therefore against the **low-level static predictor*
 prediction is the perception × data **crossover**, not a tighter posterior. The
 latent-inference material above is retained as the record of the
 reordering-era analysis and as reviewer pre-emption. See `proposal.md` §0 /
-`decisions.md` 2026-06-25.
+[`decisions.md` 2026-06-25](decisions/02-pivot.md#2026-06-25-direction-pivot-representation-question).
 
 ---
 

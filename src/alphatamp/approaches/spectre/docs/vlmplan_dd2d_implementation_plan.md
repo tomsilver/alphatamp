@@ -3,12 +3,12 @@
 > ## ⚠️ As-built delta (2026-07-24) — read this first
 >
 > **This document is now the *design* record, not the current state.** The baseline was
-> built; where the two disagree, `decisions.md` 2026-07-24 and the code win.
+> built; where the two disagree, [`decisions.md` 2026-07-24](decisions/README.md) and the code win.
 >
 > **Built:** `vlmplan/` (`template`/`parsing`/`adapter`/`dd2d_adapter`/`models`/`loop`/
 > `score`/`runio`) + `envs/dd2d/spectre_render.py` + `experiments/spectre/vlmplan_{run,score}.py`
 > + `conf/vlmplan.yaml` + `test_vlmplan.py`; wired into `compare_dd2d_methods.py` as the
-> `VLMPlan` row via `dd2d_compare.SEQUENCE_METHODS`. Smoke numbers in `notebook.md` 2026-07-24.
+> `VLMPlan` row via `dd2d_compare.SEQUENCE_METHODS`. Smoke numbers in [`notebook.md` 2026-07-24](notebook/README.md).
 >
 > **Changed from this plan:**
 > - **No `probe_blockers.py` / `probe_packing.py`** (§8) and **no LLMPlan ±image arm** (§4.1) —

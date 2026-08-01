@@ -157,12 +157,19 @@ def test_v3_rollout_is_bit_identical_to_v2() -> None:
         # divergence is the point of G5 and is asserted in `test_proof_demotion_v3`;
         # folding it in here would make a real regression and an intended improvement
         # look identical.
+        # `apply_demotion=True` is passed explicitly and is NOT the deployed default any
+        # more (demotion was cut from the method on 2026-07-30). It has to be forced here:
+        # `deployed_rollout_traced` is the v2.2 path and v2.2 always demotes, so leaving
+        # v3 on the new default would compare two different *policies* and pass only where
+        # the offset happens not to change an argmax -- an equivalence oracle that quietly
+        # stops testing equivalence.
         a3, t3 = deployed_rollout_v3_traced(
             v3_model,
             episode,
             vocab,
             device,
             mode="permissive",
+            apply_demotion=True,
         )
         pid = int(episode.provenance.problem_id)
         assert t3.order == t2.order, f"pid {pid}: attempt order diverged"
@@ -203,11 +210,16 @@ def test_stored_compare_cache_is_stale_against_current_code() -> None:
         pid = int(episode.provenance.problem_id)
         if pid not in cached:
             continue
+        # Demotion forced ON: the cache this compares against was written when demotion
+        # was part of the method, so leaving it at the new default would add a second,
+        # unrelated source of divergence and make the "known-stale" branch expected for
+        # the wrong reason. This test is about code-vs-cache staleness, nothing else.
         _, trace = deployed_rollout_v3_traced(
             model,
             episode,
             vocab,
             "cpu",
+            apply_demotion=True,
         )
         agree += int(trace.order == cached[pid]["order"])
         total += 1

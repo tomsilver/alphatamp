@@ -65,6 +65,19 @@ _RT2D_TYPE_AUG_POLICY: dict[str, bool] = {
 # documentation — an absent entry defaults every type to augmentable anyway.
 _DD2D_TYPE_AUG_POLICY: dict[str, bool] = {"item": True}
 
+# StickButton2D has three types and all three are augmentable, but for different
+# reasons worth writing down. `circle` (the buttons) are genuinely interchangeable --
+# the goal names every one of them, so no button holds a privileged role that its
+# local id has to encode. `crv_robot` and `rectangle` (the stick) are singletons in
+# every scene, so permutation within those types is the identity and the flag is
+# vacuous. An absent entry would default to the same thing; this is explicit so a
+# future variant with two sticks or two robots has to make a deliberate choice.
+_STICKBUTTON2D_TYPE_AUG_POLICY: dict[str, bool] = {
+    "crv_robot": True,
+    "rectangle": True,
+    "circle": True,
+}
+
 _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     "routedtransport2d_n2_v1": _RT2D_TYPE_AUG_POLICY,
     "routedtransport2d_n3_v1": _RT2D_TYPE_AUG_POLICY,
@@ -83,6 +96,19 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     # Kept as a separate variant for the same reason as v3 -- so the two can never be
     # silently mixed in one number.
     "dd2d_v4": _DD2D_TYPE_AUG_POLICY,
+    # stickbutton2d_v1: the collected dataset. b1/b2/b3/b5 pooled into one variant with
+    # button count as the stratum axis (b10 dropped -- structurally infeasible, see
+    # docs/autonomous_stickbutton_session.md D5). The per-button-count entries below are
+    # the development variants the feasibility work used and stay for reproducing it.
+    "stickbutton2d_v1": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    # StickButton2D, one variant per button count. See
+    # docs/kinder_stickbutton2d_map.md for the substrate map and the measured
+    # per-variant feasibility -- b10 does not yield positive labels.
+    "stickbutton2d_b1": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    "stickbutton2d_b2": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    "stickbutton2d_b3": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    "stickbutton2d_b5": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    "stickbutton2d_b10": _STICKBUTTON2D_TYPE_AUG_POLICY,
 }
 
 

@@ -117,6 +117,8 @@ in `CLAUDE.md`; I still walked into it.
 
 ### A3 — `dead` is a disguised shortness cue; this is L4 reappearing as a *feature*
 
+> **Ratified** as ADR [`2026-07-27-dead-is-a-length-proxy`](decisions/06-v3-performance.md#2026-07-27-dead-is-a-length-proxy). This entry keeps the full measurement narrative.
+
 Diagnosing the s1 regression (v3 8.56 vs v2.2 6.20, while v3's *no-evidence* bar is 3.64 —
 better than v2.2). Measured on dd2d_v4 train, 4600 candidate/context pairs:
 
@@ -176,7 +178,7 @@ The single most important finding of the run. Counted directly off the collectio
 | dd2d_v3 | 8000 | 6732 |
 | **dd2d_v4** | **8000** | **0** |
 
-The offline harvest (`spectre_harvest.py`, `decisions.md` 2026-07-19) was **never run on
+The offline harvest (`spectre_harvest.py`, [`decisions.md` 2026-07-19](decisions/README.md)) was **never run on
 dd2d_v4**. So the v2.2 checkpoint used as the v3 yardstick trained and deploys with its
 `FactEncoder` receiving nothing: **v2.2@dd2d_v4 = static + `cand_overlap` + demotion, with
 no evidence tokens at all.**
@@ -222,6 +224,8 @@ the deepest step, summing effort, unioning culprits. Measured: **−88.7% tokens
 tuning knob: §6.1 defines the record as the failing query and its arguments.
 
 ### A8 — **the trained model already ignores its record tokens**, and v3 in fact *matches* v2.2
+
+> **Ratified** as ADR [`2026-07-27-record-tokens-are-ignored-at-inference`](decisions/06-v3-performance.md#2026-07-27-record-tokens-are-ignored-at-inference). This entry keeps the full measurement narrative.
 
 The pivotal measurement of the run, and it overturned my own A6 reading. Added
 `suppress_records` (a diagnostic, never a deployment mode) and ran the G6b
@@ -289,6 +293,8 @@ right that the token pathway itself has to be made to work, which is A10.
 
 ### A10 — **the root cause: evidence competes with geometry inside one softmax**
 
+> **Ratified** as ADR [`2026-07-27-evidence-needs-its-own-attention-channel`](decisions/06-v3-performance.md#2026-07-27-evidence-needs-its-own-attention-channel). This entry keeps the full measurement narrative.
+
 `CrossAttentionScorer` builds a single memory and runs one cross-attention over it:
 
 ```python
@@ -320,6 +326,8 @@ those rows afterwards — the same guard `model.py` already uses. Verified NaN-f
 without records.
 
 ### A11 — the missing cell, and a sharper statement than A8
+
+> **Ratified** as ADR [`2026-07-27-record-tokens-are-ignored-at-inference`](decisions/06-v3-performance.md#2026-07-27-record-tokens-are-ignored-at-inference) (jointly with A8). This entry keeps the full measurement narrative.
 
 `p2_norec` (records OFF, **overlap ON**) is the cell the G6 ablation never ran, and it is
 the closest v3 analogue of the v2.2 configuration:
@@ -453,7 +461,7 @@ written. Recorded so they are not rediscovered as objections.
 
 **1. P-v3-1's bar is cross-collection.** The 17.08 astar-dist target was measured on
 **dd2d_v3**; v3's s2 of 13.03 ± 1.52 is on **dd2d_v4**. The two collections differ on only
-~0.08% of candidate labels (`decisions.md` 2026-07-26), so they are comparable at that
+~0.08% of candidate labels ([`decisions.md` 2026-07-26](decisions/README.md)), so they are comparable at that
 level — but it is not literally the same benchmark, and any writeup should say "s2 = 13.03
 on dd2d_v4, against a 17.08 bar measured on dd2d_v3" rather than implying one number beat
 the other on identical data.
@@ -553,6 +561,8 @@ per-failure token stream (carrying s1 and the stability). Neither alone is the m
 
 ### A16 — three seeds over-claimed s1; six corrected it
 
+> **Ratified** as ADR [`2026-07-27-margin-must-be-compared-to-seed-sd`](decisions/06-v3-performance.md#2026-07-27-margin-must-be-compared-to-seed-sd). This entry keeps the full measurement narrative.
+
 The final headline, and the one place where running more seeds changed a conclusion rather
 than tightening it.
 
@@ -620,3 +630,13 @@ I relaunched following a collate crash, so the first reported checkpoint scored 
 8.39 as the second run overwrote it. Same config, so the conclusion is unaffected, but the
 provenance was muddy — the reportable number is the clean 3-seed re-run. `spectre_sweep.py`
 should refuse to start an arm whose checkpoint directory is already being written.
+
+> ⚠️ **Corrected 2026-07-27 — the "clean 3-seed re-run" does not exist.** All three
+> `p8_cov_final_s{0,1,2}` runs stopped at **epoch 5 of 30**; their `best.pt` files are
+> mid-training stubs. Scored, `p8_cov_final_s0` gives **26.97 ALL with s0 = 36.64**, against
+> ~8 for the finished config and 0.00 at s0 for every other arm. **The recommendation above
+> is withdrawn**: prefer `p5_jac_cov` (complete, 30 epochs, race notwithstanding) or the
+> retrained `checkpoints_v3_abl_cov_rec`. This is why a checkpoint's existence is not
+> evidence its run finished — `precompute_dd2d_cache._warn_if_undertrained` now reads the
+> training log, and `_is_mid_training` reads `train_v3`'s `.owner` marker and skips.
+> See `decisions.md` / [`notebook.md` 2026-07-27](notebook/README.md).

@@ -32,52 +32,15 @@ import torch
 
 from alphatamp.approaches.spectre.dd2d_compare import stratum_of
 from alphatamp.approaches.spectre.domain import spec_for
-from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
-from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.model_v3 import (
-    SpectreV3Model,
-    V3Config,
-    load_v2_checkpoint,
+from alphatamp.approaches.spectre.inference_v3 import (
+    deployed_rollout_v3_traced,
 )
+from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint as load_v3
+from alphatamp.approaches.spectre.io import list_episodes, load_episode
+from alphatamp.approaches.spectre.model_v3 import load_v2_checkpoint
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
-
-
-def load_v3(ckpt: Path, vocab: Vocab, device: str) -> tuple[SpectreV3Model, dict]:
-    """Rebuild a v3 model from its checkpoint, with dropout off for evaluation.
-
-    Returns ``(model, overlap_mode)``: the mode is read back off the checkpoint rather
-    than passed in, because deploying a model under a different ``overlap_mode`` than it
-    trained under feeds it a feature column it has never seen populated (or blanks one
-    it relies on) -- a silent train/deploy mismatch of exactly the kind §6.6 warns
-    about.
-    """
-    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
-    cfg = ck["cfg"]
-    model = SpectreV3Model(
-        n_ops=int(ck["n_ops"]),
-        max_arity=vocab.max_operator_arity,
-        cfg=V3Config(
-            n_overlap_feats=(
-                (4 if cfg.get("coverage_feats") else 2) if cfg.get("use_overlap") else 0
-            ),
-            n_prior_feats=0,
-            max_tags=int(cfg.get("max_tags", 32)),
-            dropout_p=0.0,
-            use_records=bool(cfg.get("use_records")),
-            sinusoidal_pos=bool(cfg.get("sinusoidal_pos")),
-            use_obj_evidence=bool(cfg.get("use_obj_evidence")),
-            evidence_attn=bool(cfg.get("evidence_attn")),
-            coverage_feats=bool(cfg.get("coverage_feats")),
-        ),
-    )
-    model.load_state_dict(ck["state_dict"], strict=True)
-    return model.eval().to(device), {
-        "overlap_mode": str(cfg.get("overlap_mode", "both")),
-        "aggregate_records": bool(cfg.get("aggregate_records")),
-        "coverage_feats": bool(cfg.get("coverage_feats")),
-    }
 
 
 def score(
@@ -87,7 +50,7 @@ def score(
     device,
     spec,
     mode: Literal["permissive", "strict"],
-    apply_demotion: bool = True,
+    apply_demotion: bool = False,
     deploy: dict | None = None,
 ) -> dict[int, float]:
     """Uncensored deployed FP per problem id."""
@@ -153,10 +116,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
     ap.add_argument(
-        "--no-demotion",
+        "--with-demotion",
         action="store_true",
-        help="withhold the proof-demotion offset, measuring the model's own ordering "
-        "(the eval-time axis of the G7 2x2)",
+        help="re-enable the proof-demotion offset. OFF by default since 2026-07-30: the "
+        "deployed method is a purely learned ranker and nothing outside the network "
+        "touches its ordering. Worth 0.23 FP on DD2D; kept available because the "
+        "deduction is sound and a domain whose proofs fire more often may want it",
     )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(argv)
@@ -218,12 +183,12 @@ def main(argv: list[str] | None = None) -> int:
                     a.device,
                     spec,
                     mode,
-                    not a.no_demotion,
+                    a.with_demotion,
                     ov_mode,
                 )
             )
 
-    demo = "off" if a.no_demotion else f"on ({a.mode})"
+    demo = f"on ({a.mode})" if a.with_demotion else "off (deployed default)"
     print(
         f"\n# {a.env_variant} test, uncensored deployed FP, "
         f"demotion={demo}, n={len(pids)}"

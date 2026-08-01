@@ -45,6 +45,7 @@ from alphatamp.approaches.spectre.schema import (
 )
 
 _ROUTED_TRANSPORT_MODEL_NAME = "routedtransport2d"
+_STICK_BUTTON_MODEL_NAME = "stickbutton2d"
 
 
 def _refinement_seed(rule: str, problem_id: int, skeleton_idx: int) -> int:
@@ -95,16 +96,22 @@ def _make_plan_generator(
     env_models: SesameModels,
     obs: dict[str, object] | object,
     problem_id: int,
+    x0: object = None,
 ):  # pragma: no cover — return type union widens to whatever the impl supports
     """Build the abstract plan generator.
 
-    Three-way dispatch:
+    Four-way dispatch:
 
     - RT2D + ``plan_generator="closed_form"`` (default) → deterministic
       enumeration via :class:`ClosedFormSkeletonGenerator`.
     - RT2D + ``plan_generator="heuristic_search"`` → the same A*+FF generator
       the kinder envs use; ordering becomes problem-instance-aware.
-    - Any kinder env → A*+FF (the ``plan_generator`` field is ignored; kinder
+    - StickButton2D → A* over a **geometry-aware** heuristic. Required, not an
+      optimization: kinder's symbolic model lets ``RobotPressButton*`` apply to any
+      button, including ones past the robot's reach, so hff ranks physically
+      unrefinable stick-free plans first and they crowd out the pool. Opt out with
+      ``plan_generator="heuristic_search"`` to get the stock hff ordering.
+    - Any other kinder env → A*+FF (the ``plan_generator`` field is ignored; those
       envs have no closed-form option).
     """
     if (
@@ -128,6 +135,17 @@ def _make_plan_generator(
         return ClosedFormSkeletonGenerator(
             problem=problem, seed=problem_id, k_cap=cfg.K_max
         )
+    if (
+        cfg.model_name == _STICK_BUTTON_MODEL_NAME
+        and cfg.plan_generator != "heuristic_search"
+    ):
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.stickbutton2d.heuristic import (
+            make_plan_generator,
+        )
+
+        state = x0 if x0 is not None else env_models.observation_to_state(obs)
+        return make_plan_generator(env_models, state, seed=problem_id)
     del obs  # heuristic-search path takes its inputs from env_models alone
     return RelationalHeuristicSearchAbstractPlanGenerator(
         env_models.types,
@@ -136,6 +154,41 @@ def _make_plan_generator(
         heuristic_name=cfg.heuristic_name,
         seed=problem_id,
     )
+
+
+def _make_trajectory_sampler(
+    cfg: CollectionConfig, env_models: SesameModels
+) -> ParameterizedControllerTrajectorySampler | None:
+    """Build the trajectory sampler for this env, or ``None`` where one is not used.
+
+    RT2D bypasses gym stepping entirely, so its sentinel ``transition_fn`` would raise.
+
+    StickButton2D gets :class:`RecordingSampler` instead of the stock sampler. That is a
+    deliberate exception to "wrap kinder, do not reimplement it": upstream's sampler
+    computes the achieved abstract state in order to decide accept-or-reject and then
+    throws it away behind a payload-free ``TrajectorySamplingFailure``, with no hook to
+    read it. Without that state there is no class-2 evidence, and ``coverage``/``waste``
+    -- the features v3's margin rests on -- are identically zero on this environment. The
+    subclass re-runs the same loop and keeps what it discarded; that labels are unchanged
+    is a same-seed differential measurement, in
+    ``tests/approaches/spectre/test_stickbutton2d_observational.py``.
+    """
+    if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
+        return None
+    kwargs: dict[str, object] = {
+        "controller_generator": RelationalControllerGenerator(env_models.skills),
+        "transition_function": env_models.transition_fn,
+        "state_abstractor": env_models.state_abstractor,
+        "max_trajectory_steps": cfg.max_trajectory_steps,
+    }
+    if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
+            RecordingSampler,
+        )
+
+        return RecordingSampler(**kwargs)
+    return ParameterizedControllerTrajectorySampler(**kwargs)  # type: ignore[arg-type]
 
 
 def _make_refiner(
@@ -245,7 +298,7 @@ def collect_episode(
         bpg.add_state_node(x0)
         bpg.add_state_abstractor_edge(x0, s0)
 
-        plan_generator = _make_plan_generator(cfg, env_models, obs, problem_id)
+        plan_generator = _make_plan_generator(cfg, env_models, obs, problem_id, x0)
 
         # Draw the pool (lazy; islice caps at K_max).
         pool_iter = plan_generator(x0, s0, goal, cfg.abstract_plan_timeout_s, bpg)
@@ -253,18 +306,7 @@ def collect_episode(
             tuple[list[RelationalAbstractState], list[GroundOperator]]
         ] = list(itertools.islice(pool_iter, cfg.K_max))
 
-        # Trajectory sampler is built only for envs that need it; RT2D
-        # bypasses gym stepping so its sentinel transition_fn would raise.
-        trajectory_sampler: ParameterizedControllerTrajectorySampler | None
-        if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
-            trajectory_sampler = None
-        else:
-            trajectory_sampler = ParameterizedControllerTrajectorySampler(
-                controller_generator=RelationalControllerGenerator(env_models.skills),
-                transition_function=env_models.transition_fn,
-                state_abstractor=env_models.state_abstractor,
-                max_trajectory_steps=cfg.max_trajectory_steps,
-            )
+        trajectory_sampler = _make_trajectory_sampler(cfg, env_models)
 
         skeleton_records: list[SkeletonRecord] = []
         outcome_records: list[OutcomeRecord] = []
@@ -282,6 +324,9 @@ def collect_episode(
 
             seed = _refinement_seed(cfg.refinement_seed_rule, problem_id, idx)
             refiner = _make_refiner(cfg, obs, trajectory_sampler, seed)
+            # Rejections accumulate on the sampler, which outlives the candidate loop.
+            if hasattr(trajectory_sampler, "clear"):
+                trajectory_sampler.clear()  # type: ignore[union-attr]
 
             start = time.perf_counter()
             outcome: str
@@ -296,6 +341,26 @@ def collect_episode(
             except BaseException as exc:  # pylint: disable=broad-exception-caught
                 outcome = "error"
                 error_info = {"cls": type(exc).__name__, "msg": str(exc)}
+
+            # StickButton2D: harvest the observed failure. Observation-only -- every
+            # field below was computed by the acceptance check the refiner already ran.
+            if cfg.model_name == _STICK_BUTTON_MODEL_NAME and outcome == "fail":
+                # pylint: disable=import-outside-toplevel
+                from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
+                    failure_metadata,
+                )
+
+                failures = failure_metadata(
+                    trajectory_sampler,  # type: ignore[arg-type]
+                    action_plan,
+                    cfg.num_sampling_attempts_per_step,
+                    budget_exhausted=(
+                        time.perf_counter() - start >= cfg.refinement_timeout_s
+                    ),
+                )
+                if failures:
+                    refiner_metadata["failures"] = failures
+                    stuck_step_index = int(failures[0]["step_index"])
 
             # RT2D-specific: pull structured failure cause from the refiner.
             # ThreeGateRefiner exposes ``last_outcome`` after each call.
@@ -347,6 +412,26 @@ def collect_episode(
             if problem is not None:
                 scene_latent = problem.scene_latent
 
+        # Audit trail for the pooled StickButton2D collection, where the stratum is the
+        # button count and is otherwise recoverable only by decoding the problem id
+        # arithmetically (`envs/stickbutton2d/strata.py`). Recording it independently is
+        # what makes a broken encoding detectable instead of silently mislabelling every
+        # stratum. Never a model input -- nothing in the tensorizer reads provenance.
+        gen_params: dict[str, object] | None = None
+        if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
+            # pylint: disable=import-outside-toplevel
+            from alphatamp.approaches.spectre.envs.stickbutton2d.strata import (
+                slot_of,
+            )
+
+            n_buttons = int(cfg.model_kwargs.get("num_buttons", 0))
+            gen_params = {
+                "num_buttons": n_buttons,
+                "stratum": slot_of(n_buttons),
+                "split": cfg.split,
+                "acyclic_pool": True,
+            }
+
         provenance = ProvenanceBlock(
             problem_id=problem_id,
             env_id=cfg.env_id,
@@ -360,9 +445,22 @@ def collect_episode(
             ),
             package_versions=dict(cfg.package_versions),
             scene_latent=scene_latent,
+            gen_params=gen_params,
         )
 
         object_registry = _collect_all_objects(s0, skeleton_pool, goal.atoms)
+
+        # Ground-truth geometry. Required by v3 (`train_v3._trainable` drops episodes
+        # without it, silently) and by the later PIGINet / VLMPlan comparators. Only
+        # StickButton2D has a builder; the other kinder envs stay abstract-only as before.
+        scene_geometry = None
+        if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
+            # pylint: disable=import-outside-toplevel
+            from alphatamp.approaches.spectre.envs.stickbutton2d.scene_geometry import (
+                build_scene_geometry,
+            )
+
+            scene_geometry = build_scene_geometry(x0)
 
         return EpisodeRecord(
             provenance=provenance,
@@ -372,6 +470,7 @@ def collect_episode(
             skeleton_pool=tuple(skeleton_records),
             outcomes=tuple(outcome_records),
             summary=summary,
+            scene_geometry=scene_geometry,
         )
     finally:
         env.close()  # type: ignore[no-untyped-call]

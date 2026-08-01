@@ -51,12 +51,20 @@ from alphatamp.approaches.spectre.tags import PAD_TAG
 DROPOUT = 0.1
 
 # Record-token dims. `MAX_RECORD_ARGS` / `MAX_RECORD_CULPRITS` cap how many objects one
-# record names in each role; DD2D queries are unary and a grasp is blocked by a handful of
-# objects, so these are generous.
+# record names in each role; DD2D queries are unary and a grasp is blocked by a handful
+# of objects, so these are generous.
 MAX_RECORD_ARGS = 4
 MAX_RECORD_CULPRITS = 8
 D_SCHEMA = 32
 N_RECORD_SCALARS = 4  # [depth j/L, effort (log1p, scaled), exhausted, effort_is_total]
+
+# State-delta dims (`s_j` relative to `s_0`, §6.1). `MAX_DELTA_ATOMS` caps how many atoms
+# one role contributes; measured on dd2d_v4 the maxima are |added| = 4 and |deleted| = 5,
+# so 8 is slack and truncation never fires. It is a pooled sequence axis, so it appears
+# in no parameter shape and can be raised for another domain for free.
+MAX_DELTA_ATOMS = 8
+D_PRED = 32
+D_DELTA = 32
 
 
 @dataclass
@@ -69,8 +77,8 @@ class SpectreV3Batch(SpectreV2Batch):
 
     Tags are **role-separated**: `rec_arg_tags` holds the objects the failing query was
     *about*, `rec_culprit_tags` the objects observed to block it. v2.2 kept that
-    distinction only implicitly, by giving `grasp-witness` its own fact type; pooling both
-    roles into one slot would tell the net "these objects are associated with this
+    distinction only implicitly, by giving `grasp-witness` its own fact type; pooling
+    both roles into one slot would tell the net "these objects are associated with this
     failure" without saying which was the target and which the obstacle.
     """
 
@@ -80,6 +88,11 @@ class SpectreV3Batch(SpectreV2Batch):
     rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
     rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
     obj_evidence: Optional[Tensor] = None  # (B, N, N_OBJ_EVIDENCE) float
+    # `s_j - s_0` per record. Role axis is [added, deleted] — kept apart for the same
+    # reason arg-tags and culprit-tags are: "the prefix put o1 on the buffer" and "the
+    # prefix took o1 out of the drawer" are different claims about o1.
+    rec_delta_pred_ids: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS) long
+    rec_delta_arg_tags: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS, A) long
 
     def to(self, device) -> "SpectreV3Batch":
         return SpectreV3Batch(
@@ -94,13 +107,19 @@ class RecordEncoder(nn.Module):
     """One observed failure -> one token, with the object roles kept apart.
 
     Replaces `FactEncoder`'s hand-built type vocabulary with the domain's own operator
-    schemas, and finally consumes the scalars v2.2 harvested and then dropped on the floor
-    (`Fact.scalars` never reached the tensorizer). No tier embedding: only hint-tier
-    evidence ever entered the network, so it was a constant column.
+    schemas, and finally consumes the scalars v2.2 harvested and then dropped on the
+    floor (`Fact.scalars` never reached the tensorizer). No tier embedding: only
+    hint-tier evidence ever entered the network, so it was a constant column.
     """
 
     def __init__(
-        self, n_schemas: int, max_tags: int, dropout_p: float = DROPOUT
+        self,
+        n_schemas: int,
+        max_tags: int,
+        dropout_p: float = DROPOUT,
+        n_predicates: int = 0,
+        max_pred_arity: int = 0,
+        state_delta: bool = False,
     ) -> None:
         super().__init__()
         self.schema_emb = nn.Embedding(n_schemas + 1, D_SCHEMA, padding_idx=0)
@@ -110,12 +129,62 @@ class RecordEncoder(nn.Module):
             nn.Dropout(dropout_p),
             nn.LayerNorm(D_MODEL),
         )
+        # The delta enters as an ADDITIVE, ZERO-INITIALIZED branch rather than by
+        # widening `proj[0]`. Widening re-randomizes every weight in that layer
+        # (measured: 0.177 max shift on the shared block against a kaiming bound of
+        # 0.100), which is the same init confound `V3Config` warns about for
+        # `n_prior_feats` -- the flag would then change the draw as well as the
+        # features. Built LAST, and `self.records` is itself built last in
+        # `SpectreV3Model`, so every pre-existing parameter keeps its exact
+        # initialization and a flag-on model is functionally identical to flag-off at
+        # step 0. Anything measured afterwards is the feature.
+        self.pred_emb: Optional[nn.Embedding] = None
+        self.atom_proj: Optional[nn.Linear] = None
+        self.delta_proj: Optional[nn.Linear] = None
+        self.delta_arity = 0
+        if state_delta:
+            if n_predicates <= 0:
+                raise ValueError(
+                    "use_state_delta needs n_predicates from the vocab; a 1-row "
+                    "embedding table would train silently and mean nothing"
+                )
+            self.delta_arity = max(max_pred_arity, 1)
+            self.pred_emb = nn.Embedding(n_predicates + 1, D_PRED, padding_idx=0)
+            self.atom_proj = nn.Linear(D_PRED + self.delta_arity * D_TAG, D_DELTA)
+            self.delta_proj = nn.Linear(2 * D_DELTA, D_MODEL)
+            nn.init.zeros_(self.delta_proj.weight)
+            nn.init.zeros_(self.delta_proj.bias)
 
     @staticmethod
     def _pool(emb: Tensor, ids: Tensor) -> Tensor:
         """Masked mean over a role's tag slots; zeros when the role is empty."""
         present = (ids != PAD_TAG).float().unsqueeze(-1)
         return (emb * present).sum(dim=2) / present.sum(dim=2).clamp(min=1.0)
+
+    def _delta(self, pred_ids: Tensor, arg_tags: Tensor) -> Tensor:
+        """``(B, R, 2*D_DELTA)`` from the per-role atom sets; exact zeros when empty.
+
+        Two properties are load-bearing and easy to lose:
+
+        - an atom's argument slots are **concatenated positionally**, never pooled, so
+          ``p(a, b)`` and ``p(b, a)`` do not collide. DD2D is all-unary and would never
+          show the difference, which is exactly why it is pinned by a test;
+        - the per-atom projection happens **before** the pool over atoms, so
+          ``{on-buffer(o1), holding(o2)}`` and ``{on-buffer(o2), holding(o1)}`` differ.
+          Concatenating the roles and pooling afterwards would make them identical.
+
+        An empty role pools to exactly zero (masked sum over nothing, denominator
+        clamped), so ``j = 0`` -- about half of the aggregated tokens -- contributes
+        nothing rather than a bias, and the first attempt of a rollout stays purely
+        static.
+        """
+        assert self.pred_emb is not None and self.atom_proj is not None
+        b, r = pred_ids.shape[0], pred_ids.shape[1]
+        present = pred_ids.ne(0).unsqueeze(-1).float()
+        args = self.tag_emb(arg_tags).reshape(*arg_tags.shape[:-1], -1)
+        atom = self.atom_proj(torch.cat([self.pred_emb(pred_ids), args], dim=-1))
+        pooled = (atom * present).sum(dim=3) / present.sum(dim=3).clamp(min=1.0)
+        return pooled.reshape(b, r, 2 * D_DELTA)
 
     def forward(
         self,
@@ -124,6 +193,8 @@ class RecordEncoder(nn.Module):
         culprit_tags: Tensor,
         scalars: Tensor,
         mask: Tensor,
+        delta_pred_ids: Optional[Tensor] = None,
+        delta_arg_tags: Optional[Tensor] = None,
     ) -> Tensor:
         parts = [
             self.schema_emb(schema_ids),
@@ -131,7 +202,23 @@ class RecordEncoder(nn.Module):
             self._pool(self.tag_emb(culprit_tags), culprit_tags),
             scalars,
         ]
-        return self.proj(torch.cat(parts, dim=-1)) * mask.unsqueeze(-1)
+        hidden = self.proj[0](torch.cat(parts, dim=-1))
+        if self.delta_proj is not None:
+            # Substituted zeros rather than a skipped branch: a batch whose records all
+            # sit at j=0 must encode identically to the same record beside a batch-mate
+            # that has a delta. Deploy collates ONE example at a time, so the two cases
+            # are not hypothetical. Mirrors `SceneEncoderV3`'s missing-`obj_evidence`
+            # fallback.
+            if delta_pred_ids is None or delta_arg_tags is None:
+                b, r = schema_ids.shape
+                delta_pred_ids = schema_ids.new_zeros(b, r, 2, MAX_DELTA_ATOMS)
+                delta_arg_tags = schema_ids.new_zeros(
+                    b, r, 2, MAX_DELTA_ATOMS, self.delta_arity
+                )
+            hidden = hidden + self.delta_proj(
+                self._delta(delta_pred_ids, delta_arg_tags)
+            )
+        return self.proj[2](self.proj[1](hidden)) * mask.unsqueeze(-1)
 
 
 def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
@@ -140,9 +227,9 @@ def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
     Returns ``(*pos.shape, dim)``. Unlike a learned table this is *defined* at every
     position, which is the whole point: the absolute ``nn.Embedding(64, D)`` it replaces
     has untrained rows beyond the longest plan seen in training, so a model trained on
-    s0-s2 (plans of <= 5 operators) and deployed on s3 (7) would read randomly-initialized
-    vectors at steps 5 and 6 -- and the length-generalization experiment would be
-    measuring initialization noise rather than generalization.
+    s0-s2 (plans of <= 5 operators) and deployed on s3 (7) would read
+    randomly-initialized vectors at steps 5 and 6 -- and the length-generalization
+    experiment would be measuring initialization noise rather than generalization.
     """
     half = dim // 2
     freqs = torch.exp(
@@ -169,8 +256,8 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
       the trained model had already learned to discard its own records).
 
     Two channels remove the competition: the candidate attends over ``[scene ; global]``
-    and, independently, over the evidence memory, and the head sees both. Evidence can now
-    be attended to *without* giving up geometry, so a useful record no longer has to
+    and, independently, over the evidence memory, and the head sees both. Evidence can
+    now be attended to *without* giving up geometry, so a useful record no longer has to
     out-compete the scene to be read.
 
     Fully domain-agnostic -- it is a change to how tokens are consumed, not to what they
@@ -265,12 +352,12 @@ class SceneEncoderV3(SceneEncoder):
 
     **Why here, and not as more tokens.** Measured on the G6b checkpoint: deploying a
     records-trained model with its evidence memory emptied at every step moves it by 0.23
-    FP (16.17 -> 16.40). The model had learned to *ignore* the per-failure tokens. What it
-    does use is `cand_overlap` -- two compact scalars per candidate summarising the same
-    failure set. So the failure is not "evidence is useless" but "free-floating tokens are
-    the wrong shape for this architecture": the scorer's strength is the tag join between
-    objects and candidate arguments, and a record token participates in that join only
-    weakly, through pooled tag slots.
+    FP (16.17 -> 16.40). The model had learned to *ignore* the per-failure tokens. What
+    it does use is `cand_overlap` -- two compact scalars per candidate summarising the
+    same failure set. So the failure is not "evidence is useless" but "free-floating
+    tokens are the wrong shape for this architecture": the scorer's strength is the tag
+    join between objects and candidate arguments, and a record token participates in
+    that join only weakly, through pooled tag slots.
 
     This routes the same observations onto the objects they *name*, where the tag join
     already lives. Four scalars per object, all in [0, 1], all zero when no failure has
@@ -282,9 +369,9 @@ class SceneEncoderV3(SceneEncoder):
        mean normalized depth of the records naming o]``
 
     Domain-agnostic by construction -- set membership over record fields, no geometry and
-    no per-environment predicate (C1). Proof-tier records stay excluded exactly as they are
-    from the token path, so nothing here re-imports the "blocked sets are large, prefer
-    longer" correlate that L4 warns about.
+    no per-environment predicate (C1). Proof-tier records stay excluded exactly as they
+    are from the token path, so nothing here re-imports the "blocked sets are large,
+    prefer longer" correlate that L4 warns about.
     """
 
     def __init__(
@@ -376,6 +463,17 @@ class V3Config:
     evidence_attn: bool = False
     # Observed coverage/waste appended to cand_overlap (width 2 -> 4).
     coverage_feats: bool = False
+    # §6.1's `s_j`: each record token also carries the abstract state at the failing
+    # step, as the delta from s_0. Additive and zero-initialized inside `RecordEncoder`,
+    # so a pre-flag v3 checkpoint still loads `strict=True` -- D-8's discipline one
+    # level down, against the *deployed v3* state dict rather than v2.2's.
+    use_state_delta: bool = False
+    # Vocab-derived sizing for the delta's predicate table, filled by whichever caller
+    # holds the vocab (`train_v3`, `load_v3_checkpoint`) exactly as `max_arity` already
+    # is. Not persisted: they are properties of the vocab, and `strict=True` is the
+    # backstop if one ever moves under a checkpoint.
+    n_predicates: int = 0
+    max_pred_arity: int = 0
 
     @classmethod
     def from_v2_checkpoint_cfg(cls, cfg: dict) -> "V3Config":
@@ -422,7 +520,16 @@ class SpectreV3Model(nn.Module):
         # default-config state dict is byte-identical to v2.2's (D-8) and the equivalence
         # oracle keeps loading.
         self.records = (
-            RecordEncoder(n_ops, c.max_tags, c.dropout_p) if c.use_records else None
+            RecordEncoder(
+                n_ops,
+                c.max_tags,
+                c.dropout_p,
+                c.n_predicates,
+                c.max_pred_arity,
+                c.use_state_delta,
+            )
+            if c.use_records
+            else None
         )
         if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
             raise NotImplementedError(
@@ -441,8 +548,8 @@ class SpectreV3Model(nn.Module):
         scene_tok = self.scene(batch)
         cand_emb = self.cands(batch)
         # Evidence memory: v3 record tokens when enabled, else the legacy fact tokens.
-        # Never both -- they encode the same failures, so stacking them would double-count
-        # the evidence and make the increment unattributable.
+        # Never both -- they encode the same failures, so stacking them would
+        # double-count the evidence and make the increment unattributable.
         fact_tok = None
         fact_mask = batch.fact_mask
         if (
@@ -457,6 +564,8 @@ class SpectreV3Model(nn.Module):
                 batch.rec_culprit_tags,
                 batch.rec_scalars,
                 batch.rec_mask,
+                getattr(batch, "rec_delta_pred_ids", None),
+                getattr(batch, "rec_delta_arg_tags", None),
             )
             fact_mask = batch.rec_mask
         elif (

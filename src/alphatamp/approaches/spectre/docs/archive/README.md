@@ -49,3 +49,16 @@ Known-stale points in `SPECTRE_WRITEUP_APR_2026.md`:
     binds, so the reported numbers are uncensored; the sentence now reads 30.
     See the 2026-06-07 `decisions.md` entry adopting uncensored evaluation as
     the standard.
+
+## Frozen log monoliths
+
+`decisions.md` and `notebook.md` were single files until 2026-07-29, when they were split
+into era chapters under `docs/decisions/` and `docs/notebook/`. The pre-split files are
+frozen here byte-for-byte:
+
+- `decisions_2026-07-29_monolithic.md` — 2241 lines, 38 ADRs
+- `notebook_2026-07-29_monolithic.md` — 2111 lines, 49 entries
+
+These are not merely historical: `experiments/spectre/decisions_index.py check` compares every
+live entry against them on every run, which is what makes the split non-lossy as an enforced
+property. Do not edit them — that would weaken the check to a tautology.

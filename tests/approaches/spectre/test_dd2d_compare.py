@@ -533,6 +533,51 @@ def test_load_fp_records_per_seed_preserves_the_seed_axis(tmp_path: Path) -> Non
     # deterministic baselines carry seed=None rather than a fabricated 0: reporting a
     # spread for a single deterministic run would imply stability nobody measured
     assert {r["seed"] for r in records if r["method"] == "astar-dist"} == {None}
+    # PIGINet here is a FLAT cache (no seed_* layer), so it is seedless too
+    assert {r["seed"] for r in records if r["method"] == "PIGINet"} == {None}
+
+
+def test_static_cache_layout_is_detected_not_assumed(tmp_path: Path) -> None:
+    """A seeded PIGINet cache keeps its seed axis; a flat one still reads as one run.
+
+    PIGINet had no ``--seed`` flag until 2026-07-28, so dd2d_v2/v3 are genuinely single
+    deterministic runs while dd2d_v4 has three. Both layouts live on disk at once, and
+    the difference must survive loading: fabricating ``seed_0`` for a flat cache would
+    report a one-sample spread for something never sampled, while collapsing a seeded
+    cache to ``seed=None`` would silently discard the spread we paid to measure.
+    """
+    cache = tmp_path / "compare_cache"
+    pid = 1_600_000  # stratum 2
+    _dump(
+        cache / "astar" / f"{pid}.json",
+        {"problem_id": pid, "stratum": 2, "scores": [0.0, -1.0], "labels": [0, 1]},
+    )
+    # PIGINet, seeded: seed 0 ranks the positive first (FP 0), seed 1 ranks it last (FP 1)
+    for seed, scores in ((0, [5.0, 1.0]), (1, [1.0, 5.0])):
+        _dump(
+            cache / "piginet" / f"seed_{seed}" / f"{pid}.json",
+            {"problem_id": pid, "stratum": 2, "scores": scores, "labels": [1, 0]},
+        )
+
+    records = dd2d_compare.load_fp_records_per_seed(cache)
+    piginet = sorted(
+        (r for r in records if r["method"] == "PIGINet"), key=lambda r: r["seed"]
+    )
+    assert [r["seed"] for r in piginet] == [0, 1]
+    assert [r["fp"] for r in piginet] == [0.0, 1.0]
+    assert {r["seed"] for r in records if r["method"] == "astar-dist"} == {None}
+
+    # and the collapsing loader averages the seeds, exactly as it does for SPECTRE
+    collapsed = [
+        r for r in dd2d_compare.load_fp_records(cache) if r["method"] == "PIGINet"
+    ]
+    assert len(collapsed) == 1 and collapsed[0]["fp"] == 0.5
+
+    # build_table then reports a real between-seed spread rather than a bare mean
+    _header, rows, _tidy = dd2d_compare.build_table(records)
+    by_method = {r[0]: r for r in rows}
+    assert by_method["PIGINet"][1] == "2"  # the `seeds` column
+    assert by_method["astar-dist"][1] == "-"
 
 
 def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
@@ -585,3 +630,138 @@ def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
         t for t in tidy if t["method"] == "SPECTREv2-adaptive" and t["stratum"] == "ALL"
     )
     assert entry["n_seeds"] == 3 and entry["mean_fp"] == 7.0
+
+
+def test_load_fp_records_includes_v3_family(tmp_path: Path) -> None:
+    """The SPECTRE v3 family (spectre3_*) is read alongside the others when present."""
+    cache = tmp_path / "compare_cache"
+    pid = 1_600_000  # stratum 2
+    _dump(
+        cache / "astar" / f"{pid}.json",
+        {"problem_id": pid, "stratum": 2, "scores": [0.0, -1.0], "labels": [0, 1]},
+    )
+    _dump(
+        cache / "piginet" / f"{pid}.json",
+        {"problem_id": pid, "stratum": 2, "scores": [5.0, 1.0], "labels": [1, 0]},
+    )
+    # Only the v3 family present -> v1 and v2 gracefully skipped.
+    _dump(
+        cache / "spectre3_static" / "seed_0" / f"{pid}.json",
+        {"problem_id": pid, "stratum": 2, "scores": [2.0, 1.0], "labels": [0, 1]},
+    )
+    _dump(
+        cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
+        {"problem_id": pid, "stratum": 2, "fp": 4.0, "order": [1, 0]},
+    )
+    by_method = {r["method"]: r["fp"] for r in dd2d_compare.load_fp_records(cache)}
+    assert by_method["SPECTREv3-static"] == 1.0  # neg (2.0) outranks pos (1.0)
+    assert by_method["SPECTREv3-adaptive"] == 4.0
+    assert "SPECTREv2-static" not in by_method
+    assert "SPECTRE-static" not in by_method
+    # and it is ordered for display
+    assert "SPECTREv3-adaptive" in dd2d_compare.METHOD_ORDER
+
+
+def test_load_named_fp_records_per_seed_keeps_the_seed_axis(tmp_path: Path) -> None:
+    """An ablation arm read by name preserves seeds, unlike its averaging sibling."""
+    cache = tmp_path / "compare_cache"
+    pid = 1_600_000
+    for seed, fp in [(0, 4.0), (1, 6.0)]:
+        _dump(
+            cache / "abl_thing_adaptive" / f"seed_{seed}" / f"{pid}.json",
+            {"problem_id": pid, "stratum": 2, "fp": fp, "order": [0]},
+        )
+    rows = dd2d_compare.load_named_fp_records_per_seed(
+        cache, "abl_thing_adaptive", "thing"
+    )
+    assert {(r["seed"], r["fp"]) for r in rows} == {(0, 4.0), (1, 6.0)}
+    assert {r["method"] for r in rows} == {"thing"}
+    # the averaging sibling collapses the same data to one row
+    avg = dd2d_compare.load_named_fp_records(cache, "abl_thing_adaptive", "thing")
+    assert [r["fp"] for r in avg] == [5.0]
+
+
+def test_load_named_fp_records_per_seed_missing_dir_raises(tmp_path: Path) -> None:
+    """A missing ablation arm raises: a 2x2 silently rendering as 2x1 over-reads."""
+    (tmp_path / "compare_cache").mkdir(parents=True)
+    with pytest.raises(FileNotFoundError, match="precompute_dd2d_cache.py"):
+        dd2d_compare.load_named_fp_records_per_seed(
+            tmp_path / "compare_cache", "abl_absent", "absent"
+        )
+
+
+def _rec(method: str, pid: int, fp: float, seed=0) -> dict:
+    return {"seed": seed, "problem_id": pid, "stratum": 2, "method": method, "fp": fp}
+
+
+def test_merge_collections_grafts_only_the_named_methods() -> None:
+    """Legacy rows are taken only for methods absent from the primary collection."""
+    primary = [_rec("SPECTREv3-adaptive", 1, 7.0), _rec("SPECTREv2-adaptive", 1, 14.0)]
+    legacy = [
+        _rec("PIGINet", 1, 18.0, seed=None),
+        _rec("SPECTREv2-adaptive", 1, 13.0),  # exists in primary -> must NOT be taken
+        _rec("VLMPlan-8B", 1, 29.0),
+    ]
+    out = dd2d_compare.merge_collections(
+        primary, legacy, ["PIGINet", "VLMPlan-8B", "SPECTREv2-adaptive"], "v4", "v3"
+    )
+    by_method = {r["method"]: r for r in out}
+    assert set(by_method) == {
+        "SPECTREv3-adaptive",
+        "SPECTREv2-adaptive",
+        "PIGINet",
+        "VLMPlan-8B",
+    }
+    # primary wins a name collision, and keeps its own value
+    assert by_method["SPECTREv2-adaptive"]["fp"] == 14.0
+    assert by_method["SPECTREv2-adaptive"]["collection"] == "v4"
+    assert by_method["PIGINet"]["collection"] == "v3"
+    # every record is tagged, not just the grafted ones
+    assert all("collection" in r for r in out)
+
+
+def test_select_seed_prefers_seed_zero_and_reports_it() -> None:
+    """Seed 0 is kept when cached; deterministic rows pass through."""
+    records = [
+        _rec("m", 1, 5.0, seed=0),
+        _rec("m", 1, 9.0, seed=1),
+        _rec("astar-dist", 1, 34.0, seed=None),
+    ]
+    kept, chosen = dd2d_compare.select_seed(records, prefer=0)
+    assert chosen == {"m": 0, "astar-dist": None}
+    assert [r["fp"] for r in kept if r["method"] == "m"] == [5.0]
+    assert [r["fp"] for r in kept if r["method"] == "astar-dist"] == [34.0]
+
+
+def test_select_seed_falls_back_to_the_best_seed() -> None:
+    """Without seed 0, the lowest-mean-FP seed is used -- and named, not assumed."""
+    records = [
+        _rec("m", 1, 9.0, seed=1),
+        _rec("m", 2, 9.0, seed=1),
+        _rec("m", 1, 3.0, seed=2),
+        _rec("m", 2, 5.0, seed=2),  # seed 2 mean 4.0 < seed 1 mean 9.0
+    ]
+    kept, chosen = dd2d_compare.select_seed(records, prefer=0)
+    assert chosen == {"m": 2}
+    assert sorted(r["fp"] for r in kept) == [3.0, 5.0]
+
+
+def test_build_table_reports_across_seed_spread_not_across_problem() -> None:
+    """`±` must be the between-seed spread; one seed leaves it blank, never 0.00."""
+    records = [
+        # seed 0: problems 1,2 -> mean 2.0 ; seed 1: problems 1,2 -> mean 4.0
+        _rec("m", 1, 0.0, seed=0),
+        _rec("m", 2, 4.0, seed=0),
+        _rec("m", 1, 4.0, seed=1),
+        _rec("m", 2, 4.0, seed=1),
+        _rec("solo", 1, 1.0, seed=0),
+    ]
+    header, rows, tidy = dd2d_compare.build_table(records)
+    assert header[:3] == ["method", "seeds", "ALL"]
+    by_method = {r[0]: r for r in rows}
+    # across-seed sd of (2.0, 4.0) is sqrt(2) ~ 1.41 -- NOT the across-problem sd
+    assert by_method["m"][2] == "3.00 ± 1.41"
+    # a single seed reports the mean alone; "0.00" would imply measured stability
+    assert by_method["solo"][2] == "1.00"
+    solo_all = next(t for t in tidy if t["method"] == "solo" and t["stratum"] == "ALL")
+    assert math.isnan(solo_all["std_fp_across_seeds"])

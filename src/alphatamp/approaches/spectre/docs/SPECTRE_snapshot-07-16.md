@@ -141,7 +141,7 @@ model). "Baseline" always means B1–B6 — never SPECTRE-specific code.
 
 ## 3. How SPECTRE is deployed on DD2D
 
-*(Sources: `decisions.md` 2026-07-12; audit Findings 3–4; `notebook.md` 2026-07-12/13;
+*(Sources: [`decisions.md` 2026-07-12](decisions/03-dd2d-v2.2.md#2026-07-12-dd2d-integration-converter-not-native-env); audit Findings 3–4; [`notebook.md` 2026-07-12](notebook/03-dd2d-v2.2.md#2026-07-12-dd2d-wired-via-converter)/13;
 combinatorics computed 2026-07-14.)*
 
 ### 3.1 The DD2D domain

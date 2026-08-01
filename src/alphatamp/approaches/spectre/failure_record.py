@@ -13,6 +13,7 @@ continuous query. Instrumenting the computations that already ran yields exactly
 ===================  ====================================================================
 ``step_index`` *j*   which step failed
 ``schema``/``args``  which query, on which objects
+``state_delta``      ``s_j`` relative to ``s_0``: which atoms the prefix added / deleted
 ``unmoved``          ``U(sigma, j)``: objects the prefix had not moved when it failed
 ``culprits``         objects the failed samples actually collided with
 ``n_step``           sampler effort spent on this step
@@ -38,13 +39,76 @@ fields populated, so the two must not be mixed within one checkpoint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
-from alphatamp.approaches.spectre.schema import EpisodeRecord
+from alphatamp.approaches.spectre.schema import EpisodeRecord, SkeletonRecord
+from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
-__all__ = ["FailureRecord", "records_for_episode", "records_for_candidate"]
+__all__ = [
+    "FailureRecord",
+    "StateDelta",
+    "records_for_episode",
+    "records_for_candidate",
+]
+
+#: One atom, as ``(predicate name, argument names)``.
+DeltaAtom = tuple[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class StateDelta:
+    """``s_j`` relative to ``s_0``: which atoms the prefix added, which it deleted.
+
+    The proposal's §6.1 field is the abstract state itself; what is carried is the
+    *delta*, because ``s_0`` already reaches the scorer through the scene tokens and the
+    delta is the part a record actually contributes. It is pure STRIPS progression over
+    the candidate's own operator sequence -- no geometry, no domain computation.
+
+    Atoms are ``(predicate, args)`` **name** pairs rather than ``GroundAtom``s, so a
+    record stays cheap and its object names live in the same namespace as ``args`` /
+    ``culprits`` / ``unmoved``. Both tuples are **sorted**, so any downstream truncation
+    is deterministic rather than a function of set iteration order.
+    """
+
+    added: tuple[DeltaAtom, ...] = ()
+    deleted: tuple[DeltaAtom, ...] = ()
+
+    def is_empty(self) -> bool:
+        """``s_j == s_0`` -- true exactly when the prefix is empty (``j == 0``)."""
+        return not self.added and not self.deleted
+
+
+def _atom_names(atoms) -> set[DeltaAtom]:
+    return {(a.predicate.name, tuple(e.name for e in a.entities)) for a in atoms}
+
+
+def _state_deltas(
+    episode: EpisodeRecord, skeleton: SkeletonRecord, step_indices: set[int]
+) -> dict[int, StateDelta]:
+    """``s_j - s_0`` and ``s_0 - s_j`` for each requested prefix length ``j``.
+
+    One progression per *candidate*, not per record: a candidate's records share a plan,
+    so the trajectory is computed once and indexed. ``verify_preconditions=False`` is
+    defensive rather than permissive -- every dd2d_v4 skeleton verifies, but a deployed
+    rollout must not raise on a malformed one.
+    """
+    traj = reconstruct_trajectory(
+        episode.initial_abstract_state,
+        skeleton.operator_seq,
+        verify_preconditions=False,
+    )
+    s0 = _atom_names(episode.initial_abstract_state.atoms)
+    out: dict[int, StateDelta] = {}
+    for j in step_indices:
+        # A budget exit reports the deepest step *reached*, so clamp rather than trust
+        # it.
+        sj = _atom_names(traj[min(max(j, 0), len(traj) - 1)].atoms)
+        out[j] = StateDelta(
+            added=tuple(sorted(sj - s0)), deleted=tuple(sorted(s0 - sj))
+        )
+    return out
 
 
 @dataclass(frozen=True)
@@ -69,6 +133,27 @@ class FailureRecord:
 
     instrumented: bool = False
     """True when the refiner emitted this directly; False when backfilled from metadata."""
+
+    dev_blame: tuple[str, ...] = ()
+    """Objects the *collateral deviation* names, on environments with no class-1 channel.
+
+    Separate from :attr:`culprits` on purpose. A culprit was named by a validity check the
+    environment itself ran; this is inferred from the observed-vs-predicted trace, which is
+    all StickButton2D affords (kinder's collision check returns a bool). Keeping them in
+    one field would let a model trained where the signal is observed be deployed where it
+    is inferred without anything saying so. Absent on every DD2D record, so the token path
+    that falls back to it is unreachable there.
+    """
+
+    state_delta: Optional[StateDelta] = None
+    """``s_j`` relative to ``s_0``, or ``None`` when it was not asked for.
+
+    ``None`` and ``StateDelta()`` mean different things and the distinction is
+    load-bearing: ``None`` is *not computed*, ``StateDelta()`` is *computed, and the
+    prefix changed nothing* (``j == 0``, ~48% of aggregated dd2d_v4 tokens). Only the
+    token path requests it -- ``records_for_candidate`` is called three times per
+    candidate in ``build_v3_example`` and the progression is not free.
+    """
 
     def proves_failure(self) -> bool:
         """Whether this record witnesses a query that actually ran to exhaustion.
@@ -96,6 +181,7 @@ def _from_instrumented(
         exhausted=bool(obs.get("exhausted", True)),
         budget_exhausted=bool(obs.get("budget_exhausted", False)),
         instrumented=True,
+        dev_blame=tuple(obs.get("dev_blame") or ()),
     )
 
 
@@ -126,10 +212,11 @@ def _backfilled(
     j = int(meta.get("steps_bound", 0))
     n_total = int(meta.get("n_attempts") or 0)
     # Exactness witness: if the whole attempt cost exactly the minimum possible number of
-    # sampler calls, nothing was re-sampled, so every query it reports genuinely ran. That
-    # is derivable from stored metadata and is sound; where the count exceeds the minimum
-    # the attempt re-sampled and may have stopped on a budget, so we claim nothing. A
-    # domain that declares no cost model gets `False` -- no evidence, not assumed evidence.
+    # sampler calls, nothing was re-sampled, so every query it reports genuinely ran.
+    # That is derivable from stored metadata and is sound; where the count exceeds the
+    # minimum the attempt re-sampled and may have stopped on a budget, so we claim
+    # nothing. A domain that declares no cost model gets `False` -- no evidence, not
+    # assumed evidence.
     floor = spec.min_calls(skeleton)
     return FailureRecord(
         candidate_idx=candidate_idx,
@@ -150,8 +237,21 @@ def records_for_candidate(
     episode: EpisodeRecord,
     candidate_idx: int,
     spec: Optional[DomainSpec] = None,
+    with_state_delta: bool = False,
 ) -> list[FailureRecord]:
-    """Every failure observed while refining one candidate (empty if it succeeded)."""
+    """Every failure observed while refining one candidate (empty if it succeeded).
+
+    ``with_state_delta`` populates :attr:`FailureRecord.state_delta`. It is off by
+    default because the progression costs a trajectory per candidate and only the
+    learned token path consumes it.
+
+    Object names in the returned records -- ``args``, ``culprits``, ``unmoved`` and the
+    delta alike -- are in whatever namespace ``episode`` is in. Records are built on
+    demand and never serialized, so a canonicalized episode yields canonical records and
+    a raw one yields raw records; the delta inherits that for free because it is derived
+    from ``initial_abstract_state`` and ``operator_seq``, both of which
+    ``canonicalize_episode`` already remaps.
+    """
     spec = spec or spec_for(episode.provenance.env_variant)
     outcome = episode.outcomes[candidate_idx]
     if outcome.outcome != "fail":
@@ -162,26 +262,36 @@ def records_for_candidate(
     # rather than trusted: a malformed entry should be skipped, not crash a rollout.
     observations = meta.get("failures")
     if isinstance(observations, (list, tuple)) and observations:
-        return [
+        recs = [
             _from_instrumented(candidate_idx, o, all_objects)
             for o in observations
             if isinstance(o, dict) and "schema" in o and "step_index" in o
         ]
-    rec = _backfilled(
-        candidate_idx,
-        outcome,
+    else:
+        rec = _backfilled(
+            candidate_idx,
+            outcome,
+            episode.skeleton_pool[candidate_idx],
+            all_objects,
+            spec,
+            spec.goal_objects(episode),
+        )
+        recs = [rec] if rec is not None else []
+    if not with_state_delta or not recs:
+        return recs
+    deltas = _state_deltas(
+        episode,
         episode.skeleton_pool[candidate_idx],
-        all_objects,
-        spec,
-        spec.goal_objects(episode),
+        {r.step_index for r in recs},
     )
-    return [rec] if rec is not None else []
+    return [replace(r, state_delta=deltas[r.step_index]) for r in recs]
 
 
 def records_for_episode(
     episode: EpisodeRecord,
     candidate_indices=None,
     spec: Optional[DomainSpec] = None,
+    with_state_delta: bool = False,
 ) -> list[FailureRecord]:
     """Flatten the failure records of the given candidates (default: all failures)."""
     spec = spec or spec_for(episode.provenance.env_variant)
@@ -191,5 +301,5 @@ def records_for_episode(
         ]
     out: list[FailureRecord] = []
     for idx in candidate_indices:
-        out.extend(records_for_candidate(episode, idx, spec))
+        out.extend(records_for_candidate(episode, idx, spec, with_state_delta))
     return out

@@ -183,10 +183,12 @@ def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
     """Rename the object names inside v3 failure observations.
 
     ``refiner_metadata`` is a free-form dict, and its v3 ``failures`` entries carry object
-    names in three roles (``args``, ``culprits``, ``unmoved``). Those must land in the same
-    namespace as the scene and candidate tokens or the record tokens silently lose all
-    object identity -- the tags simply fail to resolve and every record degenerates to
-    "some failure of some schema". This is the same trap ``_remap_post_mortem`` exists for.
+    names in five roles: three flat lists (``args``, ``culprits``, ``unmoved``) and, for
+    class-2 deviations, the argument lists *inside* ``dev_added`` / ``dev_deleted``. All of
+    them must land in the same namespace as the scene and candidate tokens or the record
+    tokens silently lose all object identity -- the tags simply fail to resolve and every
+    record degenerates to "some failure of some schema". This is the same trap
+    ``_remap_post_mortem`` exists for, and the nested case is the easier one to miss.
 
     Anything not a known object name (e.g. the ``__wall__`` sentinel, which is not an
     item) is passed through unchanged rather than dropped, so a non-object culprit stays
@@ -203,6 +205,14 @@ def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
             if isinstance(n, str)
         ]
 
+    def _rename_atoms(atoms) -> list[list]:
+        """``[[predicate, [arg, ...]], ...]`` with the arguments renamed in place."""
+        return [
+            [pair[0], _rename(pair[1])]
+            for pair in (atoms or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+
     out = dict(meta)
     out["failures"] = [
         (
@@ -211,6 +221,21 @@ def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
                 "args": _rename(f.get("args")),
                 "culprits": _rename(f.get("culprits")),
                 "unmoved": _rename(f.get("unmoved")),
+                **(
+                    {"dev_blame": _rename(f.get("dev_blame"))}
+                    if "dev_blame" in f
+                    else {}
+                ),
+                **(
+                    {"dev_added": _rename_atoms(f.get("dev_added"))}
+                    if "dev_added" in f
+                    else {}
+                ),
+                **(
+                    {"dev_deleted": _rename_atoms(f.get("dev_deleted"))}
+                    if "dev_deleted" in f
+                    else {}
+                ),
             }
             if isinstance(f, dict)
             else f

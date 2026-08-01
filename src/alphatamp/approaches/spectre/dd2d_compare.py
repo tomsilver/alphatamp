@@ -17,6 +17,11 @@ Cache layout (``<cache_dir>/``):
 - ``spectre2_static/seed_<s>/<pid>.json``  → ``{problem_id, stratum, scores, labels}``
 - ``spectre2_adaptive/seed_<s>/<pid>.json``→ ``{problem_id, stratum, fp, order[,
   step_scores, step_dead]}``
+- ``spectre3_static``/``spectre3_adaptive`` → same two shapes, for v3
+- ``spectre3_abl_<arm>/seed_<s>/<pid>.json`` → adaptive shape; one dir per ablation
+  arm, read by name via :func:`load_named_fp_records_per_seed` rather than through
+  :data:`SPECTRE_FAMILIES` (an ablation is one method's components switched off, not
+  a method in the comparison)
 
 ``step_scores``/``step_dead`` are optional (older caches lack them) and only the
 single-problem :func:`load_adaptive_trace` accessor reads them; the aggregate
@@ -27,12 +32,19 @@ For the static methods ``scores[j]`` / ``labels[j]`` align with pool index =
 :func:`rollout_fp`. A ``*-adaptive`` method is an online rollout, so its
 per-problem FP is cached directly. SPECTRE FPs are averaged over the cached seeds
 (v1/v2 currently ship a single seed each — a 1-seed dev figure).
+
+Two collections can be shown side by side via :func:`merge_collections`: DD2D
+re-collections share their test problem-id set, so a per-problem join is well
+defined even though the underlying scenes differ slightly (``decisions.md``
+2026-07-26). Use it only for methods that have no row on the newer collection.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -56,6 +68,11 @@ SPECTREV2_STATIC_METHOD = "SPECTREv2-static"
 SPECTREV2_ADAPTIVE_METHOD = "SPECTREv2-adaptive"
 SPECTREV2_STATIC_DIR = "spectre2_static"
 SPECTREV2_ADAPTIVE_DIR = "spectre2_adaptive"
+# SPECTRE v3 (FailureRecord + observed coverage/waste; strict proof-demotion).
+SPECTREV3_STATIC_METHOD = "SPECTREv3-static"
+SPECTREV3_ADAPTIVE_METHOD = "SPECTREv3-adaptive"
+SPECTREV3_STATIC_DIR = "spectre3_static"
+SPECTREV3_ADAPTIVE_DIR = "spectre3_adaptive"
 
 # Seeded SPECTRE families: (static_method, static_dir, adaptive_method, adaptive_dir).
 # Both static and adaptive of a family are two deployment modes of one checkpoint.
@@ -71,6 +88,12 @@ SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
         SPECTREV2_STATIC_DIR,
         SPECTREV2_ADAPTIVE_METHOD,
         SPECTREV2_ADAPTIVE_DIR,
+    ),
+    (
+        SPECTREV3_STATIC_METHOD,
+        SPECTREV3_STATIC_DIR,
+        SPECTREV3_ADAPTIVE_METHOD,
+        SPECTREV3_ADAPTIVE_DIR,
     ),
 ]
 
@@ -98,6 +121,8 @@ METHOD_ORDER: list[str] = [
     SPECTRE_STATIC_METHOD,
     SPECTREV2_ADAPTIVE_METHOD,
     SPECTREV2_STATIC_METHOD,
+    SPECTREV3_ADAPTIVE_METHOD,
+    SPECTREV3_STATIC_METHOD,
     *SEQUENCE_METHODS,
 ]
 
@@ -231,9 +256,16 @@ def _spectre_per_seed(
 def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
     """Like :func:`load_fp_records` but keeps the seed axis.
 
-    Records are ``{"seed", "problem_id", "stratum", "method", "fp"}``. Static baselines
-    (astar / PIGINet) have no seed dimension -- they are deterministic single runs -- and
-    are emitted once with ``seed=None`` so a caller can tell "one run" from "one seed".
+    Records are ``{"seed", "problem_id", "stratum", "method", "fp"}``. A static baseline
+    is emitted with ``seed=None`` when its cache is a flat directory of ``<pid>.json``,
+    so a caller can tell "one deterministic run" from "one seed of several".
+
+    **The static layout is detected, not assumed.** ``astar`` is a planner order and has
+    no seed axis at all; PIGINet had none either until it gained a ``--seed`` flag
+    (2026-07-28), so its dd2d_v2/v3 caches are flat and its dd2d_v4 cache is per-seed.
+    Reading a ``seed_*`` layer when one exists, and ``seed=None`` when it does not, is
+    what keeps a genuinely single-run row from being reported as a one-seed sample --
+    ``build_table`` renders the two differently on purpose.
     """
     cache_dir = Path(cache_dir)
     if not cache_dir.is_dir():
@@ -255,10 +287,22 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
         if not parent.is_dir():
             missing.append(method)
             continue
-        for pid, (stratum, fp) in _static_fp_by_pid(parent).items():
+        if sorted(parent.glob("seed_*")):
+            rows = [
+                (seed, pid, stratum, fp)
+                for seed, pid, stratum, fp in _spectre_per_seed(
+                    parent, is_adaptive=False
+                )
+            ]
+        else:
+            rows = [
+                (None, pid, stratum, fp)  # type: ignore[misc]
+                for pid, (stratum, fp) in _static_fp_by_pid(parent).items()
+            ]
+        for seed, pid, stratum, fp in rows:
             records.append(
                 {
-                    "seed": None,
+                    "seed": seed,
                     "problem_id": pid,
                     "stratum": stratum,
                     "method": method,
@@ -312,7 +356,15 @@ def load_fp_records(cache_dir: Path | str) -> list[dict]:
 
     records: list[dict] = []
     for method, subdir in STATIC_METHODS.items():
-        by_pid = _static_fp_by_pid(_require_dir(cache_dir / subdir, cache_dir))
+        parent = _require_dir(cache_dir / subdir, cache_dir)
+        # Same layout detection as `load_fp_records_per_seed`: a seeded static cache
+        # (PIGINet on dd2d_v4 and later) is averaged over its seeds exactly as a SPECTRE
+        # family is, so this function keeps returning one row per (method, problem).
+        by_pid = (
+            _spectre_seed_mean(parent, is_adaptive=False)
+            if sorted(parent.glob("seed_*"))
+            else _static_fp_by_pid(parent)
+        )
         for pid, (stratum, fp) in by_pid.items():
             records.append(
                 {"problem_id": pid, "stratum": stratum, "method": method, "fp": fp}
@@ -343,6 +395,96 @@ def load_fp_records(cache_dir: Path | str) -> list[dict]:
             )
 
     return records
+
+
+def load_named_fp_records_per_seed(
+    cache_dir: Path | str, subdir: str, method_name: str
+) -> list[dict]:
+    """Seed-preserving twin of :func:`load_named_fp_records`.
+
+    Ablation arms live in their own cache sub-directories rather than in
+    :data:`SPECTRE_FAMILIES` -- they are not methods in the comparison, they are one
+    method's components switched off -- but a table over them still needs the seed axis
+    for the same reason the main one does. Returns ``{seed, problem_id, stratum, method,
+    fp}``; missing dirs raise, because an ablation cell silently vanishing would turn a
+    2x2 into a 2x1 without saying so.
+    """
+    cache_dir = Path(cache_dir)
+    parent = _require_dir(cache_dir / subdir, cache_dir)
+    return [
+        {
+            "seed": seed,
+            "problem_id": pid,
+            "stratum": stratum,
+            "method": method_name,
+            "fp": fp,
+        }
+        for seed, pid, stratum, fp in _spectre_per_seed(parent, is_adaptive=True)
+    ]
+
+
+def merge_collections(
+    primary: list[dict],
+    legacy: list[dict],
+    legacy_methods: Sequence[str],
+    primary_name: str = "primary",
+    legacy_name: str = "legacy",
+) -> list[dict]:
+    """Tag records with their collection and graft the named methods from ``legacy``.
+
+    A method retrained on the newer collection must be read from *that* collection, so
+    only ``legacy_methods`` -- the ones with no newer equivalent -- are taken from
+    ``legacy``, and a name appearing in both resolves to ``primary``. The ``collection``
+    key is added to every record rather than only the grafted ones, so a downstream table
+    cannot show a mixed row without the provenance being available to display beside it.
+    """
+    want = set(legacy_methods)
+    out = [{**r, "collection": primary_name} for r in primary]
+    have = {r["method"] for r in out}
+    out += [
+        {**r, "collection": legacy_name}
+        for r in legacy
+        if r["method"] in want and r["method"] not in have
+    ]
+    return out
+
+
+def select_seed(
+    records: list[dict], prefer: int = 0
+) -> tuple[list[dict], dict[str, object]]:
+    """Reduce to one seed per method: ``prefer`` if cached, else the best seed.
+
+    Returns ``(records, chosen)`` where ``chosen`` maps method -> the seed used, so a
+    caller can display it. Deterministic single runs (``seed=None``) pass through
+    untouched.
+
+    "Best" = lowest mean FP. That is a *selection over seeds*, so it flatters a method
+    that has several; it exists only as a fallback for methods whose seed 0 was never
+    cached, and the chosen seed is reported rather than assumed. Prefer caching seed 0.
+    """
+    by_method: dict[str, set] = {}
+    for r in records:
+        by_method.setdefault(r["method"], set()).add(r["seed"])
+
+    chosen: dict[str, object] = {}
+    for method, seeds in by_method.items():
+        if seeds == {None}:
+            chosen[method] = None
+        elif prefer in seeds:
+            chosen[method] = prefer
+        else:
+            means = {
+                s: _mean(
+                    [
+                        r["fp"]
+                        for r in records
+                        if r["method"] == method and r["seed"] == s
+                    ]
+                )
+                for s in seeds
+            }
+            chosen[method] = min(means, key=lambda s: means[s])
+    return [r for r in records if r["seed"] == chosen[r["method"]]], chosen
 
 
 def load_named_fp_records(
@@ -854,3 +996,99 @@ def load_adaptive_ladder_records(
             for pid, lads in per_pid.items()
         )
     return records
+
+
+# ---------------------------------------------------------------------------
+# Per-stratum summary table. Lives here rather than in the script that first grew
+# it (`experiments/spectre/spectre_v3_table.py`) so the marimo notebook can import
+# it -- a notebook has no reliable path to a sibling script -- and so the one
+# implementation stays CI-checked.
+# ---------------------------------------------------------------------------
+
+
+def _mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs) if xs else float("nan")
+
+
+def _std(xs: list[float]) -> float:
+    """Sample standard deviation; ``nan`` below two observations.
+
+    ``nan`` rather than ``0.0`` on a single seed on purpose -- a zero would read as
+    "this method is perfectly stable" when the truth is "nobody measured".
+    """
+    if len(xs) < 2:
+        return float("nan")
+    m = _mean(xs)
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+
+def _fmt(mean: float, std: float) -> str:
+    if math.isnan(mean):
+        return "--"
+    return f"{mean:.2f}" if math.isnan(std) else f"{mean:.2f} ± {std:.2f}"
+
+
+def build_table(records: list[dict]) -> tuple[list[str], list[list[str]], list[dict]]:
+    """Return ``(header, rows, tidy)`` for the per-stratum FP table.
+
+    The ``±`` is the spread ACROSS SEEDS of the per-stratum mean, not across problems:
+    :func:`load_fp_records` averages a problem's FP over seeds before returning it, so a
+    std taken downstream of *that* is the across-problem spread of a seed-mean. Feed this
+    :func:`load_fp_records_per_seed`. With one seed cached the column reads ``--`` and
+    populates itself once more seeds exist.
+    """
+    strata = sorted({r["stratum"] for r in records})
+    by_method_seed: dict[tuple[str, object, object], list[float]] = defaultdict(list)
+    for r in records:
+        by_method_seed[(r["method"], r["seed"], r["stratum"])].append(r["fp"])
+        by_method_seed[(r["method"], r["seed"], "ALL")].append(r["fp"])
+
+    methods = [m for m in METHOD_ORDER if any(r["method"] == m for r in records)]
+    methods += sorted({r["method"] for r in records} - set(methods))
+
+    header = ["method", "seeds", "ALL"] + [f"s{s}" for s in strata]
+    rows: list[list[str]] = []
+    tidy: list[dict] = []
+    for method in methods:
+        seeds = sorted(
+            {r["seed"] for r in records if r["method"] == method},
+            key=lambda s: (s is None, s),
+        )
+        row = [method, "-" if seeds == [None] else str(len(seeds))]
+        for stratum in ["ALL"] + list(strata):
+            # per seed: mean over that seed's problems; then spread across seeds
+            per_seed = [
+                _mean(by_method_seed[(method, s, stratum)])
+                for s in seeds
+                if by_method_seed[(method, s, stratum)]
+            ]
+            mean, std = _mean(per_seed), _std(per_seed)
+            row.append(_fmt(mean, std))
+            tidy.append(
+                {
+                    "method": method,
+                    "stratum": stratum,
+                    "n_seeds": len(per_seed),
+                    "mean_fp": mean,
+                    "std_fp_across_seeds": std,
+                }
+            )
+        rows.append(row)
+    return header, rows, tidy
+
+
+def render_markdown(header: list[str], rows: list[list[str]]) -> str:
+    """Render :func:`build_table`'s output as a GitHub-flavoured markdown table."""
+    widths = [
+        max(len(header[i]), max((len(r[i]) for r in rows), default=0))
+        for i in range(len(header))
+    ]
+    out = [
+        "| " + " | ".join(h.ljust(w) for h, w in zip(header, widths)) + " |",
+        "|" + "|".join("-" * (w + 2) for w in widths) + "|",
+    ]
+    out += [
+        "| " + " | ".join(c.ljust(w) for c, w in zip(row, widths)) + " |"
+        for row in rows
+    ]
+    return "\n".join(out)

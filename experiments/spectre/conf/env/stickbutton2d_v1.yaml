@@ -1,0 +1,17 @@
+# StickButton2D — the pooled SPECTRE collection (b1/b2/b3/b5, 400/100/100).
+#
+# One env_variant covering four kinder env ids, with button count as the difficulty
+# stratum. b10 is deliberately absent: a single A* run cannot produce prefix-diverse
+# pools at 10 buttons, so 0/20 problems were solvable within the 200-attempt budget
+# (docs/autonomous_stickbutton_session.md D5).
+#
+# `env_id` / `model_kwargs` below are the *default* (b3) and exist so the standard
+# per-variant entry points (spectre_build_vocab.py, spectre_check_pipeline.py) resolve.
+# The collection itself is driven by experiments/spectre/sb2d_collect.py, which builds one
+# CollectionConfig per button count and pools them under the stratum-encoded problem ids
+# of envs/stickbutton2d/strata.py. Only `env_variant` selects the on-disk layout.
+env_id: "kinder/StickButton2D-b3-v0"
+env_variant: "stickbutton2d_v1"
+model_name: "stickbutton2d"
+model_kwargs:
+  num_buttons: 3

@@ -1,0 +1,5 @@
+env_id: "kinder/StickButton2D-b10-v0"
+env_variant: "stickbutton2d_b10"
+model_name: "stickbutton2d"
+model_kwargs:
+  num_buttons: 10

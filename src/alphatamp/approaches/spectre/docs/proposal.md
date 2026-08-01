@@ -5,12 +5,12 @@ test-time reordering* to a **representation question for plan-feasibility
 prediction** in fully-observable, deterministic bilevel TAMP. §0 below is the
 current framing; the prior adaptivity-first proposal (the original §1–§6) is
 retained byte-unchanged under **"Superseded framing (April 2026)"**. Rationale:
-[`decisions.md`](decisions.md) 2026-06-25.
+[`decisions.md` 2026-06-25](decisions/02-pivot.md#2026-06-25-direction-pivot-representation-question).
 
 ## Status & reading order
 
-- **Current** (source of truth): **§0** below, [`decisions.md`](decisions.md)
-  (newest entry 2026-06-25), [`notebook.md`](notebook.md) (newest entry
+- **Current** (source of truth): **§0** below, [`decisions.md`](decisions/README.md)
+  (newest entry 2026-06-25), [`notebook.md`](notebook/README.md) (newest entry
   2026-06-25).
 - **Frozen / historical**: the original §1–§6 of this file (under "Superseded
   framing (April 2026)"); the April writeup
@@ -22,8 +22,8 @@ retained byte-unchanged under **"Superseded framing (April 2026)"**. Rationale:
 
 > **Epistemic status.** The representation advantage stated here is a
 > **hypothesis with a falsifiable prediction**, *not* an established result. The
-> ~27% adaptivity finding (`notebook.md` 2026-06-06), the B6 lookahead-saturation
-> sweep (`notebook.md` 2026-06-11), and RT2D's construction are established;
+> ~27% adaptivity finding ([`notebook.md` 2026-06-06](notebook/README.md)), the B6 lookahead-saturation
+> sweep ([`notebook.md` 2026-06-11](notebook/01-foundations.md#2026-06-11-b6-exact-h-sweep)), and RT2D's construction are established;
 > the crossover below is conjecture to be tested.
 
 **The contribution.** A *representation question* for plan-feasibility prediction
@@ -71,7 +71,7 @@ than future-work).
 **Adaptivity is secondary.** Within-episode refinement failures carry free
 instance-specific signal, but our own analysis attributes only a **minority
 (~27%)** of the method's margin to this component; the static representation does
-the bulk (`notebook.md` 2026-06-06). The SPECTRE re-ranker is therefore a
+the bulk ([`notebook.md` 2026-06-06](notebook/README.md)). The SPECTRE re-ranker is therefore a
 **secondary, composable** increment — orthogonal to, and combinable with,
 whichever representation wins.
 
@@ -121,7 +121,7 @@ as attempts. Deviations from the KinDER template are enumerated in
 ## Superseded framing (April 2026)
 
 *Retained byte-unchanged as the record of the adaptivity-first direction. See §0
-above and `decisions.md` 2026-06-25 for what superseded it; nothing below has
+above and [`decisions.md` 2026-06-25](decisions/02-pivot.md#2026-06-25-direction-pivot-representation-question) for what superseded it; nothing below has
 been rephrased.*
 
 **S**keleton-**P**ool **E**mbedding with **C**ontextual **T**ransformer for
@@ -166,7 +166,7 @@ SPECTRE is the candidate method; B1–B5 are the baselines (never the reverse):
 | B3 | static-historical (Laplace-smoothed success rates on canonical keys) | the static ranker to strictly beat |
 | B4 | adaptive-historical (Naive-Bayes log-odds over pairwise failure conditionals) | **headline comparison** — empirical lower bound on the adaptivity premium |
 | B5 | oracle | top anchor / headroom |
-| B6 | DP-on-counts (receding-horizon expectimax over B4's calibrated counts, depth `h`) | tests whether *lookahead* over the same count model beats B4's myopic greedy; `h=1` ≡ B4 (`decisions.md` 2026-06-08) |
+| B6 | DP-on-counts (receding-horizon expectimax over B4's calibrated counts, depth `h`) | tests whether *lookahead* over the same count model beats B4's myopic greedy; `h=1` ≡ B4 ([`decisions.md` 2026-06-08](decisions/01-foundations.md#2026-06-08-dp-on-counts-b6-baseline)) |
 
 ## 2. Why RoutedTransport2D
 
@@ -317,7 +317,7 @@ rollout performance — they are diagnostics only; never optimize for them.
   abstract substrate question is the contribution; see §0.)*
 - **DD2D as the packing / negative-control testbed.** DD2D (Drawer Decluttering
   2D) is wired in as env_variant `dd2d_v2` via a JSON→EpisodeRecord converter
-  (`envs/dd2d/spectre_convert.py`; `decisions.md` 2026-07-12), abstract-only for
+  (`envs/dd2d/spectre_convert.py`; [`decisions.md` 2026-07-12](decisions/03-dd2d-v2.2.md#2026-07-12-dd2d-integration-converter-not-native-env)), abstract-only for
   now. Feasibility is a continuous packing problem, so abstract-first is expected
   to *lose* — DD2D is the negative control that bounds the representation claim
   (§0). The source JSON retains per-object poses/shapes/sizes, so DD2D is also the
