@@ -244,6 +244,33 @@ class OffPoolLabeler(MemoizingLabeler):
         return "success" if result.feasible else "fail"
 
 
+def label_step_sequence(
+    episode: EpisodeRecord,
+    steps: tuple[Step, ...],
+    adapter: EnvAdapter,
+    labeler: Labeler,
+    pool: dict[tuple[object, ...], int] | None = None,
+    stored: Sequence[str] | None = None,
+) -> tuple[str, int | None]:
+    """Label one proposal: ``(label, pool_index or None)``.
+
+    **The single definition of how a VLMPlan proposal is labelled.** A plan matching a
+    pooled candidate takes that candidate's *stored* outcome and is never re-refined, so
+    VLMPlan reads byte-identical labels to every other method; anything else is refined
+    live at the collection's settings.
+
+    Extracted so the generation loop's first-success stop check and the scorer use the
+    same rule. Two copies of this would drift, and the symptom would be a run that stops
+    generating on a "success" the scorer then labels a failure.
+    """
+    pool = adapter.pool_index(episode) if pool is None else pool
+    stored = [o.outcome for o in episode.outcomes] if stored is None else stored
+    pool_idx = pool.get(adapter.canonical_key(steps))
+    if pool_idx is not None:
+        return stored[pool_idx], pool_idx
+    return labeler.label(episode, steps), None
+
+
 def score_sequence(
     episode: EpisodeRecord,
     proposals: Sequence[tuple[tuple[Step, ...], int]],
@@ -281,14 +308,12 @@ def score_sequence(
         censored=True,
     )
     for steps, source, round_index in sequence[:attempt_budget]:
-        pool_idx = pool.get(adapter.canonical_key(steps))
         members = adapter.discretionary_objects(steps)
-        label: str
-        if pool_idx is not None:
-            label = stored[pool_idx]
-        else:
+        label, pool_idx = label_step_sequence(
+            episode, steps, adapter, labeler, pool=pool, stored=stored
+        )
+        if pool_idx is None:
             result.n_offpool += 1
-            label = labeler.label(episode, steps)
         if source == "fill":
             result.n_fill_used += 1
         result.attempts.append(

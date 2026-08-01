@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from prpl_llm_utils.models import PretrainedLargeModel
 
@@ -106,6 +106,7 @@ class GenerationResult:
     rounds: list[RoundLog] = field(default_factory=list)
     stalled: bool = False
     hit_max_rounds: bool = False
+    stopped_on_success: bool = False
     parse_reasons: list[str] = field(default_factory=list)
 
     @property
@@ -121,6 +122,7 @@ class GenerationResult:
             "rounds": [asdict(r) for r in self.rounds],
             "stalled": self.stalled,
             "hit_max_rounds": self.hit_max_rounds,
+            "stopped_on_success": self.stopped_on_success,
             "n_truncated": self.n_truncated,
             # Capped: the reason list is a debugging aid, not a dataset, and a
             # pathological model can otherwise emit thousands per problem.
@@ -168,8 +170,24 @@ def generate_sequence(
     config: LoopConfig,
     decode: dict[str, Any],
     base_seed: int = 0,
+    stop_check: Callable[[Sequence[Proposal]], bool] | None = None,
 ) -> GenerationResult:
-    """Run the multi-round loop for one problem and return its ordered proposals."""
+    """Run the multi-round loop for one problem and return its ordered proposals.
+
+    ``stop_check`` is called after each round with the proposals so far and should
+    return True once one of them is known to refine. **A feasible plan ends the
+    episode**: ``max_plans`` (= the pool cap) is a hard ceiling for the case where every
+    proposal keeps failing, not a target to fill. Generating past the first success
+    cannot change the reported FP — the rollout would never have reached those
+    proposals — so it is pure wall-clock. Measured on StickButton2D b5, where a problem
+    ran all 10 rounds to accumulate 27 plans that the scorer then never looked past the
+    first few of.
+
+    It also changes what ``n_proposed`` means (§6 of the comparison notebook): with a
+    stop check the count is censored at the first success, so it reads as "plans needed"
+    rather than "plans the model can produce". Runs generated with and without a stop
+    check are therefore not comparable on that column — but they are on FP.
+    """
     result = GenerationResult(problem_id=problem_id)
     prompt_config = PromptConfig(plans_per_round=config.plans_per_round)
 
@@ -257,6 +275,11 @@ def generate_sequence(
         result.rounds.append(log)
 
         if len(result.proposals) >= config.max_plans:
+            break
+        # Checked after the round is logged, so the round that found the success is
+        # still recorded with its accounting.
+        if stop_check is not None and stop_check(result.proposals):
+            result.stopped_on_success = True
             break
         consecutive_stalls = (
             consecutive_stalls + 1 if log.yield_rate < config.tau else 0

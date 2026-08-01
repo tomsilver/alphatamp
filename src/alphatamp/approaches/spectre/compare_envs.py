@@ -160,6 +160,11 @@ SB2D = EnvSpec(
         "collection was cut at a wall-clock budget — so the b5 column is substantially "
         "a generalisation result. No method is advantaged; none should be quoted as "
         "trained-on-b5.",
+        "**§6's `n_proposed` is not comparable to DD2D's.** SB2D generation stops at "
+        "the first plan that refines (the 200-plan budget is a ceiling for when they "
+        "all fail, not a quota), so the count reads as *plans needed*; DD2D's rows "
+        "predate that and read as *plans producible*. The FP columns are unaffected — "
+        "the rollout never looks past the first success either way.",
         "**Run-to-run noise at fixed seed reaches 1.02 FP here — read §4 against that, "
         "not against the seed sd.** The deployed arm and `abl_cov_rec` are the *same "
         "flags at the same three seeds*, trained twice by accident, and they read 1.69 "

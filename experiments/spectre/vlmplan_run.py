@@ -36,7 +36,11 @@ from omegaconf import DictConfig, OmegaConf
 from alphatamp.approaches.spectre.vlmplan import runio
 from alphatamp.approaches.spectre.vlmplan.loop import LoopConfig, generate_sequence
 from alphatamp.approaches.spectre.vlmplan.models import ModelConfig, make_model
-from alphatamp.approaches.spectre.vlmplan.registry import make_adapter
+from alphatamp.approaches.spectre.vlmplan.registry import (
+    make_adapter,
+    make_labeler_factory,
+)
+from alphatamp.approaches.spectre.vlmplan.score import label_step_sequence
 from alphatamp.approaches.spectre.vlmplan.template import PromptConfig, build_prompt
 
 REPO = Path(__file__).resolve().parents[2]
@@ -99,9 +103,18 @@ def main(cfg: DictConfig) -> None:
         n_problems=int(cfg.n_problems),
         problem_ids=[int(p) for p in (cfg.problem_ids or [])],
     )
+    # Default on. Off reproduces the pre-2026-08-01 behaviour (generate until stall or
+    # round cap), which is what the DD2D rows were produced with -- so `n_proposed` is
+    # comparable only within a setting. FP is comparable across both.
+    stop_at_first_success = bool(cfg.get("stop_at_first_success", True))
+    labeler = make_labeler_factory(
+        env_variant, memo_path=out_root / "offpool_labels.json"
+    )()
+
     print(
         f"VLMPlan generate: {len(episodes)} problems from {env_variant}/{cfg.split}  "
-        f"model={mc.model_name}  images={bool(cfg.with_images)}  run={cfg.run}"
+        f"model={mc.model_name}  images={bool(cfg.with_images)}  run={cfg.run}  "
+        f"stop_at_first_success={stop_at_first_success}"
     )
 
     n_written = n_skipped = 0
@@ -113,6 +126,36 @@ def main(cfg: DictConfig) -> None:
             continue
 
         started = time.time()
+
+        # **A feasible plan ends the episode.** `max_plans` (= the pool cap) is the hard
+        # ceiling for when every proposal keeps failing, not a quota to fill. Proposals
+        # generated after the first success can never change the reported FP, because
+        # the rollout stops there -- so generating them is pure wall-clock. On SB2D b5
+        # that was ~10 rounds and ~15 min per problem spent past the answer.
+        #
+        # The labels come from `label_step_sequence`, the same rule the scorer uses, and
+        # land in the same on-disk memo -- so this moves the refinement work earlier
+        # rather than duplicating it, and `vlmplan_score.py` still runs standalone.
+        pool = adapter.pool_index(episode)
+        stored = [o.outcome for o in episode.outcomes]
+        cursor = 0
+
+        def _stop_check(proposals, _ep=episode, _pool=pool, _stored=stored):
+            nonlocal cursor
+            while cursor < len(proposals):
+                label, _ = label_step_sequence(
+                    _ep,
+                    proposals[cursor].steps,
+                    adapter,
+                    labeler,
+                    pool=_pool,
+                    stored=_stored,
+                )
+                cursor += 1
+                if label == "success":
+                    return True
+            return False
+
         result = generate_sequence(
             adapter,
             episode,
@@ -121,7 +164,9 @@ def main(cfg: DictConfig) -> None:
             loop_cfg,
             decode,
             base_seed=int(cfg.seed) * 1000,
+            stop_check=_stop_check if stop_at_first_success else None,
         )
+        labeler.flush()
         elapsed = time.time() - started
 
         payload = result.as_dict()

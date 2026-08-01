@@ -4,6 +4,61 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-vlmplan-stops-generating-first-feasible-plan"></a>
+## 2026-08-01 — VLMPlan stops generating at the first feasible plan
+
+<!--strip-->
+> **id** `2026-08-01-vlmplan-stops-generating-first-feasible-plan` · **status** active
+> · **tracks** baselines, evaluation
+<!--/strip-->
+
+**Context.** VLMPlan's generation loop ran until it stalled or hit its round cap, then
+scoring walked the proposals to the first success. The 200-plan budget was read as a
+target to approach; it is a **hard ceiling for the case where proposals keep failing**,
+which is a different thing.
+
+The two stages are deliberately split — only generation needs a model, so a re-score is
+cheap ([2026-07-24](04-comparison.md#2026-07-24-vlmplan-baseline-protocol)) — and the
+side effect was that generation had no labels and therefore no way to know it was done.
+It kept proposing after the answer had already been found.
+
+The cost became visible once the b5 grounding bug was fixed
+([2026-08-01](07-stickbutton2d.md#2026-08-01-off-pool-proposals-grounded-against-domain-filtered)):
+b5 problems went from stalling out at 0 plans to running all 10 rounds for 27 plans at
+~884 s each, pushing the 100-problem run from ~9 h to ~14 h — to generate proposals the
+scorer would never reach.
+
+**Decision.** `generate_sequence` takes a `stop_check`, called after each round, and
+stops at the first proposal known to refine. The runner supplies it; `max_plans` remains
+the ceiling for the all-failing case.
+
+**FP is unchanged, and that is the whole argument.** The metric is failures before the
+first success, so the rollout never looks past that success — proposals after it are
+wall-clock and nothing else. Pinned by
+`test_vlmplan.py::test_stop_at_first_success_preserves_fp`.
+
+Labels come from `label_step_sequence`, newly extracted as the **single** definition of
+how a proposal is labelled (stored outcome if it matches a pooled candidate, live refine
+otherwise) and now called by both the scorer and the stop check. Two copies would drift,
+and the symptom would be a run stopping on a "success" the scorer then calls a failure.
+They share the on-disk memo, so the refinement work is *moved earlier*, not duplicated,
+and `vlmplan_score.py` still runs standalone.
+
+**Consequences.**
+
+- **`n_proposed` changes meaning, and §6 of the comparison notebook reports it.** With a
+  stop check the count is censored at the first success — "plans needed", not "plans the
+  model can produce". **The DD2D rows were generated without it, so that column is not
+  comparable across the two environments.** FP is. `stop_at_first_success: false`
+  reproduces the old behaviour, and `stopped_on_success` is recorded per problem so a
+  short proposal list is never mistaken for a model that ran out of ideas.
+- Wall-clock on the SB2D test run drops by roughly the margin above; the exact saving
+  depends on how early the first success lands, which is itself the thing being measured.
+- The stop check is *conservative by construction*: it can only fire on a plan the
+  scorer would also label a success, because it is the same function.
+
+---
+
 <a id="2026-08-01-off-pool-proposals-grounded-against-domain-filtered"></a>
 ## 2026-08-01 — Off-pool proposals are grounded against the domain, not the filtered pool
 

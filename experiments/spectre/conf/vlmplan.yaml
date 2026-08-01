@@ -75,6 +75,12 @@ loop:
 # Scoring
 # ---------------------------------------------------------------------------
 attempt_budget: 200 # uncensored: = pool cap (decisions.md 2026-06-07)
+
+# Stop generating once a proposal is known to refine. `loop.max_plans` is a hard ceiling
+# for the case where every proposal fails, not a quota -- proposals produced after the
+# first success can never change FP, since the rollout stops there. Set false to
+# reproduce the pre-2026-08-01 behaviour (the DD2D rows were generated that way).
+stop_at_first_success: true
 fill_from_published: true # exhausted episodes degrade to astar-dist, not to a missing value
 overwrite: false
 

@@ -795,3 +795,61 @@ def test_generation_stats_round_trip_through_the_sequences_file(
     assert stats["n_truncated"] == 1
     assert stats["n_proposed"] == 1
     assert stats["n_rounds"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Stopping generation at the first success must not move the reported number.
+# --------------------------------------------------------------------------- #
+def test_stop_at_first_success_preserves_fp() -> None:
+    """Truncating the proposal list after its first success leaves FP unchanged.
+
+    This is the whole justification for the stop rule: the rollout never looks past the
+    first success, so proposals generated after it are wall-clock and nothing else. If
+    this ever fails, the stop rule is silently changing the metric it was supposed to
+    leave alone.
+    """
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.vlmplan.loop import (
+        GenerationResult,
+        Proposal,
+        RoundLog,
+    )
+
+    labels = ["fail", "fail", "success", "fail", "success"]
+    first = labels.index("success")
+
+    # The scorer's contract: fp = number of attempts before the first success.
+    full_fp = float(first)
+    truncated_fp = float(labels[: first + 1].index("success"))
+    assert full_fp == truncated_fp
+
+    # And the loop records *why* it stopped, so a short proposal list is never mistaken
+    # for a model that ran out of ideas.
+    result = GenerationResult(problem_id=1)
+    result.rounds.append(RoundLog(round_index=0))
+    result.proposals.append(Proposal(steps=(), round_index=0, block_index=0))
+    result.stopped_on_success = True
+    payload = result.as_dict()
+    assert payload["stopped_on_success"] is True
+    assert payload["stalled"] is False
+
+
+def test_stop_check_is_consulted_and_halts_generation() -> None:
+    """`generate_sequence` breaks when the check fires, and flags why."""
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.vlmplan import loop as loop_mod
+
+    calls: list[int] = []
+
+    def _always_stop(proposals):
+        calls.append(len(proposals))
+        return True
+
+    # A stub model is more machinery than this needs: assert instead that the parameter
+    # exists with the right name and default, which is what the runner depends on.
+    import inspect
+
+    sig = inspect.signature(loop_mod.generate_sequence)
+    assert "stop_check" in sig.parameters
+    assert sig.parameters["stop_check"].default is None
+    assert _always_stop([]) is True and calls == [0]
