@@ -65,8 +65,8 @@ editing the file above.
 8. **The StickButton2D chaining rule** (`sb2d_adapter._CONTROLLER_NOTE`). Same class as
    deviation 7, on the second environment, and measured the same way. StickButton2D's
    operators come in `...FromNothing` / `...FromButton` pairs whose difference is a
-   precondition on where the robot is standing: pressing a button leaves the robot on it,
-   so only the *first* press of a plan can be the `FromNothing` variant.
+   precondition on where the presser is standing: pressing a button leaves whatever
+   pressed it standing on that button.
 
    Left to infer that from the names, `qwen3-vl-32b-instruct` wrote `FromNothing` for
    every press. Measured on train problem 500000 (b3): **11/11 parsed plans violated a
@@ -84,6 +84,22 @@ editing the file above.
    same reason the DD2D block discloses geometry: StickButton2D's symbolic model is
    reach-blind, so a prompt without it describes a problem where every plan is equally
    good.
+
+   **Corrected 2026-08-01, after the first version of the rule proved false.** It
+   originally read "the first press is `...FromNothing`, every later press is
+   `...FromButton`", which holds only *within* one uninterrupted run of presses by the
+   same effector. `PlaceStick` and `PickStickFromButton` both re-establish
+   `(AboveNoButton)`, so the press after either is `...FromNothing` again; and arm presses
+   track `RobotAboveButton` while stick presses track `StickAboveButton`, so an arm run
+   and a stick run can never chain into one another. A model following the old text
+   produced mixed plans that could not ground — on b5 train problem 750000, round 0 was
+   **19 parsed, 19 inapplicable**, and both b5 pilots returned zero usable plans.
+
+   This matters for how the deviation should be read: a disclosure that *removes* a
+   handicap only does so if it is correct. A wrong one is worse than silence, because the
+   model obeys it. The corrected note states the effector-separation rule and the two
+   reset actions, and gives a correct example of each of the two mixed strategies. Pinned
+   by `test_vlmplan_sb2d.py::test_mixed_stick_then_arm_plan_grounds` and its converse.
 
 ## Decode settings (part of reproducing a run)
 

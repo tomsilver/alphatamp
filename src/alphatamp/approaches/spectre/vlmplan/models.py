@@ -147,6 +147,14 @@ def make_model(config: ModelConfig) -> PretrainedLargeModel:
     For a local server, set ``base_url`` (or ``OPENAI_BASE_URL``) and any non-empty
     ``OPENAI_API_KEY`` — the backends assert the key exists but a local server ignores
     its value.
+
+    **An unset endpoint is an error, not a default.** The OpenAI SDK falls back to
+    ``api.openai.com``, so forgetting the export does not fail — it silently sends every
+    prompt of a 100-problem run to a paid public endpoint under whatever key happens to
+    be in the environment. That happened on 2026-08-01 (5 requests, all rejected 401,
+    nothing processed) and the only reason it was caught is that no valid key was set.
+    A run that *did* have one would have completed and billed. Refuse instead, and name
+    the fix.
     """
     if config.backend not in _BACKENDS:
         raise ValueError(
@@ -155,6 +163,15 @@ def make_model(config: ModelConfig) -> PretrainedLargeModel:
     if config.base_url:
         os.environ["OPENAI_BASE_URL"] = config.base_url
     if config.backend.startswith("openai"):
+        allow_remote = os.environ.get("SPECTRE_VLMPLAN_ALLOW_REMOTE") == "1"
+        if not os.environ.get("OPENAI_BASE_URL") and not allow_remote:
+            raise RuntimeError(
+                "No OpenAI-compatible endpoint configured, and the SDK would fall back "
+                "to api.openai.com — sending every prompt off-box and billing for it. "
+                "Set model.base_url in the config, or export OPENAI_BASE_URL "
+                "(e.g. http://localhost:1234/v1 for LM Studio). Pass "
+                "SPECTRE_VLMPLAN_ALLOW_REMOTE=1 if a hosted endpoint really is intended."
+            )
         os.environ.setdefault("OPENAI_API_KEY", "local-server")
     model_cls = _BACKENDS[config.backend]
     return model_cls(config.model_name, make_cache(config))

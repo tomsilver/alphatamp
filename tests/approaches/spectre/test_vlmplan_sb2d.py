@@ -26,6 +26,7 @@ import pytest
 
 from alphatamp.approaches.spectre.vlmplan.adapter import RawPlan
 from alphatamp.approaches.spectre.vlmplan.registry import make_adapter
+from alphatamp.approaches.spectre.vlmplan.sb2d_adapter import _lifted_by_name
 
 _EPISODES = Path("data/spectre/raw/stickbutton2d_v1/test/episodes")
 
@@ -120,3 +121,78 @@ def test_published_order_is_the_collection_order(adapter, episode) -> None:
             for op in episode.skeleton_pool[j].operator_seq
         )
         assert tuple(plan) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Grounding must judge a proposal against the DOMAIN, not against the filtered pool.
+#
+# Both cases below returned "inapplicable" before 2026-08-01 and cost the b5 pilots
+# every one of their proposals. Neither failure is visible in a result: the plans are
+# discarded, VLMPlan falls back to published order, and the row just looks weak.
+# --------------------------------------------------------------------------- #
+def _buttons(adapter, episode):
+    return sorted(n for n, t in adapter.objects(episode).items() if t == "circle")
+
+
+def test_place_stick_is_groundable_even_though_no_pooled_plan_uses_it(
+    episode,
+) -> None:
+    """The acyclic pool filter removes every skeleton containing a stick cycle.
+
+    Recovering lifted operators from the pool alone therefore leaves ``PlaceStick``
+    undefined, and *every* proposal using it is rejected — including the
+    press-far-with-stick-then-near-with-arm strategy the model actually writes.
+    """
+    lifted = _lifted_by_name(episode)
+    assert "PlaceStick" in lifted
+    pooled = {
+        op.parent.name
+        for skel in episode.skeleton_pool
+        for op in skel.operator_seq
+        if op.parent is not None
+    }
+    # The regression only bites when the pool really is missing it; if a future
+    # collection includes stick cycles this test still passes but stops proving much.
+    if "PlaceStick" in pooled:
+        pytest.skip("this pool contains PlaceStick; the gap this guards is absent")
+
+
+def test_mixed_stick_then_arm_plan_grounds(adapter, episode) -> None:
+    """`PlaceStick` restores "over no button", so the next press is `...FromNothing`.
+
+    Pins the corrected chaining rule the prompt states. The old rule ("every later press
+    is `...FromButton`") is false across a `PlaceStick`, and a model obeying it emits
+    plans that cannot ground.
+    """
+    buttons = _buttons(adapter, episode)
+    if len(buttons) < 3:
+        pytest.skip("needs >= 3 buttons to exercise a mixed plan")
+    steps = [
+        ("PickStickFromNothing", ["robot", "stick"]),
+        ("StickPressButtonFromNothing", ["robot", "stick", buttons[0]]),
+        ("PlaceStick", ["robot", "stick"]),
+        ("RobotPressButtonFromNothing", ["robot", buttons[1]]),
+    ]
+    steps += [
+        ("RobotPressButtonFromButton", ["robot", b, buttons[i + 1]])
+        for i, b in enumerate(buttons[2:])
+    ]
+    assert adapter.ground(_raw(steps), episode) is not None
+
+
+def test_from_button_after_place_stick_is_rejected(adapter, episode) -> None:
+    """The converse: `...FromButton` straight after `PlaceStick` must NOT ground.
+
+    Without this the test above would pass on an adapter that had simply stopped
+    checking preconditions.
+    """
+    buttons = _buttons(adapter, episode)
+    if len(buttons) < 2:
+        pytest.skip("needs >= 2 buttons")
+    steps = [
+        ("PickStickFromNothing", ["robot", "stick"]),
+        ("StickPressButtonFromNothing", ["robot", "stick", buttons[0]]),
+        ("PlaceStick", ["robot", "stick"]),
+        ("RobotPressButtonFromButton", ["robot", buttons[1], buttons[0]]),
+    ]
+    assert adapter.ground(_raw(steps), episode) is None

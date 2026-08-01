@@ -16,22 +16,35 @@ stating it removes a handicap rather than granting an advantage.
 **The skills get a plain-English note** for the same reason DD2D's do, and the SB2D
 pilot showed exactly why. Left to infer meaning from the names, the model wrote
 ``RobotPressButtonFromNothing`` for *every* press — but pressing a button leaves the
-robot standing on it, so only the first press can be the ``FromNothing`` variant.
-Measured on a b3 problem: **11/11 parsed plans violated a precondition, all of them this
-one.** The note therefore spells out the chaining rule, which is a precondition the PDDL
-domain already states and which every other method in the comparison reads from that
-domain for free — so stating it removes a handicap rather than granting an advantage.
-Recorded as a deviation in ``prompts/PROVENANCE.md``.
+presser standing on it. Measured on a b3 problem: **11/11 parsed plans violated a
+precondition, all of them this one.** The note therefore spells out the chaining rule,
+which is a precondition the PDDL domain already states and which every other method in
+the comparison reads from that domain for free — so stating it removes a handicap rather
+than granting an advantage. Recorded as a deviation in ``prompts/PROVENANCE.md``.
+
+**The first version of that note was itself wrong, and it cost the b5 pilots
+everything.** It said "the first press is ``...FromNothing``, every later press is
+``...FromButton``", which holds only *within* one homogeneous run of presses. Three
+things break it: ``PlaceStick`` and ``PickStickFromButton`` both re-add
+``(AboveNoButton)``, so the press after either is ``...FromNothing`` again; and arm
+presses track ``RobotAboveButton`` while stick presses track ``StickAboveButton``, so the
+two chains can never link to each other. A model obeying the old rule emits mixed plans
+that cannot ground — round 0 of b5 problem 750000 was **19 parsed, 19 inapplicable**.
+Combined with ``PlaceStick`` being ungroundable at all (see :func:`_domain_operators`),
+both b5 pilots returned zero usable plans. A prompt that states a precondition must state
+it correctly; a *wrong* disclosure is worse than none, because the model follows it.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Sequence
 
 from PIL.Image import Image
 
 from alphatamp.approaches.spectre.envs.stickbutton2d.geometry import robot_reach_max_y
 from alphatamp.approaches.spectre.envs.stickbutton2d.render import render_labeled_scene
+from alphatamp.approaches.spectre.envs.stickbutton2d.strata import env_id
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
@@ -69,19 +82,37 @@ What each skill does (these are the exact rules the low-level executor enforces)
 - PlaceStick(robot, stick): put the stick down. Requires holding it.
 
 **Chaining rule — this is the one that invalidates most plans if you get it wrong.**
-`...FromNothing` requires the robot to be over NO button; `...FromButton` requires it to
-be over `from_b`. Pressing a button leaves the robot standing on it. So in any plan:
+`...FromNothing` requires that NOTHING is currently over a button; `...FromButton`
+requires that the thing doing the pressing is already over `from_b`. Pressing a button
+leaves whatever pressed it standing on that button. So:
 
-- the FIRST press is `...FromNothing`;
-- EVERY LATER press must be `...FromButton(..., b, from_b)` where `from_b` is the button
-  pressed immediately before it.
+- **Arm presses chain with arm presses, stick presses chain with stick presses.** The
+  arm and the stick track their positions separately, so you can NEVER write
+  `StickPressButtonFromButton(robot, stick, b, from_b)` where `from_b` was pressed by
+  the arm, or `RobotPressButtonFromButton(robot, b, from_b)` where `from_b` was pressed
+  by the stick.
+- **Within one such run:** the first press is `...FromNothing`, every later press is
+  `...FromButton(..., b, from_b)` with `from_b` the button pressed immediately before.
+- **`PlaceStick` and `PickStickFromButton` reset it.** Both put you back to "over no
+  button", so the press immediately after either one is `...FromNothing` again — NOT
+  `...FromButton`.
 
-A plan that uses `...FromNothing` twice in a row is inapplicable and will be discarded.
-Correct: `RobotPressButtonFromNothing(robot, b1)` then
-`RobotPressButtonFromButton(robot, b2, b1)` then
-`RobotPressButtonFromButton(robot, b3, b2)`. The same applies to the stick presses, and
-`PickStickFromButton(robot, stick, from_b)` is the pick to use when the robot is
-standing on `from_b`.
+Correct all-arm run: `RobotPressButtonFromNothing(robot, b1)`,
+`RobotPressButtonFromButton(robot, b2, b1)`, `RobotPressButtonFromButton(robot, b3, b2)`.
+
+Correct mixed plan — press the far buttons with the stick, put it down, then use the arm:
+`PickStickFromNothing(robot, stick)`,
+`StickPressButtonFromNothing(robot, stick, b1)`,
+`StickPressButtonFromButton(robot, stick, b2, b1)`,
+`PlaceStick(robot, stick)`,
+`RobotPressButtonFromNothing(robot, b3)`   <- FromNothing, because PlaceStick reset it,
+`RobotPressButtonFromButton(robot, b4, b3)`.
+
+Correct the other way round — arm first, then switch to the stick without putting it
+down: `RobotPressButtonFromNothing(robot, b1)`,
+`RobotPressButtonFromButton(robot, b2, b1)`,
+`PickStickFromButton(robot, stick, b2)`,
+`StickPressButtonFromNothing(robot, stick, b3)`   <- FromNothing again, same reason.
 
 The single hard constraint that makes this a planning problem: **the robot presses every
 button it drives over.** A press that also sweeps a not-yet-planned button off-plan is
@@ -95,18 +126,67 @@ def _as_episode(problem: object) -> EpisodeRecord:
     return problem
 
 
-def _lifted_by_name(episode: EpisodeRecord) -> dict[str, object]:
-    """Lifted operators recovered from the pool's own ``GroundOperator.parent``.
+@lru_cache(maxsize=8)
+def _domain_operators(num_buttons: int) -> dict[str, object]:
+    """Every lifted operator the *domain* has, from kinder's own model.
 
-    Avoids rebuilding ``SesameModels`` (which would need the env) just to ground a
-    proposal — the same trick ``unified_evidence.scene_filters`` uses.
+    Recovering operators from the pool alone is not enough, and the gap is not academic:
+    the acyclic pool filter drops every skeleton containing a
+    ``PickStick``/``PlaceStick`` cycle, so on b5 **no pooled plan mentions
+    ``PlaceStick``** even though the domain has
+    it and the prompt advertises it. Grounding against the pool therefore rejected every
+    proposal of the form *pick stick → press the far buttons → put it down → press the
+    near ones with the arm* — which is the strategy the model actually writes down
+    ("we must place stick first to use bare arm"). Both b5 pilots returned **0 usable
+    plans** for that reason alone.
+
+    That is the adapter holding a proposal to a *stricter* standard than the collection,
+    which inverts the rule the port is supposed to follow. The acyclic filter is a
+    pool-generation heuristic, not a legality constraint, and an off-pool proposal is
+    refined for real — so it must be judged against the domain, not against the filtered
+    pool.
     """
-    return {
+    # pylint: disable=import-outside-toplevel
+    import kinder
+    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+
+    from alphatamp.approaches.spectre.env_registry import register_extra_envs
+
+    register_extra_envs()
+    env = kinder.make(env_id(num_buttons))
+    try:
+        models = create_bilevel_planning_models(
+            "stickbutton2d",
+            env.observation_space,
+            env.action_space,
+            num_buttons=num_buttons,
+        )
+        return {s.operator.name: s.operator for s in models.skills}
+    finally:
+        env.close()
+
+
+def _lifted_by_name(episode: EpisodeRecord) -> dict[str, object]:
+    """Lifted operators available for grounding a proposal.
+
+    The pool supplies most of them and needs no environment; :func:`_domain_operators`
+    fills in the ones the pool filter happens to have removed. Pool-first keeps the
+    common path env-free and keeps the *identity* of an operator the pool's own, so a
+    proposal matching a stored candidate still hits ``pool_index`` exactly.
+    """
+    from_pool: dict[str, object] = {
         op.parent.name: op.parent
         for skel in episode.skeleton_pool
         for op in skel.operator_seq
         if op.parent is not None
     }
+    num_buttons = sum(1 for t in episode.object_registry.values() if t == BUTTON_TYPE)
+    try:
+        for name, operator in _domain_operators(num_buttons).items():
+            from_pool.setdefault(name, operator)
+    except Exception:  # noqa: BLE001 — kinder unavailable; pool-only is still usable
+        pass
+    return from_pool
 
 
 def _objects_by_name(episode: EpisodeRecord) -> dict[str, object]:

@@ -4,6 +4,73 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-off-pool-proposals-grounded-against-domain-filtered"></a>
+## 2026-08-01 — Off-pool proposals are grounded against the domain, not the filtered pool
+
+<!--strip-->
+> **id** `2026-08-01-off-pool-proposals-grounded-against-domain-filtered` · **status**
+> active · **tracks** baselines, method, env-stickbutton2d
+<!--/strip-->
+
+**Context.** VLMPlan's protocol says a proposal is held to *exactly* the standard a
+planner-emitted skeleton meets — no more, no less
+([2026-07-24](04-comparison.md#2026-07-24-vlmplan-baseline-protocol)). The SB2D adapter
+implemented "exactly" by recovering lifted operators from the episode's own
+`skeleton_pool`, which needs no environment and keeps operator identity aligned with
+`pool_index`.
+
+That is stricter than intended, and the gap is not hypothetical. The acyclic pool filter
+([2026-08-01](07-stickbutton2d.md#2026-08-01-acyclic-pool-filter-pooled-stickbutton2d-v1))
+drops every skeleton containing a `PickStick`/`PlaceStick` cycle, so on b5 **no pooled
+plan mentions `PlaceStick`** — while the domain has it and the prompt advertises it. Any
+proposal using it died on a `KeyError` and was recorded as inapplicable.
+
+Compounding it, the chaining rule the prompt stated was **false for mixed plans**. It
+said "the first press is `...FromNothing`, every later press is `...FromButton`", which
+holds only within one uninterrupted run of presses by the same effector. `PlaceStick` and
+`PickStickFromButton` both re-add `(AboveNoButton)`; arm presses track `RobotAboveButton`
+while stick presses track `StickAboveButton`, so the two never chain into each other.
+
+Together these made the *entire* stick-then-arm strategy unrepresentable — the strategy
+the model writes down unprompted ("we must place stick first to use bare arm"). Both b5
+pilots returned **0 usable plans**; b5 problem 750000 round 0 was 21 blocks, 19 parsed,
+**19 inapplicable**.
+
+**Decision.** Ground against the **domain**, not the filtered pool: `_lifted_by_name`
+takes the pool's operators first (env-free, identity-preserving for `pool_index`) and
+fills any missing ones from kinder's own `create_bilevel_planning_models`. And correct
+the prompt's chaining rule to state effector separation and the two reset actions.
+
+The general rule, which is the part worth carrying to the next environment: **a
+pool-generation heuristic is not a legality constraint.** The acyclic filter exists to
+stop the pool filling with padding; an off-pool proposal is refined for real and must be
+judged against what the domain permits.
+
+**Consequences.**
+
+- Pinned by `test_vlmplan_sb2d.py`: a `PlaceStick` plan grounds, the mixed
+  stick→place→arm plan grounds, and — the guard that keeps the other two honest —
+  `...FromButton` immediately after `PlaceStick` is still **rejected**, so the tests
+  cannot pass on an adapter that simply stopped checking preconditions.
+- **The full 100-problem test run was stopped ~8 problems in and restarted.** Its b5
+  column would have been near-entirely published-order fallback, and b5 is one of the two
+  strata that carry the SB2D result — the other 92 problems were not worth the ~9 hours
+  to produce a column known in advance to be an artifact.
+- **A wrong disclosure is worse than none.** Deviation 7/8's whole justification is that
+  stating a precondition *removes a handicap* every other method gets from the domain for
+  free. That argument only holds if the statement is true; the model obeys it either way.
+  The corrected note is in `prompts/PROVENANCE.md` deviation 8, with the old text and why
+  it was wrong.
+- **An unset LLM endpoint is now a hard error.** During the re-pilot the
+  `OPENAI_BASE_URL` export was missing and the OpenAI SDK silently fell back to
+  `api.openai.com`; 5 requests went to the public API and were rejected 401, and nothing
+  was processed only because no valid key was present. A machine with one would have
+  completed the run off-box and billed for it. `make_model` now refuses an unconfigured
+  endpoint and names the fix, `SPECTRE_VLMPLAN_ALLOW_REMOTE=1` is the deliberate opt-in,
+  and `vlmplan_sb2d_32b.yaml` states `base_url` rather than relying on an export.
+
+---
+
 <a id="2026-08-01-comparison-notebook-parameterised-env-registry"></a>
 ## 2026-08-01 — Comparison notebook parameterised by an env registry
 
