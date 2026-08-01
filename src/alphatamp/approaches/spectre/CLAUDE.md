@@ -309,9 +309,20 @@ mean over unbalanced strata as a method comparison.
 | method | ALL | b1 | b2 | b3 | b5 |
 |---|---|---|---|---|---|
 | astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+| VLMPlan-32B (n=40) | 13.18 | 0.70 | 1.30 | 6.20 | 44.50 |
 | PIGINet (low-level) | 2.02 ± 0.19 | 0.08 | 0.32 | 1.31 | 6.39 |
 | SPECTREv3-static | 1.98 ± 0.28 | 0.08 | 0.32 | 1.52 | 5.99 |
 | SPECTREv3-adaptive | **1.69 ± 0.26** | 0.08 | 0.24 | 1.13 | 5.29 |
+
+**VLMPlan-32B (the zero-data corner) is a genuine planner here** — 35/40 problems
+self-solved, 0 censored, stratified n=40 (10/stratum, so the ALL is comparable). It sits
+between astar and the learned methods: it beats the naive planner order overall (13.18 vs
+16.29, but only via b5 where astar's default order is pathological) and is *worse* than
+astar on b1/b2/b3, where its charged-but-failed off-pool proposals cost it. It trails
+SPECTREv3/PIGINet by ~7×. The 2-problem train pilot badly mis-estimated it (drew the hard
+tail — "loses to astar, censored on b5"); the stratified test sample overturns that. See
+[`notebook/07`](docs/notebook/07-stickbutton2d.md) 2026-08-01. The full 100 was descoped
+(b3/b5 tail problems run to the stall cap, ~16 h) — the ~7× gap and ordering are settled.
 
 **On SB2D the representation advantage does not reproduce.** Paired bootstrap over the 100
 test problems: v3-static − PIGINet = −0.05, CI [−0.44, +0.35]; v3-adaptive − PIGINet =

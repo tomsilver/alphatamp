@@ -4,12 +4,81 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-sb2d-vlmplan-32b-capable-tail-limited-beats-astar"></a>
+## 2026-08-01 — SB2D VLMPlan-32B: capable but tail-limited; beats astar, loses to learned methods
+
+<!--strip-->
+> **id** `2026-08-01-sb2d-vlmplan-32b-capable-tail-limited-beats-astar` · **status**
+> active · **tracks** baselines, evaluation, env-stickbutton2d
+<!--/strip-->
+
+**What.** Add the VLMPlan-32B row (the zero-training-data corner) to the SB2D four-method
+comparison. Scored on a **stratified 40-problem subset** (10/stratum, test split) rather
+than the full 100 — a compute choice, since b3/b5 problems VLMPlan cannot self-solve run
+to the ~10-round stall cap. `qwen3-vl-32b-instruct`, corrected prompt (domain grounding +
+effector-chaining rule), stop-at-first-success on. Label-agreement gate **1.000** (36
+samples).
+
+**Result — the four-method table.** Mean rollout FP, test; VLMPlan n=40 (10/stratum, so
+its stratum-weighted ALL is comparable to the n=100 rows), others n=100, 3 seeds.
+
+| method | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| SPECTREv3-adaptive | **1.69** | 0.08 | 0.24 | 1.13 | 5.29 |
+| SPECTREv3-static | 1.98 | 0.08 | 0.32 | 1.52 | 5.99 |
+| PIGINet | 2.02 | 0.08 | 0.32 | 1.31 | 6.39 |
+| **VLMPlan-32B** | **13.18** | 0.70 | 1.30 | 6.20 | 44.50 |
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+
+Generation: **35/40 solved from VLMPlan's own proposals** (5 fell back to published
+order), **0 censored**. Per-problem FP is heavily right-skewed — 22/40 problems are
+**FP=0** (the first proposal refines):
+
+| stratum | self-solve | per-problem FP (sorted) |
+|---|---|---|
+| b1 | 10/10 | 0,0,0,0,0,0,0,0,0,7 |
+| b2 | 10/10 | 0,0,0,0,0,0,0,2,4,7 |
+| b3 | 10/10 | 0,0,0,0,1,5,5,15,15,21 |
+| b5 | 5/10 | 0,0,8,13,23,32,62,66,91,150 |
+
+**Takeaway — VLMPlan-32B is a genuine planner here, sitting between astar and the learned
+methods, and the pilot badly mis-estimated it.** Three points, the first a correction.
+
+1. **The 2-problem pilot was wrong, and this is why 10/stratum was the right call.** The
+   pilot drew train problems 500000 (b3) and 750000 (b5), both in the hard tail: 0
+   self-solves, FP 34 and a censored 200. From those two I told the summary VLMPlan
+   "loses to astar on b3/b5, censored on b5." The stratified test sample overturns it:
+   0 censored anywhere, VLMPlan self-solves the *median* problem in one proposal, and it
+   **beats astar-dist overall** (13.18 vs 16.29). An earlier registry caveat asserting
+   the pilot reading was corrected in the same commit. Two hard problems are not a row.
+
+2. **It beats the naive planner order but only via b5, and loses to it everywhere else.**
+   VLMPlan is worse than astar on b1/b2/b3 (0.70 vs 0.08, 1.30 vs 0.56, 6.20 vs 2.96):
+   its off-pool proposals are refined for real and charged as attempts, so its
+   charged-but-failed guesses cost it exactly where the pool order is already near-
+   optimal. It wins on b5 (44.5 vs 61.6) only because astar's *default* order is
+   pathological there (61.56). The overall win is a b5 artefact of a weak baseline, not
+   broad superiority.
+
+3. **The representation gap is the headline, and it is wide.** VLMPlan-32B (13.18) trails
+   SPECTREv3 (1.69) and PIGINet (2.02) by ~7×. The zero-data corner is a real, competent
+   point — 35/40 self-solved — that the trained abstract-first and low-level predictors
+   both dominate. That is exactly the framing [`proposal.md`](../proposal.md) §0 wants:
+   VLMPlan answers "did you try just asking a VLM?" on the record, as a corner of the
+   data axis, not a defeated straw man.
+
+**Next.** The row is n=40; the full 100 would tighten b3/b5 (their tails are what the mean
+rides on) but cannot move the ~7× representation gap or the qualitative ordering. Left as
+a deliberate stopping point unless the paper needs n=100 parity on this row.
+
+---
+
 <a id="2026-08-01-sb2d-ablation-arms-training-not-reproducible-from-seed"></a>
 ## 2026-08-01 — SB2D v3 ablation arms: training is not reproducible from the seed alone
 
 <!--strip-->
-> **id** `2026-08-01-sb2d-ablation-arms-training-not-reproducible-from-seed` · **status** active
-> · **tracks** evaluation, baselines, env-stickbutton2d
+> **id** `2026-08-01-sb2d-ablation-arms-training-not-reproducible-from-seed` ·
+> **status** active · **tracks** evaluation, baselines, env-stickbutton2d
 <!--/strip-->
 
 **What.** Train the six v3 component arms on StickButton2D so §4 of the comparison
