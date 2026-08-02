@@ -4,6 +4,48 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-01-dd2d-compare-cache-rebuilt-unified-coverage"></a>
+## 2026-08-01 — DD2D compare cache rebuilt to the unified coverage/waste definition (7.44 to 5.78)
+
+<!--strip-->
+> **id** `2026-08-01-dd2d-compare-cache-rebuilt-unified-coverage` · **status** active
+> · **tracks** evaluation, env-dd2d
+<!--/strip-->
+
+**What.** The DD2D method-comparison notebook was still reporting SPECTREv3-adaptive at
+**7.44** — the pre-unification coverage/waste definition — even though the deployed
+checkpoint has been `checkpoints_v3_unified` (unified coverage/waste) since 2026-07-31 and
+`spectre_score_v3` already reported **5.78 ± 0.10** for it. The gap was a stale cache, not
+a disagreement: `_V3_ARMS["spectre3"]` was repointed to the unified dir on 2026-07-31, but
+`precompute_dd2d_cache._dir_complete` skips any full directory, so the pre-unified
+`spectre3_{static,adaptive}` compare-cache rows were never overwritten.
+
+**Result.** Rebuilt with
+`precompute_dd2d_cache.py --env-variant dd2d_v4 --methods spectre3 --no-ablations --force`
+(CPU, LM Studio holding the GPU). The notebook headline is now:
+
+| | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| SPECTREv3-adaptive | **5.78 ± 0.10** | 0.00 | 3.44 | 10.49 | 9.19 |
+| SPECTREv3-static | 21.10 ± 2.11 | 0.00 | 14.21 | 27.76 | 42.44 |
+
+matching the `spectre_score_v3` figures exactly (adaptive was 7.44, static 20.66 under the
+old definition). The 3× win over PIGINet (17.27) and the ~11.5 FP margin over v2.2 that the
+score instrument already showed are now what the notebook renders too.
+
+**Takeaway.** No new science — this only propagates the 2026-07-31 definition
+([`decisions/06`](../decisions/06-v3-performance.md#2026-07-31-unified-coverage-waste-is-the-deployed-definition))
+to the cache the notebook reads, so a future reader does not see two different v3 numbers
+depending on whether they ran the score tool or opened the notebook. **The §4 ablation
+arms were deliberately *not* rebuilt** (`--no-ablations`): they predate the unification and
+score under the old definition by design, as a matched-settings seed-0 study. That makes
+§4's `deployed` row (now unified, ~5.78) not directly comparable to its matched
+`cov+waste, tokens` arm (~7.90, old) — the note in §4 and the `DD2D` registry caveat both
+now say so. The standing lesson stands: **re-cache with `--force` whenever an arm is
+repointed**, because `_dir_complete` keeps a stale full directory.
+
+---
+
 <a id="2026-08-01-sb2d-vlmplan-32b-capable-tail-limited-beats-astar"></a>
 ## 2026-08-01 — SB2D VLMPlan-32B: capable but tail-limited; beats astar, loses to learned methods
 

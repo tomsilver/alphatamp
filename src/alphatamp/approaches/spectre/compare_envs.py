@@ -120,10 +120,14 @@ DD2D = EnvSpec(
     legacy_only=("VLMPlan-8B", "VLMPlan-32B"),
     has_ablations=True,
     caveats=(
-        "The `spectre3` cache row was written before `_V3_ARMS` was repointed to the "
-        "unified coverage/waste arm on 2026-07-31, and `_dir_complete` skips a full "
-        "directory. Until it is rebuilt with `--force`, this table under-reports v3 "
-        "(7.44 here vs 5.78 for the deployed checkpoint).",
+        "The §1/§2 `SPECTREv3` rows are the **deployed unified coverage/waste** "
+        "checkpoint (`checkpoints_v3_unified`), rebuilt 2026-08-01: adaptive 5.78 ± "
+        "0.10. The §4 ablation component arms (`abl_*`) predate the 2026-07-31 "
+        "unification and score under the **old** coverage/waste definition, so the §4 "
+        "`deployed` row (unified, ~5.78) is not directly comparable to the matched "
+        "`cov+waste, tokens` arm (~7.90) — the gap conflates the definition change with "
+        "the aggregate-records/evidence-attn switches. §4 is a self-contained "
+        "matched-settings study; read it internally, not against §1.",
     ),
     render_scene=_dd2d_scene,
     scene_legend=(

@@ -475,10 +475,13 @@ def _(mo):
           > including the v2.2 baseline the Δ column is measured against, is seed 0.
 
           > **The `deployed` row post-dates the component arms.** It now carries the
-          > state delta (`decisions.md` 2026-07-28); the six component arms predate it
-          > and were not re-run. That makes `deployed` context for the contrast, not a
-          > cell in it — which is what it always was, since it also carries record
-          > aggregation and evidence-attention that the matched arms do not.
+          > state delta (`decisions.md` 2026-07-28) **and the unified coverage/waste
+          > definition** (`decisions.md` 2026-07-31, cache rebuilt 2026-08-01, ~5.78);
+          > the six component arms predate both and score under the old definition, so
+          > `deployed` (~5.78) is not comparable to the matched `cov+waste, tokens` arm
+          > (~7.90) — that gap conflates the definition change with the aggregate-records
+          > and evidence-attention switches. That makes `deployed` context for the
+          > contrast, not a cell in it, which is what it always was.
 
           > ### What is left when **both** components are off
           >
