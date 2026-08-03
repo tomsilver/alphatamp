@@ -25,6 +25,7 @@ the reach disclosure the text prompt carries.
 from __future__ import annotations
 
 import io
+from typing import Any
 
 import matplotlib
 
@@ -191,3 +192,124 @@ def render_labeled_scene(
         return Image.open(buf).convert("RGB")
     finally:
         plt.close(fig)
+
+
+def _annotate_scene(ax, geometry: SceneGeometry, label_fontsize: float) -> None:
+    """Overlay Set-of-Mark object labels on an axes kinder drew on.
+
+    The label strings are the canonicalized object names (``circle_0``…), identical to
+    the prompt's object list and the parser vocabulary — that identity is the whole point,
+    it is what lets the model name a disc it can see.
+
+    Placement is edge-aware: a label for an object near the top of the frame is dropped
+    *below* it (and vice versa), and every label is clamped inside the frame, so a label
+    never runs off the top edge — buttons cluster along the top wall on b5, so the naive
+    "always above" placement clipped them.
+
+    ``label_fontsize`` is small on purpose (the button markers are tiny discs, so a large
+    label reads as bigger than the thing it names). No reach line is drawn — the table
+    band already shows the base-exclusion zone and the exact numeric reach limit is stated
+    in the text prompt, so the render stays uncluttered.
+    """
+    world = next((c for c in geometry.containers if c.kind == "world"), None)
+    x0, y0, x1, y1 = world.bounds if world else (0.0, 0.0, 3.5, 2.5)
+    xr, yr = (x1 - x0), (y1 - y0)
+    placed: list[tuple[float, float, float]] = []  # (x, y, half-width)
+    # The kinder figure is `xr` inches wide, so an inch is ~one data unit; estimate the
+    # label's half-width in data units from its character count for de-collision.
+    for obj in geometry.objects:
+        half_h = max((py for _, py in obj.boundary), default=0.05)
+        half_w = 0.5 * len(obj.name) * label_fontsize * 0.62 / 72.0
+        gap = 0.055 * yr
+        # Below objects near the top, above otherwise, so nothing clips the top edge.
+        below = obj.pose[1] > y0 + 0.62 * yr
+        step = -gap if below else gap
+        lx = min(max(obj.pose[0], x0 + half_w + 0.01 * xr), x1 - half_w - 0.01 * xr)
+        ly = obj.pose[1] + (-half_h - 0.5 * gap if below else half_h + 0.5 * gap)
+        for _ in range(8):
+            if not any(
+                abs(lx - px) < (half_w + pw) and abs(ly - py) < abs(step)
+                for px, py, pw in placed
+            ):
+                break
+            ly += step
+        ly = min(max(ly, y0 + 0.03 * yr), y1 - 0.03 * yr)
+        placed.append((lx, ly, half_w))
+        ax.annotate(
+            obj.name,
+            xy=(obj.pose[0], obj.pose[1] + (-half_h if below else half_h)),
+            xytext=(lx, ly),
+            ha="center",
+            va=("top" if below else "bottom"),
+            fontsize=label_fontsize,
+            color="black",
+            zorder=8,
+            bbox={"facecolor": "white", "alpha": 0.85, "pad": 0.6, "edgecolor": "none"},
+            arrowprops={"arrowstyle": "-", "lw": 0.5, "color": "#444444"},
+            annotation_clip=False,
+        )
+
+
+# One kinder env per button count, reused across a run's renders (kinder.make is slow).
+_ENV_CACHE: dict[int, Any] = {}
+
+
+def render_kinder_labeled_scene(
+    episode,
+    width_px: int = 1024,
+    label_fontsize: float = 7.0,
+) -> Image.Image:
+    """Kinder's own initial-scene pixels with Set-of-Mark labels overlaid.
+
+    This is the SB2D VLMPlan image for the ``stickbutton2d_v1_kinder`` arm: the *real*
+    environment render (identical to what PIGINet's crops are sourced from), so the
+    representation contrast is measured on the same pixels — but kinder draws every
+    unpressed button as an identical unlabeled red disc, which a VLM cannot ground. The
+    labels are drawn in **data coordinates via kinder's own ``ax_callback``**, so they sit
+    exactly on the objects with no pixel-transform guesswork.
+
+    Reconstructs the env from the stored seed (``env.reset(seed=problem_id)``), the one
+    sanctioned exception to *reconstruct, never regenerate*, exactly as
+    ``sb2d_render_convert.py`` does. Object *positions and names* come from the stored
+    ``scene_geometry`` (canonical names matching the prompt); only the *pixels* come from
+    kinder.
+    """
+    # pylint: disable=import-outside-toplevel
+    import kinder
+    from kinder.envs.utils import render_2dstate
+    from PIL import Image as _Image
+
+    from alphatamp.approaches.spectre.env_registry import register_extra_envs
+    from alphatamp.approaches.spectre.envs.stickbutton2d.strata import env_id
+
+    geometry = episode.scene_geometry
+    if geometry is None:
+        raise ValueError("SB2D episode has no scene_geometry to render from")
+    num_buttons = sum(1 for t in episode.object_registry.values() if t == "circle")
+    if num_buttons not in _ENV_CACHE:
+        register_extra_envs()
+        _ENV_CACHE[num_buttons] = kinder.make(
+            env_id(num_buttons), render_mode="rgb_array"
+        )
+    env = _ENV_CACHE[num_buttons]
+    env.reset(seed=int(episode.provenance.problem_id))
+    oc = env.unwrapped._object_centric_env  # pylint: disable=protected-access
+    state = oc._current_state.copy()  # pylint: disable=protected-access
+    state.data.update(oc.initial_constant_state.data)
+    cache = oc._static_object_body_cache  # pylint: disable=protected-access
+    cfg = oc.config
+    rgb = render_2dstate(
+        state,
+        cache,
+        cfg.world_min_x,
+        cfg.world_max_x,
+        cfg.world_min_y,
+        cfg.world_max_y,
+        cfg.render_dpi,
+        ax_callback=lambda ax: _annotate_scene(ax, geometry, label_fontsize),
+    )
+    img = _Image.fromarray(rgb).convert("RGB")
+    if img.width != width_px:
+        height = round(img.height * width_px / img.width)
+        img = img.resize((width_px, height), _Image.Resampling.LANCZOS)
+    return img

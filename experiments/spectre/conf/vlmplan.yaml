@@ -19,9 +19,13 @@ data_root: "data/spectre"
 split: "train"
 
 # Problem selection. n_problems <= 0 means the whole split. Problems are taken in
-# sorted-problem-id order so a subset is reproducible.
+# sorted-problem-id order so a subset is reproducible. `stratified_per_stratum > 0` takes
+# that many problems from EACH stratum instead (stride, never truncate — the strata are
+# contiguous problem-id bands, so n_problems=40 would be all one stratum). Explicit
+# `problem_ids` win over both.
 n_problems: 5
 problem_ids: []
+stratified_per_stratum: 0
 
 # Run identity. Generation writes under <data_root>/derived/<env_variant>/vlmplan/<run>/;
 # scoring writes the comparison row into the compare cache under `cache_subdir`.
@@ -58,6 +62,10 @@ model:
 # arm, from the identical prompt.
 with_images: true
 image_width_px: 1024
+# Which scene image the model sees. "schematic" = the spectre-drawn vector render (both
+# envs). "kinder_labeled" = kinder's own environment pixels with Set-of-Mark labels
+# overlaid (StickButton2D only; DD2D ignores it). See vlmplan/registry.make_adapter.
+image_source: "schematic"
 
 # ---------------------------------------------------------------------------
 # Generation loop. Pilot on the train split, then FREEZE these before touching test.
@@ -75,6 +83,11 @@ loop:
 # Scoring
 # ---------------------------------------------------------------------------
 attempt_budget: 200 # uncensored: = pool cap (decisions.md 2026-06-07)
+
+# Per-candidate refinement cap (seconds) for the wall-clock section's capped column — the
+# deployed DD2D value (decisions/07 2026-08-02). Every attempt is charged at most this many
+# seconds of refinement; the uncapped FP headline is unaffected.
+refine_cap_s: 2.0
 
 # Stop generating once a proposal is known to refine. `loop.max_plans` is a hard ceiling
 # for the case where every proposal fails, not a quota -- proposals produced after the

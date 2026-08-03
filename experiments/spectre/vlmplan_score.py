@@ -68,6 +68,8 @@ def main(cfg: DictConfig) -> None:
         runio.split_dir(data_root, env_variant, str(cfg.split)),
         n_problems=int(cfg.n_problems),
         problem_ids=[int(p) for p in (cfg.problem_ids or [])],
+        stratified_per_stratum=int(cfg.get("stratified_per_stratum", 0)),
+        stratum_of=stratum_of,
     )
     adapter = make_adapter(env_variant, with_images=False)  # no render needed
 
@@ -130,7 +132,11 @@ def main(cfg: DictConfig) -> None:
             attempt_budget=int(cfg.attempt_budget),
             fill_from_published=bool(cfg.fill_from_published),
             env_variant=env_variant,
+            refine_cap_s=float(cfg.get("refine_cap_s", 2.0)),
         )
+        # VLM generation wall-clock (the §2b "inference" component) comes from the
+        # sequences file's per-round api_s, not from anything the scorer re-times.
+        result.infer_s = runio.load_infer_seconds(seq_path)
         score_mod.write_record(
             out_dir,
             result,
@@ -177,6 +183,10 @@ def main(cfg: DictConfig) -> None:
                     1 for r in rows if r["first_success_source"] == "fill"
                 ),
                 "total_live_refines": labeler.n_refines,
+                "mean_infer_s": sum(r.get("infer_s", 0.0) for r in rows) / n,
+                "mean_refine_s": sum(r.get("refine_s", 0.0) for r in rows) / n,
+                "mean_refine_s_capped": sum(r.get("refine_s_capped", 0.0) for r in rows)
+                / n,
                 "mean_fp_by_stratum": {
                     k: sum(v) / len(v) for k, v in sorted(by_stratum.items())
                 },

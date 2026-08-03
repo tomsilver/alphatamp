@@ -1,0 +1,45 @@
+# VLMPlan on DD2D with the GPT-5.6-luna frontier VLM (OpenAI Responses API).
+# Overlay over `vlmplan.yaml`. Replaces the local-Qwen arm as the paper's VLMPlan row.
+#
+#   export OPENAI_API_KEY=sk-...            # a REAL key; this arm is billed
+#   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_dd2d_luna
+#   python experiments/spectre/vlmplan_score.py --config-name vlmplan_dd2d_luna
+#
+# Pilot first on explicit ids (turn the stratified subset off):
+#   python experiments/spectre/vlmplan_run.py --config-name vlmplan_dd2d_luna \
+#       run=dd2d_luna_pilot cache_subdir=vlmplan_luna_pilot \
+#       stratified_per_stratum=0 problem_ids=[...]
+#
+# The frontier arm needs the `openai_responses` backend: GPT-5 reasoning models reject
+# `max_tokens`/`temperature` over chat completions, and the Responses backend remaps
+# `max_tokens`->`max_output_tokens`, drops `temperature`/`seed`, and passes `reasoning`
+# through. `base_url` is named explicitly (not left to an export) so the run can never
+# silently hit the wrong endpoint, and it is the api.openai.com opt-in the make_model
+# guardrail wants.
+defaults:
+  - vlmplan
+  - override env: dd2d_v4
+  - _self_
+
+split: "test"
+n_problems: 0
+stratified_per_stratum: 10   # 40 problems total, 10/stratum; stride, never truncate
+run: "dd2d_luna"
+cache_subdir: "vlmplan_luna"
+
+model:
+  backend: "openai_responses"
+  model_name: "gpt-5.6-luna"
+  base_url: "https://api.openai.com/v1"
+  cache_path: "data/spectre/derived/${env.env_variant}/vlmplan_luna_cache.db"
+  decode:
+    # Dropped by the responses backend (reasoning models fix it); kept so the same config
+    # still works against a local chat-completions server.
+    temperature: 1.0
+    # -> max_output_tokens. A reasoning model bills reasoning tokens against this cap, so
+    # it must hold reasoning + 10 plan blocks. Watch `n_truncated` in the score summary.
+    max_tokens: 16384
+    # These problems are easy for a human; low effort keeps reasoning cost and latency
+    # down without hurting plan quality (validated in the pilot).
+    reasoning:
+      effort: "low"

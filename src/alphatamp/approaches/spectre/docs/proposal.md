@@ -105,16 +105,25 @@ low-level (PIGINet-class) comparison.
 **The zero-data corner: VLMPlan.** The data axis needs an endpoint at *zero* training
 problems, so a zero-shot VLM planner (the KinDER LLMPlan/VLMPlan convention) is a
 comparison method alongside PIGINet (trained low-level) and SPECTRE (trained
-abstract-first) — `vlmplan/`, wired into the DD2D comparison; see `decisions.md`
-2026-07-24 for the protocol. It is framed as **a corner of the grid, not a defeated
+abstract-first) — `vlmplan/`, wired into both the DD2D and StickButton2D comparisons; see
+`decisions.md` 2026-07-24 for the protocol. **The headline arm is a frontier VLM,
+`gpt-5.6-luna` over the OpenAI Responses API** (2026-08-03), so the corner is not
+dismissible as "you only tried a weak local model"; the earlier local Qwen arms are kept
+for a local-vs-frontier contrast. It is framed as **a corner of the grid, not a defeated
 rival**, and it answers the reviewer-obvious "did you try just asking a VLM?" on the
 record. Three properties are load-bearing for it to be a fair point rather than a straw
 man: it never sees refinement outcomes (static, so it is not competing with SPECTRE's
 adaptivity); it is given the operator semantics and the object-centric geometry that every
-other method reads from the domain and the state; and because it *generates* plans instead
+other method reads from the domain and the state — on StickButton2D that means kinder's
+own scene render with Set-of-Mark object labels overlaid, because kinder draws every
+unpressed button as an identical unlabeled disc; and because it *generates* plans instead
 of reordering the candidate pool, its off-pool proposals are refined for real and charged
-as attempts. Deviations from the KinDER template are enumerated in
-`vlmplan/prompts/PROVENANCE.md` for the appendix.
+as attempts. Its wall-clock is now reported too (generation-dominated — the Responses
+round-trip + reasoning dwarfs the sub-second refinements). Empirically it is a **genuine
+planner on the relational StickButton2D** but **weak on the DD2D packing negative
+control** (it over-stages; its proposals fail the geometric refinement) — see
+[`notebook/07` 2026-08-03](notebook/07-stickbutton2d.md). Deviations from the KinDER
+template are enumerated in `vlmplan/prompts/PROVENANCE.md` for the appendix.
 
 ---
 

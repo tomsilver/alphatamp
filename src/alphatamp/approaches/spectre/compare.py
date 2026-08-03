@@ -111,6 +111,10 @@ SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
 SEQUENCE_METHODS: dict[str, str] = {
     "VLMPlan-8B": "vlmplan_qwen8b",
     "VLMPlan-32B": "vlmplan_qwen32b",
+    # The frontier arm (gpt-5.6-luna over the OpenAI Responses API), native on dd2d_v4 and
+    # stickbutton2d_v1_kinder. This is the paper's headline VLMPlan row; the Qwen arms
+    # stay for the local-vs-frontier scale contrast.
+    "VLMPlan-GPT5.6": "vlmplan_luna",
 }
 
 # Presentation order used by the notebook.
@@ -649,6 +653,32 @@ def load_vlmplan_diagnostics(
     return rows
 
 
+def load_vlmplan_attempts(
+    cache_dir: Path | str, subdir: str, problem_id: int, seed: int = 0
+) -> dict | None:
+    """The ordered attempt list + FP for one VLMPlan problem, for the §5 inspector.
+
+    ``None`` if the arm has no record for this problem (its stratified subset need not
+    cover every pid). The returned ``attempts`` each carry the full ``steps`` (so the
+    env's ``plan_label`` can render the actual plan), the feasibility ``label``,
+    ``in_pool`` / ``source`` (a VLM proposal vs a published-order fill) and ``round``.
+    Unlike the pool methods, this is the sequence the model *itself* produced — there is no
+    shared pool to index, which is the point of showing it separately.
+    """
+    path = Path(cache_dir) / subdir / f"seed_{int(seed)}" / f"{int(problem_id)}.json"
+    if not path.is_file():
+        return None
+    rec = _load_json(path)
+    return {
+        "problem_id": int(rec["problem_id"]),
+        "stratum": int(rec.get("stratum", stratum_of(int(rec["problem_id"])))),
+        "fp": rec.get("fp"),
+        "censored": rec.get("censored"),
+        "first_success_source": rec.get("first_success_source"),
+        "attempts": rec.get("attempts") or [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # T0 — length-dependence of a ranking (does length alone explain the scores?)
 #
@@ -1096,13 +1126,18 @@ def render_markdown(header: list[str], rows: list[list[str]]) -> str:
 # Wall-clock time-to-first-success (DD2D; reuses stored per-candidate refine times)
 # --------------------------------------------------------------------------- #
 # Pool-ranking methods that carry a per-candidate timing breakdown, written by
-# precompute_dd2d_cache. Sequence methods (VLMPlan) and the v1/v2 rows are intentionally
-# absent -- only these four rank one shared pool, so their wall-clock is comparable.
+# precompute_dd2d_cache. The v1/v2 rows are intentionally absent. VLMPlan-GPT5.6 is a
+# *sequence* method, not a pool ranker, but it now carries its own timing (VLM generation
+# `infer_s` + measured off-pool refinement) written by vlmplan_score, so it is included --
+# `build_time_table` zeroes its pool `plan_gen_s`, because the VLM's generation *is* its
+# plan-gen. The Qwen VLMPlan arms have no timing (produced before it existed) and are
+# skipped automatically (`_timing_rows` drops records without `refine_s`).
 TIMED_METHODS: dict[str, str] = {
     "astar-dist": "astar",
     "PIGINet": "piginet",
     SPECTREV3_STATIC_METHOD: SPECTREV3_STATIC_DIR,
     SPECTREV3_ADAPTIVE_METHOD: SPECTREV3_ADAPTIVE_DIR,
+    "VLMPlan-GPT5.6": "vlmplan_luna",
 }
 
 
@@ -1222,14 +1257,27 @@ def build_time_table(
     and the mean ``fp_capped`` so the notebook can price the cap's (small) FP cost.
     """
     refine_key = "refine_s_capped" if use_capped else "refine_s"
+    # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already IS its
+    # plan generation; adding the pool `plan_gen_s` constant would double-count. Pool
+    # rankers pay plan_gen (enumerate) + infer (score) + refine.
     aug = [
         {
             **r,
             "refine_used_s": r.get(refine_key, r["refine_s"]),
-            "plan_gen_s": plan_gen_s.get(r["stratum"], 0.0),
-            "total_s": plan_gen_s.get(r["stratum"], 0.0)
-            + r.get(refine_key, r["refine_s"])
-            + r["infer_s"],
+            "plan_gen_s": (
+                0.0
+                if r["method"] in SEQUENCE_METHODS
+                else plan_gen_s.get(r["stratum"], 0.0)
+            ),
+            "total_s": (
+                (
+                    0.0
+                    if r["method"] in SEQUENCE_METHODS
+                    else plan_gen_s.get(r["stratum"], 0.0)
+                )
+                + r.get(refine_key, r["refine_s"])
+                + r["infer_s"]
+            ),
         }
         for r in records
     ]

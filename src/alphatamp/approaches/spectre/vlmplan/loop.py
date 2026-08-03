@@ -80,6 +80,13 @@ class RoundLog:
     n_new: int = 0
     n_decoration_repaired: int = 0
     elapsed_s: float = 0.0
+    # Pure model-call wall-clock, measured around the query alone. ``elapsed_s`` also
+    # includes parse + ground, which are milliseconds; ``api_s`` is what the VLMPlan
+    # wall-clock section reports as "inference", so it is recorded separately rather than
+    # approximated from ``elapsed_s``. Summed over a problem's rounds it is the model's
+    # generation cost to first success (the run stops at first success, so every recorded
+    # round's api_s is generation the rollout genuinely needed).
+    api_s: float = 0.0
     error: str | None = None
     prompt_chars: int = 0
     response_chars: int = 0
@@ -87,8 +94,16 @@ class RoundLog:
     # the last plan block was cut mid-line and lost — silent quality loss unless it is
     # surfaced. The 2026-07-24 smoke run truncated 16/104 responses at max_tokens=4096
     # and nothing said so; hence recorded, not inferred from response length.
+    #
+    # ``prompt_tokens`` / ``completion_tokens`` are normalised names: the chat-completions
+    # backend reports them under those keys, but the Responses API (the GPT-5 arm) reports
+    # ``input_tokens`` / ``output_tokens``. ``_record_usage`` maps both, so token
+    # accounting, truncation detection and $-cost tracking work on either backend.
+    # ``completion_tokens`` includes ``reasoning_tokens`` for a reasoning model — which is
+    # correct, because reasoning tokens are billed as output and count against the cap.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    reasoning_tokens: int | None = None
     truncated: bool = False
 
     @property
@@ -171,8 +186,13 @@ def generate_sequence(
     decode: dict[str, Any],
     base_seed: int = 0,
     stop_check: Callable[[Sequence[Proposal]], bool] | None = None,
+    images: Sequence[Any] | None = None,
 ) -> GenerationResult:
     """Run the multi-round loop for one problem and return its ordered proposals.
+
+    ``images`` lets the caller pass the rendered scene once (so it can also persist it to
+    disk) instead of the loop re-rendering it; ``None`` renders it here via
+    ``adapter.images``. Either way the same picture is sent every round.
 
     ``stop_check`` is called after each round with the proposals so far and should
     return True once one of them is known to refine. **A feasible plan ends the
@@ -193,7 +213,8 @@ def generate_sequence(
 
     skills = adapter.skills(problem)
     objects = adapter.objects(problem)
-    images = adapter.images(problem)
+    if images is None:
+        images = adapter.images(problem)
     controllers = adapter.controllers_str(problem)
     typed_objects = adapter.typed_objects_str(problem)
     type_hierarchy = adapter.type_hierarchy_str(problem)
@@ -230,9 +251,11 @@ def generate_sequence(
             "problem_id": problem_id,
             "round": round_index,
         }
+        query_started = time.perf_counter()
         text, error, usage = _query_with_retry(
             model, prompt, images, hyperparameters, config
         )
+        log.api_s = time.perf_counter() - query_started
 
         if text is None:
             log.error = error
@@ -306,14 +329,31 @@ def _record_usage(log: RoundLog, usage: dict[str, Any], decode: dict[str, Any]) 
     ``completion_tokens == max_tokens`` is an exact truncation signal: the model was cut
     off mid-generation, so the final plan block is incomplete and the parser drops it. A
     backend that reports no usage leaves ``truncated`` False rather than guessing.
+
+    The two backends name the fields differently — chat completions returns
+    ``prompt_tokens`` / ``completion_tokens``; the Responses API returns ``input_tokens``
+    / ``output_tokens`` with reasoning tokens nested under ``output_tokens_details``. Both
+    are accepted so the GPT-5 (Responses) arm records usage exactly as the local
+    chat-completions arm does. ``output_tokens`` already includes reasoning tokens, which
+    is the number billed and the number that hits the cap, so it maps to
+    ``completion_tokens`` unchanged.
     """
-    prompt_tokens = usage.get("prompt_tokens")
-    completion_tokens = usage.get("completion_tokens")
+    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+    details = usage.get("output_tokens_details") or {}
+    reasoning_tokens = (
+        details.get("reasoning_tokens") if isinstance(details, dict) else None
+    )
     log.prompt_tokens = int(prompt_tokens) if prompt_tokens is not None else None
     log.completion_tokens = (
         int(completion_tokens) if completion_tokens is not None else None
     )
-    max_tokens = decode.get("max_tokens")
+    log.reasoning_tokens = (
+        int(reasoning_tokens) if reasoning_tokens is not None else None
+    )
+    # The Responses API remaps ``max_tokens`` -> ``max_output_tokens`` inside the backend,
+    # but ``decode`` still carries ``max_tokens``, so the cap comparison holds for both.
+    max_tokens = decode.get("max_tokens") or decode.get("max_output_tokens")
     log.truncated = bool(
         log.completion_tokens is not None
         and max_tokens is not None

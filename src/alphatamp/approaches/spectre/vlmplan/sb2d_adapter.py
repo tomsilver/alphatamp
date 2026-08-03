@@ -43,7 +43,10 @@ from typing import Sequence
 from PIL.Image import Image
 
 from alphatamp.approaches.spectre.envs.stickbutton2d.geometry import robot_reach_max_y
-from alphatamp.approaches.spectre.envs.stickbutton2d.render import render_labeled_scene
+from alphatamp.approaches.spectre.envs.stickbutton2d.render import (
+    render_kinder_labeled_scene,
+    render_labeled_scene,
+)
 from alphatamp.approaches.spectre.envs.stickbutton2d.strata import env_id
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
@@ -200,9 +203,20 @@ def _steps_of(operator_seq) -> tuple[Step, ...]:
 class SB2DAdapter(EnvAdapter):
     """VLMPlan's view of StickButton2D."""
 
-    def __init__(self, with_images: bool = True, image_width_px: int = 1024) -> None:
+    def __init__(
+        self,
+        with_images: bool = True,
+        image_width_px: int = 1024,
+        image_source: str = "schematic",
+    ) -> None:
         self._with_images = with_images
         self._image_width_px = image_width_px
+        if image_source not in ("schematic", "kinder_labeled"):
+            raise ValueError(
+                f"image_source must be 'schematic' or 'kinder_labeled', "
+                f"got {image_source!r}"
+            )
+        self._image_source = image_source
 
     # --- vocabulary ------------------------------------------------------------
     def skills(self, problem: object) -> dict[str, SkillSpec]:
@@ -320,10 +334,18 @@ class SB2DAdapter(EnvAdapter):
         return "\n".join(header) + "\n" + "\n".join(rows)
 
     def images(self, problem: object) -> list[Image]:
-        """The labelled top-down render, or none for the text-only arm."""
+        """The labelled top-down render, or none for the text-only arm.
+
+        ``image_source="kinder_labeled"`` sends kinder's own environment pixels with
+        Set-of-Mark labels overlaid (the PIGINet-parity image); the default
+        ``"schematic"`` sends the spectre-drawn vector render. Both label objects with the
+        same canonical names the prompt uses, so the model can ground either one.
+        """
         episode = _as_episode(problem)
         if not self._with_images or episode.scene_geometry is None:
             return []
+        if self._image_source == "kinder_labeled":
+            return [render_kinder_labeled_scene(episode, width_px=self._image_width_px)]
         return [
             render_labeled_scene(
                 episode.scene_geometry,

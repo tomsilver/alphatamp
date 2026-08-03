@@ -4,6 +4,72 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-03-vlmplan-frontier-vlm-gpt-5-6-luna-strong"></a>
+## 2026-08-03 — VLMPlan on a frontier VLM (gpt-5.6-luna): strong on SB2D, weak on DD2D
+
+<!--strip-->
+> **id** `2026-08-03-vlmplan-frontier-vlm-gpt-5-6-luna-strong` · **status** active ·
+> **tracks** baselines, evaluation, env-stickbutton2d, env-dd2d
+<!--/strip-->
+
+**What.** Ran the VLMPlan baseline with a **frontier** VLM — `gpt-5.6-luna` over the OpenAI
+Responses API (`reasoning.effort: low`, `max_output_tokens 16384`) — replacing the local Qwen
+arms, to answer "did you just try a frontier VLM?" on the record. Stratified 40 test problems/env
+(10/stratum), native on `dd2d_v4` and `stickbutton2d_v1_kinder`; SB2D uses the new
+`kinder_labeled` image (kinder's real pixels + Set-of-Mark labels). Protocol ADR:
+[decisions/07 2026-08-03](../decisions/07-stickbutton2d.md#2026-08-03-frontier-vlm-vlmplan-arm-gpt-5-6-luna-kinder-labeled).
+Spend ≈ $1.2 total. **Label-agreement 0.983 (DD2D) / 1.000 (SB2D)** — numbers are defensible.
+
+**Result (uncensored FP, VLMPlan n=40 / others n=100, per-stratum means comparable):**
+
+DD2D (`dd2d_v4`) — s0..s3:
+
+| method | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| SPECTREv3-adaptive | **5.78** | 0.0 | 3.4 | 10.5 | 9.2 |
+| PIGINet | 17.27 | 0.1 | 5.0 | 18.8 | 45.2 |
+| VLMPlan-32B (qwen) | 23.55 | 6.8 | 5.0 | 13.2 | 69.2 |
+| astar-dist | 34.52 | 0.0 | 2.2 | 17.1 | 118.8 |
+| **VLMPlan-GPT5.6** | **62.98** | 43.2 | 35.9 | 46.8 | 126.0 |
+
+StickButton2D (kinder) — b1..b5:
+
+| method | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| SPECTREv3-adaptive | **1.69** | 0.1 | 0.2 | 1.1 | 5.3 |
+| PIGINet | 2.28 | 0.1 | 0.3 | 1.2 | 7.5 |
+| **VLMPlan-GPT5.6** | **11.85** | 0.0 | 1.0 | 11.4 | 35.0 |
+| VLMPlan-32B (qwen) | 13.18 | 0.7 | 1.3 | 6.2 | 44.5 |
+| astar-dist | 16.29 | 0.1 | 0.6 | 3.0 | 61.6 |
+
+Wall-clock to first success (DD2D §2b, deployed 2 s cap): VLMPlan-GPT5.6 **63.7 s**
+(plan-gen 0 + infer 57.8 + refine 5.8; uncapped 78.5), vs v3-adaptive 1.8 s / astar 3.0 s —
+**generation-dominated and ~20–35× slower** than a learned ranker. On SB2D `first_success_from_vlm
+= 35/40, 0 censored`; on DD2D 24 vlm / 11 fill / **5 censored** (all s3).
+
+**Takeaway / next.**
+- **A frontier VLM does not change the conclusion.** On both environments VLMPlan is decisively
+  beaten by the learned rankers (DD2D ~11×, SB2D ~7×), and the frontier upgrade over the local
+  32B is roughly a wash (SB2D 11.85 vs 13.18; DD2D *worse*, 62.98 vs 23.55). The "just ask a VLM"
+  objection is now answered with the strongest available model.
+- **DD2D is a genuine negative control.** `gpt-5.6-luna` is the **worst** method on DD2D — worse
+  than the naive planner order and worse than the local Qwen — because it **over-stages
+  confidently and never stalls**: on trivial s0 problems it proposes only 3-blocker stagings that
+  all fail the packing refinement (s0 43.2 vs astar 0.0), accruing many diverse failed attempts.
+  Continuous packing is exactly where an abstract/generated plan is expected to lose.
+- **SB2D: a real planner, still ~6× short.** It self-solves 35/40 and beats astar overall, and
+  the **kinder-labeled image works** — luna grounds `circle_N` correctly (0 fill on the easy
+  strata). But it *over-thinks b3* (11.4 vs learned ~1.2, and worse than astar's 3.0), and only
+  wins at b5 where astar's default order is pathological. So a frontier VLM's edge over the naive
+  order is narrow and stratum-specific.
+- **Pilot lesson (re-logged): a 1/stratum pilot mis-estimates badly.** The SB2D pilot drew the
+  *first* pid in each band (the easiest) and read 2.5 ALL; the stratified 40 reads 11.85. Same
+  family as *stride-never-truncate* — pilot on a stratified sample, not the head.
+- Not run: `reasoning.effort` sweep (would over-thinking *more* help or hurt DD2D?) and a
+  full-100 SB2D. Neither changes the qualitative picture.
+
+---
+
 <a id="2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate"></a>
 ## 2026-08-02 — DD2D s1 wall-clock blow-up diagnosed; per-candidate refinement cap
 

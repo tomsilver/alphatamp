@@ -23,10 +23,7 @@ def _(mo):
           list, caveats, the scene render in §5, whether §4's ablations exist — comes
           from that environment's entry in `spectre/compare_envs.py`. A third
           environment is a new `EnvSpec` there, not a copy of this file.
-          """
-
-
-             )
+          """)
 
 
 @app.cell
@@ -109,6 +106,7 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
         "SPECTREv3-static": "#ff9896",
         "VLMPlan-8B": "#9467bd",
         "VLMPlan-32B": "#c5b0d5",
+        "VLMPlan-GPT5.6": "#8c564b",
     }
     STRATA = sorted(ENV.stratum_labels)
     SLAB = ENV.stratum_labels
@@ -138,8 +136,7 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## Load
+    mo.md(r"""## Load
 
           Reads precomputed per-problem scores from both caches and grafts the methods
           that have no dd2d_v4 row. Nothing here runs inference — build the caches with:
@@ -159,8 +156,7 @@ def _(mo):
           - **`df`** — the same data collapsed to the per-*(method, problem)* mean over
             seeds. Every per-problem view (§3, §5, the CSV) uses it, so a method with
             three seeds still contributes one curve and one row per problem.
-          """
-             )
+          """)
     return
 
 
@@ -211,8 +207,7 @@ def _(CACHE_DIR, ENV_VARIANT, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, compare
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 1 · Summary table — mean FP per stratum, ± across seeds
+    mo.md(r"""## 1 · Summary table — mean FP per stratum, ± across seeds
 
           **Stratum** = minimum feasible subset size (`s0` needs no blocker moved, `s3`
           needs three); s2/s3 are where methods separate.
@@ -298,8 +293,7 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 2 · Mean FP per stratum (± across-seed std)
+    mo.md(r"""## 2 · Mean FP per stratum (± across-seed std)
 
           Lower is better. Error bars are the **across-seed** std-dev of the per-stratum
           mean — the same numbers as §1, read from the same table, clipped at 0 so a bar
@@ -308,8 +302,7 @@ def _(mo):
           A bar with **no cap** has one run and therefore no measurable spread (astar,
           VLMPlan); that is different from a spread of zero. Hatched bars are grafted
           from the older collection.
-          """
-             )
+          """)
     return
 
 
@@ -416,8 +409,7 @@ def _(ENV, mo):
         time.
         """
         if ENV.has_timing
-        else\
-             r"""## 2b · Wall-clock to first success
+        else r"""## 2b · Wall-clock to first success
 
              _Not available for this environment: its episodes carry no per-candidate refinement
              wall-clock — only the DD2D v3/v4 refiner-instrumented collections do._
@@ -509,8 +501,7 @@ def _(ENV, ENV_VARIANT, METHODS, N_PROBLEMS, np, plt, refine_cap_s, time_tidy):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 3 · Survival curves
+    mo.md(r"""## 3 · Survival curves
 
           Fraction of problems solved within ≤ k failed attempts (higher & further-left
           is better). The `ALL` panel is the whole split; the rest split by stratum.
@@ -519,8 +510,7 @@ def _(mo):
           per-seed statistics. Pooling every (seed, problem) attempt into one curve
           would fold seed spread into what reads as a distribution over problems, and
           would make a 3-seed method look smoother than a 1-seed one for no real reason.
-          """
-             )
+          """)
     return
 
 
@@ -563,8 +553,7 @@ def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 4 · Ablation — what makes v3 adaptive?
+    mo.md(r"""## 4 · Ablation — what makes v3 adaptive?
 
           <!--
           Two components carry v3, and both are **adaptive**: they are exactly zero at
@@ -707,8 +696,7 @@ def _(mo):
     # Restored 2026-07-28: this decorator had been left orphaned when the markdown below
     # it was commented out in the notebook trim, so it decorated the *next* cell object
     # and marimo refused to load the file at all.
-    mo.md(\
-          r"""### 4.1 · coverage × record tokens
+    mo.md(r"""### 4.1 · coverage × record tokens
 
           One component at a time, matched settings. `Δ vs v2.2` is a paired bootstrap
           over problems against the v2.2 yardstick (negative = better); a CI excluding 0
@@ -808,8 +796,7 @@ def _(STRATA, abl_df, df_seeds, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""### 4.2 · `coverage` vs `waste`, separated
+    mo.md(r"""### 4.2 · `coverage` vs `waste`, separated
 
           The two columns have only ever been switched on together. `--coverage-mode`
           zeroes one of them (rather than narrowing the tensor, so the state-dict shape
@@ -819,8 +806,7 @@ def _(mo):
           the objects the refiner reported as blocking", **`waste`** is "does it also
           remove objects that were never implicated". `no cov/waste, tokens` is the
           floor with neither column.
-          """
-             )
+          """)
     return
 
 
@@ -873,8 +859,7 @@ def _(STRATA, V2_BY_PID, abl_df, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""### 4.3 · What the demotion cut costs
+    mo.md(r"""### 4.3 · What the demotion cut costs
 
           **Proof-tier demotion was cut from the method on 2026-07-30**
           (`decisions.md`). SPECTREv3 as reported everywhere above is a **purely learned
@@ -900,8 +885,7 @@ def _(mo):
           > than DD2D's 6% it would go the other way. A Δ of exactly 0.00 would instead
           > mean the switch never took effect, which is why the two cache dirs are
           > asserted to differ.
-          """
-             )
+          """)
     return
 
 
@@ -925,6 +909,7 @@ def _(CACHE_DIR, ENV_VARIANT, STRATA, compare, mo, np, pd):
             "abl_nocov_norec_adaptive",
         ),
     ]
+
     def _by_seed(subdir):
         """``{seed: {pid: fp}}`` for one cached arm, or None when it is absent."""
         if not (CACHE_DIR / subdir).is_dir():
@@ -1153,9 +1138,17 @@ def _(CACHE_DIR, REPO, compare, np):
             "spectre3_adaptive",
         ),
     }
+    # Sequence methods (VLMPlan) are inspected differently — they produce their own
+    # ordered attempt list off the shared pool, so there is no skeleton to index. They are
+    # rendered from the cached `attempts` in the plan-table cell, not through insp_order.
+    INSPECT_SEQ = {
+        m: d
+        for m, d in compare.SEQUENCE_METHODS.items()
+        if (CACHE_DIR / d / "seed_0").is_dir()
+    }
     INSPECT_METHODS = [
         m for m in INSPECT_SPEC if (CACHE_DIR / INSPECT_SPEC[m][1]).is_dir()
-    ]
+    ] + list(INSPECT_SEQ)
 
     def insp_load(method, pid):
         """``(static scores | None, AdaptiveTrace | None)`` for one method+problem."""
@@ -1204,7 +1197,14 @@ def _(CACHE_DIR, REPO, compare, np):
         return [int(i) for i in np.argsort(-scores, kind="stable")], None
 
     _ = REPO
-    return INSPECT_METHODS, INSPECT_SPEC, insp_effective, insp_load, insp_order
+    return (
+        INSPECT_METHODS,
+        INSPECT_SPEC,
+        INSPECT_SEQ,
+        insp_effective,
+        insp_load,
+        insp_order,
+    )
 
 
 @app.cell
@@ -1288,6 +1288,7 @@ def _(
     ENV_VARIANT,
     INSPECT_METHODS,
     INSPECT_PIDS,
+    INSPECT_SEQ,
     REPO,
     compare,
     df,
@@ -1326,6 +1327,25 @@ def _(
     }
     _rows = []
     for _m in INSPECT_METHODS:
+        if _m in INSPECT_SEQ:
+            # VLMPlan: its own attempt sequence, not a pool ranking. "1st-feasible rank"
+            # is its own first-success index (== FP); a pid outside its stratified subset
+            # has no record, shown blank.
+            _vrec = compare.load_vlmplan_attempts(CACHE_DIR, INSPECT_SEQ[_m], _pid)
+            _rows.append(
+                {
+                    "": "▶" if _m == inspect_model.value else "",
+                    "method": _m,
+                    "FP": _fp_here.get(_m),
+                    "1st-feasible rank": (
+                        None
+                        if _vrec is None or _vrec.get("censored")
+                        else int(_vrec["fp"])
+                    ),
+                    "attempts": None if _vrec is None else len(_vrec["attempts"]),
+                }
+            )
+            continue
         _order, _tr = insp_order(_m, _pid, inspect_realized.value)
         _ff = next((r for r, i in enumerate(_order) if _feas[i]), None)
         _rows.append(
@@ -1382,7 +1402,11 @@ def _(
 
 @app.cell
 def _(
+    CACHE_DIR,
+    ENV,
+    INSPECT_SEQ,
     INSPECT_SPEC,
+    compare,
     ep_by_pid,
     get_pid,
     insp_load,
@@ -1395,133 +1419,189 @@ def _(
 ):
     import math as _math
 
-    def _plan_label(skel):
-        staged = [
-            op.parameters[0].name.split("_")[-1]
-            for op in skel.operator_seq
-            if op.name == "place-buffer"
-        ]
-        tgt = next(
-            (
-                op.parameters[0].name.split("_")[-1]
-                for op in skel.operator_seq
-                if op.name == "retrieve"
-            ),
-            "?",
-        )
-        head = "stage {" + ", ".join(staged) + "} → " if staged else ""
-        return f"{head}retrieve {tgt}"
+    def _steps_of_skel(skel):
+        """A pooled skeleton's operators as ``[(name, [args...]), ...]`` for the env
+        formatter."""
+        return [(op.name, [p.name for p in op.parameters]) for op in skel.operator_seq]
+
+    def _plan_label_steps(steps):
+        # The env-specific formatter (compare_envs). Replaces the DD2D-hardcoded local that
+        # printed "retrieve ?" for every StickButton2D row.
+        if ENV.plan_label is not None:
+            return ENV.plan_label(steps)
+        return " → ".join(name for name, _ in steps)
 
     _method = inspect_model.value
     _pid = get_pid()
     _ep = ep_by_pid[_pid]
-    _lens = [len(s.operator_seq) for s in _ep.skeleton_pool]
-    _feas = [o.outcome == "success" for o in _ep.outcomes]
-    _scores, _trace = insp_load(_method, _pid)
-    _order, _tr = insp_order(_method, _pid, inspect_realized.value)
 
-    # "Adaptive view" needs a realized trace *with* per-step scores; a legacy cache
-    # (order only) falls back to the plain score table.
-    _adaptive = _tr is not None and bool(_tr.step_scores)
-    _st_rank = (
-        {int(i): r for r, i in enumerate(np.argsort(-_scores, kind="stable"))}
-        if _scores is not None
-        else {}
-    )
-    # An adaptive method re-scores the whole pool after every failure, so a candidate
-    # has no single score. The honest per-row number is the score at the step it was
-    # *picked* (that is the opinion it acted on); never-attempted candidates get the
-    # final step, the most-informed context. Reading the final row for an attempted
-    # candidate would be blank by construction: the model masks its own failure
-    # context, so those entries come back NaN.
-    _first_dead: dict[int, int] = {}
-    if _adaptive and _tr.step_dead:
-        for _t, _dead in enumerate(_tr.step_dead):
-            for _i in _dead:
-                _first_dead.setdefault(int(_i), _t)
-
-    _rows = []
-    for _rank, _i in enumerate(_order):
-        _row = {"rank": _rank}
-        if _adaptive:
-            _row["attempt"] = _rank + 1 if _rank < len(_tr.order) else None
-        _row["plan"] = _plan_label(_ep.skeleton_pool[_i])
-        _row["len"] = int(_lens[_i])
-        _row["feasible"] = "✓" if _feas[_i] else ""
-        if _adaptive:
-            _at = _rank if _rank < len(_tr.order) else len(_tr.step_scores) - 1
-            _v = _tr.step_scores[_at][_i]
-            _row["ad.score"] = None if _math.isnan(_v) else round(float(_v), 3)
-            _row["st.rank"] = _st_rank.get(_i)
-            _row["st.score"] = None if _scores is None else round(float(_scores[_i]), 3)
-            _row["Δrank"] = None if _i not in _st_rank else int(_st_rank[_i]) - _rank
-            _row["demoted@"] = _first_dead.get(_i)
-        elif _scores is not None:
-            _row["score"] = round(float(_scores[_i]), 3)
-        _rows.append(_row)
-    _plan_df = pd.DataFrame(_rows)
-    _ff = next((r for r, i in enumerate(_order) if _feas[i]), None)
-
-    def _style_cell(row_id, name, value):
-        style = {}
-        if row_id == _ff:
-            style["background-color"] = "#e6f4ea"  # the FP boundary: first feasible
-        if name == "Δrank" and isinstance(value, (int, float)):
-            style["color"] = (
-                "#2e7d32" if value > 0 else ("#c62828" if value < 0 else "#888")
+    if _method in INSPECT_SEQ:
+        # VLMPlan: render the model's OWN ordered proposals from the cached record; there
+        # is no shared skeleton pool to index (its plans are off-pool by design).
+        _vrec = compare.load_vlmplan_attempts(CACHE_DIR, INSPECT_SEQ[_method], _pid)
+        if _vrec is None:
+            inspect_plan_table = mo.md(
+                f"*(**{_method}** has no record for problem {_pid} — its stratified "
+                "subset is 10/stratum, not the full test set.)*"
             )
-        return style
+            _legend = (
+                f"**{_method}** generates its own plans, so it is shown off its own "
+                "attempt list rather than the shared pool."
+            )
+        else:
+            _att = _vrec["attempts"]
+            _ff = int(_vrec["fp"]) if not _vrec.get("censored") else None
+            _rows = []
+            for _rank, _a in enumerate(_att):
+                _steps = [(n, list(g)) for n, g in _a.get("steps", [])]
+                _rows.append(
+                    {
+                        "attempt": _rank + 1,
+                        "plan": (
+                            _plan_label_steps(_steps)
+                            if _steps
+                            else ", ".join(_a.get("members", []))
+                        ),
+                        "len": len(_steps),
+                        "feasible": "✓" if _a.get("label") == "success" else "",
+                        "source": _a.get("source"),
+                        "in pool": "✓" if _a.get("in_pool") else "",
+                        "round": _a.get("round"),
+                    }
+                )
 
-    if not len(_plan_df):
-        inspect_plan_table = mo.md(
-            f"*(no cached scores for **{_method}** on problem {_pid})*"
-        )
-    else:
-        inspect_plan_table = mo.ui.table(
-            _plan_df,
-            pagination=True,
-            page_size=10,
-            selection=None,
-            show_column_summaries=False,
-            freeze_columns_left=["rank"],
-            style_cell=_style_cell,
-        )
+            def _style_seq(row_id, name, value):
+                return {"background-color": "#e6f4ea"} if row_id == _ff else {}
 
-    _kind = INSPECT_SPEC[_method][0]
-    if _adaptive:
-        _legend = (
-            f"**{_method}** · realized attempt order over {len(_tr.step_scores)} steps. "
-            "`attempt` = the step the rollout actually ran it — it stops at the first "
-            f"success, so those are exactly ranks 0…{_ff}; blank rows were **never "
-            "tried** and are ordered by the final-step opinion. "
-            "`ad.score` = the score at the step the candidate was **picked** (an "
-            "adaptive "
-            "ranker re-scores after every failure, so there is no single score); "
-            "never-attempted rows use the final, most-informed step. "
-            "`st.*` is the same checkpoint's **t=0** (`c₀`) ranking, so "
-            "`Δrank = st.rank − rank` reads directly as **+ promoted** by adaptivity, "
-            "**− demoted**. `demoted@t` = proof-demotion proved it dead from the "
-            "attempt-`t` failure."
-        )
-    elif _kind == "adaptive":
-        _legend = (
-            f"**{_method}** · **t=0 score order** — identical to its `*-static` twin "
-            "(same checkpoint, empty failure context `c₀`). Flip the toggle for the "
-            "realized rollout."
-        )
+            inspect_plan_table = mo.ui.table(
+                pd.DataFrame(_rows),
+                pagination=True,
+                page_size=15,
+                selection=None,
+                show_column_summaries=False,
+                style_cell=_style_seq,
+            )
+            _src = _vrec.get("first_success_source")
+            _legend = (
+                f"**{_method}** · the plans the model itself proposed, in order, each "
+                f"refined for real. **FP = {_vrec['fp']}** (green = first feasible). "
+                "`source` is `vlm` for a model proposal, `fill` for the published-order "
+                "fallback used after the model ran dry; `in pool` marks a proposal that "
+                f"coincides with a pooled candidate. First success from **{_src}**. "
+                "Off-pool plans are expected here and are refined and charged like any "
+                "other attempt."
+            )
     else:
-        _legend = (
-            f"**{_method}** · one-shot score ranking. Static methods never run a "
-            "rollout, so there is no attempt order to show."
+        # ---- pool-ranking methods (astar / SPECTRE): rank the shared candidate pool ----
+        _lens = [len(s.operator_seq) for s in _ep.skeleton_pool]
+        _feas = [o.outcome == "success" for o in _ep.outcomes]
+        _scores, _trace = insp_load(_method, _pid)
+        _order, _tr = insp_order(_method, _pid, inspect_realized.value)
+
+        # "Adaptive view" needs a realized trace *with* per-step scores; a legacy cache
+        # (order only) falls back to the plain score table.
+        _adaptive = _tr is not None and bool(_tr.step_scores)
+        _st_rank = (
+            {int(i): r for r, i in enumerate(np.argsort(-_scores, kind="stable"))}
+            if _scores is not None
+            else {}
         )
+        # An adaptive method re-scores the whole pool after every failure, so a candidate
+        # has no single score. The honest per-row number is the score at the step it was
+        # *picked* (that is the opinion it acted on); never-attempted candidates get the
+        # final step, the most-informed context. Reading the final row for an attempted
+        # candidate would be blank by construction: the model masks its own failure
+        # context, so those entries come back NaN.
+        _first_dead: dict[int, int] = {}
+        if _adaptive and _tr.step_dead:
+            for _t, _dead in enumerate(_tr.step_dead):
+                for _i in _dead:
+                    _first_dead.setdefault(int(_i), _t)
+
+        _rows = []
+        for _rank, _i in enumerate(_order):
+            _row = {"rank": _rank}
+            if _adaptive:
+                _row["attempt"] = _rank + 1 if _rank < len(_tr.order) else None
+            _row["plan"] = _plan_label_steps(_steps_of_skel(_ep.skeleton_pool[_i]))
+            _row["len"] = int(_lens[_i])
+            _row["feasible"] = "✓" if _feas[_i] else ""
+            if _adaptive:
+                _at = _rank if _rank < len(_tr.order) else len(_tr.step_scores) - 1
+                _v = _tr.step_scores[_at][_i]
+                _row["ad.score"] = None if _math.isnan(_v) else round(float(_v), 3)
+                _row["st.rank"] = _st_rank.get(_i)
+                _row["st.score"] = (
+                    None if _scores is None else round(float(_scores[_i]), 3)
+                )
+                _row["Δrank"] = (
+                    None if _i not in _st_rank else int(_st_rank[_i]) - _rank
+                )
+                _row["demoted@"] = _first_dead.get(_i)
+            elif _scores is not None:
+                _row["score"] = round(float(_scores[_i]), 3)
+            _rows.append(_row)
+        _plan_df = pd.DataFrame(_rows)
+        _ff = next((r for r, i in enumerate(_order) if _feas[i]), None)
+
+        def _style_cell(row_id, name, value):
+            style = {}
+            if row_id == _ff:
+                style["background-color"] = "#e6f4ea"  # FP boundary: first feasible
+            if name == "Δrank" and isinstance(value, (int, float)):
+                style["color"] = (
+                    "#2e7d32" if value > 0 else ("#c62828" if value < 0 else "#888")
+                )
+            return style
+
+        if not len(_plan_df):
+            inspect_plan_table = mo.md(
+                f"*(no cached scores for **{_method}** on problem {_pid})*"
+            )
+        else:
+            inspect_plan_table = mo.ui.table(
+                _plan_df,
+                pagination=True,
+                page_size=10,
+                selection=None,
+                show_column_summaries=False,
+                freeze_columns_left=["rank"],
+                style_cell=_style_cell,
+            )
+
+        _kind = INSPECT_SPEC[_method][0]
+        if _adaptive:
+            _legend = (
+                f"**{_method}** · realized attempt order over {len(_tr.step_scores)} "
+                "steps. `attempt` = the step the rollout actually ran it — it stops at "
+                f"the first success, so those are exactly ranks 0…{_ff}; blank rows were "
+                "**never tried** and are ordered by the final-step opinion. "
+                "`ad.score` = the score at the step the candidate was **picked** (an "
+                "adaptive ranker re-scores after every failure, so there is no single "
+                "score); never-attempted rows use the final, most-informed step. "
+                "`st.*` is the same checkpoint's **t=0** (`c₀`) ranking, so "
+                "`Δrank = st.rank − rank` reads directly as **+ promoted** by adaptivity, "
+                "**− demoted**. `demoted@t` = proof-demotion proved it dead from the "
+                "attempt-`t` failure."
+            )
+        elif _kind == "adaptive":
+            _legend = (
+                f"**{_method}** · **t=0 score order** — identical to its `*-static` twin "
+                "(same checkpoint, empty failure context `c₀`). Flip the toggle for the "
+                "realized rollout."
+            )
+        else:
+            _legend = (
+                f"**{_method}** · one-shot score ranking. Static methods never run a "
+                "rollout, so there is no attempt order to show."
+            )
     mo.vstack([mo.md(_legend), inspect_plan_table])
     return (inspect_plan_table,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 6 · VLMPlan — usable plans generated per problem
+    mo.md(r"""## 6 · VLMPlan — usable plans generated per problem
 
           How much of each VLM arm's attempt list it produced *itself*, before the
           published-order fallback takes over. `n_proposed` counts the **unique, valid,
@@ -1529,8 +1609,7 @@ def _(mo):
           the candidate pool), so it is a capacity measure, not an attempt count.
 
           Error bars are ± std **across problems** within a stratum.
-          """
-             )
+          """)
     return
 
 

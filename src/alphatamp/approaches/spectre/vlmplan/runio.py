@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from alphatamp.approaches.spectre import eda
 from alphatamp.approaches.spectre.schema import EpisodeRecord
@@ -45,11 +45,19 @@ def select_episodes(
     episodes_dir: Path,
     n_problems: int = 0,
     problem_ids: Sequence[int] = (),
+    stratified_per_stratum: int = 0,
+    stratum_of: Callable[[int], int] | None = None,
 ) -> list[EpisodeRecord]:
     """Load a split and take the configured subset, in problem-id order.
 
     Sorted so that ``n_problems=5`` names the same five problems on every run, and so a
     generation subset and a scoring subset can never silently disagree.
+
+    Precedence: explicit ``problem_ids`` win; else a ``stratified_per_stratum`` subset
+    (``stride, never truncate`` — the strata are contiguous problem-id bands, so
+    ``n_problems=40`` would take only the first stratum); else the first ``n_problems``;
+    else all. Stratified selection needs ``stratum_of`` (passed in so this module stays
+    decoupled from ``compare``).
     """
     episodes = sorted(
         eda.load_split_episodes(episodes_dir).episodes,
@@ -62,7 +70,36 @@ def select_episodes(
         if missing:
             raise KeyError(f"problem_ids not present in {episodes_dir}: {missing}")
         return [by_pid[p] for p in wanted]
+    if stratified_per_stratum > 0:
+        if stratum_of is None:
+            raise ValueError("stratified selection requires a stratum_of callable")
+        return _stratified(episodes, stratified_per_stratum, stratum_of)
     return episodes[:n_problems] if n_problems > 0 else episodes
+
+
+def _stratified(
+    episodes: list[EpisodeRecord],
+    per_stratum: int,
+    stratum_of: Callable[[int], int],
+) -> list[EpisodeRecord]:
+    """``per_stratum`` episodes from each stratum, evenly strided within the stratum.
+
+    Striding (rather than taking the first ``per_stratum``) samples across the whole band
+    so a stratum's own internal ordering does not bias the subset, and it is deterministic
+    so generation and scoring pick the identical set.
+    """
+    by_stratum: dict[int, list[EpisodeRecord]] = {}
+    for ep in episodes:
+        s = int(stratum_of(int(ep.provenance.problem_id)))
+        by_stratum.setdefault(s, []).append(ep)
+    chosen: list[EpisodeRecord] = []
+    for _s, members in sorted(by_stratum.items()):
+        if len(members) <= per_stratum:
+            chosen.extend(members)
+            continue
+        step = len(members) / per_stratum
+        chosen.extend(members[int(i * step)] for i in range(per_stratum))
+    return sorted(chosen, key=lambda ep: int(ep.provenance.problem_id))
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -95,6 +132,21 @@ def load_generation_stats(path: Path) -> dict[str, Any]:
         "n_duplicate": sum(int(r.get("n_duplicate") or 0) for r in rounds),
         "n_invalid": sum(int(r.get("n_invalid") or 0) for r in rounds),
     }
+
+
+def load_infer_seconds(path: Path) -> float:
+    """VLM generation wall-clock to first success, from a sequences file.
+
+    The run stops generating at the first success, so the sum of the recorded rounds'
+    ``api_s`` (pure model-call time) is exactly the inference the rollout needed. Falls
+    back to ``elapsed_s`` for a round written before ``api_s`` existed.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    total = 0.0
+    for r in payload.get("rounds") or []:
+        api_s = r.get("api_s")
+        total += float(api_s if api_s is not None else (r.get("elapsed_s") or 0.0))
+    return total
 
 
 def load_proposals(path: Path) -> list[tuple[tuple[Step, ...], int]]:

@@ -19,14 +19,27 @@ from .adapter import EnvAdapter, Labeler
 
 
 def make_adapter(
-    env_variant: str, with_images: bool = True, image_width_px: int = 1024
+    env_variant: str,
+    with_images: bool = True,
+    image_width_px: int = 1024,
+    image_source: str = "schematic",
 ) -> EnvAdapter:
-    """The generation-side adapter for a collection."""
+    """The generation-side adapter for a collection.
+
+    ``image_source`` selects StickButton2D's scene render: ``"schematic"`` (the
+    spectre-drawn vector render, the default) or ``"kinder_labeled"`` (kinder's own
+    environment pixels with Set-of-Mark object labels overlaid). It is ignored for DD2D,
+    whose custom labeled renderer is already the environment's canonical picture.
+    """
     if env_variant.startswith("stickbutton2d"):
         # pylint: disable=import-outside-toplevel
         from .sb2d_adapter import SB2DAdapter
 
-        return SB2DAdapter(with_images=with_images, image_width_px=image_width_px)
+        return SB2DAdapter(
+            with_images=with_images,
+            image_width_px=image_width_px,
+            image_source=image_source,
+        )
     # pylint: disable=import-outside-toplevel
     from .dd2d_adapter import DD2DAdapter
 

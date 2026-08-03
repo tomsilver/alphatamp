@@ -80,6 +80,18 @@ class EnvSpec:
     """Labelled scene render for the §5 planner inspector; ``None`` hides the
     section."""
 
+    plan_label: Callable[[Sequence[tuple[str, Sequence[str]]]], str] | None = None
+    """Render one plan's step sequence (``[(op_name, [args...]), ...]``) into a short
+    human-readable string for the §5 inspector.
+
+    Env-specific because the operator vocabulary is: DD2D names its operators
+    ``place-buffer`` / ``retrieve``, StickButton2D names them ``RobotPressButton*`` /
+    ``StickPressButton*`` / ``PickStick*``. A single hardcoded formatter is why the SB2D
+    inspector printed ``retrieve ?`` for every row. ``None`` falls back to a generic
+    join. It takes the step sequence (not a skeleton) so it renders both a pooled skeleton
+    and a VLMPlan off-pool attempt, which carries steps but no skeleton.
+    """
+
     scene_legend: str = ""
     """Markdown describing what the §5 render shows: colours, labels, what to look at.
 
@@ -115,6 +127,43 @@ def _sb2d_scene(episode: EpisodeRecord) -> Image:
     return render_labeled_scene(episode.scene_geometry, episode.object_registry)
 
 
+def _short(name: str) -> str:
+    """``item_5`` / ``circle_3`` -> the trailing token, matching the render's labels."""
+    return name.rsplit("_", 1)[-1]
+
+
+def _dd2d_plan_label(steps: Sequence[tuple[str, Sequence[str]]]) -> str:
+    """``stage {5, 3} → retrieve 10`` from a DD2D plan's ``place-buffer`` / ``retrieve``
+    ops."""
+    staged = [
+        _short(args[0]) for name, args in steps if name == "place-buffer" and args
+    ]
+    tgt = next(
+        (_short(args[0]) for name, args in steps if name == "retrieve" and args), "?"
+    )
+    head = "stage {" + ", ".join(staged) + "} → " if staged else ""
+    return f"{head}retrieve {tgt}"
+
+
+def _sb2d_plan_label(steps: Sequence[tuple[str, Sequence[str]]]) -> str:
+    """The press order + stick handling of a StickButton2D plan.
+
+    The pressed button is arg 1 for an arm press and arg 2 for a stick press (the stick
+    sits between robot and button), matching ``SB2DAdapter.discretionary_objects``.
+    """
+    parts: list[str] = []
+    for name, args in steps:
+        if name.startswith("PickStick"):
+            parts.append("pick stick")
+        elif name == "PlaceStick":
+            parts.append("place stick")
+        elif name.startswith("RobotPressButton") and len(args) >= 2:
+            parts.append(f"press {args[1]} (arm)")
+        elif name.startswith("StickPressButton") and len(args) >= 3:
+            parts.append(f"press {args[2]} (stick)")
+    return " → ".join(parts) if parts else "(empty plan)"
+
+
 DD2D = EnvSpec(
     key="dd2d",
     title="DD2D — SPECTRE v3 vs v2, PIGINet, VLMPlan and pure planning",
@@ -141,8 +190,17 @@ DD2D = EnvSpec(
         "`cov+waste, tokens` arm (~7.90) — the gap conflates the definition change with "
         "the aggregate-records/evidence-attn switches. §4 is a self-contained "
         "matched-settings study; read it internally, not against §1.",
+        "**`VLMPlan-GPT5.6` (gpt-5.6-luna, the frontier arm) is the *worst* method here** "
+        "— 62.98 ALL, worse than the naive planner order (34.52) and the local Qwen-32B "
+        "(23.55). It over-stages confidently on the packing negative control (s0 43.2 vs "
+        "astar 0.0) and never stalls, so it accrues many diverse failed off-pool attempts. "
+        "It is scored on a stratified 40 (10/stratum); the per-stratum means are comparable "
+        "to the 100-problem rows, the stratum-weighted ALL is not read against them "
+        "1-for-1. A frontier VLM does not rescue VLMPlan on DD2D — see "
+        "`notebook/07` 2026-08-03.",
     ),
     render_scene=_dd2d_scene,
+    plan_label=_dd2d_plan_label,
     scene_legend=(
         "the initial drawer, drawn from the episode's stored geometry. The **red** item "
         "is the retrieval target; blue items are concave; the dark frame is the wall "
@@ -203,6 +261,7 @@ SB2D = EnvSpec(
         "separate on this environment and no arm ordering there should be quoted.",
     ),
     render_scene=_sb2d_scene,
+    plan_label=_sb2d_plan_label,
     scene_legend=(
         "the initial table scene, drawn from the episode's stored geometry. **Red** "
         "discs are unpressed buttons, the brown bar is the stick, the blue disc is the "
@@ -255,8 +314,17 @@ SB2D_KINDER = EnvSpec(
         "collection was cut at a wall-clock budget — so the b5 column is substantially "
         "a generalisation result. No method is advantaged; none should be quoted as "
         "trained-on-b5.",
+        "**`VLMPlan-GPT5.6` (gpt-5.6-luna, the frontier arm) is native here** on the "
+        "kinder-labeled image (kinder's real pixels + Set-of-Mark labels; unlabeled kinder "
+        "discs are unusable by a VLM). It is a genuine planner — 11.85 ALL, self-solves "
+        "35/40, beats the naive order (16.29) — but **~6× behind the learned rankers** "
+        "(1.69–2.28) and roughly tied with the local Qwen-32B (13.18); it over-thinks b3 "
+        "(11.4, worse than astar's 3.0) and only wins at b5. Stratified 40 (10/stratum). "
+        "A frontier VLM does not close the gap to the learned methods — see "
+        "`notebook/07` 2026-08-03.",
     ),
     render_scene=_sb2d_scene,
+    plan_label=_sb2d_plan_label,
     scene_legend=SB2D.scene_legend,
 )
 

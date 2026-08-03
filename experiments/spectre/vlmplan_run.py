@@ -33,6 +33,7 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
+from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.vlmplan import runio
 from alphatamp.approaches.spectre.vlmplan.loop import LoopConfig, generate_sequence
 from alphatamp.approaches.spectre.vlmplan.models import ModelConfig, make_model
@@ -75,11 +76,14 @@ def main(cfg: DictConfig) -> None:
 
     mc = model_config(cfg)
     model = make_model(mc)
+    image_source = str(cfg.get("image_source", "schematic"))
     adapter = make_adapter(
         env_variant,
         with_images=bool(cfg.with_images),
         image_width_px=int(cfg.image_width_px),
+        image_source=image_source,
     )
+    image_dir = out_root / "images"
     _loop = OmegaConf.to_container(cfg.loop, resolve=True)
     loop_cfg = LoopConfig(**_loop)  # type: ignore[arg-type]
     decode = dict(mc.decode)
@@ -92,6 +96,7 @@ def main(cfg: DictConfig) -> None:
             "split": str(cfg.split),
             "seed": int(cfg.seed),
             "with_images": bool(cfg.with_images),
+            "image_source": image_source,
             "image_width_px": int(cfg.image_width_px),
             "loop": OmegaConf.to_container(cfg.loop, resolve=True),
             "model": mc.describe(),
@@ -102,6 +107,8 @@ def main(cfg: DictConfig) -> None:
         runio.split_dir(data_root, env_variant, str(cfg.split)),
         n_problems=int(cfg.n_problems),
         problem_ids=[int(p) for p in (cfg.problem_ids or [])],
+        stratified_per_stratum=int(cfg.get("stratified_per_stratum", 0)),
+        stratum_of=stratum_of,
     )
     # Default on. Off reproduces the pre-2026-08-01 behaviour (generate until stall or
     # round cap), which is what the DD2D rows were produced with -- so `n_proposed` is
@@ -126,6 +133,16 @@ def main(cfg: DictConfig) -> None:
             continue
 
         started = time.time()
+
+        # Render the scene once, persist it (the exact image the model saw, for the paper
+        # and future reuse — the renderers are otherwise in-memory only), and hand it to
+        # the loop so it is not re-rendered per round.
+        images = adapter.images(episode)
+        if images:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            for k, img in enumerate(images):
+                name = f"{pid}.png" if len(images) == 1 else f"{pid}_{k}.png"
+                img.save(image_dir / name)
 
         # **A feasible plan ends the episode.** `max_plans` (= the pool cap) is the hard
         # ceiling for when every proposal keeps failing, not a quota to fill. Proposals
@@ -165,6 +182,7 @@ def main(cfg: DictConfig) -> None:
             decode,
             base_seed=int(cfg.seed) * 1000,
             stop_check=_stop_check if stop_at_first_success else None,
+            images=images,
         )
         labeler.flush()
         elapsed = time.time() - started

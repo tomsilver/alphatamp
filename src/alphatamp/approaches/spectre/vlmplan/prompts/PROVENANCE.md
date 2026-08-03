@@ -116,6 +116,38 @@ editing the file above.
   `RoundLog.truncated` now flags this exactly, and a nonzero `n_truncated` on a record means
   that run under-reports the model and should be re-run rather than reported.
 
+## Frontier-VLM arm (gpt-5.6-luna, 2026-08-03)
+
+The paper's headline VLMPlan row is **gpt-5.6-luna** over the OpenAI **Responses API**
+(`model.backend: openai_responses`), replacing the local Qwen arms. The prompt is
+byte-identical; only the model and decode change, plus the SB2D image source (below).
+
+- **Responses API, not chat completions.** GPT-5 reasoning models reject `max_tokens` and a
+  non-default `temperature` over chat completions. The Responses backend remaps
+  `max_tokens → max_output_tokens` and drops `temperature`/`seed`, so **round-to-round
+  diversity comes from the growing "previously proposed plans" block + the model's own
+  sampling**, not from a per-round seed. This is still the static hard line — the model never
+  sees an outcome.
+- **`max_tokens = 16384`, `reasoning.effort = low`.** A reasoning model bills reasoning tokens
+  against the output cap, so it is raised from 8192; `effort: low` keeps reasoning cost/latency
+  down on problems that are easy for a human. Measured `n_truncated = 0` on both pilots and
+  full runs; watch it on any re-collection. Recorded into every record via
+  `ModelConfig.describe()`.
+- **Wall-clock is dominated by generation, not refinement.** The Responses round-trip +
+  reasoning is ~10–16 s/round, so VLMPlan's time-to-first-success (`infer_s`) is seconds–
+  minutes; this is the honest cost of a zero-shot frontier planner and is reported in the §2b
+  wall-clock section.
+
+**Deviation 3, on the kinder-rendered SB2D variant.** For `stickbutton2d_v1_kinder`,
+`image_source: kinder_labeled` attaches **kinder's own environment render** (the PIGINet-parity
+pixels) with Set-of-Mark object labels overlaid — because kinder draws every unpressed button as
+an identical unlabeled red disc, so the name↔disc correspondence is unsolvable without the
+overlay, exactly the situation deviation 3 addresses on DD2D. Labels are the canonical object
+names (`circle_N`/`rectangle_N`/`crv_robot_N`), drawn in data coordinates via kinder's
+`ax_callback` so they sit exactly on the objects. The reach line is *not* drawn on this image
+(the table band shows the base-exclusion zone and the numeric reach limit is in the text
+prompt). The schematic renderer remains the default `image_source` for the other SB2D variant.
+
 ## Harness-side deviations (parser, not prompt)
 
 5. **Per-block error semantics.** The vendored parser drops only the offending **plan

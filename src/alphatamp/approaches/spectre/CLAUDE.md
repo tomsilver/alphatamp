@@ -135,6 +135,25 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_32b
    python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_32b
    ```
+   **Frontier arm (`gpt-5.6-luna`, the headline VLMPlan row, 2026-08-03).** Named configs
+   `vlmplan_{dd2d,sb2d}_luna` set `backend: openai_responses` (GPT-5 reasoning models need
+   the Responses API — chat completions rejects `max_tokens`/`temperature`),
+   `base_url: https://api.openai.com/v1` (billed) and `reasoning.effort: low`; export a real
+   `OPENAI_API_KEY` first. They run **native** on `dd2d_v4` / `stickbutton2d_v1_kinder`, a
+   **stratified 40** (`stratified_per_stratum: 10`, stride-not-truncate), and save the exact
+   scene image sent to `…/vlmplan/<run>/images/<pid>.png`. SB2D uses
+   `image_source: kinder_labeled` — kinder's real pixels with Set-of-Mark labels overlaid
+   (unlabeled kinder discs are unusable by a VLM). Pilot first (`stratified_per_stratum=1`,
+   its own `run`/`cache_subdir`) and watch `n_truncated`.
+   ```bash
+   export OPENAI_API_KEY=sk-...   # a real key; this arm is billed (~$1-2 for both envs)
+   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_dd2d_luna
+   python experiments/spectre/vlmplan_score.py --config-name vlmplan_dd2d_luna
+   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_luna
+   python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_luna
+   ```
+   The score record now carries wall-clock (`infer_s` VLM generation + `refine_s`), so
+   VLMPlan appears in §2b; `VLMPlan-GPT5.6` is a `SEQUENCE_METHOD` in `compare.py`.
    Adapter *and* off-pool labeler are dispatched on `env_variant` by `vlmplan/registry.py`;
    a new environment is an `EnvAdapter` + a `Labeler`, both registered there.
    One `cache_subdir` is one method row — give a different `run` its own `cache_subdir`

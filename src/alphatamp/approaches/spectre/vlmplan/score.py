@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -76,6 +77,16 @@ REFINER_PRESETS: dict[str, dict[str, Any]] = {
         "time_budget": 4.0,
     },
     "dd2d_v3": {
+        "budget": None,
+        "retry_cap": 10,
+        "samples_per_step": 15,
+        "time_budget": 20.0,
+    },
+    # v4 = v3's refiner settings (lam=0.8, crowd=5, k=200, retry_cap=10,
+    # samples_per_step=15, time_budget=20.0) plus observation-only instrumentation, so an
+    # off-pool label uses the same distribution as the stored in-pool ones. See
+    # conf/env/dd2d_v4.yaml.
+    "dd2d_v4": {
         "budget": None,
         "retry_cap": 10,
         "samples_per_step": 15,
@@ -115,6 +126,13 @@ class Attempt:
     label: str
     source: str  # "vlm" | "fill"
     round_index: int | None = None
+    # Refinement wall-clock for this attempt: the stored per-candidate time for an in-pool
+    # plan, the run-captured live-refine time for an off-pool one, ``None`` if unknown.
+    refine_s: float | None = None
+    # The full canonical step sequence, ``[[name, [args...]], ...]``. Kept so the planner
+    # inspector can render VLMPlan's actual ordered plans (its attempts are off the shared
+    # pool, so there is no skeleton to index) via the env's plan formatter.
+    steps: list = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-ready form for the cache record's ``attempts`` list."""
@@ -125,6 +143,8 @@ class Attempt:
             "label": self.label,
             "source": self.source,
             "round": self.round_index,
+            "refine_s": self.refine_s,
+            "steps": [[name, list(args)] for name, args in self.steps],
         }
 
 
@@ -141,6 +161,16 @@ class ScoreResult:
     n_fill_used: int = 0
     first_success_source: str | None = None
     n_live_refines: int = 0
+    # Wall-clock to first success (the VLMPlan row of the comparison's §2b). ``infer_s`` is
+    # the VLM generation cost (summed round api_s; set by the caller from the sequences
+    # file). ``refine_s`` sums the per-attempt refinement up to and including first
+    # success. The ``_capped`` pair re-walks that order under the deployed per-candidate
+    # refinement cap (a slow near-feasible candidate is abandoned at the cap), mirroring
+    # the pool methods so the two are comparable.
+    infer_s: float = 0.0
+    refine_s: float = 0.0
+    refine_s_capped: float = 0.0
+    fp_capped: float | None = None
 
     @property
     def order(self) -> list[int]:
@@ -161,6 +191,10 @@ class ScoreResult:
             "n_fill_used": self.n_fill_used,
             "n_live_refines": self.n_live_refines,
             "first_success_source": self.first_success_source,
+            "infer_s": self.infer_s,
+            "refine_s": self.refine_s,
+            "refine_s_capped": self.refine_s_capped,
+            "fp_capped": self.fp_capped,
         }
 
 
@@ -177,6 +211,19 @@ class MemoizingLabeler(Labeler):
         self._memo: dict[str, str] = {}
         if memo_path is not None and memo_path.is_file():
             self._memo = json.loads(memo_path.read_text(encoding="utf-8"))
+        # Per-refine wall-clock, keyed identically to the label memo, persisted to a
+        # sidecar. The off-pool refine happens once (in the run's first-success stop
+        # check); its wall-clock is captured there so the wall-clock section never has to
+        # re-refine at score time — a refine can cost up to the collection's time budget
+        # (20 s on DD2D), so re-doing it per attempt would be minutes per problem.
+        self._times_path = (
+            memo_path.with_name(memo_path.stem + "_times.json")
+            if memo_path is not None
+            else None
+        )
+        self._times: dict[str, float] = {}
+        if self._times_path is not None and self._times_path.is_file():
+            self._times = json.loads(self._times_path.read_text(encoding="utf-8"))
         self.n_refines = 0
 
     @staticmethod
@@ -197,22 +244,39 @@ class MemoizingLabeler(Labeler):
                 f"episode {episode.provenance.problem_id} has no scene_geometry; "
                 "off-pool proposals cannot be labelled without it"
             )
+        started = time.perf_counter()
         label = self._refine(episode, steps)
+        self._times[key] = time.perf_counter() - started
         self.n_refines += 1
         self._memo[key] = label
         return label
+
+    def refine_seconds(
+        self, episode: EpisodeRecord, steps: Sequence[Step]
+    ) -> float | None:
+        """Recorded wall-clock of the off-pool refine for this plan, or ``None``.
+
+        ``None`` means this labeler never refined it (e.g. an in-pool plan, whose time is
+        the stored per-candidate one instead, or a plan labelled by a different run).
+        """
+        return self._times.get(self._key(int(episode.provenance.problem_id), steps))
 
     def _refine(self, episode: EpisodeRecord, steps: Sequence[Step]) -> str:
         raise NotImplementedError
 
     def flush(self) -> None:
-        """Persist the memo so a re-score never re-refines a labelled plan."""
+        """Persist the memo (and the refine-time sidecar) so a re-score never re-refines
+        a labelled plan."""
         if self._memo_path is None:
             return
         self._memo_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._memo_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self._memo), encoding="utf-8")
         tmp.replace(self._memo_path)
+        if self._times_path is not None:
+            tmp_t = self._times_path.with_suffix(".json.tmp")
+            tmp_t.write_text(json.dumps(self._times), encoding="utf-8")
+            tmp_t.replace(self._times_path)
 
 
 class OffPoolLabeler(MemoizingLabeler):
@@ -271,6 +335,39 @@ def label_step_sequence(
     return labeler.label(episode, steps), None
 
 
+def _stored_refine_seconds(episode: EpisodeRecord, pool_idx: int) -> float | None:
+    """The collection's stored per-candidate refine wall-clock for pool skeleton j.
+
+    The same number every pool method replays (DD2D v3/v4 instrumented collections). SB2D
+    outcomes carry it too, but it is not the deployed-cap-instrumented figure, so the SB2D
+    wall-clock is reported for completeness only.
+    """
+    if 0 <= pool_idx < len(episode.outcomes):
+        value = getattr(episode.outcomes[pool_idx], "refinement_wall_clock_s", None)
+        return float(value) if value is not None else None
+    return None
+
+
+def _fp_refine_capped(attempts: Sequence[Attempt], cap: float) -> tuple[float, float]:
+    """Re-walk the realized order under a per-candidate refinement cap.
+
+    Charges ``min(t, cap)`` per attempt and stops at the first success reached *within*
+    the cap; a feasible-but-slow candidate (``t > cap``) is abandoned and counts against
+    FP, exactly the deployed-cap semantics the pool methods use. Because the uncapped walk
+    already stopped at the first success, the recorded attempts end there — on DD2D the
+    feasible p95 (0.44 s) is far below the 2 s cap, so the success is essentially never the
+    abandoned-slow case and this is exact; in the rare case it is, ``fp_capped`` is
+    conservatively the censored count.
+    """
+    total = 0.0
+    for i, attempt in enumerate(attempts):
+        t = attempt.refine_s if attempt.refine_s is not None else 0.0
+        total += min(t, cap)
+        if attempt.label == "success" and t <= cap:
+            return float(i), total
+    return float(len(attempts)), total
+
+
 def score_sequence(
     episode: EpisodeRecord,
     proposals: Sequence[tuple[tuple[Step, ...], int]],
@@ -280,15 +377,21 @@ def score_sequence(
     attempt_budget: int = ATTEMPT_BUDGET,
     fill_from_published: bool = True,
     env_variant: str = DEFAULT_VARIANT,
+    refine_cap_s: float = 2.0,
 ) -> ScoreResult:
     """Walk the proposals (then the published-order fill) to the first success.
 
     ``proposals`` is ``[(steps, round_index), ...]`` in the order the model produced
-    them. Returns the FP the comparison table reports.
+    them. Returns the FP the comparison table reports, and the per-attempt / total
+    refinement wall-clock the §2b wall-clock section reports (``infer_s`` is filled by the
+    caller from the sequences file). In-pool attempts take the collection's stored
+    per-candidate time; off-pool attempts take the time the run captured when it refined
+    them (see ``MemoizingLabeler``).
     """
     pool = adapter.pool_index(episode)
     stored = [o.outcome for o in episode.outcomes]
     labeler = labeler or OffPoolLabeler(env_variant=env_variant)
+    refine_seconds = getattr(labeler, "refine_seconds", None)
 
     sequence: list[tuple[tuple[Step, ...], str, int | None]] = [
         (steps, "vlm", round_index) for steps, round_index in proposals
@@ -312,6 +415,12 @@ def score_sequence(
         label, pool_idx = label_step_sequence(
             episode, steps, adapter, labeler, pool=pool, stored=stored
         )
+        if pool_idx is not None:
+            refine_s = _stored_refine_seconds(episode, pool_idx)
+        elif refine_seconds is not None:
+            refine_s = refine_seconds(episode, steps)  # run-captured live-refine time
+        else:
+            refine_s = None
         if pool_idx is None:
             result.n_offpool += 1
         if source == "fill":
@@ -324,6 +433,8 @@ def score_sequence(
                 label=label,
                 source=source,
                 round_index=round_index,
+                refine_s=refine_s,
+                steps=list(steps),
             )
         )
         if label == "success":
@@ -333,6 +444,10 @@ def score_sequence(
             break
 
     result.n_live_refines = labeler.n_refines
+    result.refine_s = sum((a.refine_s or 0.0) for a in result.attempts)
+    result.fp_capped, result.refine_s_capped = _fp_refine_capped(
+        result.attempts, refine_cap_s
+    )
     return result
 
 

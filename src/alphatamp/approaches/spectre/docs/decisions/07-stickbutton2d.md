@@ -4,6 +4,69 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-03-frontier-vlm-vlmplan-arm-gpt-5-6-luna-kinder-labeled"></a>
+## 2026-08-03 — Frontier-VLM VLMPlan arm (gpt-5.6-luna): kinder-labeled SB2D image, wall-clock, inspector
+
+<!--strip-->
+> **id** `2026-08-03-frontier-vlm-vlmplan-arm-gpt-5-6-luna-kinder-labeled` ·
+> **status** active · **tracks** baselines, evaluation, method, env-stickbutton2d,
+> env-dd2d, tooling
+<!--/strip-->
+
+**Context.** VLMPlan — the zero-data corner of the representation grid — was a **local Qwen3-VL**
+arm (8B/32B) served through an OpenAI-compatible endpoint. A reviewer can dismiss a weak local
+model, so the headline VLMPlan row should be a **frontier** VLM. Separately, VLMPlan lacked parity
+with the SPECTRE/PIGINet/astar rows in three ways: it was absent from the §2b wall-clock section
+and the §5 planner inspector, and the inspector's plan formatter was DD2D-hardcoded so every SB2D
+row printed `retrieve ?`. Finally the SB2D pixel question: the representation contrast is measured
+on `stickbutton2d_v1_kinder` (kinder's own pixels, PIGINet-parity), but kinder draws every
+unpressed button as an **identical unlabeled red disc**, so those pixels are unusable by a VLM as-is.
+
+**Decision.**
+
+- **Model = `gpt-5.6-luna` over the OpenAI Responses API** (`backend: openai_responses`,
+  `reasoning.effort: low`, `max_output_tokens 16384`). GPT-5 reasoning models reject
+  `max_tokens`/`temperature` over chat completions; the Responses backend remaps the cap and drops
+  `temperature`/`seed`, so round diversity comes from the growing repeat-suppression block, not a
+  seed. `luna` (the economy tier) is deliberate — these problems are easy for a human and it keeps
+  spend ~$1–2 for the whole study. It is the **headline** VLMPlan row (`VLMPlan-GPT5.6`,
+  `cache_subdir vlmplan_luna`); the Qwen arms are kept for a local-vs-frontier contrast.
+- **SB2D image = `image_source: kinder_labeled`** — kinder's real env render with Set-of-Mark
+  object labels overlaid in data coordinates (via kinder's `ax_callback`, so labels sit exactly on
+  the objects). This is deviation 3 (`prompts/PROVENANCE.md`) applied to the second environment:
+  labels are load-bearing, not an advantage, because the names appear nowhere in an unlabeled
+  render. No reach line is drawn (the table band + text prompt convey it). DD2D keeps its schematic
+  labeled renderer. **Both envs now persist the exact scene image sent, to
+  `…/vlmplan/<run>/images/<pid>.png`.**
+- **Scope = stratified 40/env (10/stratum)**, selected by *striding within each stratum band*
+  (`runio._stratified`), never `n_problems=40` (which is one stratum — the stride-never-truncate
+  trap). DD2D runs **native on `dd2d_v4`** (aligned with the pool methods), replacing the v3 graft
+  for the headline row; SB2D runs native on `stickbutton2d_v1_kinder`.
+- **Wall-clock for VLMPlan** = `infer_s` (VLM generation to first success, summed per-round
+  `api_s`) + `refine_s` (the collection's stored per-candidate time for an in-pool attempt; the
+  run-captured live-refine time for an off-pool one — captured once in the first-success stop
+  check, never re-refined at score time), with a capped variant under `REFINE_CAP_S = 2 s`.
+  VLMPlan joins `TIMED_METHODS`; `build_time_table` **zeroes the pool `plan_gen_s`** for a sequence
+  method, because the VLM's generation *is* its plan-gen (`total = infer_s + refine_s`).
+- **Inspector** = VLMPlan is selectable and renders its **own** ordered attempts from the cache
+  record (off-pool by design); the DD2D-hardcoded `_plan_label` is replaced by an
+  `EnvSpec.plan_label` hook (DD2D `stage {…} → retrieve N`; SB2D the press order), which is what
+  fixes `retrieve ?`. The full step sequence is now stored per VLMPlan attempt so the plan renders.
+
+**Consequences.** A clean cross-environment story, consistent with the pilots and the direction the
+Qwen arms already showed (see [notebook/07 2026-08-03](../notebook/07-stickbutton2d.md#2026-08-03-vlmplan-frontier-vlm-gpt-5-6-luna-strong)
+for the per-stratum numbers): the frontier VLM is a **genuine planner on SB2D** (self-solves the
+large majority of problems, low FP, correctly grounds buttons from the labeled kinder image) but
+**struggles on DD2D**, the proposal's declared *negative control* for continuous packing — it
+systematically over-stages and its proposals fail the geometric refinement, exactly as the Qwen
+arms did (qwen32b s3 ≈ 69). Two method-level findings this exercised: **VLMPlan wall-clock is
+generation-dominated** (the Responses round-trip + reasoning is seconds–minutes, dwarfing the
+sub-second refinements), which is the honest cost of a zero-shot frontier planner; and the
+label-agreement gate read **1.0 on both envs**, so the numbers are defensible. Reproduce with
+`--config-name vlmplan_{dd2d,sb2d}_luna`; the response cache makes a re-score free.
+
+---
+
 <a id="2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration"></a>
 ## 2026-08-02 — Per-candidate refinement cap is the deployed wall-clock configuration
 
