@@ -22,6 +22,7 @@ step without ever running inference at load time.
 from __future__ import annotations
 
 import dataclasses
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -128,6 +129,25 @@ class V3Trace:
     order: list[int]
     step_scores: list[list[float]]
     step_dead: list[list[int]]
+    infer_seconds: float = 0.0
+    """Wall-clock spent on inference across the rollout: per-step tensorization
+    (``build_v3_example`` + ``collate_v3``) + the model forward, summed.
+
+    Defaulted so callers that ignore timing are unaffected; the timing bracket includes
+    the device sync, so on cuda it is a true end-to-end measure. Warm the model up once
+    before a timed pass so one-time CUDA init does not land in the first step.
+    """
+
+    refine_capped_seconds: float = 0.0
+    """Refinement wall-clock along the realized order, each candidate's stored
+    ``refinement_wall_clock_s`` clamped to ``refine_cap_s`` (uncapped sum when no cap).
+
+    Reuses the per-candidate refiner times stored on the episode; the rollout must
+    accumulate it here (rather than a caller summing ``_refine_seconds`` over ``order``)
+    because a capped rollout's order can contain a *slow-feasible* candidate that did
+    not stop the loop -- a plain "sum to first success" would break there and
+    undercount. 0.0 when the episode carries no per-candidate times.
+    """
 
 
 @torch.no_grad()
@@ -148,6 +168,7 @@ def deployed_rollout_v3_traced(
     unified_coverage: bool = False,
     state_delta: bool = False,
     suppress_records: bool = False,
+    refine_cap_s: Optional[float] = None,
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
@@ -155,22 +176,22 @@ def deployed_rollout_v3_traced(
     ``spec`` defaults to the contract registered for the episode's own ``env_variant``.
 
     ``max_attempts`` censors the rollout at a fixed budget. Reporting always runs
-    uncensored -- the budget equals the pool cap, so it never binds -- and censoring exists
-    only for *checkpoint selection*, where the metric is recomputed every epoch and the
-    full loop otherwise costs several times the training step it is selecting over. This
-    mirrors the split the project already runs: selection under a budget, reporting
-    without one.
+    uncensored -- the budget equals the pool cap, so it never binds -- and censoring
+    exists only for *checkpoint selection*, where the metric is recomputed every epoch
+    and the full loop otherwise costs several times the training step it is selecting
+    over. This mirrors the split the project already runs: selection under a budget,
+    reporting without one.
 
-    ``apply_demotion`` defaults to **False**: proof-tier demotion was cut from the deployed
-    method on 2026-07-30 (``decisions.md``). v3 is now a purely learned ranker -- nothing
-    outside the network touches the ordering -- which is what the deployed numbers report.
-    It costs a measured 0.23 FP (7.20 -> 7.44, CI [+0.08, +0.43]) and buys a system with one
-    kind of component in it.
+    ``apply_demotion`` defaults to **False**: proof-tier demotion was cut from the
+    deployed method on 2026-07-30 (``decisions.md``). v3 is now a purely learned ranker
+    -- nothing outside the network touches the ordering -- which is what the deployed
+    numbers report. It costs a measured 0.23 FP (7.20 -> 7.44, CI [+0.08, +0.43]) and
+    buys a system with one kind of component in it.
 
     Passing ``True`` re-enables the finite offset and is still fully supported: the proof
     machinery (``ProofStateV3``, the axiom registry, ``strict``/``permissive``) is kept,
-    tested and correct, because the deduction is sound and a domain where proofs fire more
-    often than DD2D's 6% may well want it. It is *off by default*, not removed.
+    tested and correct, because the deduction is sound and a domain where proofs fire
+    more often than DD2D's 6% may well want it. It is *off by default*, not removed.
 
     ``mode`` selects how much exactness evidence a failure must carry before it licenses
     demotion, and is therefore only consulted when ``apply_demotion=True``. ``strict``
@@ -178,8 +199,8 @@ def deployed_rollout_v3_traced(
     deduction sound; ``permissive`` reproduces v2.2's semantics.
 
     The proof state is advanced either way, so ``V3Trace.step_dead`` stays populated even
-    with demotion off -- it then reads as "what a proof *would* have demoted", which is what
-    the planner inspector shows.
+    with demotion off -- it then reads as "what a proof *would* have demoted", which is
+    what the planner inspector shows.
 
     ``suppress_records=True`` is a **diagnostic**, not a deployment mode: it runs a
     records-trained model with its evidence memory emptied at every step. Deliberately a
@@ -190,18 +211,41 @@ def deployed_rollout_v3_traced(
 
     There is no ``demotion_source`` knob: v3 reads the refiner's own report, and the
     geometry-reconstruction alternative is not ported (R2).
+
+    ``refine_cap_s`` models a **per-candidate refinement-abandonment cap**: a deployment
+    that bounds each skeleton's refinement at ``refine_cap_s`` seconds before moving on.
+    A feasible candidate whose stored ``refinement_wall_clock_s`` exceeds the cap is
+    then *not* a stopping success -- it is abandoned and observed like any other
+    failure (so it enters the failure context and re-ranks the pool), and the loop
+    continues. This only reorders the *ranking*, never removes a plan (P-E holds): the
+    pool is still exhausted in order, so a problem is lost only if every feasible
+    candidate exceeds the cap. ``V3Trace.refine_capped_seconds`` accumulates the
+    wall-clock the capped deployment pays. ``None`` (default) is the uncapped rollout.
     """
     model.eval()
     spec = spec or spec_for(episode.provenance.env_variant)
     n_candidates = len(episode.skeleton_pool)
-    success = {i for i, o in enumerate(episode.outcomes) if o.outcome == "success"}
+
+    def _stops(o) -> bool:
+        # A candidate ends the rollout only if it refines *and* does so within the cap;
+        # a slow-feasible candidate over the cap is abandoned and treated as a failure.
+        if o.outcome != "success":
+            return False
+        if refine_cap_s is None:
+            return True
+        return float(o.refinement_wall_clock_s or 0.0) <= refine_cap_s
+
+    success = {i for i, o in enumerate(episode.outcomes) if _stops(o)}
     state = ProofStateV3(candidate_queries(episode, spec), spec, mode=mode)
     tried: list[int] = []
     step_scores: list[list[float]] = []
     step_dead: list[list[int]] = []
+    infer_seconds = 0.0
+    refine_capped_seconds = 0.0
 
     budget = n_candidates if max_attempts is None else min(max_attempts, n_candidates)
     while len(tried) < budget:
+        _t_infer = time.perf_counter()
         example, records = build_v3_example(
             episode,
             vocab,
@@ -229,6 +273,12 @@ def deployed_rollout_v3_traced(
         ).to(device)
         logits, _ = model(batch)
         raw = logits[0].detach().cpu().numpy().astype(float)
+        # end-to-end inference time: tensorize + collate + forward. The .cpu() above
+        # already forces a device sync; synchronize() is a defensive no-op making the
+        # bracket a true wall-clock even if that copy is ever removed.
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+        infer_seconds += time.perf_counter() - _t_infer
         step_scores.append([float(x) for x in raw])
         step_dead.append(sorted(int(i) for i in state.dead))
 
@@ -239,12 +289,20 @@ def deployed_rollout_v3_traced(
             row = demote_scores(row, state.dead)
         pick = int(np.argmax(row))
         tried.append(pick)
+        _t_pick = float(episode.outcomes[pick].refinement_wall_clock_s or 0.0)
+        refine_capped_seconds += (
+            _t_pick if refine_cap_s is None else min(_t_pick, refine_cap_s)
+        )
         if pick in success:
             break
         state.observe(records_for_candidate(episode, pick, spec))
 
     return len(tried), V3Trace(
-        order=list(tried), step_scores=step_scores, step_dead=step_dead
+        order=list(tried),
+        step_scores=step_scores,
+        step_dead=step_dead,
+        infer_seconds=infer_seconds,
+        refine_capped_seconds=round(refine_capped_seconds, 6),
     )
 
 

@@ -308,8 +308,22 @@ rollout performance — they are diagnostics only; never optimize for them.
   among the most informative experiments not yet run (writeup, Limitations).
 - **Compositional generalization.** Train on one (N, zones, passages)
   configuration, test on another. The architecture factors across object
-  counts by design (typed local ids, set pooling, variable-length sequences)
-  but this has never been tested (writeup, Future work).
+  counts by design (typed local ids, set pooling, variable-length sequences).
+  On RT2D this is still untested; **on DD2D it now is** (2026-08-01): the
+  dd2d_v4-trained v3 checkpoint was scored train-old / test-new on held-out sets
+  with **unseen blocker counts** (13–15 vs the trained 9–12) and **unseen shape
+  figures** (a T and a cross, added with no per-shape grasp code). v3's advantage
+  over the naive planner order **survives** OOD (still wins overall, CI excludes
+  zero, on both sets), while absolute FP degrades ~1.6–1.9× and its s2 advantage
+  collapses under the shift — carried at the ALL level by s3, where the planner
+  order is pathological. Scoring hit **no OOV** (the vocab is over the fixed
+  operator/predicate/type set, so a new shape family is geometry metadata, not a
+  token). *Caveat: the s2 collapse is a pool-composition artifact — s2 problems have
+  only ~1.5 unique feasible solutions, padded in-distribution by redundant feasible
+  triples the k=200 pool crowds out at high count — not a clean model signal; read the
+  generalization at s3 (diagnosed 2026-08-02).* See
+  [`decisions/07` 2026-08-01](decisions/07-stickbutton2d.md#2026-08-01-dd2d-generalization-test-unseen-count-unseen)
+  and [`notebook/07` 2026-08-02](notebook/07-stickbutton2d.md#2026-08-02-s2-ood-degradation-pool-composition-artifact-model).
 - **x₀-conditioned prior.** A PIGINet-style feasibility predictor over the
   concrete initial state as an additional scorer input — a strict
   generalization of the current deliberately x₀-free setup (writeup, Future
@@ -325,9 +339,28 @@ rollout performance — they are diagnostics only; never optimize for them.
   is testable here once a low-level baseline is stood up. Label caveat: DD2D's
   Day-1 labeler marks non-area-proven negatives as *marginal*, so no
   label-dependent number until its negative certificate lands.
+- **PIGINet's SB2D pixel source is now kinder-native.** The low-level comparator
+  on StickButton2D previously read a *schematic* crop (each object drawn as a lone
+  polygon on a blank background); for the representation contrast to be fair, PIGINet
+  should see the environment's own pixels. As of 2026-08-02 the crops come from
+  kinder's built-in renderer, via a converted env_variant `stickbutton2d_v1_kinder`
+  that copies every v1 record verbatim and only re-images it (reconstruct-from-seed;
+  SPECTRE is image-free and unaffected). The SB2D representation contrast is therefore
+  being **re-measured on valid pixels**, and the standing SB2D finding
+  ("the advantage does not reproduce; PIGINet ties v3 despite a degenerate image
+  channel") is pending that re-run — noting the ceiling is positional context, since
+  unpressed buttons are identical discs in the env too. See
+  [`decisions/07` 2026-08-02](decisions/07-stickbutton2d.md#2026-08-02-kinder-rendered-piginet-crops-stickbutton2d-via-new)
+  and [`notebook/07` 2026-08-02](notebook/07-stickbutton2d.md#2026-08-02-stickbutton2d-piginet-crops-re-sourced-kinder-s).
 - **DAgger round** — only if test-time gap appears that offline AUROC(t) does
   not predict.
 - **Deferred from the original spec:** cost-weighted PL (wall-clock metric),
   OOV graceful fallback, refiner-instrumentation features for Ψ (deliberately
   excluded so the SPECTRE-vs-B4 gap is attributable to skeleton structure, not
-  refiner introspection).
+  refiner introspection). *(⚠️ 2026-08-02: a simpler realization of the wall-clock
+  objective landed — a **per-candidate refinement cap** (deployment knob, not a loss
+  change) bounds each skeleton's refinement, so on DD2D v3-adaptive goes from ~equal
+  uncapped wall-clock to **fastest** at a +0.05 FP cost; see
+  [`decisions/07` 2026-08-02](decisions/07-stickbutton2d.md#2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration).
+  Cost-weighted PL — training the ranker to minimize expected wall-clock — remains the
+  loss-level version, still deferred.)*

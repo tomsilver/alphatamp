@@ -70,6 +70,7 @@ import re
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -124,6 +125,20 @@ _PIGINET_PATHS = {
         "ckpt": DERIVED_ROOT / "stickbutton2d_v1" / "piginet_bce_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "spectre",
         "cache": DERIVED_ROOT / "stickbutton2d_v1" / "clip_cache",
+        "domain": "stickbutton2d",
+    },
+    # StickButton2D with kinder-rendered PIGINet crops (2026-08-02). Same records as
+    # stickbutton2d_v1 -- SPECTRE is image-free and grafts from v1; only PIGINet's crops
+    # differ, so its checkpoint and CLIP cache repoint to the `_kinder` derived subdir.
+    # The factory in `make_sb2d_domain` reads the kinder PNGs for this variant. See
+    # experiments/spectre/sb2d_render_convert.py.
+    "stickbutton2d_v1_kinder": {
+        "ckpt": DERIVED_ROOT
+        / "stickbutton2d_v1_kinder"
+        / "piginet_bce_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v1_kinder" / "clip_cache",
         "domain": "stickbutton2d",
     },
 }
@@ -347,6 +362,133 @@ def _round_rows(rows) -> list[list[float | None]]:
     ]
 
 
+def _static_order(scores) -> list[int]:
+    """Descending-score attempt order for a static ranker (stable ties)."""
+    return [int(i) for i in np.argsort(-np.asarray(scores, dtype=float), kind="stable")]
+
+
+def _refine_seconds(ep, order) -> float:
+    """Refinement wall-clock (s) summed along ``order`` up to and including the first
+    success, reused from the stored per-candidate ``refinement_wall_clock_s`` (dd2d_v3/v4;
+    0.0 on collections without it). Every method sums the *same* per-candidate times over its
+    own order, so the cross-method comparison is fair even though the absolute seconds are a
+    within-collection relative measure."""
+    total = 0.0
+    for idx in order:
+        o = ep.outcomes[idx]
+        total += float(o.refinement_wall_clock_s or 0.0)
+        if o.outcome == "success":
+            break
+    return round(total, 6)
+
+
+# Deployed per-candidate refinement-abandonment cap (seconds). A skeleton is refined for at
+# most this long before the deployment moves on; a feasible candidate over the cap is
+# abandoned (its outcome no longer counts as a stopping success). ~4.5x the feasible p95
+# (0.44s on dd2d_v4), so only genuine near-feasible outliers are cut. The §2b wall-clock
+# table reports every pool-ranking method under it; the uncapped fields stay for the FP
+# headline. See decisions/07 2026-08-02.
+REFINE_CAP_S = 2.0
+
+
+def _fp_and_refine_capped(ep, order, cap: float) -> tuple[float, float]:
+    """``(fp_capped, refine_s_capped)`` for a **fixed-order** method under the cap.
+
+    Walks the score-order (independent of refine time, so no model re-run is needed) and
+    stops at the first candidate that refines *within* the cap. A feasible candidate whose
+    stored ``refinement_wall_clock_s`` exceeds ``cap`` is abandoned -- charged ``cap`` and
+    skipped -- exactly as the deployed refiner would. ``fp_capped`` is the failed-attempt
+    count before that stop; ``refine_s_capped`` sums ``min(t, cap)`` up to and including it.
+    If nothing refines within the cap (every feasible candidate is slow -- does not happen
+    on dd2d_v4, where every problem keeps a sub-0.25s feasible candidate), the whole order
+    is charged and ``fp_capped == len(order)``.
+    """
+    total = 0.0
+    for k, idx in enumerate(order):
+        o = ep.outcomes[idx]
+        t = float(o.refinement_wall_clock_s or 0.0)
+        total += min(t, cap)
+        if o.outcome == "success" and t <= cap:
+            return float(k), round(total, 6)
+    return float(len(order)), round(total, 6)
+
+
+def _feasibility_at_risk(cap: float) -> int | None:
+    """Count test problems whose *every* feasible candidate refines slower than ``cap``.
+
+    These are the only problems a per-candidate cap could turn from solved into
+    censored. ``None`` when the split carries no per-candidate times (nothing to check).
+    """
+    n_at_risk = 0
+    saw_times = False
+    for ep in eda.load_split_episodes(SPECTRE_TEST).episodes:
+        feas = [
+            float(o.refinement_wall_clock_s or 0.0)
+            for o in ep.outcomes
+            if o.outcome == "success"
+        ]
+        if any(o.refinement_wall_clock_s for o in ep.outcomes):
+            saw_times = True
+        if feas and min(feas) > cap:
+            n_at_risk += 1
+    return n_at_risk if saw_times else None
+
+
+def _measure_plan_gen(per_stratum: int = 3) -> dict[str, float]:
+    """Per-stratum abstract-plan-generation time (s), shared by all pool-ranking
+    methods.
+
+    Not stored at collection, so measured here: regenerate a few problems per stratum
+    from the stored ``gen_params`` + seed and time the astar top-k pool enumeration
+    (``make_dd2d_planner(prefer='pyperplan', search='astar', heuristic='dist').plan``) —
+    the step that produces the ranked candidate pool the models score. A regenerated
+    proxy (DD2D's generator is PYTHONHASHSEED-dependent), used as a representative per-
+    stratum constant. DD2D only; ``{}`` (and a 0 fallback in the notebook) elsewhere or
+    on failure.
+    """
+    if not ENV_VARIANT.startswith("dd2d"):
+        return {}
+    try:
+        from collections import defaultdict
+
+        from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import (
+            make_dd2d_planner,
+        )
+        from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+            generate_dd2d_problem,
+        )
+    except Exception as e:  # pragma: no cover - env not importable
+        print(f"[plan_gen] unavailable, skipping: {type(e).__name__}: {e}")
+        return {}
+
+    groups: dict[int, list] = defaultdict(list)
+    for ep in eda.load_split_episodes(SPECTRE_TEST).episodes:
+        groups[stratum_of(int(ep.provenance.problem_id))].append(ep)
+    planner = make_dd2d_planner(prefer="pyperplan", search="astar", heuristic="dist")
+    out: dict[str, float] = {}
+    for s in sorted(groups):
+        times: list[float] = []
+        for ep in groups[s][:per_stratum]:
+            gp = dict(ep.provenance.gen_params.get("gen_params", {}))
+            gp["certify"] = (
+                False  # deployment does not certify; time only pool production
+            )
+            seed = int(
+                getattr(ep.provenance, "problem_seed", 0) or ep.provenance.problem_id
+            )
+            try:
+                problem = generate_dd2d_problem(seed=seed, **gp)
+                t0 = time.perf_counter()
+                planner.plan(problem, len(ep.skeleton_pool))
+                times.append(time.perf_counter() - t0)
+            except Exception as e:  # keep going; a per-problem failure is not fatal
+                print(f"[plan_gen] s{s} seed{seed} skipped: {type(e).__name__}: {e}")
+        if times:
+            out[str(s)] = round(sum(times) / len(times), 6)
+            print(f"[plan_gen] s{s}: {out[str(s)]:.4f}s (n={len(times)})", flush=True)
+    return out
+
+
 def cache_astar(force: bool) -> None:
     """astar-dist: planner enumeration order (score = -plan_idx)."""
     out = CACHE_DIR / "astar"
@@ -359,6 +501,8 @@ def cache_astar(force: bool) -> None:
         pid = int(ep.provenance.problem_id)
         labels = [1 if o.outcome == "success" else 0 for o in ep.outcomes]
         scores = [float(-j) for j in range(len(ep.outcomes))]  # ascending plan_idx
+        order = _static_order(scores)
+        fp_cap, refine_cap = _fp_and_refine_capped(ep, order, REFINE_CAP_S)
         n += _write(
             out / f"{pid}.json",
             {
@@ -366,6 +510,10 @@ def cache_astar(force: bool) -> None:
                 "stratum": stratum_of(pid),
                 "scores": scores,
                 "labels": labels,
+                "refine_s": _refine_seconds(ep, order),
+                "refine_s_capped": refine_cap,
+                "fp_capped": fp_cap,
+                "infer_s": 0.0,  # astar-dist = planner default order, no model inference
             },
             force,
         )
@@ -412,9 +560,13 @@ def cache_piginet(force: bool, device: str) -> None:
         print(f"[{tag}] running fresh inference on test split ...")
         domain = None
         if PIGINET_DOMAIN == "stickbutton2d":
-            from alphatamp.approaches.spectre.piginet.sb2d_adapter import SB2DDomain
+            from alphatamp.approaches.spectre.piginet.sb2d_adapter import (
+                make_sb2d_domain,
+            )
 
-            domain = SB2DDomain(str(PIGINET_DATA), ENV_VARIANT)
+            # Factory picks the crop source by variant (kinder PNGs vs schematic).
+            domain = make_sb2d_domain(str(PIGINET_DATA), ENV_VARIANT)
+        _t0 = time.perf_counter()
         rows, _thr, _temp = score_split(
             str(ckpt),
             str(PIGINET_DATA),
@@ -423,20 +575,43 @@ def cache_piginet(force: bool, device: str) -> None:
             device=device,
             domain=domain,
         )
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+        # PIGINet is a static predictor: it scores every candidate up front, then ranks,
+        # then refines -- so the whole split's scoring IS its inference-to-first-success.
+        # Per-problem infer = total / n. Caveat: CLIP image features are read from the
+        # clip_cache, so this is the BCE-head cost, not a from-scratch CLIP encode.
         by_pid: dict[str, list[tuple[int, int, float]]] = {}
         for pid, _stratum, plan_idx, _length, label, score in rows:
             by_pid.setdefault(pid, []).append((int(plan_idx), int(label), float(score)))
+        infer_per_problem = round((time.perf_counter() - _t0) / max(1, len(by_pid)), 6)
+        ep_by_pid = {
+            int(e.provenance.problem_id): e
+            for e in eda.load_split_episodes(SPECTRE_TEST).episodes
+        }
         n = 0
         for pid_str, triples in by_pid.items():
             triples.sort(key=lambda t: t[0])  # order by plan_idx
             pid = int(pid_str.split("_s")[-1])
+            scores = [t[2] for t in triples]
+            ep = ep_by_pid.get(pid)
+            order = _static_order(scores)
+            fp_cap, refine_cap = (
+                _fp_and_refine_capped(ep, order, REFINE_CAP_S)
+                if ep is not None
+                else (0.0, 0.0)
+            )
             n += _write(
                 out / f"{pid}.json",
                 {
                     "problem_id": pid,
                     "stratum": stratum_of(pid),
-                    "scores": [t[2] for t in triples],
+                    "scores": scores,
                     "labels": [t[1] for t in triples],
+                    "refine_s": (_refine_seconds(ep, order) if ep is not None else 0.0),
+                    "refine_s_capped": refine_cap,
+                    "fp_capped": fp_cap,
+                    "infer_s": infer_per_problem,
                 },
                 force,
             )
@@ -849,11 +1024,32 @@ def cache_spectre3(
                 )
                 continue
             model, deploy = load_v3_checkpoint(ckpt, vocab, device)
+            # Warm up so one-time CUDA init/autotune does not land in the first problem's
+            # measured inference time (no-op cost on cpu).
+            if episodes and device.startswith("cuda"):
+                _wex, _wr = build_v3_example(
+                    episodes[0],
+                    vocab,
+                    rng=None,
+                    evidence=True,
+                    context_f=frozenset(),
+                    augment_tags=False,
+                    spec=spec,
+                    **deploy,
+                )
+                _wb = collate_v3(
+                    [_wex], max_arity=vocab.max_operator_arity, records=[_wr]
+                ).to(device)
+                for _ in range(3):
+                    model(_wb)
+                torch.cuda.synchronize()
 
             na = ns = 0
             for ep in episodes:
                 pid = int(ep.provenance.problem_id)
                 if need_s:
+                    # Time the full static-inference path: tensorize + collate + forward.
+                    _t0 = time.perf_counter()
                     ex, recs = build_v3_example(
                         ep,
                         vocab,
@@ -868,15 +1064,25 @@ def cache_spectre3(
                         [ex], max_arity=vocab.max_operator_arity, records=[recs]
                     ).to(device)
                     logits, _ = model(batch)
+                    scores = [float(x) for x in logits[0].detach().cpu().numpy()]
+                    if device.startswith("cuda"):
+                        torch.cuda.synchronize()
+                    infer_s = round(time.perf_counter() - _t0, 6)
+                    order = _static_order(scores)
+                    fp_cap, refine_cap = _fp_and_refine_capped(ep, order, REFINE_CAP_S)
                     ns += _write(
                         sdir / f"{pid}.json",
                         {
                             "problem_id": pid,
                             "stratum": stratum_of(pid),
-                            "scores": [float(x) for x in logits[0].cpu().numpy()],
+                            "scores": scores,
                             "labels": [
                                 1 if o.outcome == "success" else 0 for o in ep.outcomes
                             ],
+                            "refine_s": _refine_seconds(ep, order),
+                            "refine_s_capped": refine_cap,
+                            "fp_capped": fp_cap,
+                            "infer_s": infer_s,
                         },
                         force,
                     )
@@ -892,6 +1098,22 @@ def cache_spectre3(
                         apply_demotion=apply_demotion,
                         **deploy,
                     )
+                    # Second, capped rollout: a slow-feasible candidate over the cap is
+                    # abandoned into the failure context, so the adaptive order can
+                    # diverge from the uncapped one -- it must be re-run, not derived by
+                    # capping the uncapped order's stored times.
+                    attempts_cap, trace_cap = deployed_rollout_v3_traced(
+                        model,
+                        ep,
+                        vocab,
+                        device,
+                        spec=spec,
+                        mode="strict",
+                        suppress_records=suppress_records,
+                        apply_demotion=apply_demotion,
+                        refine_cap_s=REFINE_CAP_S,
+                        **deploy,
+                    )
                     na += _write(
                         adir / f"{pid}.json",
                         {
@@ -901,6 +1123,11 @@ def cache_spectre3(
                             "order": trace.order,
                             "step_scores": _round_rows(trace.step_scores),
                             "step_dead": trace.step_dead,
+                            "refine_s": _refine_seconds(ep, trace.order),
+                            "refine_s_capped": trace_cap.refine_capped_seconds,
+                            "fp_capped": float(attempts_cap) - 1.0,
+                            "order_capped": trace_cap.order,
+                            "infer_s": round(trace.infer_seconds, 6),
                         },
                         force,
                     )
@@ -1082,7 +1309,26 @@ def main() -> None:
     if "lenctx" in args.methods:
         cache_lenctx(args.force, args.device, repeats=args.lenctx_repeats)
 
-    (CACHE_DIR / "meta.json").write_text(
+    # Per-stratum abstract-plan-generation time (shared across pool-ranking methods). Preserve
+    # a prior good measurement if this run measured nothing (e.g. a non-DD2D or lenctx-only run).
+    meta_path = CACHE_DIR / "meta.json"
+    plan_gen_s = _measure_plan_gen()
+    if not plan_gen_s and meta_path.exists():
+        try:
+            plan_gen_s = json.loads(meta_path.read_text()).get("plan_gen_s", {})
+        except Exception:  # pragma: no cover - corrupt/legacy meta
+            plan_gen_s = {}
+    # The per-candidate cap only reorders the pool; a problem is lost only if *every*
+    # feasible candidate exceeds the cap. Log that count so a future collection where it is
+    # non-zero (a domain with slow-feasible plans) is caught rather than silently censored.
+    at_risk = _feasibility_at_risk(REFINE_CAP_S)
+    if at_risk is not None:
+        tag = "OK" if at_risk == 0 else "!! WARN"
+        print(
+            f"[cap] refine_cap_s={REFINE_CAP_S}s: {at_risk} problem(s) with all feasible "
+            f"candidates > cap (would be censored) [{tag}]"
+        )
+    meta_path.write_text(
         json.dumps(
             {
                 "env_variant": ENV_VARIANT,
@@ -1090,6 +1336,8 @@ def main() -> None:
                 "seeds": SEEDS,
                 "n_problems": N_PROBLEMS,
                 "device": args.device,
+                "plan_gen_s": plan_gen_s,
+                "refine_cap_s": REFINE_CAP_S,
             },
             indent=2,
         ),

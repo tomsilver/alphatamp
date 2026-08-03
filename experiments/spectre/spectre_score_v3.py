@@ -30,7 +30,7 @@ from typing import Literal, cast
 import numpy as np
 import torch
 
-from alphatamp.approaches.spectre.compare import stratum_of
+from alphatamp.approaches.spectre.compare import rollout_fp, stratum_of
 from alphatamp.approaches.spectre.domain import spec_for
 from alphatamp.approaches.spectre.inference_v3 import (
     deployed_rollout_v3_traced,
@@ -90,6 +90,23 @@ def main(argv: list[str] | None = None) -> int:
     """Score every requested arm on the test split and print the comparison table."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--env-variant", default="dd2d_v4")
+    ap.add_argument(
+        "--test-variant",
+        default=None,
+        help="score on THIS variant's test episodes while loading the vocab, model "
+        "config and checkpoints from --env-variant -- the train-old / test-new "
+        "generalization eval (e.g. --env-variant dd2d_v4 --test-variant "
+        "dd2d_v4gen_count). Stratum "
+        "recovery is pid arithmetic (variant-independent) and the DD2D domain spec is "
+        "shared across dd2d_* variants, so only the episodes change.",
+    )
+    ap.add_argument(
+        "--astar-baseline",
+        action="store_true",
+        help="add an astar-dist (planner default-order) arm computed from each "
+        "episode's stored plan order (score = -plan_idx) and use it as the "
+        "paired-bootstrap baseline -- the SPECTREv3-vs-astar comparison. No checkpoint.",
+    )
     ap.add_argument("--arm", action="append", default=[], help='"label:ckpt_subdir"')
     ap.add_argument(
         "--v2-arm",
@@ -127,13 +144,16 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     data = REPO / "data" / "spectre"
+    # Vocab, model config and checkpoints come from the *training* variant; only the test
+    # episodes come from --test-variant (train-old / test-new generalization). The DD2D
+    # domain spec is shared across dd2d_* variants, so the train variant's spec is used.
+    test_variant = a.test_variant or a.env_variant
     vocab = Vocab.from_json(data / "derived" / a.env_variant / "train_vocab.json")
     spec = spec_for(a.env_variant)
     episodes = [
         e
         for e in (
-            load_episode(p)
-            for p in list_episodes(data / "raw" / a.env_variant / "test")
+            load_episode(p) for p in list_episodes(data / "raw" / test_variant / "test")
         )
         if e.scene_geometry is not None
     ]
@@ -188,11 +208,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
 
+    if a.astar_baseline:
+        # astar-dist: the planner's default enumeration order, score = -plan_idx, scored
+        # by the same rollout_fp accounting every static method shares (compare.py). No
+        # checkpoint -- read straight off each episode's stored outcomes.
+        astar_fp: dict[int, float] = {}
+        for ep in episodes:
+            labels = [1.0 if o.outcome == "success" else 0.0 for o in ep.outcomes]
+            scores = [float(-j) for j in range(len(ep.outcomes))]
+            fp = rollout_fp(scores, labels)
+            if fp is not None:  # every kept problem has >=1 feasible, so this holds
+                astar_fp[int(ep.provenance.problem_id)] = float(fp)
+        results["astar-dist"] = [astar_fp]
+
     demo = f"on ({a.mode})" if a.with_demotion else "off (deployed default)"
-    print(
-        f"\n# {a.env_variant} test, uncensored deployed FP, "
-        f"demotion={demo}, n={len(pids)}"
+    title = (
+        a.env_variant if not a.test_variant else f"{a.env_variant}->{a.test_variant}"
     )
+    print(f"\n# {title} test, uncensored deployed FP, demotion={demo}, n={len(pids)}")
     wide = any(len(v) > 1 for v in results.values())
     w = 15 if wide else 8
     print(
@@ -211,8 +244,12 @@ def main(argv: list[str] | None = None) -> int:
         n = f" [{len(runs)} seeds]" if len(runs) > 1 else ""
         print(f"{label + n:<26}" + "".join(f"{c:>{w}}" for c in cells))
 
-    if a.baseline:
+    base_label = None
+    if a.astar_baseline:
+        base_label = "astar-dist"
+    elif a.baseline:
         base_label = a.baseline.partition(":")[0]
+    if base_label:
         base = np.stack([[r[p] for p in pids] for r in results[base_label]]).mean(0)
         print(f"\n# paired bootstrap vs '{base_label}' (negative = arm is better)")
         for label, fps in results.items():

@@ -150,10 +150,10 @@ def stratum_of(seed: int) -> int:
 def rollout_fp(scores: Sequence[float], labels: Sequence[float]) -> float | None:
     """Rollout false-positives for a static ranking (higher score first).
 
-    Number of infeasible skeletons ranked strictly above the best-scoring
-    feasible one, with half credit for exact score ties. Returns ``None`` if the
-    pool has no feasible skeleton. Mirrors
-    ``piginet.eval._rollout_fp_group`` exactly, so all methods share accounting.
+    Number of infeasible skeletons ranked strictly above the best-scoring feasible one,
+    with half credit for exact score ties. Returns ``None`` if the pool has no feasible
+    skeleton. Mirrors ``piginet.eval._rollout_fp_group`` exactly, so all methods share
+    accounting.
     """
     pos = [s for s, lbl in zip(scores, labels) if lbl > 0.5]
     if not pos:
@@ -194,8 +194,8 @@ def _static_fp_by_pid(method_dir: Path) -> dict[int, tuple[int, float]]:
 def _spectre_seed_mean(parent: Path, is_adaptive: bool) -> dict[int, tuple[int, float]]:
     """Average per-problem FP over ``seed_*`` sub-dirs.
 
-    Adaptive dirs store ``fp`` directly; static dirs store raw ``scores`` /
-    ``labels`` and FP is derived via :func:`rollout_fp`.
+    Adaptive dirs store ``fp`` directly; static dirs store raw ``scores`` / ``labels``
+    and FP is derived via :func:`rollout_fp`.
     """
     per_pid_fps: dict[int, list[float]] = {}
     per_pid_stratum: dict[int, int] = {}
@@ -338,10 +338,10 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
 def load_fp_records(cache_dir: Path | str) -> list[dict]:
     """Read the cache and return per-(method, problem) rollout-FP records.
 
-    Each record is ``{"problem_id": int, "stratum": int, "method": str,
-    "fp": float}``. SPECTRE methods are averaged over the cached seeds. The
-    notebook wraps this in a ``pandas.DataFrame``; keeping this dependency-free
-    lets the loader stay CI-checked without adding pandas to the package.
+    Each record is ``{"problem_id": int, "stratum": int, "method": str, "fp": float}``.
+    SPECTRE methods are averaged over the cached seeds. The notebook wraps this in a
+    ``pandas.DataFrame``; keeping this dependency-free lets the loader stay CI-checked
+    without adding pandas to the package.
     """
     cache_dir = Path(cache_dir)
     if not cache_dir.is_dir():
@@ -431,8 +431,9 @@ def merge_collections(
     A method retrained on the newer collection must be read from *that* collection, so
     only ``legacy_methods`` -- the ones with no newer equivalent -- are taken from
     ``legacy``, and a name appearing in both resolves to ``primary``. The ``collection``
-    key is added to every record rather than only the grafted ones, so a downstream table
-    cannot show a mixed row without the provenance being available to display beside it.
+    key is added to every record rather than only the grafted ones, so a downstream
+    table cannot show a mixed row without the provenance being available to display
+    beside it.
     """
     want = set(legacy_methods)
     out = [{**r, "collection": primary_name} for r in primary]
@@ -491,9 +492,9 @@ def load_named_fp_records(
     """Seed-averaged FP records for an adaptive-style intervention cache.
 
     Reads ``<cache_dir>/<subdir>/seed_*/<pid>.json`` (each carrying a precomputed
-    ``fp``, like ``spectre_adaptive``) and returns
-    ``{problem_id, stratum, method, fp}`` per problem, averaged over seeds. Used
-    for the T1 length-only-context arm (``subdir="spectre_lenctx"``).
+    ``fp``, like ``spectre_adaptive``) and returns ``{problem_id, stratum, method, fp}``
+    per problem, averaged over seeds. Used for the T1 length-only-context arm
+    (``subdir="spectre_lenctx"``).
     """
     cache_dir = Path(cache_dir)
     by_pid = _spectre_seed_mean(
@@ -538,8 +539,8 @@ def load_static_scores(
 ) -> dict | None:
     """Read one static-score record — ``{problem_id, stratum, scores, labels}``.
 
-    Returns ``None`` when the problem is absent from that method's cache (PIGINet,
-    for instance, is missing one test problem), so callers can skip rather than raise.
+    Returns ``None`` when the problem is absent from that method's cache (PIGINet, for
+    instance, is missing one test problem), so callers can skip rather than raise.
     """
     path = Path(cache_dir) / subdir / f"{int(problem_id)}.json"
     return _load_json(path) if path.is_file() else None
@@ -771,11 +772,11 @@ def mean_position_by_length(
 def length_ladder(order: Sequence[int], lengths: Sequence[float]) -> dict:
     """Length trajectory of a *realized* attempt order (adaptive rollout).
 
-    ``order`` is the sequence of pool indices actually attempted (until first
-    success). Returns ``{spearman, slope, n_steps, first_len, last_len}`` where
-    ``spearman``/``slope`` correlate attempt position (0,1,2,…) with the tried
-    plan's length. Positive ⇒ the method climbs to longer plans as it fails (a
-    length-escalation ladder).
+    ``order`` is the sequence of pool indices actually attempted (until first success).
+    Returns ``{spearman, slope, n_steps, first_len, last_len}`` where
+    ``spearman``/``slope`` correlate attempt position (0,1,2,…) with the tried plan's
+    length. Positive ⇒ the method climbs to longer plans as it fails (a length-
+    escalation ladder).
     """
     ln = np.asarray(lengths, dtype=float)
     tried = np.array([ln[i] for i in order], dtype=float)
@@ -848,13 +849,12 @@ def load_length_fit_records(
 ) -> list[dict]:
     """Per-(method, problem) length-fit records for the static-score methods.
 
-    Covers ``astar-dist``, ``PIGINet`` and the ``*-static`` rows of every SPECTRE
-    family (seed-averaged); each record is ``{problem_id, stratum, method, pearson,
-    r2, eta2, within_frac, spearman}``. A ``*-adaptive`` method has no static
-    per-skeleton scores — its one-shot ranking is provably identical to its
-    ``*-static`` twin (same checkpoint, empty context → c₀), so the notebook mirrors
-    the static row for it and uses :func:`load_adaptive_ladder_records` for the
-    realized-order view.
+    Covers ``astar-dist``, ``PIGINet`` and the ``*-static`` rows of every SPECTRE family
+    (seed-averaged); each record is ``{problem_id, stratum, method, pearson, r2, eta2,
+    within_frac, spearman}``. A ``*-adaptive`` method has no static per-skeleton scores
+    — its one-shot ranking is provably identical to its ``*-static`` twin (same
+    checkpoint, empty context → c₀), so the notebook mirrors the static row for it and
+    uses :func:`load_adaptive_ladder_records` for the realized-order view.
     """
     cache_dir = Path(cache_dir)
     if not cache_dir.is_dir():
@@ -958,12 +958,12 @@ def load_adaptive_ladder_records(
 ) -> list[dict]:
     """Per-problem realized-order length-ladder for the ``*-adaptive`` methods.
 
-    Reads the ``order`` field written by ``precompute_dd2d_cache.py`` (the
-    sequence of attempted pool indices) and seed-averages :func:`length_ladder`,
-    for every SPECTRE family's adaptive cache present on disk. A family whose
-    adaptive dir is missing, or whose records carry no ``order`` (pre-trace cache),
-    contributes nothing — so the notebook degrades gracefully. Each record is
-    ``{problem_id, stratum, method, spearman, slope, n_steps, first_len, last_len}``.
+    Reads the ``order`` field written by ``precompute_dd2d_cache.py`` (the sequence of
+    attempted pool indices) and seed-averages :func:`length_ladder`, for every SPECTRE
+    family's adaptive cache present on disk. A family whose adaptive dir is missing, or
+    whose records carry no ``order`` (pre-trace cache), contributes nothing — so the
+    notebook degrades gracefully. Each record is ``{problem_id, stratum, method,
+    spearman, slope, n_steps, first_len, last_len}``.
     """
     cache_dir = Path(cache_dir)
     records: list[dict] = []
@@ -1031,9 +1031,9 @@ def build_table(records: list[dict]) -> tuple[list[str], list[list[str]], list[d
 
     The ``±`` is the spread ACROSS SEEDS of the per-stratum mean, not across problems:
     :func:`load_fp_records` averages a problem's FP over seeds before returning it, so a
-    std taken downstream of *that* is the across-problem spread of a seed-mean. Feed this
-    :func:`load_fp_records_per_seed`. With one seed cached the column reads ``--`` and
-    populates itself once more seeds exist.
+    std taken downstream of *that* is the across-problem spread of a seed-mean. Feed
+    this :func:`load_fp_records_per_seed`. With one seed cached the column reads ``--``
+    and populates itself once more seeds exist.
     """
     strata = sorted({r["stratum"] for r in records})
     by_method_seed: dict[tuple[str, object, object], list[float]] = defaultdict(list)
@@ -1090,3 +1090,180 @@ def render_markdown(header: list[str], rows: list[list[str]]) -> str:
         for row in rows
     ]
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Wall-clock time-to-first-success (DD2D; reuses stored per-candidate refine times)
+# --------------------------------------------------------------------------- #
+# Pool-ranking methods that carry a per-candidate timing breakdown, written by
+# precompute_dd2d_cache. Sequence methods (VLMPlan) and the v1/v2 rows are intentionally
+# absent -- only these four rank one shared pool, so their wall-clock is comparable.
+TIMED_METHODS: dict[str, str] = {
+    "astar-dist": "astar",
+    "PIGINet": "piginet",
+    SPECTREV3_STATIC_METHOD: SPECTREV3_STATIC_DIR,
+    SPECTREV3_ADAPTIVE_METHOD: SPECTREV3_ADAPTIVE_DIR,
+}
+
+
+def _timing_rows(parent: Path):
+    """Yield timing rows from a cache dir (flat or per-seed layout).
+
+    Each row is ``(seed, pid, stratum, refine_s, refine_s_capped, fp_capped, infer_s)``.
+    ``refine_s_capped``/``fp_capped`` come from the per-candidate refinement cap; they
+    fall back to the uncapped ``refine_s`` / ``None`` on caches built before the cap.
+    Records without ``refine_s`` (a collection built before timing) are skipped, so a
+    partially-timed cache omits the untimed rows rather than erroring.
+    """
+
+    def rows(directory: Path, seed):
+        for path in sorted(directory.glob("*.json")):
+            rec = _load_json(path)
+            if "refine_s" not in rec:
+                continue
+            pid = int(rec["problem_id"])
+            refine_s = float(rec["refine_s"])
+            fp_capped = rec.get("fp_capped")
+            yield (
+                seed,
+                pid,
+                int(rec.get("stratum", stratum_of(pid))),
+                refine_s,
+                float(rec.get("refine_s_capped", refine_s)),
+                None if fp_capped is None else float(fp_capped),
+                float(rec.get("infer_s", 0.0)),
+            )
+
+    seed_dirs = sorted(parent.glob("seed_*"))
+    if seed_dirs:
+        for sub in seed_dirs:
+            yield from rows(sub, int(sub.name.split("_")[-1]))
+    else:
+        yield from rows(parent, None)
+
+
+def load_time_records_per_seed(cache_dir: Path | str) -> list[dict]:
+    """Per-seed wall-clock records for the pool-ranking methods.
+
+    ``{seed, problem_id, stratum, method, refine_s, refine_s_capped, fp_capped,
+    infer_s}``. ``refine_s`` reuses the stored per-candidate ``refinement_wall_clock_s``
+    summed along each method's order to first success; ``refine_s_capped`` is the same
+    under a per-candidate refinement cap (``fp_capped`` its failed-attempt count);
+    ``infer_s`` was measured (on GPU) at cache-build. Methods or collections without
+    timing are omitted -- an empty list means "hide the section".
+    """
+    cache_dir = Path(cache_dir)
+    records: list[dict] = []
+    for method, subdir in TIMED_METHODS.items():
+        parent = cache_dir / subdir
+        if not parent.is_dir():
+            continue
+        for row in _timing_rows(parent):
+            seed, pid, stratum, refine_s, refine_s_capped, fp_capped, infer_s = row
+            records.append(
+                {
+                    "seed": seed,
+                    "problem_id": pid,
+                    "stratum": stratum,
+                    "method": method,
+                    "refine_s": refine_s,
+                    "refine_s_capped": refine_s_capped,
+                    "fp_capped": fp_capped,
+                    "infer_s": infer_s,
+                }
+            )
+    return records
+
+
+def load_plan_gen_s(cache_dir: Path | str) -> dict[int, float]:
+    """Per-stratum plan-generation seconds from ``meta.json`` (``{}`` if absent)."""
+    meta = Path(cache_dir) / "meta.json"
+    if not meta.is_file():
+        return {}
+    try:
+        pg = json.loads(meta.read_text(encoding="utf-8")).get("plan_gen_s", {}) or {}
+        return {int(k): float(v) for k, v in pg.items()}
+    except Exception:  # pragma: no cover - corrupt / legacy meta
+        return {}
+
+
+def load_refine_cap_s(cache_dir: Path | str) -> float | None:
+    """Per-candidate refinement cap (s) from ``meta.json`` (``None`` if absent)."""
+    meta = Path(cache_dir) / "meta.json"
+    if not meta.is_file():
+        return None
+    try:
+        v = json.loads(meta.read_text(encoding="utf-8")).get("refine_cap_s")
+        return None if v is None else float(v)
+    except Exception:  # pragma: no cover - corrupt / legacy meta
+        return None
+
+
+def _per_seed_means(recs: list[dict], seeds: list, key: str) -> list[float]:
+    """Per-seed mean of ``key`` over ``recs`` (one value per seed with records)."""
+    out: list[float] = []
+    for s in seeds:
+        xs = [r[key] for r in recs if r["seed"] == s]
+        if xs:
+            out.append(_mean(xs))
+    return out
+
+
+def build_time_table(
+    records: list[dict], plan_gen_s: dict[int, float], use_capped: bool = True
+) -> tuple[list[str], list[list[str]], list[dict]]:
+    """``(header, rows, tidy)`` for wall-clock-to-first-success (seconds).
+
+    ``total_s = plan_gen_s[stratum] + refine + infer_s``, aggregated as mean ± the
+    across-seed std per stratum + ALL, like the FP table. ``use_capped`` (default) uses
+    the per-candidate-cap refinement (``refine_s_capped``, the deployed configuration);
+    ``False`` uses the uncapped ``refine_s`` for contrast. ``tidy`` carries the
+    per-component means (``plan_gen_s`` / ``infer_s`` / ``refine_s``) for a stacked bar,
+    and the mean ``fp_capped`` so the notebook can price the cap's (small) FP cost.
+    """
+    refine_key = "refine_s_capped" if use_capped else "refine_s"
+    aug = [
+        {
+            **r,
+            "refine_used_s": r.get(refine_key, r["refine_s"]),
+            "plan_gen_s": plan_gen_s.get(r["stratum"], 0.0),
+            "total_s": plan_gen_s.get(r["stratum"], 0.0)
+            + r.get(refine_key, r["refine_s"])
+            + r["infer_s"],
+        }
+        for r in records
+    ]
+    strata = sorted({r["stratum"] for r in aug})
+    methods = [m for m in METHOD_ORDER if any(r["method"] == m for r in aug)]
+    header = ["method", "seeds", "ALL"] + [f"s{s}" for s in strata]
+    rows: list[list[str]] = []
+    tidy: list[dict] = []
+    for method in methods:
+        m_recs = [r for r in aug if r["method"] == method]
+        seeds = sorted({r["seed"] for r in m_recs}, key=lambda s: (s is None, s))
+        row = [method, "-" if seeds == [None] else str(len(seeds))]
+        for stratum in ["ALL"] + list(strata):
+            sel = [r for r in m_recs if stratum in ("ALL", r["stratum"])]
+            per_seed_total = _per_seed_means(sel, seeds, "total_s")
+            mean, std = _mean(per_seed_total), _std(per_seed_total)
+            row.append(_fmt(mean, std))
+            fp_sel = [r for r in sel if r.get("fp_capped") is not None]
+            tidy.append(
+                {
+                    "method": method,
+                    "stratum": stratum,
+                    "n_seeds": len(per_seed_total),
+                    "mean_seconds": mean,
+                    "std_seconds_across_seeds": std,
+                    "plan_gen_s": _mean(_per_seed_means(sel, seeds, "plan_gen_s")),
+                    "infer_s": _mean(_per_seed_means(sel, seeds, "infer_s")),
+                    "refine_s": _mean(_per_seed_means(sel, seeds, "refine_used_s")),
+                    "fp_capped": (
+                        _mean(_per_seed_means(fp_sel, seeds, "fp_capped"))
+                        if fp_sel
+                        else None
+                    ),
+                }
+            )
+        rows.append(row)
+    return header, rows, tidy

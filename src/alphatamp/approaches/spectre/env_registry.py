@@ -1,9 +1,9 @@
 """Bootstrap kinder environment ids that are not in the default registrations.
 
-``kinder.register_all_environments()`` only registers a fixed set of variants
-(see ``kinder/__init__.py``). SPECTRE wants additional block/obstruction counts
-for dataset-generation convenience. Registration is idempotent: calling with
-ids that already exist is a no-op.
+``kinder.register_all_environments()`` only registers a fixed set of variants (see
+``kinder/__init__.py``). SPECTRE wants additional block/obstruction counts for dataset-
+generation convenience. Registration is idempotent: calling with ids that already exist
+is a no-op.
 """
 
 from __future__ import annotations
@@ -101,6 +101,10 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     # docs/autonomous_stickbutton_session.md D5). The per-button-count entries below are
     # the development variants the feasibility work used and stay for reproducing it.
     "stickbutton2d_v1": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    # stickbutton2d_v1_kinder: byte-identical records to v1 with kinder-rendered PIGINet
+    # crops (SPECTRE is image-free, so its inputs are unchanged). Same augmentation
+    # policy -- the tensorizer path is identical; only PIGINet's crop source differs.
+    "stickbutton2d_v1_kinder": _STICKBUTTON2D_TYPE_AUG_POLICY,
     # StickButton2D, one variant per button count. See
     # docs/kinder_stickbutton2d_map.md for the substrate map and the measured
     # per-variant feasibility -- b10 does not yield positive labels.
@@ -148,9 +152,8 @@ _STATIC_TAG_PREDICATES: dict[str, list[str]] = {
 def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
     """Return the per-type augmentability policy for an env variant.
 
-    Returns an empty dict for envs that have no policy entry; callers treat
-    missing keys as ``augmentable=True`` (backwards-compatible with all
-    kinder envs).
+    Returns an empty dict for envs that have no policy entry; callers treat missing keys
+    as ``augmentable=True`` (backwards-compatible with all kinder envs).
     """
     return dict(_TYPE_AUG_POLICIES.get(env_variant, {}))
 
@@ -158,9 +161,9 @@ def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
 def get_static_tag_predicates(env_variant: str) -> list[str]:
     """Return the predicate-name list for the static-tag pool stream.
 
-    Empty list if the env has no registry entry; ``_StateTokenEncoder``
-    treats that as "single-pool legacy path". Callers may union with
-    ``vocab.predicates`` to drop names the vocab has not seen.
+    Empty list if the env has no registry entry; ``_StateTokenEncoder`` treats that as
+    "single-pool legacy path". Callers may union with ``vocab.predicates`` to drop names
+    the vocab has not seen.
     """
     return list(_STATIC_TAG_PREDICATES.get(env_variant, []))
 
@@ -198,11 +201,10 @@ def cluttered_retrieval_variants(
 def stick_button_variants(button_counts: range | list[int]) -> list[ExtraVariant]:
     """Variants of ``StickButton2D`` parameterized by ``num_buttons``.
 
-    Kinder pre-registers ``b{1,2,3,5,10}`` natively; use this helper to
-    bootstrap any additional counts (e.g. ``b4``, ``b6``, ``b8``) that an
-    experiment may want. For the five pre-registered counts this helper is
-    a no-op at registration time — ``register_extra_envs`` skips ids already
-    present in ``gymnasium.registry``.
+    Kinder pre-registers ``b{1,2,3,5,10}`` natively; use this helper to bootstrap any
+    additional counts (e.g. ``b4``, ``b6``, ``b8``) that an experiment may want. For the
+    five pre-registered counts this helper is a no-op at registration time —
+    ``register_extra_envs`` skips ids already present in ``gymnasium.registry``.
     """
     return [
         ExtraVariant(

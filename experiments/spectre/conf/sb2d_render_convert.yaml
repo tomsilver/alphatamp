@@ -1,0 +1,21 @@
+# Convert stickbutton2d_v1 -> stickbutton2d_v1_kinder: copy records verbatim, re-render
+# the initial-scene images with kinder's built-in renderer. See sb2d_render_convert.py.
+# Relative to the repo root (hydra.job.chdir is false).
+data_root: "data/spectre"
+
+# Source variant (records + seeds) and destination variant (kinder-rendered images).
+src_variant: "stickbutton2d_v1"
+dst_variant: "stickbutton2d_v1_kinder"
+
+# Which splits under raw/<src_variant> to convert.
+splits:
+  - train
+  - val
+  - test
+
+# Re-render + re-write episodes that already exist on disk.
+overwrite: false
+
+hydra:
+  job:
+    chdir: false

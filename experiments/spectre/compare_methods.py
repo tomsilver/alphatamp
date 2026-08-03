@@ -376,6 +376,137 @@ def _(
     return
 
 
+@app.cell
+def _(CACHE_DIR, ENV, compare):
+    time_records = (
+        compare.load_time_records_per_seed(CACHE_DIR) if ENV.has_timing else []
+    )
+    plan_gen_s = compare.load_plan_gen_s(CACHE_DIR) if ENV.has_timing else {}
+    refine_cap_s = compare.load_refine_cap_s(CACHE_DIR) if ENV.has_timing else None
+    return plan_gen_s, refine_cap_s, time_records
+
+
+@app.cell(hide_code=True)
+def _(ENV, mo):
+    mo.md(
+        r"""## 2b · Wall-clock to first success — is the inference worth it?
+
+        Mean wall-clock **seconds to the first successful refinement**, per method =
+        **abstract-plan-generation + inference + refinement**, summed over the
+        candidates each method tries until the first feasible. FP counts failed
+        attempts; this weighs each by its real cost — a failed refinement runs anywhere
+        from ~15 ms (a dead-end) to ~20 s (budget-exhausted) — and adds the model's
+        inference cost, so it answers whether a better ranking pays for the inference it
+        takes.
+
+        **Reported under a per-candidate refinement cap** (the deployed configuration):
+        each skeleton is refined for at most `refine_cap_s` seconds before moving to the
+        next in the ranked order. Feasible refinements finish in <0.5 s, so the cap only
+        cuts the 20 s near-feasible *traps* — the very candidates a good ranker still
+        tries — which is why an *uncapped* wall-clock over-punishes the learned ranker
+        at s1 (its few failures are the expensive ones; a naive planner order's failures
+        are cheap dead-ends). The cap costs a tiny FP increase (a rare slow-feasible
+        candidate abandoned); the uncapped total and that FP cost are printed below the
+        table.
+
+        Refinement time is **reused** from the stored per-candidate
+        `refinement_wall_clock_s` (every method sums the *same* per-candidate times over
+        its own order, so the comparison is fair); inference is measured on GPU; plan-
+        gen is a per-stratum shared constant. All are cached, not recomputed at render
+        time.
+        """
+        if ENV.has_timing
+        else\
+             r"""## 2b · Wall-clock to first success
+
+             _Not available for this environment: its episodes carry no per-candidate refinement
+             wall-clock — only the DD2D v3/v4 refiner-instrumented collections do._
+             """
+    )
+    return
+
+
+@app.cell
+def _(ENV, compare, mo, plan_gen_s, refine_cap_s, summary_tidy, time_records):
+    if not (ENV.has_timing and time_records):
+        time_tidy: list = []
+        _out = mo.md("")
+    else:
+        _h, _r, time_tidy = compare.build_time_table(
+            time_records, plan_gen_s, use_capped=True
+        )
+        _, _, _unc = compare.build_time_table(
+            time_records, plan_gen_s, use_capped=False
+        )
+        _all = {t["method"]: t for t in time_tidy if t["stratum"] == "ALL"}
+        _all_unc = {t["method"]: t for t in _unc if t["stratum"] == "ALL"}
+        _fp_unc = {
+            t["method"]: t["mean_fp"] for t in summary_tidy if t["stratum"] == "ALL"
+        }
+        _capnote = (
+            f"a {refine_cap_s:g}s per-candidate refinement cap"
+            if refine_cap_s is not None
+            else "no refinement cap"
+        )
+        print(f"wall-clock to first success (ALL), seconds — under {_capnote}:")
+        for _m in sorted(_all, key=lambda m: _all[m]["mean_seconds"]):
+            _e = _all[_m]
+            _u = _all_unc[_m]["mean_seconds"]
+            _fc, _fu = _e.get("fp_capped"), _fp_unc.get(_m)
+            _fpn = (
+                f"  | FP {_fu:.2f}->{_fc:.2f}"
+                if (_fc is not None and _fu is not None)
+                else ""
+            )
+            print(
+                f"  {_m:<20s} {_e['mean_seconds']:8.3f}s  = plan-gen "
+                f"{_e['plan_gen_s']:.3f} + infer {_e['infer_s']:.4f} + refine "
+                f"{_e['refine_s']:.3f}   (uncapped {_u:6.3f}s){_fpn}"
+            )
+        _out = mo.md(
+            compare.render_markdown(_h, _r)
+            + f"\n\n_Total = plan-gen + inference + refinement seconds under **{_capnote}** "
+            "— each skeleton refined for at most that long before the next, the deployed "
+            "wall-clock configuration; ± is across seeds. The cap targets the expensive "
+            "near-feasible failures a good ranker still tries, so it helps the learned "
+            "ranker most and costs only a tiny FP increase (uncapped total and FP cost in "
+            "the printout). Refinement reuses stored per-candidate times — a "
+            "within-collection *relative* measure (collector parallelism, 20 s refine "
+            "budget), fair across methods since each sums the same times. Inference is GPU "
+            "wall-clock (CPU-tensorize + GPU-forward); plan-gen is a regenerated per-stratum "
+            "proxy; PIGINet's inference is BCE-head only (CLIP features are cached)._"
+        )
+    _out
+    return (time_tidy,)
+
+
+@app.cell
+def _(ENV, ENV_VARIANT, METHODS, N_PROBLEMS, np, plt, refine_cap_s, time_tidy):
+    if ENV.has_timing and time_tidy:
+        _all = {t["method"]: t for t in time_tidy if t["stratum"] == "ALL"}
+        _ms = [m for m in METHODS if m in _all]
+        _x = np.arange(len(_ms))
+        _pg = np.array([_all[m]["plan_gen_s"] for m in _ms])
+        _inf = np.array([_all[m]["infer_s"] for m in _ms])
+        _ref = np.array([_all[m]["refine_s"] for m in _ms])
+        _fig, _ax = plt.subplots(figsize=(9, 4.4))
+        _ax.bar(_x, _pg, label="abstract plan-gen", color="#9aa4ad")
+        _ax.bar(_x, _inf, bottom=_pg, label="inference (GPU)", color="#e8a33c")
+        _cap = "" if refine_cap_s is None else f", {refine_cap_s:g}s cap"
+        _ax.bar(_x, _ref, bottom=_pg + _inf, label=f"refinement{_cap}", color="#4a7fb5")
+        _ax.set_xticks(_x)
+        _ax.set_xticklabels(_ms, rotation=20, ha="right")
+        _ax.set_ylabel("wall-clock to first success (s)")
+        _ax.set_title(
+            f"Wall-clock breakdown, ALL ({ENV_VARIANT} test, n={N_PROBLEMS}{_cap})\n"
+            "refinement dominates; inference is the small orange sliver — the cost question"
+        )
+        _ax.legend()
+        plt.tight_layout()
+    plt.gca()
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(\
@@ -552,7 +683,12 @@ def _(CACHE_DIR, compare, pd):
             {**r, "arm": _label}
             for r in compare.load_named_fp_records_per_seed(CACHE_DIR, _subdir, _label)
         ]
-    abl_df = pd.DataFrame(_rows)
+    # Give an empty frame its expected columns, so an env with **no ablation arms cached**
+    # (the kinder variant -- its ablations are SPECTRE-internal and read on the `sb2d` entry)
+    # renders §4 as empty tables rather than raising on `abl_df["arm"]`/`abl_df.seed`.
+    abl_df = pd.DataFrame(
+        _rows or [], columns=["problem_id", "stratum", "fp", "seed", "arm"]
+    )
     # PINNED TO SEED 0, explicitly. Only the deployed arm has more than one trained seed,
     # and this is not cosmetic: `_abl_row` pairs on `problem_id`, and `.loc[common]` over
     # a multi-seed frame returns one row per (seed, problem), so the paired bootstrap
@@ -629,7 +765,9 @@ def _(STRATA, abl_df, df_seeds, pd):
         if _a in set(abl_df["arm"])
     ]
     # _rows.append(_abl_row("v2.2 yardstick", _v2, V2_BY_PID))
-    ablation_2x2 = pd.DataFrame(_rows).set_index("arm")
+    # `.set_index("arm")` needs at least one row; a variant with no ablation arms cached
+    # (the kinder variant) yields none, so render an empty table rather than raising.
+    ablation_2x2 = pd.DataFrame(_rows).set_index("arm") if _rows else pd.DataFrame()
     ablation_2x2
     return V2_BY_PID, ablation_2x2
 
@@ -719,13 +857,16 @@ def _(STRATA, V2_BY_PID, abl_df, pd):
         "coverage column only": "coverage only",
         # "cov+waste, tokens": "both",
     }
-    coverage_split = pd.DataFrame(
-        [
-            _row2(_labels[_a], abl_df[abl_df.arm == _a])
-            for _a in _order
-            if _a in set(abl_df["arm"])
-        ]
-    ).set_index("arm")
+    _cov_rows = [
+        _row2(_labels[_a], abl_df[abl_df.arm == _a])
+        for _a in _order
+        if _a in set(abl_df["arm"])
+    ]
+    # Empty when the variant has no ablation arms cached (kinder) -- render an empty table
+    # rather than `.set_index("arm")` on a column-less frame.
+    coverage_split = (
+        pd.DataFrame(_cov_rows).set_index("arm") if _cov_rows else pd.DataFrame()
+    )
     coverage_split
     return (coverage_split,)
 

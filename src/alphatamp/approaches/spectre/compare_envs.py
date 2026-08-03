@@ -44,10 +44,13 @@ class EnvSpec:
     """Stratum index -> the label a reader should see (``"b5"``, ``"s3"``, …)."""
 
     stratum_meaning: str
-    """One line explaining what a stratum *is* here. Printed above every table."""
+    """One line explaining what a stratum *is* here.
+
+    Printed above every table.
+    """
 
     stratum_axis_label: str = "stratum"
-    """x-axis label for the per-stratum chart."""
+    """X-axis label for the per-stratum chart."""
 
     legacy_variant: str | None = None
     """A second collection to graft rows from, for methods never re-run natively."""
@@ -58,6 +61,14 @@ class EnvSpec:
     has_ablations: bool = False
     """Whether the v3 ablation arms (§4) are cached for this collection."""
 
+    has_timing: bool = False
+    """Whether episodes carry per-candidate refinement wall-clock, enabling the wall-
+    clock section.
+
+    True for the DD2D v3/v4 refiner-instrumented collections; False for SB2D (kinder's
+    ``BacktrackingRefiner`` records no per-candidate times).
+    """
+
     caveats: tuple[str, ...] = ()
     """Environment-specific warnings rendered under the summary table.
 
@@ -66,14 +77,15 @@ class EnvSpec:
     """
 
     render_scene: Callable[[EpisodeRecord], Image] | None = None
-    """Labelled scene render for the §5 planner inspector; ``None`` hides the section."""
+    """Labelled scene render for the §5 planner inspector; ``None`` hides the
+    section."""
 
     scene_legend: str = ""
     """Markdown describing what the §5 render shows: colours, labels, what to look at.
 
-    Env-specific by nature — DD2D's "the red item is the retrieval target" is meaningless
-    on StickButton2D — so it lives beside the renderer rather than in the notebook, where
-    it would silently describe the wrong picture.
+    Env-specific by nature — DD2D's "the red item is the retrieval target" is
+    meaningless on StickButton2D — so it lives beside the renderer rather than in the
+    notebook, where it would silently describe the wrong picture.
     """
 
     method_order: tuple[str, ...] = ()
@@ -119,6 +131,7 @@ DD2D = EnvSpec(
     # label change.
     legacy_only=("VLMPlan-8B", "VLMPlan-32B"),
     has_ablations=True,
+    has_timing=True,
     caveats=(
         "The §1/§2 `SPECTREv3` rows are the **deployed unified coverage/waste** "
         "checkpoint (`checkpoints_v3_unified`), rebuilt 2026-08-01: adaptive 5.78 ± "
@@ -199,8 +212,57 @@ SB2D = EnvSpec(
     ),
 )
 
-#: Registry. Order sets the notebook's default (first entry).
-ENVS: dict[str, EnvSpec] = {spec.key: spec for spec in (SB2D, DD2D)}
+SB2D_KINDER = EnvSpec(
+    key="sb2d_kinder",
+    title=(
+        "StickButton2D (kinder-rendered crops) — SPECTRE v3 vs PIGINet, VLMPlan and "
+        "pure planning"
+    ),
+    env_variant="stickbutton2d_v1_kinder",
+    stratum_labels={0: "b1", 1: "b2", 2: "b3", 3: "b5"},
+    stratum_meaning=SB2D.stratum_meaning,
+    stratum_axis_label="button count",
+    # SPECTRE is image-free and its records here are byte-identical to
+    # `stickbutton2d_v1`, so every non-PIGINet learned row is grafted from v1. `astar`
+    # is rebuilt natively (deterministic and cheap; the notebook counts problems from
+    # the primary cache's `astar/` dir), and PIGINet is native because its crops now
+    # come from kinder. Only PIGINet's number can differ from the `sb2d` entry.
+    legacy_variant="stickbutton2d_v1",
+    legacy_only=("SPECTREv3-static", "SPECTREv3-adaptive", "VLMPlan-32B"),
+    has_ablations=False,  # the v3 ablations are SPECTRE-internal; read them on `sb2d`
+    has_timing=False,
+    caveats=(
+        "**PIGINet's crops here come from kinder's own renderer, not the schematic.** "
+        "Each per-object crop is a window on the true rendered scene, so it carries "
+        "real context — neighbouring buttons, the stick, the table band, the wall — "
+        "that the `sb2d` entry's schematic (a lone disc on a blank background) threw "
+        "away. It does not make two unpressed buttons look different — they are "
+        "identical red discs in the real env too — so the image channel is *less* "
+        "degenerate but not fully informative; pose/shape still do most of the work. "
+        "**This is the variant to read for the representation contrast**; `sb2d` is "
+        "the schematic-crop baseline.",
+        "**Only PIGINet is native to this variant; every other row is grafted from "
+        "`stickbutton2d_v1`.** SPECTRE is image-free and its inputs are byte-identical "
+        "here, so its numbers cannot differ; VLMPlan likewise. The comparison that "
+        "moves is PIGINet vs SPECTRE.",
+        "**§4 (the v3 ablations) and §5's plan inspector for SPECTRE are not rebuilt "
+        "for this variant** — those arms are SPECTRE-internal and identical to "
+        "`stickbutton2d_v1`; read them on the `sb2d` entry.",
+        "**PIGINet's `at-pose` literals are synthesised** by the adapter. SB2D's "
+        "abstract initial state names no positions, and a low-level predictor with no "
+        "coordinates would be a strawman.",
+        "**b5's training split is 17 episodes** for every learned method — the "
+        "collection was cut at a wall-clock budget — so the b5 column is substantially "
+        "a generalisation result. No method is advantaged; none should be quoted as "
+        "trained-on-b5.",
+    ),
+    render_scene=_sb2d_scene,
+    scene_legend=SB2D.scene_legend,
+)
+
+#: Registry. Order sets the notebook's default (first entry). `sb2d` (schematic) stays
+#: the default until the kinder cache is built and its PIGINet number validated.
+ENVS: dict[str, EnvSpec] = {spec.key: spec for spec in (SB2D, SB2D_KINDER, DD2D)}
 
 
 def get(key: str) -> EnvSpec:
@@ -230,6 +292,7 @@ __all__ = [
     "ENVS",
     "DD2D",
     "SB2D",
+    "SB2D_KINDER",
     "get",
     "stratum_label",
     "methods_for",

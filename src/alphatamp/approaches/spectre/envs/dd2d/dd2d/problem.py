@@ -3,18 +3,18 @@
 Forward-generate-then-label (spec Section 8.1): synthesise a naturalistic drawer scene
 (:mod:`blocks_tamp.dd2d.scene`), enumerate the geometric clearing candidates
 (:mod:`blocks_tamp.dd2d.enumerate`), label every candidate under budget
-(:mod:`blocks_tamp.dd2d.label`), then apply the three decision-relevance filters (F1 target
-blocked, F2 a real choice of clearing subsets, F3 a solvability certificate). Instances
-failing any filter are resampled. Optional generation-time certification runs the real
-:class:`~blocks_tamp.dd2d.refine.DD2DRefiner`: the intended (first confidently-feasible)
-staging skeleton must refine, and the degenerate ``retrieve(target)``-only skeleton must
-NOT (the target is blocked) -- so the intended abstract difficulty is guaranteed by
-construction, not hoped for.
+(:mod:`blocks_tamp.dd2d.label`), then apply the three decision-relevance filters (F1
+target blocked, F2 a real choice of clearing subsets, F3 a solvability certificate).
+Instances failing any filter are resampled. Optional generation-time certification runs
+the real :class:`~blocks_tamp.dd2d.refine.DD2DRefiner`: the intended (first confidently-
+feasible) staging skeleton must refine, and the degenerate ``retrieve(target)``-only
+skeleton must NOT (the target is blocked) -- so the intended abstract difficulty is
+guaranteed by construction, not hoped for.
 
 An :class:`DD2DProblem` duck-types the surface ``blocks_tamp.record`` reads, so
-``build_example`` / ``build_image_refs`` work unchanged. The difficulty here is *measured,
-not installed*: the generator produces naturalistic scenes; the feasibility structure is a
-property of the distribution (see notebook.md / docs/dd2d.md).
+``build_example`` / ``build_image_refs`` work unchanged. The difficulty here is
+*measured, not installed*: the generator produces naturalistic scenes; the feasibility
+structure is a property of the distribution (see notebook.md / docs/dd2d.md).
 """
 
 from __future__ import annotations
@@ -177,6 +177,12 @@ def _build_problem(
 # --------------------------------------------------------------------------- #
 # generator
 # --------------------------------------------------------------------------- #
+def _scene_has_families(scene, families: tuple[str, ...]) -> bool:
+    """True iff every named family is present among the scene's items (held-out set)."""
+    present = {st.shape.family for st in scene.items.values()}
+    return all(f in present for f in families)
+
+
 def generate_dd2d_problem(
     lam: float = 1.0,
     seed: int = 0,
@@ -188,6 +194,10 @@ def generate_dd2d_problem(
     require_subset: bool = False,
     min_subset: int = 2,
     unblocked_target: bool = False,
+    require_families: tuple[str, ...] = (),
+    extra_families: dict[str, float] | None = None,
+    fill_max: float | None = None,
+    min_items: int | None = None,
     certify: bool = True,
     budget: int | None = 300,
     retry_cap: int = 10,
@@ -218,9 +228,10 @@ def generate_dd2d_problem(
     """
     from .scene import generate_scene
 
-    if n_items is not None and n_items + 0 > 14:
+    if n_items is not None and n_items > 16:
         warnings.warn(
-            f"n_items={n_items} exceeds the spec's 9-14 range; SymK top-k may be slow.",
+            f"n_items={n_items} exceeds the supported 9-16 range (9-14 base + the 14-16 "
+            f"held-out generalization band); top-k planning may be slow.",
             stacklevel=2,
         )
 
@@ -233,8 +244,18 @@ def generate_dd2d_problem(
             n_items=n_items,
             crowd=crowd,
             diverse_crowd=diverse_crowd,
+            fill_max=fill_max,
+            extra_families=extra_families,
+            require_families=require_families,
         )
         scene.margin = margin
+        if require_families and not _scene_has_families(scene, require_families):
+            continue  # held-out set: a forced family did not place -> resample
+        if min_items is not None and len(scene.items) < min_items:
+            # held-out unseen-count set: too few items actually placed (the coverage cap or
+            # a small sampled drawer bound it), so this scene would fall back into the seen
+            # count range -- resample rather than keep a not-actually-unseen problem.
+            continue
         candidates = enumerate_candidates(scene, seed=scene_seed)
         label_all(scene, candidates, seed=scene_seed)
         filt = decision_filters(scene, candidates)

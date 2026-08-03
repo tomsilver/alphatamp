@@ -4,6 +4,280 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate"></a>
+## 2026-08-02 — DD2D s1 wall-clock blow-up diagnosed; per-candidate refinement cap
+
+<!--strip-->
+> **id** `2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate` · **status**
+> active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** Investigated why §2b's DD2D wall-clock showed SPECTREv3-adaptive *slower* than the
+naive planner order overall (5.89 vs 4.94 s ALL), with the whole gap at s1 (11.99 ± 7.81 vs
+0.26 s) — suspicious because v3 wins every other stratum. Then added a per-candidate
+refinement cap and re-measured. Protocol/decision in
+[decisions/07 2026-08-02](../decisions/07-stickbutton2d.md#2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration).
+
+**Result — the s1 blow-up is real, not a bug, but the number is noisy.**
+- Timing math verified; the table reproduces from the cache.
+- v3 is genuinely (modestly) worse than astar at **s1 on FP** — 3.44 vs 2.24 (astar's *worst*
+  s1 problem is only FP=5). The planner-cost order already ranks s1's short/cheap feasible
+  plans well.
+- The ~1.2-attempt FP gap becomes a ~46× wall-clock gap because of *which* candidates fail.
+  Across all test episodes feasible refinements are uniformly cheap (s1 mean 0.32 s, p95
+  0.44 s) while near-feasible infeasible candidates burn the full 20 s budget. astar s1 refine
+  = 0.13 s (cheap dead-ends); v3 = 11.2 s (expensive traps). **Worked case pid 1250023**: pool
+  200 with **29 feasible @ 0.17 s each**, the model ranked **15 of the 20 s traps ahead of all
+  29** → 240 s, FP=15 where random ≈ 6 (*worse than random* on that problem).
+- The 12.00 ± 7.80 is a heavy-tailed 3-seed mean dominated by ~4–5 recurring hard s1 problems
+  (pids 1250011/1250015/1250023…) whose FP swings 2→15 across seeds.
+
+**Result — a per-candidate cap fixes it, cheaply and safely.**
+- Safety: per-candidate (not per-problem), so a problem is lost only if *every* feasible
+  candidate exceeds the cap. Min-feasible refine time per problem is mean 0.103 s, **max
+  0.243 s** → **0/100** problems censored at any cap ≥ 1 s; the median problem keeps ~20 sub-2 s
+  feasible candidates.
+- Under a **2 s** cap (deployed), ALL wall-clock to first success (3 seeds):
+
+  | method | ALL | s0 | s1 | s2 | s3 | uncapped ALL |
+  |---|---|---|---|---|---|---|
+  | **SPECTREv3-adaptive** | **1.79 ± 0.44** | 0.43 | 2.40 | 1.88 | 2.45 | 5.89 |
+  | SPECTREv3-static | 2.53 ± 0.71 | 0.44 | 2.04 | 3.14 | 4.50 | 7.99 |
+  | astar-dist | 2.96 | 0.40 | 0.26 | 1.35 | 9.81 | 4.94 |
+  | PIGINet | 3.14 ± 0.39 | 0.71 | 2.01 | 3.88 | 5.98 | 8.35 |
+
+- v3-adaptive becomes the **fastest** method; its s1 collapses 11.99 → 2.40. **FP cost of the
+  cap** (ALL): adaptive +0.05 (5.78 → 5.83), astar +0.00 (failures already sub-cap), PIGINet
+  +0.23, static +0.26 — a faithful re-run (the adaptive order diverges on 6/300 cells), not a
+  `min(t, cap)` accounting.
+
+**Takeaway — next.** The uncapped wall-clock over-punishes the learned ranker: its few failures
+are the *expensive* near-feasible candidates a good ranker still tries, so bounding per-skeleton
+refinement (which the cap does) is what lets the "try few candidates" advantage show in seconds.
+Do not read an uncapped wall-clock as v3's deployed cost. The **residual** is s1, where v3 still
+trails astar (2.40 vs 0.26) — the modest s1 FP deficit — a candidate for the model-side R1
+cost/enumeration-index feature (give the ranker the planner-cost order it currently cannot see).
+
+---
+
+<a id="2026-08-02-stickbutton2d-piginet-crops-re-sourced-kinder-s"></a>
+## 2026-08-02 — StickButton2D PIGINet crops re-sourced from kinder's renderer (stickbutton2d_v1_kinder)
+
+<!--strip-->
+> **id** `2026-08-02-stickbutton2d-piginet-crops-re-sourced-kinder-s` · **status**
+> active · **tracks** baselines, env-stickbutton2d, data
+<!--/strip-->
+
+**What.** Re-sourced the PIGINet baseline's SB2D image crops from **kinder's own renderer**
+instead of the schematic rasteriser (`SB2DDomain.crops`, which drew each object as a lone
+polygon on a blank background). Delivered as a new env_variant `stickbutton2d_v1_kinder`,
+built by a converter (`experiments/spectre/sb2d_render_convert.py`) that copies every record
+verbatim and only re-renders the pixels by resetting the env from the stored seed. Per
+problem it materialises per-object crops (`render_2dstate` windows, world side 1.4 m, 300 dpi
+→ 420²) plus a full `scene.png`. The reader is a thin `SB2DKinderDomain(SB2DDomain)` selected
+by `make_sb2d_domain`. Rationale and the five load-bearing choices are in
+[decisions/07 2026-08-02](../decisions/07-stickbutton2d.md#2026-08-02-kinder-rendered-piginet-crops-stickbutton2d-via-new).
+
+**Result — conversion + validation.**
+- The kinder crops render correctly and carry **real scene context** — a button crop shows
+  the table band, the wall, and the stick tip, not a lone disc. On a multi-button (b5) scene
+  the per-button crops are **not** pixel-identical (they differ by position/context), the
+  direct contrast to the schematic where every unpressed button is the same red disc.
+- Records are copied **byte-identical** (geometry, skeleton pool, outcomes, object registry,
+  goal all `==` the v1 source; only `provenance.env_variant` differs), which is what licenses
+  grafting SPECTRE from v1. Vocab is identical to v1's; `spectre_check_pipeline` passes.
+- `env.reset(seed=pid)` + `render_2dstate` is **deterministic** (re-render reproduces
+  identical pixels). All seven unit tests pass in ~1 s.
+
+**Result — the comparison (ALL FP, test n=100, 3 seeds; PIGINet retrained on kinder crops).**
+
+| method | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| SPECTREv3-adaptive | **1.69 ± 0.26** | 0.08 | 0.24 | 1.13 | 5.29 |
+| SPECTREv3-static | 1.98 ± 0.28 | 0.08 | 0.32 | 1.52 | 5.99 |
+| **PIGINet (kinder)** | **2.28 ± 0.29** | 0.07 | 0.35 | 1.17 | 7.55 |
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+
+Paired bootstrap over the 100 problems (negative = v3 better): v3-static − PIGINet = **−0.31,
+CI [−0.95, +0.36]**; v3-adaptive − PIGINet = **−0.60, CI [−1.24, +0.08]** — **neither
+separates**. The adaptive increment does: adaptive − static = **−0.29, CI [−0.51, −0.08]**.
+
+**Takeaway — the valid pixels did not overturn the finding; they reinforced it.** With real
+kinder crops PIGINet is if anything *slightly worse* than with the schematic (2.28 vs the
+prior 2.02, the drop entirely at b5: 7.55 vs 6.39), so the representation advantage **still
+does not separate on SB2D**. The honest cross-environment statement is unchanged: the abstract
+representation wins on DD2D, ties on SB2D; the adaptive increment is positive on both (−0.29
+here, matching the schematic's −0.29). The pre-registered caveat held — the crop's added
+context is positional, and since two unpressed buttons are identical discs in the real env,
+that context is net-neutral-to-mild-distractor, not new signal. **Validity was the point, not
+a better number: PIGINet now reads the environment's own pixels, and the tie survives it.**
+
+---
+
+<a id="2026-08-02-dd2d-wall-clock-first-success-fp-flatters"></a>
+## 2026-08-02 — DD2D wall-clock to first success: FP flatters the learned ranker (its failures are the expensive ones)
+
+<!--strip-->
+> **id** `2026-08-02-dd2d-wall-clock-first-success-fp-flatters` · **status** active ·
+> **tracks** evaluation, env-dd2d, tooling
+<!--/strip-->
+
+**What.** Added a **wall-clock-to-first-success** section to `compare_methods.py` (DD2D):
+per method, seconds to the first successful refinement = abstract-plan-generation + inference +
+refinement, summed over the candidates each tries until the first feasible. FP counts failed
+attempts; this weighs each by its real cost (a failed refinement runs ~15 ms to ~20 s) and adds
+inference — to answer whether the learned ranker's inference is worth it in practice. Refinement
+reuses the stored per-candidate `refinement_wall_clock_s` (every method sums the *same* times over
+its own order); inference measured on GPU (~22 ms/step, tensorization-dominated); plan-gen a
+per-stratum shared constant. All cached in the compare cache. FP table byte-identical after the
+`--force` rebuild (timing fields are additive).
+
+**Result (dd2d_v4 test, n=100, 3 seeds). Breakdown of ALL, seconds:**
+
+| method | plan-gen | inference | refinement | **total** | (FP) |
+|---|---|---|---|---|---|
+| astar-dist | 0.22 | 0.00 | 4.72 | **4.94** | 34.5 |
+| SPECTREv3-adaptive | 0.22 | 0.51 | 5.17 | **5.90** | 5.8 |
+| SPECTREv3-static | 0.22 | 0.03 | 7.72 | **7.97** | 21.1 |
+| PIGINet | 0.22 | 0.27 | 7.86 | **8.35** | 17.3 |
+
+Per-stratum total (s): astar 0.40/0.26/1.35/**17.77**; v3-adaptive 0.44/**12.00**/2.92/**8.25**;
+v3-static 0.42/9.01/7.94/14.49; PIGINet 0.71/8.47/9.65/14.57.
+
+**Takeaway — FP flatters the learned ranker.** SPECTREv3-adaptive has **6× lower FP** than astar
+(5.8 vs 34.5) yet is **not faster in wall-clock** (5.90 vs 4.94 s). The reason is the whole point
+of measuring time: astar's many failures are **cheap dead-ends** (~0.14 s each — 34.5 × 0.14 ≈
+4.7 s), while SPECTRE's few failures are the **expensive near-feasible** candidates it correctly
+ranks high, which the refiner burns time trying to refute (~0.89 s each). So a better ranking
+surfaces the costlier failures, and the FP win does not carry to wall-clock. Robust sub-findings:
+
+- **Inference is small** — v3-adaptive 0.51 s (per-step × steps), v3-static 0.03 s (one pass),
+  PIGINet 0.27 s (BCE head; CLIP features cached, so this undercounts a from-scratch encode).
+  Refinement dominates every method; plan-gen ~0.22 s is a shared constant.
+- **The win is concentrated at s3**, where astar's *volume* of failures wins out: v3-adaptive
+  8.25 s vs astar 17.77 s. At s1/s2 the learned ranker is slower (expensive failures + inference):
+  s2 2.92 vs 1.35, s1 12.00 vs 0.26.
+- **The ALL "adaptive slightly slower" is s1-sensitive and noisy** — s1 reads 12.00 ± 7.80, a few
+  problems where the ranker picked a candidate that refined to the ~20 s budget before failing.
+  Read the headline as *"no clear wall-clock win overall despite 6× fewer attempts,"* not a precise
+  loss. What is robust across strata is the per-failure cost gap (astar cheap, SPECTRE expensive)
+  and that inference is the small term.
+
+**Caveats.** The refine times are a within-collection *relative* measure (8-way worker
+parallelism, `time_budget=20 s` per candidate) — fair across methods since each sums the same
+per-candidate times, but not an isolated single-core benchmark. Plan-gen is a regenerated
+per-stratum proxy (PYTHONHASHSEED-dependent). ADR: [decisions/07
+2026-08-02](../decisions/07-stickbutton2d.md#2026-08-02-wall-clock-to-first-success-added-compare-methods-reuses-stored).
+
+---
+
+<a id="2026-08-02-s2-ood-degradation-pool-composition-artifact-model"></a>
+## 2026-08-02 — s2 OOD degradation is a pool-composition artifact, not model or generator failure
+
+<!--strip-->
+> **id** `2026-08-02-s2-ood-degradation-pool-composition-artifact-model` · **status**
+> active · **tracks** env-dd2d, evaluation, method
+<!--/strip-->
+
+**What.** Root-caused the s2 column of the [2026-08-01 DD2D generalization
+result](#2026-08-01-dd2d-generalization-v3-vs-astar-unseen), where v3's FP jumped 10.49 → 30.23
+under the unseen-count shift (and dominates the ALL mean). Prompted by the objection that s2
+(clear 2) cannot be harder than s3 (clear 3) by construction. All read-only probes on the
+collected episodes + the seed-0 checkpoint; no new collection/training/scoring.
+
+**Result.** The intrinsic difficulty ladder is intact and the generator is sound — what shifts is
+the *pool's feasible composition*.
+
+- **Not a generator bug.** s2 labels are 100% correct (every s2 problem has a real feasible
+  2-subset, none shorter — pool-implied mfs matches the label 10/10 OOD, 25/25 in-dist). Execution
+  difficulty is monotone as expected: astar-dist FP **s3 167 ≫ s2 28**; generation keep-rate
+  **s3 20% ≪ s2 91%**. s3 is genuinely harder to execute; only the *model's* FP inverts.
+- **s2 is genuinely clear-2 but has ~1.5 unique solutions.** 99% of feasible triples are redundant
+  supersets of a feasible pair (in-dist 567/575; OOD 8/8); genuine-3 solutions (no feasible pair
+  inside) ≈ 0. The circular target admits 18 diametric grasp axes and an axis opens only when its
+  antipodal blocker pair is cleared; `crowd=5` is odd → no antipodal pair → ~1.5 feasible pairs.
+- **The degradation is dominantly a pool-composition artifact.** Per-length feasibility in the
+  k=200 pool:
+
+  | s2 pool, per length | in-dist `dd2d_v4` | unseen count |
+  |---|---|---|
+  | 2-subset (len 5): candidates / feasible | 96.6 / 2.84 | 172.2 / 1.80 |
+  | 3-subset (len 7): candidates / feasible | 92.2 / **23.0** | **18.4 / 1.14** |
+  | total feasible | 25.8 | 2.9 |
+
+  In-distribution the feasibility mass is ~23 (redundant) triples; the feasible-**pair** count is
+  ~stable OOD (2.84 → 1.80). What collapses is the triples, because at 14 blockers C(14,2)=91
+  pairs flood the short-first k=200 cap (→172 pair candidates) and crowd the triples out (92 → 18
+  enumerated). The pool covers ~100% of possible pairs but almost none of the triples. So the
+  in-dist FP=3 was *flattered* by redundant-triple padding; the shift strips it, exposing the
+  problems' true ~1.5-solution difficulty. Model s2 FP corr(feasible count) = **−0.82**, median
+  FP 3 → 44 (systematic, not outliers).
+
+**Takeaway-next.** The s2 OOD number (and the ALL mean it dominates) is **confounded by pool
+composition, not a clean model-generalization signal.** Read the generalization claim at **s3**
+(unaffected — s3 was already feasible-scarce in training, so OOD s3 is in-regime; v3 s3 improves
+9.19 → 4.87 while astar s3 stays pathological) plus the s2 caveat, not the s2 point estimate.
+
+A generator redesign to give s2 *substantive* feasible-pair diversity was explored and **rejected
+as geometrically blocked**: even collar count (the obvious lever) does not raise diversity
+(generator sweep: crowd 5/6/8/10 → ~1.5 feasible pairs) and just pushes problems to mfs=3, because
+blocking a circular target from all 18 diametric axes (to keep mfs≥2) fights clean single-pair
+openings. Decision: **characterize, do not regen** (regen would also imply re-collecting
+train/val/test + retraining, re-baselining every SPECTRE result). ADR:
+[decisions/07 2026-08-02](../decisions/07-stickbutton2d.md#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact).
+
+---
+
+<a id="2026-08-01-dd2d-generalization-v3-vs-astar-unseen"></a>
+## 2026-08-01 — DD2D generalization: v3 vs astar on unseen count and unseen shapes
+
+<!--strip-->
+> **id** `2026-08-01-dd2d-generalization-v3-vs-astar-unseen` · **status** active ·
+> **tracks** env-dd2d, evaluation, method
+<!--/strip-->
+
+**What.** First OOD generalization test of the dd2d_v4-trained SPECTRE v3 checkpoint on DD2D
+itself — train-old / test-new, no retraining. Two held-out sets, 40 problems each, stratified
+s0–s3 (10 each): `dd2d_v4gen_count` (14–16 items = 13–15 blockers vs the trained 9–12, old
+shapes) and `dd2d_v4gen_shape` (same unseen count + a new `tee` and `cross` concave family,
+≥1 of each forced per scene). Scored v3 vs astar-dist, uncensored deployed FP, 3 seeds, paired
+bootstrap (`spectre_score_v3.py --test-variant … --astar-baseline`). Protocol ADR:
+[decisions/07 2026-08-01](../decisions/07-stickbutton2d.md#2026-08-01-dd2d-generalization-test-unseen-count-unseen).
+
+**Result.** In-distribution v3 reproduced 5.78 ± 0.10 exactly (instrument check). Scoring ran
+clean — **no OOV and no position-index error** on the longer skeletons from denser scenes,
+confirming the vocab/config are count- and shape-invariant.
+
+| set | v3 ALL | v3 vs astar (paired) | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|---|
+| in-dist `dd2d_v4` (n=100) | 5.78 ± 0.10 | −28.74 [−39.6,−18.8]* | 0.00 | 3.44 | 10.49 | 9.19 |
+| unseen count (n=40) | 9.40 ± 2.62 | −39.95 [−64.0,−18.1]* | 0.00 | 2.50 | 30.23 | 4.87 |
+| unseen count+shape (n=40) | 11.26 ± 3.44 | −21.89 [−42.6,−3.8]* | 0.00 | 2.40 | 31.97 | 10.67 |
+
+astar-dist ALL: 34.52 / 49.35 / 33.15; astar s3 is pathological: 118.76 / 166.80 / 108.60.
+(* CI excludes 0.)
+
+**Takeaway-next.** v3's advantage over the naive planner order **survives OOD — it still wins
+overall on both sets (CI excludes 0)** to unseen counts and unseen shapes. But three caveats,
+to quote together:
+- **Absolute FP degrades ~1.6–1.9×** (5.78 → 9.40 → 11.26); generalization is not free, and the
+  shape set is harder than count-only.
+- **The ALL-level win is carried by s3**, where astar's default order is pathological
+  (108–167 FP) and v3 stays 5–11. Balanced strata, but the s3 astar catastrophe dominates the
+  mean — do not read ALL as a uniform advantage.
+- **At s2 v3's advantage collapses under the shift**: from clearly beating astar in-distribution
+  (10.49 vs 17.08) to tying/slightly trailing OOD (30.23 vs 28.30 count; 31.97 vs 22.00 shape,
+  both within the ±9 seed spread). This amplifies v3's already-characterized in-distribution s2
+  deficit; s2 seed variance (±9–10) is high at n=10/stratum, so read it as "advantage lost,"
+  not a precise loss. The count-set s3 improving to 4.87 (below in-dist 9.19, low variance) is
+  the mirror image — more blockers give more feasible 3-subsets, which the ranker exploits.
+
+Consistent with §0 wishlist property #4 (object-count / identity generalization): the abstract
+representation transfers across counts and novel geometries well enough to keep beating the
+planner order, while degrading where the harder within-length s2 discrimination already bit it.
+
+---
+
 <a id="2026-08-01-dd2d-compare-cache-rebuilt-unified-coverage"></a>
 ## 2026-08-01 — DD2D compare cache rebuilt to the unified coverage/waste definition (7.44 to 5.78)
 

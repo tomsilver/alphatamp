@@ -60,6 +60,7 @@ def _running() -> list[tuple[str, str, str]]:
         "train_v2",
         "train_v3",
         "dd2d.dd2d.collect",
+        "sb2d_render_convert",
         "precompute_dd2d_cache",
         "vlmplan_",
     )

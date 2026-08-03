@@ -44,11 +44,11 @@ def test_convex_families_never_float_a_finger(family):
 
 
 def test_no_grasp_cell_floats_on_concave_families():
-    """The fixed grasp model's guarantee, on the families that used to break it: a finger
-    never closes across the C-opening / waist.
+    """The fixed grasp model's guarantee, on the families that used to break it: a
+    finger never closes across the C-opening / waist.
 
-    (This inverts the old assertion that such floating cells *exist* -- that was the bug.)
-    Scanned over seeds because it is a property of the family, not of one sample.
+    (This inverts the old assertion that such floating cells *exist* -- that was the
+    bug.) Scanned over seeds because it is a property of the family, not of one sample.
     """
     for fam in CONCAVE_FAMILIES:
         for seed in range(8):
@@ -75,6 +75,29 @@ def test_every_admissible_cell_has_a_contact_run_on_both_lines():
     for fam in CONCAVE_FAMILIES:
         shape = sample_shape(random.Random(5), family=fam)
         for g in grasp_cells(shape):
+            assert contact_runs(shape, g, g.xmin)
+            assert contact_runs(shape, g, g.xmax)
+
+
+@pytest.mark.parametrize("family", ["tee", "cross"])
+def test_new_shape_families_grasp_like_the_built_in_concaves(family):
+    """The held-out shape-generalisation families (a T and a symmetric plus) must clear
+    the same geometry-general grasp bars the built-in concave families do -- no new per-
+    shape grasp code exists, so this proves the model handles their concave regions.
+    Scanned over seeds because these are properties of the family, not of one sample.
+
+    (``sample_shape`` already rejects a non-graspable draw, so reaching the body at all
+    certifies isolation-graspability; the assertions pin the concave guarantee.)
+    """
+    for seed in range(8):
+        shape = sample_shape(random.Random(seed), family=family)
+        assert shape.concave, (family, seed)
+        cells = grasp_cells(shape)
+        assert cells, (family, seed)  # at least one grasp exists
+        for g in cells:
+            # no returned cell floats a finger across a concavity ...
+            assert max(finger_gaps(shape, g)) <= _TOL, (family, seed, g.alpha)
+            # ... and both supporting lines actually touch material.
             assert contact_runs(shape, g, g.xmin)
             assert contact_runs(shape, g, g.xmax)
 

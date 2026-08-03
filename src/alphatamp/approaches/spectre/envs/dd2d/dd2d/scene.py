@@ -70,6 +70,9 @@ def generate_scene(
     n_items: int | None = None,
     crowd: int = 0,
     diverse_crowd: bool = False,
+    fill_max: float | None = None,
+    extra_families: dict[str, float] | None = None,
+    require_families: tuple[str, ...] = (),
 ) -> DrawerScene:
     """Sample one drawer scene (target + settled clutter).
 
@@ -86,11 +89,22 @@ def generate_scene(
     ring (non-round items leave larger angular gaps / fail placement more often), so the
     measured subset-required rate typically drops; ``require_subset`` restores it by
     resampling.
+
+    The last three arguments serve the held-out generalization sets (docs/decisions
+    2026-08-01) and are inert at their defaults:
+
+    - ``fill_max`` raises the upper bound of the sampled coverage cap (default ``FILL_RANGE``
+      max), so denser scenes with more items actually place instead of stopping at the cap.
+    - ``extra_families`` augments the clutter/collar sampling pool with additional families
+      (e.g. the held-out ``tee``/``cross``); the target pool is left unchanged.
+    - ``require_families`` forces >= 1 item of each named family into the scene (best-effort
+      placement; the problem generator rejects any scene that still lacks one).
     """
     rng = random.Random((seed * 2_654_435_761 + 0x9E37) & 0xFFFFFFFF)
     drawer, wall_band, buffer, dims = _drawer_geometry(rng, lam)
     W, D = dims["W"], dims["D"]
-    fill = rng.uniform(*FILL_RANGE) if fill is None else fill
+    _fill_hi = FILL_RANGE[1] if fill_max is None else fill_max
+    fill = rng.uniform(FILL_RANGE[0], _fill_hi) if fill is None else fill
     n_items = rng.randint(*N_RANGE) if n_items is None else n_items
     drawer_area = drawer.area
 
@@ -129,7 +143,9 @@ def generate_scene(
                 base + 6.283185307179586 * i / crowd + rng.uniform(-0.12, 0.12) / crowd
             )
             collar_fam = None if diverse_crowd else rng.choice(_COLLAR_FAMILIES)
-            shp = sample_shape(rng, family=collar_fam, split=split)
+            shp = sample_shape(
+                rng, family=collar_fam, split=split, extra_weights=extra_families
+            )
             if not _acceptable(
                 shp, W, D
             ):  # no-op for round cans; guards a giant box collar item
@@ -150,10 +166,34 @@ def generate_scene(
             items[name] = ItemState(name, shp, pose, "drawer", is_target=False)
             coverage += fp.area / drawer_area
 
+    # forced held-out families: guarantee >= 1 item of each named family, placed like
+    # clutter but not gated on the fill cap (they are required). Best-effort: if none of the
+    # placement tries lands, the scene simply lacks the family and generate_dd2d_problem
+    # rejects and resamples it -- the same pattern require_subset uses.
+    for req_fam in require_families:
+        for _ in range(200):
+            shp = sample_shape(rng, family=req_fam, split=split)
+            if not _acceptable(shp, W, D):
+                continue
+            obstacles = [st.footprint() for st in items.values()] + [wall_band]
+            pose = settle_pose(shp, drawer, obstacles, rng)
+            if pose is None:
+                continue
+            fp = place_polygon(shp.polygon, pose)
+            if not drawer.buffer(1e-7).covers(fp) or any(
+                fp.intersection(o).area > 1e-9 for o in obstacles
+            ):
+                continue
+            name = f"o{idx}"
+            idx += 1
+            items[name] = ItemState(name, shp, pose, "drawer", is_target=False)
+            coverage += fp.area / drawer_area
+            break
+
     tries = 0
     while len(items) < n_items and coverage < fill and tries < 400:
         tries += 1
-        shp = sample_shape(rng, split=split)
+        shp = sample_shape(rng, split=split, extra_weights=extra_families)
         if not _acceptable(shp, W, D):
             continue
         obstacles = [st.footprint() for st in items.values()] + [wall_band]

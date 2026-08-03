@@ -29,7 +29,7 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 
 # families whose footprint is non-convex (a waist / L-corner / C-opening feature)
-_CONCAVE_FAMILIES = {"dumbbell", "shoe", "horseshoe"}
+_CONCAVE_FAMILIES = {"dumbbell", "shoe", "horseshoe", "tee", "cross"}
 
 # sampling weights (boxes/cans slightly upweighted, spec Section 4)
 _FAMILY_WEIGHTS = {
@@ -42,6 +42,14 @@ _FAMILY_WEIGHTS = {
     "horseshoe": 1.0,
 }
 FAMILIES = tuple(_FAMILY_WEIGHTS)
+
+# Held-out shape-generalisation families (a T and a symmetric plus). Deliberately kept OUT
+# of ``_FAMILY_WEIGHTS`` so the base sampler never draws them -- the DD2D generalization
+# test's count-only set stays the seen object set. They enter only when a caller passes
+# ``extra_weights=NEW_SHAPE_WEIGHTS`` (augmented pool) or requests them by name (forcing).
+# See docs/decisions 2026-08-01 (held-out generalization protocol).
+NEW_SHAPE_WEIGHTS = {"tee": 1.0, "cross": 1.0}
+NEW_SHAPE_FAMILIES = tuple(NEW_SHAPE_WEIGHTS)
 
 
 @dataclass(frozen=True)
@@ -209,6 +217,30 @@ def _build(family: str, rng: random.Random, shift: float) -> Polygon:
                 (0.0, yt),  # top-left of the spine
             ]
         )
+    if family == "tee":
+        # a T: a horizontal top bar with a vertical stem hanging from its centre. Two
+        # rectangles; the stem overlaps up into the bar (_OVERLAP) so the union is one
+        # connected polygon. The two armpits under the bar are the concave (re-entrant)
+        # corners. Bar/stem thickness >= the finger width (2.5 cm, grasps.FINGER_WIDTH) so
+        # a flat finger meeting a bar or the stem makes full flat contact.
+        bar_w, bar_t = _u(rng, 7, 11, shift), _u(rng, 2.5, 3.5, shift)
+        stem_t, stem_len = _u(rng, 2.5, 3.5, shift), _u(rng, 4, 7, shift)
+        bar = _rect(bar_w, bar_t)
+        stem = translate(
+            _rect(stem_t, stem_len + _OVERLAP),
+            0.0,
+            -bar_t / 2.0 - stem_len / 2.0 + _OVERLAP / 2.0,
+        )
+        return unary_union([bar, stem])
+    if family == "cross":
+        # a symmetric plus: a vertical and a horizontal bar of equal length crossing at the
+        # centre, giving four even protrusions. The two rects overlap in the central square
+        # so the union is connected without an _OVERLAP fudge. The four re-entrant corners
+        # are concave; arm thickness >= the finger width for full-face grasps.
+        thick = _u(rng, 2.5, 3.5, shift)
+        arm = _u(rng, 2.5, 3.8, shift)  # protrusion length beyond the central square
+        span = 2.0 * arm + thick
+        return unary_union([_rect(thick, span), _rect(span, thick)])
     raise ValueError(f"unknown family {family!r}")
 
 
@@ -228,26 +260,38 @@ def sample_shape(
     split: str = "train",
     require_graspable: bool = True,
     max_tries: int = 40,
+    extra_weights: dict[str, float] | None = None,
 ) -> Shape:
-    """Sample one item footprint. ``split='holdout'`` shifts dimension ranges +/-15% and
-    swaps one family (the generalisation diagnostic; deferred but wired). The returned
-    polygon is valid, non-empty, and recentred on its centroid.
+    """Sample one item footprint.
+
+    ``split='holdout'`` shifts dimension ranges +/-15% and swaps one family (the
+    generalisation diagnostic; deferred but wired). The returned polygon is valid, non-
+    empty, and recentred on its centroid.
+
+    ``extra_weights`` augments the weighted family pool with additional families (e.g.
+    ``NEW_SHAPE_WEIGHTS`` for the held-out shape-generalization set); it has no effect
+    when ``family`` is given explicitly. The base ``_FAMILY_WEIGHTS`` is never mutated,
+    so a default call is unchanged.
 
     Per spec Section 4, every sampled shape must admit >= 1 grasp in isolation (some
     direction with width <= aperture and a non-empty contact-overlap interval); shapes
     that do not (e.g. a bowl whose diameter exceeds the 12 cm aperture) are resampled.
-    ``grasps`` is imported lazily to avoid a module cycle (``grasps`` imports ``shapes``).
+    ``grasps`` is imported lazily to avoid a module cycle (``grasps`` imports
+    ``shapes``).
     """
     shift = 1.15 if split == "holdout" else 1.0
     swap = _family_swap(split)
     forced = family
+    weights_map = (
+        _FAMILY_WEIGHTS if not extra_weights else {**_FAMILY_WEIGHTS, **extra_weights}
+    )
     from .grasps import isolation_graspable  # lazy: break the shapes<->grasps cycle
 
     for _ in range(max_tries):
         family = forced
         if family is None:
-            fams = list(_FAMILY_WEIGHTS)
-            weights = [_FAMILY_WEIGHTS[f] for f in fams]
+            fams = list(weights_map)
+            weights = [weights_map[f] for f in fams]
             family = _weighted_choice(fams, weights, rng)
         family = swap.get(family, family)
 

@@ -1,0 +1,15 @@
+# StickButton2D with kinder-rendered PIGINet crops.
+#
+# Byte-identical records to `stickbutton2d_v1` (plans, timings, outcomes, geometry) with
+# only the initial-scene *image features* re-rendered by kinder's built-in renderer, via
+# experiments/spectre/sb2d_render_convert.py. SPECTRE is image-free, so its inputs are
+# unchanged; only the PIGINet baseline reads the new crops.
+#
+# `env_id` / `model_kwargs` below are the *default* (b3) and exist so the standard
+# per-variant entry points (spectre_build_vocab.py, spectre_check_pipeline.py) resolve.
+# Only `env_variant` selects the on-disk layout.
+env_id: "kinder/StickButton2D-b3-v0"
+env_variant: "stickbutton2d_v1_kinder"
+model_name: "stickbutton2d"
+model_kwargs:
+  num_buttons: 3

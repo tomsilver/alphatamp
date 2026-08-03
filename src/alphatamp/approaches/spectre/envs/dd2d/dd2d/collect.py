@@ -6,16 +6,16 @@ here, so this is a DD2D-native collector.
 
 Step 2 (this commit) is the **per-problem** core :func:`collect_problem`:
 
-  Generate one instance of a requested min-feasible-subset **stratum**, enumerate up to
-  ``k`` diverse task plans with the **astar + distance-heuristic** planner, refine them
-  **in order stopping at the first feasible plan**, and persist **one positive + only the
-  negatives that preceded it** (drop the whole problem if nothing refines within ``k``).
+Generate one instance of a requested min-feasible-subset **stratum**, enumerate up to
+``k`` diverse task plans with the **astar + distance-heuristic** planner, refine them
+**in order stopping at the first feasible plan**, and persist **one positive + only the
+negatives that preceded it** (drop the whole problem if nothing refines within ``k``).
 
-Injection seams (``problem`` / ``planner`` / ``refine_fn``) make the stop-at-first-success,
-drop-unsolvable, and exact-stratum logic unit-testable without the heavy generator/planner/
-refiner. Per-problem disk I/O (crop PNGs + record JSON, co-located in
-``<split_dir>/<problem_id>/``) happens worker-side because crops need the live scene, which
-is expensive to ship back through a process pool.
+Injection seams (``problem`` / ``planner`` / ``refine_fn``) make the stop-at-first-
+success, drop-unsolvable, and exact-stratum logic unit-testable without the heavy
+generator/planner/ refiner. Per-problem disk I/O (crop PNGs + record JSON, co-located in
+``<split_dir>/<problem_id>/``) happens worker-side because crops need the live scene,
+which is expensive to ship back through a process pool.
 
 Step 3 adds the parallel coordinator (balanced strata, disjoint seed bands, manifests).
 """
@@ -48,9 +48,8 @@ _LABEL_SOURCE = "refine_buffer_stage"  # DD2DRefiner.label_source
 class DD2DCollectConfig:
     """Locked collection knobs (docs/piginet_dd2d_plan.md).
 
-    Fields are surfaced so the
-    Step-3 coordinator / Step-4 EDA can vary them (e.g. ``crowd`` per stratum) without
-    touching :func:`collect_problem`.
+    Fields are surfaced so the Step-3 coordinator / Step-4 EDA can vary them (e.g.
+    ``crowd`` per stratum) without touching :func:`collect_problem`.
     """
 
     lam: float = 0.8
@@ -67,14 +66,21 @@ class DD2DCollectConfig:
     full_pool: bool = (
         True  # refine ALL k plans (multi pos/neg); False = legacy stop-at-first
     )
+    # Held-out generalization knobs (docs/decisions 2026-08-01); all inert at their
+    # defaults so a standard collection is byte-identical.
+    n_items_range: tuple[int, int] | None = (
+        None  # None => locked {10..13}; else uniform [lo, hi]
+    )
+    require_families: tuple[str, ...] = ()  # force >= 1 of each into every scene
+    extra_families: dict[str, float] | None = None  # augment the clutter/collar pool
+    fill_max: float | None = None  # raise the coverage cap for denser scenes
 
 
 @dataclass
 class ProblemResult:
     """Outcome of collecting one problem.
 
-    ``examples`` is non-empty iff kept (the positive
-    is last).
+    ``examples`` is non-empty iff kept (the positive is last).
     """
 
     problem_id: str
@@ -103,10 +109,16 @@ def _stable_seed(key) -> int:
     return int(hashlib.md5(repr(key).encode()).hexdigest()[:8], 16)
 
 
-def _sample_n_items(seed: int) -> int:
-    """Per-problem item count in {10,11,12,13} => 9-12 blockers (num_blockers =
-    n_items-1), deterministic per seed and decorrelated from the stratum assignment."""
-    return 10 + _stable_seed(("nitems", seed)) % 4
+def _sample_n_items(seed: int, n_items_range: tuple[int, int] | None = None) -> int:
+    """Per-problem item count, deterministic per seed and decorrelated from the stratum.
+
+    Default {10,11,12,13} => 9-12 blockers (num_blockers = n_items-1). ``n_items_range=(lo,
+    hi)`` draws uniformly in [lo, hi] instead -- the held-out unseen-count band
+    (docs/decisions 2026-08-01)."""
+    if n_items_range is None:
+        return 10 + _stable_seed(("nitems", seed)) % 4
+    lo, hi = n_items_range
+    return lo + _stable_seed(("nitems", seed)) % (hi - lo + 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -131,14 +143,15 @@ def collect_problem(
     refine_fn=None,
     problem=None,
 ) -> ProblemResult:
-    """Collect one problem: exact-stratum filter, stop-at-first-success, drop-if-unsolved.
+    """Collect one problem: exact-stratum filter, stop-at-first-success, drop-if-
+    unsolved.
 
-    ``problem`` / ``planner`` / ``refine_fn`` are injection seams for testing; in production
-    all three are ``None`` and built from the locked config. ``refine_fn(skeleton, scene,
-    seed) -> RefineResult``.
+    ``problem`` / ``planner`` / ``refine_fn`` are injection seams for testing; in
+    production all three are ``None`` and built from the locked config.
+    ``refine_fn(skeleton, scene, seed) -> RefineResult``.
     """
     t0 = time.time()
-    n_items = _sample_n_items(seed)
+    n_items = _sample_n_items(seed, config.n_items_range)
 
     def _drop(reason: str, pid: str | None = None) -> ProblemResult:
         return ProblemResult(
@@ -169,6 +182,10 @@ def collect_problem(
                 require_subset=(stratum >= 2),
                 min_subset=max(stratum, 2),
                 unblocked_target=(stratum == 0),
+                require_families=config.require_families,
+                extra_families=config.extra_families,
+                fill_max=config.fill_max,
+                min_items=(config.n_items_range[0] if config.n_items_range else None),
                 certify=True,
                 budget=config.budget,
                 retry_cap=config.retry_cap,
@@ -259,6 +276,7 @@ def collect_problem(
             extra_provenance={
                 "stratum": stratum,
                 "n_items": n_items,
+                "n_items_realized": len(problem.scene.items),
                 "plan_idx": plan_idx,
                 "split": os.path.basename(os.path.normpath(split_dir)),
                 "refine_seed": rseed,
@@ -280,6 +298,12 @@ def collect_problem(
                     "min_subset": max(stratum, 2),
                     "unblocked_target": stratum == 0,
                     "n_items": n_items,
+                    "require_families": list(config.require_families),
+                    "extra_families": config.extra_families,
+                    "fill_max": config.fill_max,
+                    "min_items": (
+                        config.n_items_range[0] if config.n_items_range else None
+                    ),
                     "certify": True,
                 },
                 "refiner_params": {
@@ -340,9 +364,9 @@ def _stratum_bands(seed_band: tuple[int, int], n: int = 3) -> list[tuple[int, in
 def _collect_task(args) -> ProblemResult:
     """Top-level (picklable) pool worker.
 
-    Records are written worker-side by
-    ``collect_problem``; we clear ``examples`` before returning so the process-pool payload
-    stays lean (the coordinator needs only counts).
+    Records are written worker-side by ``collect_problem``; we clear ``examples`` before
+    returning so the process-pool payload stays lean (the coordinator needs only
+    counts).
     """
     seed, stratum, config, split_dir = args
     try:
@@ -352,7 +376,7 @@ def _collect_task(args) -> ProblemResult:
             problem_id=f"dd2d_s{seed}_st{stratum}",
             seed=seed,
             stratum=stratum,
-            n_items=_sample_n_items(seed),
+            n_items=_sample_n_items(seed, config.n_items_range),
             kept=False,
             reason=f"error:{type(e).__name__}",
         )
@@ -469,8 +493,8 @@ def collect_split(
     """Collect one split until each stratum hits its balanced sub-target, over disjoint
     per-stratum seed sub-bands.
 
-    Records are written worker-side (crops + NNN.json); this
-    coordinator only tallies, logs attempts (for ``--resume``), and writes the manifest.
+    Records are written worker-side (crops + NNN.json); this coordinator only tallies,
+    logs attempts (for ``--resume``), and writes the manifest.
     """
     split_dir = os.path.join(out_root, split_name)
     os.makedirs(split_dir, exist_ok=True)
@@ -674,7 +698,9 @@ def collect_split(
                                         problem_id=f"dd2d_s{lost_seed}_st{lost_stratum}",
                                         seed=lost_seed,
                                         stratum=lost_stratum,
-                                        n_items=_sample_n_items(lost_seed),
+                                        n_items=_sample_n_items(
+                                            lost_seed, config.n_items_range
+                                        ),
                                         kept=False,
                                         reason=f"error:{type(e).__name__}",
                                     )
@@ -803,16 +829,66 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="tiny targets (1/stratum) for a real-path plumbing check",
     )
+    # Held-out generalization set (docs/decisions 2026-08-01). All default to the standard
+    # collection; a held-out run sets a fresh band base, an unseen item count, and (for the
+    # shape set) the augmented pool + forced families.
+    ap.add_argument(
+        "--seed-band-base",
+        type=int,
+        default=None,
+        help="override the TEST split's seed band to [N*band, (N+1)*band) for a held-out "
+        "set disjoint from train/val/test (use 3, 4, ...; keep --band=1_000_000 so "
+        "compare.stratum_of stays valid)",
+    )
+    ap.add_argument("--n-items-min", type=int, default=None)
+    ap.add_argument("--n-items-max", type=int, default=None)
+    ap.add_argument(
+        "--shape-set",
+        choices=("base", "augmented"),
+        default="base",
+        help="'augmented' adds the held-out tee/cross families to the clutter/collar pool",
+    )
+    ap.add_argument(
+        "--require-families",
+        default="",
+        help="comma-separated families to force >=1 of into every scene (e.g. tee,cross)",
+    )
+    ap.add_argument("--fill-max", type=float, default=None)
     args = ap.parse_args(argv)
 
     if args.smoke:
         args.target_train = args.target_test = args.target_val = 3  # -> 1 per stratum
         args.workers = min(args.workers, 2)
 
+    n_items_range = None
+    if args.n_items_min is not None or args.n_items_max is not None:
+        if args.n_items_min is None or args.n_items_max is None:
+            ap.error("--n-items-min and --n-items-max must be given together")
+        n_items_range = (args.n_items_min, args.n_items_max)
+    extra_families = None
+    if args.shape_set == "augmented":
+        from .shapes import (  # lazy: avoid a module-level shapes import
+            NEW_SHAPE_WEIGHTS,
+        )
+
+        extra_families = dict(NEW_SHAPE_WEIGHTS)
+    require_families = tuple(
+        f.strip() for f in args.require_families.split(",") if f.strip()
+    )
+
     config = DD2DCollectConfig(
-        crowd=args.crowd, lam=args.lam, time_budget=args.time_budget
+        crowd=args.crowd,
+        lam=args.lam,
+        time_budget=args.time_budget,
+        n_items_range=n_items_range,
+        require_families=require_families,
+        extra_families=extra_families,
+        fill_max=args.fill_max,
     )
     bands = _split_bands(args.band)
+    if args.seed_band_base is not None:
+        base = args.seed_band_base
+        bands["test"] = (base * args.band, (base + 1) * args.band)
     targets = {
         "train": args.target_train,
         "test": args.target_test,
@@ -826,6 +902,19 @@ def main(argv: list[str] | None = None) -> int:
         f"time_budget={config.time_budget}s, k={config.k}, full_pool={config.full_pool}, "
         f"strata={STRATA}, resume={args.resume})"
     )
+    if (
+        config.n_items_range
+        or config.require_families
+        or config.extra_families
+        or config.fill_max is not None
+        or args.seed_band_base is not None
+    ):
+        print(
+            f"# HELD-OUT generalization set: seed_band(test)={bands.get('test')}, "
+            f"n_items_range={config.n_items_range}, shape_set={args.shape_set}, "
+            f"require_families={list(config.require_families)}, fill_max={config.fill_max}",
+            flush=True,
+        )
     print(
         "# full_pool=True: every problem refines ALL k plans -> many pos+neg per problem "
         "(no length confound). Strata {0,1,2,3}. Live 'ETA ~…' is authoritative.",

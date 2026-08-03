@@ -288,8 +288,8 @@ def train_arm(
     """Selection/early-stop on **val rollout-FP** (the arbiter; lower is better), NOT
     AUPRC — AUPRC anti-correlates with the deployment metric under this imbalance.
 
-    ``on_epoch(ep, vm,
-    trainloss, lr)`` is an optional per-epoch callback (used to stream metrics to W&B).
+    ``on_epoch(ep, vm, trainloss, lr)`` is an optional per-epoch callback (used to
+    stream metrics to W&B).
     """
     model = PIGINet(enc, device=device, dropout=dropout, feat_noise=feat_noise)
     opt = torch.optim.AdamW(
@@ -385,10 +385,9 @@ def _pos_weight(ds) -> float:
 def _slim_state_dict(model) -> dict:
     """Drop the frozen CLIP params (``enc.clip.*``, ~605MB) from the checkpoint.
 
-    On load the
-    Encoders reconstruct CLIP from the pretrained weights, so ``load_state_dict(strict=False)``
-    restores identical behaviour — the ckpt shrinks 617MB -> ~12MB (only the trainable MLPs +
-    transformer + head).
+    On load the Encoders reconstruct CLIP from the pretrained weights, so
+    ``load_state_dict(strict=False)`` restores identical behaviour — the ckpt shrinks
+    617MB -> ~12MB (only the trainable MLPs + transformer + head).
     """
     return {
         k: v.detach().cpu().clone()
@@ -407,9 +406,11 @@ def _build_domain(args):
     0.372 against its own).
     """
     if args.domain == "stickbutton2d":
-        from .sb2d_adapter import SB2DDomain
+        from .sb2d_adapter import make_sb2d_domain
 
-        return SB2DDomain(args.data_root, args.env_variant)
+        # Factory picks the crop source by variant: kinder-rendered PNGs for
+        # `stickbutton2d_v1_kinder`, the schematic rasteriser otherwise.
+        return make_sb2d_domain(args.data_root, args.env_variant)
     from .dd2d_adapter import DD2DDomain
 
     return DD2DDomain(args.data_root)

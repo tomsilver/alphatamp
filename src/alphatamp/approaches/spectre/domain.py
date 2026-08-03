@@ -1,32 +1,35 @@
 """The domain contract -- everything v3 is allowed to know about an environment.
 
 v2.2 called itself domain-agnostic while reaching for DD2D operator names in eleven
-places: ``place-buffer`` to decide which objects a candidate manipulates and how long its
-plan is, ``retrieve`` to decide whether a failure licenses demotion. Each is a small,
-reasonable-looking literal, and together they mean porting to a second environment is a
-search-and-replace through the tensorizer and the rollout rather than a declaration.
+places: ``place-buffer`` to decide which objects a candidate manipulates and how long
+its plan is, ``retrieve`` to decide whether a failure licenses demotion. Each is a
+small, reasonable-looking literal, and together they mean porting to a second
+environment is a search-and-replace through the tensorizer and the rollout rather than a
+declaration.
 
 v3 replaces them with one :class:`DomainSpec` per environment, whose only *required*
-content is a per-query-type axiom declaration -- about one bit each. Everything else has a
-domain-independent default that reads the operator schema the planner already consumes.
+content is a per-query-type axiom declaration -- about one bit each. Everything else has
+a domain-independent default that reads the operator schema the planner already
+consumes.
 
 **Why axioms are specification, not inference.** Proof-demotion is sound in DD2D because
 of two properties (``docs/SPECTRE_v3_proposal.md`` L6): **monotonicity** (a query that
 failed against some occupancy fails against any larger occupancy -- universal in
 collision-based feasibility) and **locality** (objects the prefix moved have left the
-query's relevant region -- a property of the world layout, which fails in e.g.
-same-surface declutter). Declaring these has the same epistemic status as writing the PDDL
-domain file. Getting them *wrong* costs attempts but cannot lose a feasible plan, because
-demotion only ever reorders (P-E). With an empty registry nothing is promoted to proof
-tier, every failure flows through the learned pathway, and the ranker still works --
-"learning is the floor".
+query's relevant region -- a property of the world layout, which fails in e.g. same-
+surface declutter). Declaring these has the same epistemic status as writing the PDDL
+domain file. Getting them *wrong* costs attempts but cannot lose a feasible plan,
+because demotion only ever reorders (P-E). With an empty registry nothing is promoted to
+proof tier, every failure flows through the learned pathway, and the ranker still works
+-- "learning is the floor".
 
 **Exactness is split deliberately.** :attr:`QueryAxioms.exact` says "when this query
-runs, it runs to exhaustion" -- a statement about the query type. Whether it actually ran
-is a property of the *observation* (the refiner's ``exhausted`` / ``budget_exhausted``
-flags), checked per record at demotion time. Conflating the two is what made v2.2 unsound:
-a budget exit still reported ``retrieve(target)`` as the failing action even though the
-retrieve was never tested, and one such candidate demoted 12 genuinely-feasible plans.
+runs, it runs to exhaustion" -- a statement about the query type. Whether it actually
+ran is a property of the *observation* (the refiner's ``exhausted`` /
+``budget_exhausted`` flags), checked per record at demotion time. Conflating the two is
+what made v2.2 unsound: a budget exit still reported ``retrieve(target)`` as the failing
+action even though the retrieve was never tested, and one such candidate demoted 12
+genuinely-feasible plans.
 """
 
 from __future__ import annotations
@@ -77,7 +80,10 @@ class QueryAxioms:
 
 
 def goal_objects(episode: EpisodeRecord) -> frozenset[str]:
-    """Objects named by the goal. Computable in any PDDL problem."""
+    """Objects named by the goal.
+
+    Computable in any PDDL problem.
+    """
     return frozenset(o.name for atom in episode.goal_atoms for o in atom.objects)
 
 
@@ -86,8 +92,8 @@ def manipulated(skeleton: SkeletonRecord, goal_objs: frozenset[str]) -> frozense
 
     Goal objects are excluded because they appear in *every* candidate (DD2D's target is
     retrieved by all of them), so including them would add a constant to every set --
-    harmless for the subset relations, but it would make the necessity head spend a logit
-    predicting a label that is always 1 and already stated by ``obj_is_target``.
+    harmless for the subset relations, but it would make the necessity head spend a
+    logit predicting a label that is always 1 and already stated by ``obj_is_target``.
 
     Verified equal to DD2D's hand-written ``place-buffer`` filter on **120000/120000**
     dd2d_v3 skeletons, so replacing the literal is a proof, not a hope.
@@ -100,8 +106,8 @@ def length_key(skeleton: SkeletonRecord) -> int:
     """Bucket key for the within-length PL loss: the plan's operator count.
 
     Universal (every TAMP plan has a length) and, on DD2D, exactly equivalent to the
-    ``-removals/max`` column v2.2 bucketed on: ``len(operator_seq) == 2*|staged| + 1`` on
-    **120000/120000** skeletons, so the induced partition is identical. Using the raw
+    ``-removals/max`` column v2.2 bucketed on: ``len(operator_seq) == 2*|staged| + 1``
+    on **120000/120000** skeletons, so the induced partition is identical. Using the raw
     count rather than a normalized float also removes the ``round(key*1000)`` collision
     hazard in the loss.
     """
@@ -129,11 +135,11 @@ def unmoved(
 def failure_schema(outcome) -> Optional[str]:
     """The operator schema of a failed refinement, from stored metadata.
 
-    Reads ``failure_action`` (e.g. ``"pick(o3)"``) and returns the schema name. **Callers
-    must not treat this as proof that the query ran**: on a budget exit the refiner still
-    names the deepest step it reached. v3 records carry an explicit ``budget_exhausted``
-    marker for exactly this reason; this helper exists for pre-v3 collections and for the
-    hint pathway, where a noisy signal is acceptable.
+    Reads ``failure_action`` (e.g. ``"pick(o3)"``) and returns the schema name.
+    **Callers must not treat this as proof that the query ran**: on a budget exit the
+    refiner still names the deepest step it reached. v3 records carry an explicit
+    ``budget_exhausted`` marker for exactly this reason; this helper exists for pre-v3
+    collections and for the hint pathway, where a noisy signal is acceptable.
     """
     action = str(
         (getattr(outcome, "refiner_metadata", None) or {}).get("failure_action", "")
@@ -145,7 +151,10 @@ def failure_schema(outcome) -> Optional[str]:
 
 @dataclass(frozen=True)
 class DomainSpec:
-    """One environment's contract. Only ``axioms`` is environment-specific."""
+    """One environment's contract.
+
+    Only ``axioms`` is environment-specific.
+    """
 
     axioms: Mapping[str, QueryAxioms] = field(default_factory=dict)
     goal_objects: Callable[[EpisodeRecord], frozenset[str]] = goal_objects
@@ -159,14 +168,14 @@ class DomainSpec:
 
     Optional, and it buys one specific thing: **exactness evidence for collections that
     predate refiner instrumentation**. If a whole attempt reports exactly the minimum
-    possible call count, then nothing was re-sampled, so every query it reports really did
-    run -- a sound witness recoverable from stored metadata alone. Where the count exceeds
-    the minimum, the attempt re-sampled and may have stopped on a budget, so the witness
-    correctly declines to fire.
+    possible call count, then nothing was re-sampled, so every query it reports really
+    did run -- a sound witness recoverable from stored metadata alone. Where the count
+    exceeds the minimum, the attempt re-sampled and may have stopped on a budget, so the
+    witness correctly declines to fire.
 
-    Declaring it is a cost-model statement of the same epistemic class as the axioms, not
-    an inference routine. Undeclared (the default) simply means pre-instrumentation records
-    cannot reach proof tier in strict mode.
+    Declaring it is a cost-model statement of the same epistemic class as the axioms,
+    not an inference routine. Undeclared (the default) simply means pre-instrumentation
+    records cannot reach proof tier in strict mode.
     """
 
     def min_calls(self, skeleton: SkeletonRecord) -> Optional[int]:
@@ -225,7 +234,8 @@ class DomainSpec:
 #: evidence, not proof -- they stay hint-tier and flow through the learned pathway.
 #: ``min_calls_per_schema`` reads off the refiner's own loop: ``pick`` and ``retrieve``
 #: each run one grasp test; ``place-buffer`` costs one pose sample plus one accessibility
-#: test. So a straight-through grounding of ``[pick, place-buffer] * n ++ retrieve`` costs
+#: test. So a straight-through grounding of ``[pick, place-buffer] * n ++ retrieve``
+#: costs
 #: exactly ``3n + 1`` calls -- measured to hold for 85.76% of dd2d_v3 retrieve failures,
 #: which are therefore provably un-resampled.
 _DD2D = DomainSpec(
@@ -245,6 +255,12 @@ DOMAINS: dict[str, DomainSpec] = {
     "dd2d_v2": _DD2D,
     "dd2d_v3": _DD2D,
     "dd2d_v4": _DD2D,
+    # Held-out generalization sets (docs/decisions 2026-08-01): same DD2D domain, unseen
+    # item counts / new shape figures. They share the dd2d_v4 operator/predicate/type
+    # contract, so they resolve to the same spec (a shape family is geometry metadata,
+    # not a new schema).
+    "dd2d_v4gen_count": _DD2D,
+    "dd2d_v4gen_shape": _DD2D,
 }
 
 

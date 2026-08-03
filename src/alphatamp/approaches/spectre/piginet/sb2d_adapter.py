@@ -8,18 +8,27 @@ That direction is required, not preferred: post-hoc geometry comes from stored
 ``scene_geometry``, never from re-running the environment (``decisions/03`` 2026-07-19,
 *reconstruct, never regenerate*).
 
-**The labels are the collection's own.** One example per (episode, candidate),
-labelled by ``outcomes[i].outcome == "success"`` — the identical labels SPECTRE v3
-trains and is scored on. That is what makes the comparison a comparison rather than two
-numbers produced separately.
+**The labels are the collection's own.** One example per (episode, candidate), labelled
+by ``outcomes[i].outcome == "success"`` — the identical labels SPECTRE v3 trains and is
+scored on. That is what makes the comparison a comparison rather than two numbers
+produced separately.
 
-**Known limitation, by construction.** Every unpressed button is the same red disc of
-the same radius, so its CLIP crop is pixel-identical to every other button's. The image
-channel can therefore separate only ``{button, stick, robot}`` — information the type
-literals already carry. ``pose`` and ``shape`` work exactly as on DD2D and are where
-this environment's signal actually lives. This is a fact about what perception
-StickButton2D affords, not a defect in the port, and any PIGINet number from it should
-be read with it in view.
+**Two crop sources.** :class:`SB2DDomain` (the default, for ``stickbutton2d_v1``)
+rasterises each object as a lone polygon on a blank background from the stored ring --
+the *schematic* secondary. :class:`SB2DKinderDomain` (for ``stickbutton2d_v1_kinder``)
+reads per-object crop PNGs rendered by kinder's own renderer and materialised by
+``experiments/spectre/sb2d_render_convert.py``. The kinder crops carry real scene
+context (neighbours, stick, the table band, the wall), so they are the deployed source;
+the schematic is kept as the secondary. Pick one with :func:`make_sb2d_domain`.
+
+**Known limitation of the schematic source, by construction.** In the schematic every
+unpressed button is the same red disc of the same radius drawn on an empty background,
+so its CLIP crop is pixel-identical to every other button's; the image channel can
+separate only ``{button, stick, robot}`` -- information the type literals already carry.
+The kinder source narrows this: it does not make two unpressed buttons *look* different
+(they are identical red discs in the real env too), but a per-object crop taken from the
+whole scene carries positional context the schematic threw away. ``pose`` and ``shape``
+work exactly as on DD2D and remain where this environment's signal mostly lives.
 """
 
 from __future__ import annotations
@@ -92,9 +101,9 @@ def _config_scales() -> tuple[tuple[float, float], np.ndarray]:
     """``(frame_extent, shape_max)`` derived from the env config, never hardcoded.
 
     Same discipline as ``envs/stickbutton2d/geometry.py``'s reach limit: a config change
-    must not silently invalidate the normalisers. Getting these wrong is the failure mode
-    this whole abstraction exists for -- against DD2D's centimetre constants every value
-    here underflows to ~0.
+    must not silently invalidate the normalisers. Getting these wrong is the failure
+    mode this whole abstraction exists for -- against DD2D's centimetre constants every
+    value here underflows to ~0.
     """
     cfg = StickButton2DEnvConfig()
     frame = (
@@ -250,7 +259,13 @@ class SB2DDomain:
         return list(self._geo_cache[problem_id])
 
     def crops(self, split: str, problem_id: str) -> dict:
-        """Per-object crops rasterised from the stored boundary rings."""
+        """Per-object crops rasterised from the stored boundary rings (schematic
+        source).
+
+        The secondary crop source: each object is drawn as a lone polygon on a blank
+        background, so it carries no scene context. The deployed source is
+        :class:`SB2DKinderDomain`, which reads kinder-rendered PNGs instead.
+        """
         # pylint: disable=import-outside-toplevel
         from PIL import Image, ImageDraw
 
@@ -270,3 +285,60 @@ class SB2DDomain:
             )
             out[name] = img
         return out
+
+
+class SB2DKinderDomain(SB2DDomain):
+    """StickButton2D PIGINet domain whose crops are **kinder-rendered PNGs** on disk.
+
+    Identical to :class:`SB2DDomain` in every respect -- vocab, normalisers, the object
+    table, ``problems``/``object_names`` -- except the crop *source*: instead of drawing
+    a lone polygon from the stored ring, it reads the per-object crop PNG that
+    ``experiments/spectre/sb2d_render_convert.py`` materialised from kinder's own
+    renderer at ``raw/<variant>/<split>/images/<pid>/<obj>.png``. Those crops carry real
+    scene context, which the schematic discarded.
+
+    A missing PNG is *omitted* from the returned dict, which ``precompute_clip_cache``
+    turns into a zero vector -- the same missing-file semantics DD2D's stored-PNG path
+    already has.
+    """
+
+    def crops(self, split: str, problem_id: str) -> dict:
+        """Per-object crops read from the materialised kinder PNGs."""
+        # pylint: disable=import-outside-toplevel
+        from PIL import Image
+
+        if problem_id not in self._geo_cache:
+            list(self.problems(split))
+        # `_problem_id` is `sb2d_s<int>`; the images dir is keyed by the bare int,
+        # matching the layout the converter writes.
+        pid_int = problem_id.split("_s")[-1]
+        images_dir = self.root / split / "images" / pid_int
+        out = {}
+        for name in self._geo_cache[problem_id]:
+            png = images_dir / f"{name}.png"
+            if png.exists():
+                out[name] = Image.open(png).convert("RGB")
+        return out
+
+
+#: Which crop source each SB2D variant uses. A ``kinder`` variant reads the PNGs
+#: materialised by ``sb2d_render_convert.py``; anything else falls back to the schematic
+#: rasteriser (the historical default), so :func:`make_sb2d_domain` is a strict superset
+#: of constructing :class:`SB2DDomain` directly.
+_SB2D_CROP_SOURCE: dict[str, str] = {
+    "stickbutton2d_v1": "schematic",
+    "stickbutton2d_v1_kinder": "kinder",
+}
+
+
+def make_sb2d_domain(
+    data_root: str | Path, env_variant: str = "stickbutton2d_v1"
+) -> SB2DDomain:
+    """Return the SB2D PIGINet domain for ``env_variant``: kinder-crop or schematic.
+
+    Unknown variants default to the schematic source, matching the behaviour before the
+    kinder variant existed.
+    """
+    if _SB2D_CROP_SOURCE.get(env_variant) == "kinder":
+        return SB2DKinderDomain(data_root, env_variant)
+    return SB2DDomain(data_root, env_variant)

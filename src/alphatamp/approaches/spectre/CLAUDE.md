@@ -153,6 +153,24 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    (`--force` if the arm moved — `_dir_complete` skips a full directory, which is how
    DD2D's v3 row went stale). Render headlessly for any entry with
    `SPECTRE_COMPARE_ENV=<key> python experiments/spectre/compare_methods.py`.
+   A **wall-clock-to-first-success** section (§2b, DD2D only, `EnvSpec.has_timing`) sits
+   beside the FP table: plan-gen + inference + refinement seconds, reusing the stored
+   per-candidate `refinement_wall_clock_s` (inference measured on GPU, plan-gen a per-stratum
+   constant; all cached, so a `--force` rebuild is what refreshes them). It is reported under
+   the **deployed per-candidate refinement cap** (`REFINE_CAP_S = 2 s`): each skeleton is
+   refined for at most C seconds before the next, so a slow near-feasible *trap* costs C, not
+   the 20 s budget. The cap is a wall-clock deployment config applied to every method; the
+   §1/§2 FP headline stays **uncapped**, and §2b prints the cap's tiny FP delta. Two findings,
+   read together: (1) uncapped, **FP flatters the learned ranker** — v3-adaptive has 6× lower
+   FP than astar but ~equal *uncapped* wall-clock, because its few failures are the *expensive*
+   near-feasible candidates while astar's many are cheap dead-ends, so an FP margin is not a
+   proportional uncapped wall-clock win; (2) **under the cap v3-adaptive is the *fastest***
+   (1.79 s ALL vs astar 2.96), s1 collapsing 11.99 → 2.40, at an FP cost of +0.05 — because the
+   cap targets exactly those expensive failures. The cap is a test-time accounting change (no
+   retraining); the adaptive order is *re-run* under it (it diverges on 6/300 cells), never
+   `min(t, C)`-accounted ([`notebook/07`](docs/notebook/07-stickbutton2d.md#2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate)
+   / [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration)
+   2026-08-02).
 
 ## SPECTRE v3 (in progress, 2026-07-26)
 
@@ -273,6 +291,49 @@ rollout observes. A leakage audit returned 0 violations.
 Findings and numbers live in `docs/notebook.md` / `docs/decisions.md` under 2026-07-26 —
 cite them rather than restating figures.
 
+## DD2D generalization test — unseen count & unseen shapes (2026-08-01)
+
+The dd2d_v4-trained v3 checkpoint is scored **train-old / test-new** on two held-out test-only
+env_variants (each 40 problems, stratified s0–s3, seed bands disjoint from train/val/test):
+**`dd2d_v4gen_count`** (14–16 items = 13–15 blockers vs the trained 9–12, old shapes) and
+**`dd2d_v4gen_shape`** (same unseen count + two new *concave* families, a `tee` and a `cross`,
+≥1 of each forced per scene). The grasp model is geometry-general (`grasps.py` reads only
+`shape.polygon`), so the new shapes needed **no per-shape grasp code** — only `shapes.py`
+(`_build` + `_CONCAVE_FAMILIES`, kept out of `_FAMILY_WEIGHTS`). Reproduce:
+
+```bash
+bash experiments/spectre/collect_dd2d_genset.sh 12   # collect A+B, convert, reuse dd2d_v4 vocab
+python experiments/spectre/spectre_score_v3.py --env-variant dd2d_v4 \
+    --test-variant dd2d_v4gen_count --arm "v3:checkpoints_v3_unified" --astar-baseline --seeds 0 1 2
+# then --test-variant dd2d_v4gen_shape
+```
+
+**Headline (v3 ALL FP, 3 seeds; paired vs astar-dist):** in-dist 5.78 → unseen-count
+9.40 ± 2.62 → count+shape 11.26 ± 3.44. **v3 still beats astar overall on both (CI excludes
+0)**, so the learned ranker's advantage survives OOD. Three things to quote together
+([`notebook/07`](docs/notebook/07-stickbutton2d.md) 2026-08-01):
+- absolute FP degrades ~1.6–1.9× — generalization is not free, shape is harder than count;
+- **the ALL win is carried by s3** (astar's default order is pathological there, 108–167 FP),
+  not a uniform advantage;
+- **at s2 v3's edge collapses** under the shift (30.23 vs astar 28.30 count; 31.97 vs 22.00
+  shape, within ±9 seed spread). **⚠️ The s2 column is a pool-composition artifact, not a clean
+  model signal** (diagnosed 2026-08-02): s2 problems have only ~1.5 unique feasible solutions, and
+  in-distribution the k=200 pool pads them with ~23 redundant feasible triples; at high blocker
+  count C(14,2)=91 pairs flood the short-first cap and crowd the triples out (92→18 enumerated), so
+  the feasible density collapses (26→2.9) and FP jumps. **Read the generalization at s3, not s2**
+  — s3 was already feasible-scarce in training, so OOD s3 is in-regime and v3 improves there
+  (9.19→4.87). A generator regen for s2 pair-diversity was explored and rejected as geometrically
+  blocked (circular target + 18 diametric grasp axes cap feasible pairs at ~1.5). See
+  [`notebook/07`](docs/notebook/07-stickbutton2d.md#2026-08-02-s2-ood-degradation-pool-composition-artifact-model)
+  / [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact)
+  2026-08-02.
+
+Two invariants this exercised: **a scene truncating below the unseen floor falls back into the
+seen range** — the collector rejects it (`min_items`), so cranking `fill_max` alone is not
+enough; and **no OOV / no position-index error** OOD, because the vocab is over the fixed
+op/pred/type set (a shape family is geometry metadata) and the dd2d_v4 vocab is reused.
+Protocol ADR: [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-01-dd2d-generalization-test-unseen-count-unseen).
+
 ## StickButton2D — the second environment (2026-08-01)
 
 DD2D was the only evaluation environment; SB2D is the second, so the generality claim in
@@ -333,7 +394,17 @@ static representation carried ~73% and adaptivity ~27%. Honest cross-environment
 positive on both.** Read it with the caveats in
 [`notebook/07`](docs/notebook/07-stickbutton2d.md) — PIGINet's image channel is degenerate
 here yet it still matches v3, and the `at-pose` literals it reads are synthesised by our
-adapter, not stored.
+adapter, not stored. **These numbers are the *schematic*-crop PIGINet (2.02).** As of
+2026-08-02 there is also a kinder-rendered variant **`stickbutton2d_v1_kinder`** (PIGINet's
+crops re-sourced from kinder's own renderer via `sb2d_render_convert.py`; SPECTRE is
+image-free and grafted from v1) — the validity fix. It **reinforced** this finding rather
+than overturning it: kinder-crop PIGINet reads **2.28 ± 0.29**, if anything slightly worse
+(all at b5), and still does not separate (v3-adaptive − PIGINet = −0.60, CI [−1.24, +0.08]).
+The abstract crop context is positional, and unpressed buttons are identical discs in the
+real env too, so it is net-neutral-to-mild-distractor. See
+[`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-02-kinder-rendered-piginet-crops-stickbutton2d-via-new)
+/ [`notebook/07`](docs/notebook/07-stickbutton2d.md#2026-08-02-stickbutton2d-piginet-crops-re-sourced-kinder-s)
+2026-08-02.
 
 **Three things to quote together, not separately** — all in
 [`notebook/07`](docs/notebook/07-stickbutton2d.md):

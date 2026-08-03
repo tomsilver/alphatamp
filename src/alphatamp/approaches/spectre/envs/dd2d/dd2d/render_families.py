@@ -1,12 +1,12 @@
 """Render representative samples of every DD2D shape family to a labelled grid.
 
 Each family in :mod:`blocks_tamp.dd2d.shapes` is a *parametric distribution*, so two
-instances of the same family differ in size / proportion / shape noise. This tool samples
-``N_SAMPLES`` instances per family and lays them out one family per row, tagging the
-concave families, so you can eyeball the shape library at a glance.
+instances of the same family differ in size / proportion / shape noise. This tool
+samples ``N_SAMPLES`` instances per family and lays them out one family per row, tagging
+the concave families, so you can eyeball the shape library at a glance.
 
-    PYTHONPATH=. .venv/bin/python -m blocks_tamp.dd2d.render_families
-    # -> out/dd2d/shape_families.png
+PYTHONPATH=. .venv/bin/python -m blocks_tamp.dd2d.render_families # ->
+out/dd2d/shape_families.png
 """
 
 from __future__ import annotations
@@ -22,7 +22,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.patches import Polygon as MplPoly
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import FAMILIES, sample_shape
+from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import (
+    FAMILIES,
+    NEW_SHAPE_FAMILIES,
+    sample_shape,
+)
 
 N_SAMPLES = 3
 HALF = (
@@ -33,7 +37,9 @@ _CONCAVE_COLOR = "#d98a3d"
 
 
 def render(out_path: str, n_samples: int = N_SAMPLES, seed0: int = 1000) -> str:
-    families = list(FAMILIES)
+    # include the held-out shape-generalisation families (tee/cross); they are not in the
+    # base sampling pool but this catalogue is exactly where they should be eyeballed.
+    families = list(FAMILIES) + list(NEW_SHAPE_FAMILIES)
     nrows, ncols = len(families), n_samples
     fig, axes = plt.subplots(
         nrows, ncols, figsize=(ncols * 2.4, nrows * 2.4), squeeze=False

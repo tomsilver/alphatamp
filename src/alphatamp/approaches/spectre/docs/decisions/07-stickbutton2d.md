@@ -4,6 +4,309 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration"></a>
+## 2026-08-02 — Per-candidate refinement cap is the deployed wall-clock configuration
+
+<!--strip-->
+> **id** `2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration` ·
+> **status** active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**Context.** The §2b DD2D wall-clock table showed SPECTREv3-adaptive *slower* overall than
+the naive planner order (5.89 vs 4.94 s ALL to first success), with the entire gap at s1
+(11.99 ± 7.81 vs astar 0.26 s). The diagnosis
+([notebook/07 2026-08-02](../notebook/07-stickbutton2d.md#2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate))
+is real, not a measurement bug: v3's s1 FP (3.44) is modestly *worse* than astar's (2.24) —
+the planner-cost order already ranks s1's short/cheap feasible plans well — and that ~1.2-
+attempt FP gap becomes a ~46× wall-clock gap because of *which* candidates each method fails
+on. Feasible refinements finish in <0.5 s (p95 0.44 s); the waste is entirely near-feasible
+infeasible candidates that burn the full **20 s** refinement budget. astar's s1 failures are
+cheap dead-ends (~0.06 s); v3's few extra failures are the 20 s traps. This is "FP flatters
+the learned ranker" running against v3 — FP alone hides it.
+
+**Decision.** The **deployed wall-clock configuration is a per-candidate refinement-
+abandonment cap** `REFINE_CAP_S = 2 s`: each skeleton is refined for at most C seconds before
+the deployment moves to the next in the ranked order; a candidate not refined within C is
+abandoned and treated as a failure. Load-bearing choices:
+
+- **Per-candidate, never per-problem.** A per-problem total budget can starve a solvable
+  problem (spend it on traps, never reach the feasible skeleton); a per-candidate cap only
+  skips the slow *skeleton*. A problem is lost only if *every* feasible candidate exceeds C —
+  measured **0/100** on dd2d_v4 (min-feasible refine time per problem: mean 0.103 s, **max
+  0.243 s**). Precompute logs this at-risk count (`_feasibility_at_risk`) so a future
+  collection where it is non-zero is caught, not silently censored. Provably lossless with an
+  iterative-deepening fallback (exhaust the pool at C; if nothing refines, retry uncapped) for
+  any domain with slow-feasible plans; it never fires on dd2d_v4.
+- **C = 2 s** ≈ 4.5× the feasible p95, so only genuine near-feasible outliers are cut.
+- **The cap faithfully shifts FP, so it is re-run, not accounted.** A slow-feasible candidate
+  ranked first is abandoned (FP + 1), and for the *adaptive* rollout it enters the failure
+  context and re-ranks the rest — so the order diverges (0/100 astar, 6/300 piginet, 4/300
+  static, 6/300 adaptive at C=2 s). `deployed_rollout_v3_traced(refine_cap_s=…)` redefines the
+  stopping-success set as `outcome==success and time ≤ C` and re-runs; the fixed-order methods
+  derive capped FP/refine on their score-order (`_fp_and_refine_capped`). `min(t, C)` on the
+  uncapped stored sums would be silently optimistic on exactly those cells.
+- **The published FP headline (§1/§2) stays uncapped** at the pool-cap budget — the metric of
+  ranking quality is unchanged. The cap is a *wall-clock* deployment configuration; §2b owns
+  it and prints the capped-FP delta beside the table.
+- The cap applies to **all four pool-ranking methods** (astar-dist, PIGINet, SPECTREv3-static,
+  SPECTREv3-adaptive) — a shared-refiner policy, so fairness requires it. It is a test-time
+  accounting change: **no retraining**, checkpoints reused as-is.
+
+**Consequences.** Under the 2 s cap, SPECTREv3-adaptive is the **fastest** method — 1.79 ± 0.44 s
+ALL vs astar 2.96, PIGINet 3.14, v3-static 2.53 — its s1 collapses 11.99 → 2.40 and it wins s2
+(1.88) and s3 (2.45) decisively. The cap's **FP cost is tiny**: adaptive +0.05 (5.78 → 5.83),
+astar +0.00 (failures already sub-cap), PIGINet +0.23, static +0.26 — while cutting adaptive's
+wall-clock 3.3×. This is the honest resolution of "FP flatters the learned ranker": the ranker's
+value (try few candidates) shows in wall-clock only once each failed try is bounded, because the
+cap targets exactly the expensive failures the ranker still makes. **DD2D-only** (SB2D's kinder
+`BacktrackingRefiner` records no per-candidate times; `EnvSpec.has_timing` gates the section).
+Reproduce with `precompute_dd2d_cache.py --env-variant dd2d_v4 --force` (writes
+`refine_s_capped`/`fp_capped` per record + `refine_cap_s` in `meta.json`) then read §2b. New
+code: `REFINE_CAP_S` + `_fp_and_refine_capped` + `_feasibility_at_risk` in
+`precompute_dd2d_cache.py`; `refine_cap_s` + `V3Trace.refine_capped_seconds` in `inference_v3.py`;
+`load_refine_cap_s` + `build_time_table(use_capped=…)` in `compare.py`; `test_refine_cap.py`.
+The **residual s1 gap** (v3 2.40 vs astar 0.26) is the modest s1 FP deficit and is a candidate
+for the model-side R1 cost/enumeration-index feature.
+
+---
+
+<a id="2026-08-02-kinder-rendered-piginet-crops-stickbutton2d-via-new"></a>
+## 2026-08-02 — Kinder-rendered PIGINet crops for StickButton2D via a new env_variant
+
+<!--strip-->
+> **id** `2026-08-02-kinder-rendered-piginet-crops-stickbutton2d-via-new` · **status**
+> active · **tracks** baselines, evaluation, env-stickbutton2d, data, tooling
+<!--/strip-->
+
+**Context.** For the representation contrast to be fair, the pixel input a *model* consumes
+should come from the environment's own renderer, not an approximation. On SB2D the only
+model reading pixels is **PIGINet** (SPECTRE is image-free: its `SceneEncoder` consumes
+vector `scene_geometry` — boundary polygons + poses — read from kinder's
+`object_to_multibody2d`, so it is already kinder-native). PIGINet's SB2D crops, though, were
+produced by a **schematic** rasteriser (`SB2DDomain.crops`): each object drawn as a lone
+polygon on a blank background, with no scene context. DD2D is unaffected — it is not a
+kinder env and already renders PIGINet crops from its own env renderer. This is SB2D-only.
+
+**Decision.** Route PIGINet's SB2D pixels through **kinder's built-in renderer**, delivered
+as a new env_variant **`stickbutton2d_v1_kinder`** built by *converting*
+`stickbutton2d_v1`, not re-collecting it. Five choices are load-bearing:
+- **Reconstruct, never regenerate — with the sanctioned exception.** The converter
+  (`experiments/spectre/sb2d_render_convert.py`) copies every record **verbatim** (plans,
+  timings, outcomes, geometry) and only re-renders the pixels, by resetting the env from the
+  stored seed (`env.reset(seed=problem_id)`). That reset is the one sanctioned exception to
+  the rule (it is deterministic on SB2D; the same reset backs `vlmplan/sb2d_label.py`). Only
+  `provenance.env_variant` changes in the record.
+- **Per-object crops from the true scene, not a whole-scene embedding.** Each crop is a
+  native `render_2dstate` window (world side = the adapter's `_CROP_WORLD`) centred on the
+  stored object pose, so it keeps PIGINet's per-object CLIP channel *and* now carries real
+  local context (neighbours, stick, table band, wall) that the schematic discarded. A full
+  `scene.png` is materialised alongside for possible future use (no consumer wired).
+- **No schema change.** Crops live at `raw/<variant>/<split>/images/<pid>/<obj>.png`, a path
+  the reader reconstructs from the pid — so `EpisodeRecord` gains no image field and needs no
+  migration shim. The reader is a thin `SB2DKinderDomain(SB2DDomain)` overriding only
+  `crops()`; `make_sb2d_domain(data_root, variant)` dispatches on variant, keeping the
+  schematic as the documented secondary.
+- **SPECTRE is grafted, not retrained.** Because the records are byte-identical and SPECTRE
+  is image-free, its numbers cannot differ; the comparison notebook grafts SPECTRE (and
+  VLMPlan) from `stickbutton2d_v1` via `EnvSpec.legacy_only`, and only PIGINet (+ the cheap
+  deterministic astar) is native to the kinder cache. Retraining would add training noise,
+  not signal.
+- **Kinder does not manufacture signal it cannot have.** Two unpressed buttons are identical
+  red discs in the real env too, so the image channel stays partly degenerate; the win, if
+  any, is the positional context the crop now carries, not disc appearance.
+
+**Consequences.** The seam turned out to be one function — `domain.crops` — so model, loss,
+tokenizer and CLIP cache are untouched; the change is a converter + a subclass + a variant
+row. **The re-run reinforced the standing finding rather than overturning it.** PIGINet
+retrained on kinder crops (3 seeds, same weighted-bce/40-epoch recipe) reads **2.28 ± 0.29 FP
+ALL** — *slightly worse* than the schematic's 2.02, the whole drop at b5 (7.55 vs 6.39). The
+paired bootstrap still does not separate: v3-static − PIGINet = −0.31, CI [−0.95, +0.36];
+v3-adaptive − PIGINet = −0.60, CI [−1.24, +0.08]; the adaptive increment holds (−0.29, CI
+[−0.51, −0.08]). So "the representation advantage does not reproduce on SB2D" survives the
+validity fix, and the pre-registered caveat held — the crop's added context is positional and,
+since unpressed buttons are identical discs in the real env, net-neutral-to-mild-distractor.
+Full numbers in [notebook/07 2026-08-02](../notebook/07-stickbutton2d.md#2026-08-02-stickbutton2d-piginet-crops-re-sourced-kinder-s).
+The schematic `stickbutton2d_v1` stays as the secondary/baseline, so the two are never
+silently mixed. One kinder-internal coupling was accepted
+(`env.unwrapped._object_centric_env._current_state`, mirroring `base_env.render()`), with a
+public fallback and a determinism test guarding it.
+
+---
+
+<a id="2026-08-02-wall-clock-to-first-success-added-compare-methods-reuses-stored"></a>
+## 2026-08-02 — Wall-clock-to-first-success added to compare_methods; reuses stored refine times
+
+<!--strip-->
+> **id** `2026-08-02-wall-clock-to-first-success-added-compare-methods-reuses-stored`
+> · **status** active · **tracks** evaluation, tooling, env-dd2d
+<!--/strip-->
+
+**Context.** `compare_methods.py` reported only FP (failed attempts before first success). FP
+treats every failed attempt as equal cost, but a DD2D failed refinement ranges ~15 ms (a dead-end)
+to ~20 s (budget-exhausted), so FP cannot say whether a method's inference cost is *worth it* in
+wall-clock. We added a wall-clock-to-first-success metric = abstract-plan-generation + inference +
+refinement.
+
+**Decision.** A new **complementary** metric (FP stays the headline), computed so the cross-method
+comparison is fair and the result is durable:
+- **Refinement time is reused, not re-run.** The dd2d_v3/v4 refiner stores per-candidate
+  `refinement_wall_clock_s`; each method's refine-to-first-success is that summed along its own
+  attempt order (adaptive = the cached `order`; static = `argsort(-scores)`). Every method sums the
+  *same* per-candidate times over its own ordered subset, so the comparison is fair even though the
+  absolute seconds are a within-collection relative measure (collector 8-way parallelism, 20 s
+  budget).
+- **Inference is measured on GPU** (the deployment-realistic path; `~22 ms/step`, CPU-tensorize +
+  GPU-forward, tensorization-dominated), via an `infer_seconds` field on `V3Trace`.
+- **Plan-gen is a per-stratum shared constant** (identical pool for all four pool-ranking methods),
+  measured by regenerating a few problems per stratum and timing the astar top-k enumeration.
+- **All three are persisted** in the compare cache (`refine_s`/`infer_s` per record; per-stratum
+  `plan_gen_s` in `meta.json`) — measured once at `--force` cache build, reused at render, never
+  recomputed. Scope: the four pool-ranking methods (astar-dist, PIGINet, SPECTREv3-static/adaptive)
+  on DD2D; gated by `EnvSpec.has_timing` (SB2D's refiner stores no per-candidate times). The FP
+  table is byte-identical after the rebuild (timing fields are additive; scores/FP deterministic).
+
+**Consequences.** The headline finding is that **FP flatters the learned ranker**: SPECTREv3-adaptive
+has 6× lower FP than astar (5.8 vs 34.5) but is not faster in wall-clock (5.90 vs 4.94 s ALL),
+because astar's many failures are cheap dead-ends (~0.14 s) while SPECTRE's few failures are the
+expensive *near-feasible* candidates it correctly ranks high (~0.89 s) — a better ranking surfaces
+the costlier failures. Inference is the small term (0.03–0.51 s); the learned ranker's wall-clock
+advantage is concentrated at s3 (astar's failure *volume*) and is net-negative at s1/s2. Numbers +
+per-stratum breakdown + noise caveats in [notebook/07
+2026-08-02](../notebook/07-stickbutton2d.md#2026-08-02-dd2d-wall-clock-first-success-fp-flatters).
+**Standing implication:** an FP margin on DD2D should not be read as a proportional wall-clock win;
+quote the wall-clock section alongside it.
+
+---
+
+<a id="2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact"></a>
+## 2026-08-02 — s2 generalization degradation characterized as pool-composition artifact; regen for pair-diversity rejected
+
+<!--strip-->
+> **id**
+> `2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact` ·
+> **status** active · **tracks** env-dd2d, evaluation, method, data
+<!--/strip-->
+
+**Context.** The [2026-08-01 generalization test](#2026-08-01-dd2d-generalization-test-unseen-count-unseen)
+reported v3's s2 FP degrading 10.49 → 30.23 under the unseen-count shift, framed in that entry's
+consequences as v3's "already characterized in-distribution s2 weakness." An objection — s2 (clear
+2) cannot be intrinsically harder than s3 (clear 3) — prompted a read-only diagnosis
+([notebook/07 2026-08-02](../notebook/07-stickbutton2d.md#2026-08-02-s2-ood-degradation-pool-composition-artifact-model)).
+The objection is correct: intrinsic/execution difficulty is monotone (astar-dist FP s3 167 ≫ s2
+28; generation keep-rate s3 20% ≪ s2 91%; s2 labels 100% sound). Only the *model's* FP inverts,
+and it does so for a reason that is neither a model-generalization failure nor a generator bug.
+
+**Decision.** **Root cause = a pool-composition artifact sitting on top of low s2 solution
+diversity; characterize it, do not re-engineer.**
+- s2 problems have only **~1.5 unique feasible solutions** (feasible pairs). 99% of feasible
+  triples are redundant supersets of those pairs (genuine-3 ≈ 0). The circular target admits 18
+  diametric grasp axes; an axis opens only when its antipodal blocker pair is cleared, and
+  `crowd=5` (odd) yields no antipodal pair.
+- In-distribution, the k=200 pool pads those ~1.5 solutions with ~23 redundant feasible triples
+  (92 triples enumerated) → 26 feasible → the ranker finds one in ~3 tries. At 14 blockers,
+  C(14,2)=91 pairs flood the short-first cap (→172 pair candidates) and crowd the triples out
+  (→18 enumerated, 1.1 feasible) → ~2.9 feasible → FP ~30. So the OOD number exposes the true
+  low-diversity difficulty that pool padding hid in-distribution (model FP corr(feasible count)
+  = −0.82).
+- **A generator redesign for substantive feasible-pair diversity was explored and rejected as
+  geometrically blocked.** The obvious lever — even collar count so antipodal pairs each open an
+  axis — does not work empirically (generator sweep: crowd 5/6/8/10 → ~1.5 feasible pairs) and
+  pushes problems to mfs=3: keeping mfs≥2 requires blocking the circular target from all 18 axes,
+  which is exactly the coverage that prevents a single removed pair from cleanly opening one axis.
+  Any real regen would also imply re-collecting train/val/test + retraining, re-baselining every
+  existing SPECTRE result — a large cost against an uncertain geometric payoff.
+
+**Consequences.** The s2 column of the generalization table — and the ALL mean it dominates — is
+**confounded by pool composition, not a clean model-generalization signal**, and is recorded as
+such (this entry, the notebook entry, the `CLAUDE.md` DD2D-generalization section, and
+`proposal.md` §6). The **s3 column is the clean signal**: s3 was already feasible-scarce in
+training, so OOD s3 is in-regime and v3 improves there (9.19 → 4.87) while astar stays pathological
+— i.e. v3's advantage over the planner order does generalize where the feasible regime is stable.
+This entry **refines** the s2 interpretation in the
+[2026-08-01 generalization ADR](#2026-08-01-dd2d-generalization-test-unseen-count-unseen) (which
+attributed s2 to model weakness); the numbers there are unchanged, the attribution is corrected
+here. No code or data changed.
+
+---
+
+<a id="2026-08-01-dd2d-generalization-test-unseen-count-unseen"></a>
+## 2026-08-01 — DD2D generalization test — unseen count and unseen shapes
+
+<!--strip-->
+> **id** `2026-08-01-dd2d-generalization-test-unseen-count-unseen` · **status** active
+> · **tracks** env-dd2d, method, evaluation, data
+<!--/strip-->
+
+**Context.** The dd2d_v4-trained SPECTRE v3 checkpoint had only ever been evaluated
+in-distribution (9–12 blockers, the base 7 shape families). The proposal's §6 object-count /
+compositional-generalization question and §0 wishlist property #4 were *asserted, never
+tested*. We wanted a direct OOD test on DD2D along two axes the model never saw: **more
+blockers** and **novel shape figures**, scored train-old / test-new against the existing
+checkpoint (no retraining).
+
+**Decision.** Three sub-decisions, each load-bearing.
+
+1. **New shapes ride the geometry-general grasp model — no per-shape code.** `dd2d/grasps.py`
+   derives both the global-envelope grasp and the internal/concave grasp purely from
+   `shape.polygon` (supporting-line contact runs + a scan-line antipodal search), with no
+   branch on family anywhere. So a `tee` (bar+stem) and a `cross` (symmetric plus), both
+   **concave**, were added to `dd2d/shapes.py` alone (`_build` + `_CONCAVE_FAMILIES`; kept OUT
+   of `_FAMILY_WEIGHTS` so the base sampler never draws them, and sized to the finger/aperture
+   constants like `horseshoe`). Verified: 0 floating grasps over 30 seeds each, and the real
+   refiner certifies scenes containing them at collection — the grasp model carries over to
+   the new shapes and their concave regions, exactly as hypothesised.
+
+2. **Held-out collection = fresh band + unseen count with a *realized-count floor* + forced
+   families.** Two test-only sets, 40 problems each, stratified s0–s3 (10 each):
+   `dd2d_v4gen_count` (14–16 items = 13–15 blockers, old shapes; isolates count) and
+   `dd2d_v4gen_shape` (same count + tee/cross in the pool with **≥1 of each forced** per
+   scene). New collector flags (all default-preserving): `--seed-band-base` (base 3 = `[3M,4M)`
+   for count, base 4 = `[4M,5M)` for shape — disjoint from train/val/test, `--band=1_000_000`
+   kept so `compare.stratum_of` stays valid), `--n-items-min/max`, `--shape-set augmented`,
+   `--require-families`, `--fill-max`. The **realized-count floor** was the non-obvious
+   necessity: a fill-cap sweep showed 12–22% of scenes truncate below 14 items even at
+   `fill_max=0.85` (a small sampled drawer can't fit 15), and such a scene falls *back into the
+   seen range* — silently defeating the test. Cranking `fill_max` never closes the tail, so the
+   generator now rejects and resamples any scene realizing fewer than `min_items`, which
+   *guarantees* every kept problem is genuinely unseen-count. `fill_max=0.72` keeps the
+   resample rate low.
+
+3. **Score train-old / test-new via `--test-variant`, reusing the dd2d_v4 vocab.**
+   `spectre_score_v3.py`'s new `--test-variant` overrides only the episode dir; vocab, model
+   config and checkpoints stay from `--env-variant`. Valid with **no OOV and no retraining**
+   because the DD2D vocab / `config_hash` are over the fixed operator/predicate/type sets only
+   — a shape family is geometry metadata, not a vocab token, and more blockers only add generic
+   objects handled by positional local-ids. The domain spec is shared across `dd2d_*` variants
+   (registered in `domain.DOMAINS`) and stratum recovery is pid arithmetic. `--astar-baseline`
+   computes astar-dist (default order, score = −plan_idx) off each episode's stored outcomes via
+   the shared `rollout_fp`, so v3-vs-astar is one instrument, uncensored, paired bootstrap.
+
+**Consequences.** The scoring ran clean (no OOV, no position-index error on the longer
+skeletons from denser scenes) — confirming the count/shape invariance and that the position
+encoding tolerates the longer plans. In-distribution v3 reproduced **5.78 ± 0.10** exactly,
+validating the instrument. Result (v3 ALL FP, 3 seeds; paired vs astar-dist):
+
+| set | v3 ALL | vs astar | s2 | s3 |
+|---|---|---|---|---|
+| in-dist `dd2d_v4` (n=100) | 5.78 ± 0.10 | −28.74 [−39.6,−18.8] | 10.49 | 9.19 |
+| unseen count (n=40) | 9.40 ± 2.62 | −39.95 [−64.0,−18.1] | 30.23 | 4.87 |
+| unseen count+shape (n=40) | 11.26 ± 3.44 | −21.89 [−42.6,−3.8] | 31.97 | 10.67 |
+
+**v3 still wins overall on both held-out sets (CI excludes 0), so its advantage over the naive
+planner order survives OOD** — but absolute FP degrades ~1.6–1.9× (5.78 → 9.40 → 11.26), and
+the honest stratum reading is that **the win is carried by s3** (astar's default order is
+pathological there, 108–167 FP), while **at s2 v3's advantage collapses under the count shift**
+(30.23 vs astar 28.30; 31.97 vs 22.00 — within the ±9 seed spread), amplifying v3's already
+characterized in-distribution s2 weakness. *(⚠️ s2 root cause refined 2026-08-02: this collapse is
+dominantly a **pool-composition artifact** — the k=200 pool crowds out the redundant feasible
+triples that padded s2 in-distribution — not model weakness; see
+[2026-08-02](#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact).)*
+The shape set is harder than count-only, as expected. Numbers and caveats live in [notebook 07](../notebook/07-stickbutton2d.md)
+2026-08-01. The held-out raw dirs are archived and authoritative (DD2D generation is
+PYTHONHASHSEED-dependent, so a re-run yields a fresh sample).
+
+---
+
 <a id="2026-08-01-vlmplan-stops-generating-first-feasible-plan"></a>
 ## 2026-08-01 — VLMPlan stops generating at the first feasible plan
 

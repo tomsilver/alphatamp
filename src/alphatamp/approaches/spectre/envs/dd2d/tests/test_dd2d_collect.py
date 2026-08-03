@@ -20,7 +20,15 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import generate_dd2d_problem
+from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+    _scene_has_families,
+    generate_dd2d_problem,
+)
+from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
+from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import (
+    NEW_SHAPE_FAMILIES,
+    NEW_SHAPE_WEIGHTS,
+)
 from alphatamp.approaches.spectre.envs.dd2d.refine import RefineResult
 from alphatamp.approaches.spectre.envs.dd2d.skeleton import Skeleton
 
@@ -215,6 +223,61 @@ def test_determinism(problem, tmp_path):
 def test_stable_seed_helpers_deterministic():
     assert collect._stable_seed(("x",)) == collect._stable_seed(("x",))
     assert all(10 <= collect._sample_n_items(s) <= 13 for s in range(200))
+
+
+# --------------------------------------------------------------------------- #
+# held-out generalization controls (docs/decisions 2026-08-01)
+# --------------------------------------------------------------------------- #
+def test_sample_n_items_range_override():
+    # default band unchanged (9-12 blockers) ...
+    assert all(10 <= collect._sample_n_items(s) <= 13 for s in range(500))
+    # ... and an explicit unseen band is honoured and covers every value in it.
+    assert set(collect._sample_n_items(s, (14, 16)) for s in range(500)) == {14, 15, 16}
+
+
+def test_base_pool_excludes_new_shape_families():
+    """Dataset-A purity: without opting in, tee/cross never enter a scene."""
+    for seed in range(20):
+        scene = generate_scene(
+            100 + seed, lam=0.8, n_items=14, crowd=5, diverse_crowd=True
+        )
+        fams = {st.shape.family for st in scene.items.values()}
+        assert not (set(NEW_SHAPE_FAMILIES) & fams), (seed, fams)
+
+
+def test_generate_scene_forces_required_families():
+    """Dataset-B forcing: >= 1 tee and >= 1 cross in every scene when required."""
+    for seed in range(20):
+        scene = generate_scene(
+            200 + seed,
+            lam=0.8,
+            n_items=15,
+            crowd=5,
+            diverse_crowd=True,
+            fill_max=0.72,
+            extra_families=dict(NEW_SHAPE_WEIGHTS),
+            require_families=("tee", "cross"),
+        )
+        fams = {st.shape.family for st in scene.items.values()}
+        assert {"tee", "cross"} <= fams, (seed, fams)
+        assert _scene_has_families(scene, ("tee", "cross"))
+        assert not _scene_has_families(scene, ("nonexistent",))
+
+
+def test_generate_dd2d_problem_min_items_floor():
+    """The realized-count floor: a kept scene has >= min_items items even when the
+    coverage cap or a small drawer would otherwise truncate it below the unseen band."""
+    prob = generate_dd2d_problem(
+        lam=0.8,
+        seed=42,
+        n_items=15,
+        crowd=5,
+        diverse_crowd=True,
+        fill_max=0.72,
+        min_items=14,
+        certify=False,
+    )
+    assert len(prob.scene.items) >= 14
 
 
 # --------------------------------------------------------------------------- #
