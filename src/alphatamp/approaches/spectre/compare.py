@@ -1221,7 +1221,9 @@ def build_time_table(
     the per-candidate-cap refinement (``refine_s_capped``, the deployed configuration);
     ``False`` uses the uncapped ``refine_s`` for contrast. ``tidy`` carries the
     per-component means (``plan_gen_s`` / ``infer_s`` / ``refine_s``) for a stacked bar,
-    and the mean ``fp_capped`` so the notebook can price the cap's (small) FP cost.
+    their across-seed stds (``infer_std`` / ``refine_std``; plan-gen has none, being a
+    per-stratum constant) for the breakdown table, and the mean ``fp_capped`` so the
+    notebook can price the cap's (small) FP cost.
     """
     refine_key = "refine_s_capped" if use_capped else "refine_s"
     # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already IS its
@@ -1263,6 +1265,13 @@ def build_time_table(
             mean, std = _mean(per_seed_total), _std(per_seed_total)
             row.append(_fmt(mean, std))
             fp_sel = [r for r in sel if r.get("fp_capped") is not None]
+            # Per-seed component means, kept so the notebook's §2b breakdown table can
+            # report each component's own across-seed std, not just the total's. Plan-gen
+            # has no std: it is a per-stratum constant applied to every seed, so its
+            # across-seed spread is identically 0/NaN and is deliberately not shown.
+            _pg = _per_seed_means(sel, seeds, "plan_gen_s")
+            _if = _per_seed_means(sel, seeds, "infer_s")
+            _rf = _per_seed_means(sel, seeds, "refine_used_s")
             tidy.append(
                 {
                     "method": method,
@@ -1270,9 +1279,11 @@ def build_time_table(
                     "n_seeds": len(per_seed_total),
                     "mean_seconds": mean,
                     "std_seconds_across_seeds": std,
-                    "plan_gen_s": _mean(_per_seed_means(sel, seeds, "plan_gen_s")),
-                    "infer_s": _mean(_per_seed_means(sel, seeds, "infer_s")),
-                    "refine_s": _mean(_per_seed_means(sel, seeds, "refine_used_s")),
+                    "plan_gen_s": _mean(_pg),
+                    "infer_s": _mean(_if),
+                    "infer_std": _std(_if),
+                    "refine_s": _mean(_rf),
+                    "refine_std": _std(_rf),
                     "fp_capped": (
                         _mean(_per_seed_means(fp_sel, seeds, "fp_capped"))
                         if fp_sel

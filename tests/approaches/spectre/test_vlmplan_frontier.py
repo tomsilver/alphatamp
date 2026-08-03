@@ -8,6 +8,7 @@ capped-refinement accounting, and the method registration.
 
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 from alphatamp.approaches.spectre import compare, compare_envs
@@ -179,3 +180,51 @@ def test_build_time_table_zeroes_plan_gen_for_sequence_methods() -> None:
     assert (
         abs(astar_all["mean_seconds"] - 11.0) < 1e-9
     )  # 7 plan_gen + 0 infer + 4 refine
+
+
+def test_build_time_table_reports_per_component_std() -> None:
+    """`infer_std`/`refine_std` are each component's across-seed spread; NaN at 1 seed."""
+    records = [
+        # a 2-seed pool method: inference 0.4/0.6, refinement 1.0/2.0 across seeds
+        {
+            "seed": 0,
+            "problem_id": 1_000_000,
+            "stratum": 0,
+            "method": "PIGINet",
+            "refine_s": 1.0,
+            "refine_s_capped": 1.0,
+            "fp_capped": 1.0,
+            "infer_s": 0.4,
+        },
+        {
+            "seed": 1,
+            "problem_id": 1_000_000,
+            "stratum": 0,
+            "method": "PIGINet",
+            "refine_s": 2.0,
+            "refine_s_capped": 2.0,
+            "fp_capped": 1.0,
+            "infer_s": 0.6,
+        },
+        # a 1-seed method -> each component std is NaN, not 0
+        {
+            "seed": 0,
+            "problem_id": 1_000_001,
+            "stratum": 0,
+            "method": "VLMPlan-GPT5.6",
+            "refine_s": 3.0,
+            "refine_s_capped": 3.0,
+            "fp_capped": 1.0,
+            "infer_s": 60.0,
+        },
+    ]
+    _, _, tidy = compare.build_time_table(records, {0: 0.0}, use_capped=True)
+    pig = next(t for t in tidy if t["method"] == "PIGINet" and t["stratum"] == "ALL")
+    assert abs(pig["infer_s"] - 0.5) < 1e-9
+    assert abs(pig["infer_std"] - math.sqrt(0.02)) < 1e-9  # sample std of [0.4, 0.6]
+    assert abs(pig["refine_s"] - 1.5) < 1e-9
+    assert abs(pig["refine_std"] - math.sqrt(0.5)) < 1e-9  # sample std of [1.0, 2.0]
+    vlm = next(
+        t for t in tidy if t["method"] == "VLMPlan-GPT5.6" and t["stratum"] == "ALL"
+    )
+    assert math.isnan(vlm["infer_std"]) and math.isnan(vlm["refine_std"])

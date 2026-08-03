@@ -229,12 +229,12 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
         compare.render_markdown(summary_header, summary_rows)
         + "\n\n"
         + ENV.stratum_meaning
-        + (
-            "\n\n**Read before quoting a number:**\n"
-            + "\n".join(f"- {c}" for c in ENV.caveats)
-            if ENV.caveats
-            else ""
-        )
+        # + (
+        #     "\n\n**Read before quoting a number:**\n"
+        #     + "\n".join(f"- {c}" for c in ENV.caveats)
+        #     if ENV.caveats
+        #     else ""
+        # )
     )
     return summary_df, summary_tidy
 
@@ -442,9 +442,9 @@ def _(ENV, ENV_VARIANT, METHODS, N_PROBLEMS, np, plt, refine_cap_s, time_tidy):
         _ref = np.array([_all[m]["refine_s"] for m in _ms])
         _fig, _ax = plt.subplots(figsize=(9, 4.4))
         _ax.bar(_x, _pg, label="abstract plan-gen", color="#9aa4ad")
-        _ax.bar(_x, _inf, bottom=_pg, label="inference (GPU)", color="#e8a33c")
+        _ax.bar(_x, _inf, bottom=_pg, label="inference", color="#e8a33c")
         _cap = "" if refine_cap_s is None else f", {refine_cap_s:g}s cap"
-        _ax.bar(_x, _ref, bottom=_pg + _inf, label=f"refinement{_cap}", color="#4a7fb5")
+        _ax.bar(_x, _ref, bottom=_pg + _inf, label=f"refinement", color="#4a7fb5")
         _ax.set_xticks(_x)
         _ax.set_xticklabels(_ms, rotation=20, ha="right")
         _ax.set_ylabel("wall-clock to first success (s)")
@@ -455,6 +455,69 @@ def _(ENV, ENV_VARIANT, METHODS, N_PROBLEMS, np, plt, refine_cap_s, time_tidy):
         _ax.legend()
         plt.tight_layout()
     plt.gca()
+    return
+
+
+@app.cell
+def _(ENV, METHODS, SLAB, STRATA, compare, mo, time_tidy):
+    # Exact per-component numbers behind the stacked bar above: one table per component
+    # (inference, refinement), rows = method, cols = strata + ALL, each cell mean ± the
+    # across-seed std. Plan-gen is a per-stratum constant shared by the pool methods, so
+    # it gets one shared row rather than a column that repeats.
+    if not (ENV.has_timing and time_tidy):
+        _out = mo.md("")
+    else:
+        _by = {(t["method"], t["stratum"]): t for t in time_tidy}
+        _methods = [m for m in METHODS if any(t["method"] == m for t in time_tidy)]
+        _cols = list(STRATA) + ["ALL"]
+        _labels = [SLAB.get(s, str(s)) for s in STRATA] + ["ALL"]
+
+        def _cell(mean, std):
+            # bare mean when the std is NaN: astar (deterministic) / VLMPlan (1 seed).
+            if mean is None or (isinstance(mean, float) and mean != mean):
+                return "—"
+            if std is None or (isinstance(std, float) and std != std):
+                return f"{mean:.3f}"
+            return f"{mean:.3f} ± {std:.3f}"
+
+        def _component_table(mean_key, std_key):
+            _rows = []
+            for _m in _methods:
+                _r = [_m]
+                for _s in _cols:
+                    _e = _by.get((_m, _s), {})
+                    _r.append(_cell(_e.get(mean_key), _e.get(std_key)))
+                _rows.append(_r)
+            return compare.render_markdown(["method"] + _labels, _rows)
+
+        # plan-gen is identical across the pool methods (and 0 for VLMPlan), so show it once.
+        _pool = next((m for m in _methods if m not in compare.SEQUENCE_METHODS), None)
+        if _pool is not None:
+            _pg = [
+                f"{_by.get((_pool, _s), {}).get('plan_gen_s', 0.0):.3f}" for _s in _cols
+            ]
+            _pg_md = compare.render_markdown(
+                ["component"] + _labels, [["plan-gen (s)"] + _pg]
+            )
+        else:
+            _pg_md = ""
+
+        _out = mo.md(
+            "### §2b breakdown — exact per-component seconds (mean ± across-seed std)\n\n"
+            "**Inference** — GPU forward for the learned methods, the VLM generation call "
+            "for VLMPlan, `0` for astar.\n\n"
+            + _component_table("infer_s", "infer_std")
+            + "\n\n**Refinement** — per-candidate refine time summed to first success, "
+            "under the deployed cap.\n\n"
+            + _component_table("refine_s", "refine_std")
+            + "\n\n**Plan-gen** — a per-stratum constant shared across the pool methods; "
+            "VLMPlan's is 0 (its generation *is* the inference above).\n\n"
+            + _pg_md
+            + "\n\n_`±` is across the training seeds (3 for the learned methods); a bare "
+            "number is a single deterministic / 1-seed run (astar, VLMPlan-GPT5.6). These "
+            "reconcile with the §2b total table and the stacked bars._"
+        )
+    _out
     return
 
 
@@ -508,9 +571,7 @@ def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (
-        mo.md(
-            r"""## 4 · Ablation — what makes SPECTRE adaptive?
+    (mo.md(r"""## 4 · Ablation — what makes SPECTRE adaptive?
 
           Two adaptive components (both exactly zero at `F=∅`, accruing as the rollout
           observes failures): the **`coverage`/`waste`** columns and **record tokens** (one
@@ -521,14 +582,13 @@ def _(ENV, mo):
           - **`waste`** = precision over unexplained work — of the steps the abstraction
             says were unneeded, the fraction answering to nothing the evidence named.
 
+          <!--
           Unified definition (deployed 2026-07-31). ⚠️ The arms below were **scored under
           the pre-unification definition**, so read §4 internally, not against §1. Arms are
           **seed 0** (only the deployed config was multi-seed), accepted by paired bootstrap
-          over problems; `Δ vs floor` is measured against the no-columns/no-tokens arm."""
-        )
-        if ENV.has_ablations
-        else mo.md("")
-    )
+          over problems; `Δ vs floor` is measured against the no-columns/no-tokens arm.
+          -->
+          """) if ENV.has_ablations else mo.md(""))
     return
 
 
