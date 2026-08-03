@@ -15,15 +15,12 @@ def _():
 def _(mo):
     mo.md(r"""# Method comparison — SPECTRE vs the low-level and zero-shot baselines
 
-          Compares plan-feasibility methods on a held-out **test split** by **rollout
-          false-positives (FP)** — failed refinement attempts before the first success.
-          Lower is better.
-
-          **Pick the environment below.** Everything after it — strata labels, method
-          list, caveats, the scene render in §5, whether §4's ablations exist — comes
-          from that environment's entry in `spectre/compare_envs.py`. A third
-          environment is a new `EnvSpec` there, not a copy of this file.
+          Plan-feasibility methods on the held-out **test split**, by **rollout FP**
+          (failed refinement attempts before the first success; lower is better). **Pick
+          the environment below** — strata, method list, caveats and the §5 scene all come
+          from its `compare_envs.py` entry.
           """)
+    return
 
 
 @app.cell
@@ -95,17 +92,17 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
     CACHE_DIR = DERIVED / ENV_VARIANT / "compare_cache"
     LEGACY_CACHE = DERIVED / LEGACY_VARIANT / "compare_cache"
 
+    # A method's records live in the primary cache, except grafted (`legacy_only`) methods,
+    # which are in the legacy cache. Used by the inspector (§5) and the VLMPlan diag (§6).
+    def cache_for(method):
+        return LEGACY_CACHE if method in LEGACY_ONLY else CACHE_DIR
+
     COLORS = {
         "astar-dist": "#7f7f7f",
         "PIGINet": "#ff7f0e",
-        "SPECTRE-adaptive": "#1f77b4",
-        "SPECTRE-static": "#7fb8de",
-        "SPECTREv2-adaptive": "#2ca02c",
-        "SPECTREv2-static": "#98df8a",
-        "SPECTREv3-adaptive": "#d62728",
-        "SPECTREv3-static": "#ff9896",
-        "VLMPlan-8B": "#9467bd",
-        "VLMPlan-32B": "#c5b0d5",
+        "SPECTRE-adaptive": "#d62728",
+        "SPECTRE-static": "#ff9896",
+        "VLMPlan-32B": "#9467bd",
         "VLMPlan-GPT5.6": "#8c564b",
     }
     STRATA = sorted(ENV.stratum_labels)
@@ -126,6 +123,7 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
         N_PROBLEMS,
         SLAB,
         STRATA,
+        cache_for,
         compare,
         np,
         pd,
@@ -138,24 +136,9 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
 def _(mo):
     mo.md(r"""## Load
 
-          Reads precomputed per-problem scores from both caches and grafts the methods
-          that have no dd2d_v4 row. Nothing here runs inference — build the caches with:
-
-          ```
-          # spectre3 needs --force: its seed_0 dir predates the state-delta model
-          python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v4 \
-              --methods spectre3 --seeds 0 1 2 --force --no-ablations
-          python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v4 \
-              --methods astar piginet spectre2 --seeds 0 1 2
-          ```
-
-          Two frames come out of this, and the split is deliberate:
-
-          - **`df_seeds`** — one row per *(method, seed, problem)*. §1 and §2 use it, so
-            their `±` is the spread **across seeds**.
-          - **`df`** — the same data collapsed to the per-*(method, problem)* mean over
-            seeds. Every per-problem view (§3, §5, the CSV) uses it, so a method with
-            three seeds still contributes one curve and one row per problem.
+          Reads precomputed per-problem FP from the primary + legacy caches (grafting the
+          methods without a native row). Two frames: **`df_seeds`** (per method/seed/problem
+          — §1/§2's `±` is across seeds) and **`df`** (seed-collapsed; §3/§5/the CSV).
           """)
     return
 
@@ -207,17 +190,11 @@ def _(CACHE_DIR, ENV_VARIANT, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, compare
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## 1 · Summary table — mean FP per stratum, ± across seeds
+    mo.md(r"""## 1 · Summary table — mean FP per stratum
 
-          **Stratum** = minimum feasible subset size (`s0` needs no blocker moved, `s3`
-          needs three); s2/s3 are where methods separate.
-
-          `±` is the spread **across seeds** of the per-stratum mean — the quantity a
-          gate is judged on, and the one that says whether a margin is real. The `seeds`
-          column is how many went into it: `3` for the learned methods, `-` for a single
-          deterministic run (astar, and VLMPlan, which has one). **A row with one seed
-          shows a bare mean, never `± 0.00`** — zero would claim a stability nobody
-          measured.
+          `±` = across-seed spread of the per-stratum mean; `seeds` = how many went into it
+          (`-` = a single deterministic run). A one-seed row shows a bare mean, never
+          `± 0.00`. Stratum meaning + per-env caveats are printed under the table.
           """)
     return
 
@@ -295,13 +272,9 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
 def _(mo):
     mo.md(r"""## 2 · Mean FP per stratum (± across-seed std)
 
-          Lower is better. Error bars are the **across-seed** std-dev of the per-stratum
-          mean — the same numbers as §1, read from the same table, clipped at 0 so a bar
-          never dips below zero (FP ≥ 0).
-
-          A bar with **no cap** has one run and therefore no measurable spread (astar,
-          VLMPlan); that is different from a spread of zero. Hatched bars are grafted
-          from the older collection.
+          §1 as a bar chart. Error bars = across-seed std; a bar with **no cap** is a
+          single deterministic run (astar, VLMPlan). Hatched = grafted from the legacy
+          collection.
           """)
     return
 
@@ -361,7 +334,7 @@ def _(
     _ax.set_ylabel("rollout FP (fails before first success)")
     _ax.set_title(
         f"Mean rollout FP by stratum ({ENV_VARIANT} test, n={N_PROBLEMS})\n"
-        "error bars = ± across-seed std · no cap = single run · † = grafted from dd2d_v3"
+        "error bars = ± across-seed std · no cap = single run · † = grafted from legacy"
     )
     _ax.legend(ncol=2, fontsize=7)
     plt.tight_layout()
@@ -384,35 +357,21 @@ def _(ENV, mo):
     mo.md(
         r"""## 2b · Wall-clock to first success — is the inference worth it?
 
-        Mean wall-clock **seconds to the first successful refinement**, per method =
-        **abstract-plan-generation + inference + refinement**, summed over the
-        candidates each method tries until the first feasible. FP counts failed
-        attempts; this weighs each by its real cost — a failed refinement runs anywhere
-        from ~15 ms (a dead-end) to ~20 s (budget-exhausted) — and adds the model's
-        inference cost, so it answers whether a better ranking pays for the inference it
-        takes.
-
-        **Reported under a per-candidate refinement cap** (the deployed configuration):
-        each skeleton is refined for at most `refine_cap_s` seconds before moving to the
-        next in the ranked order. Feasible refinements finish in <0.5 s, so the cap only
-        cuts the 20 s near-feasible *traps* — the very candidates a good ranker still
-        tries — which is why an *uncapped* wall-clock over-punishes the learned ranker
-        at s1 (its few failures are the expensive ones; a naive planner order's failures
-        are cheap dead-ends). The cap costs a tiny FP increase (a rare slow-feasible
-        candidate abandoned); the uncapped total and that FP cost are printed below the
-        table.
-
-        Refinement time is **reused** from the stored per-candidate
-        `refinement_wall_clock_s` (every method sums the *same* per-candidate times over
-        its own order, so the comparison is fair); inference is measured on GPU; plan-
-        gen is a per-stratum shared constant. All are cached, not recomputed at render
-        time.
+        Mean **seconds to the first successful refinement** = plan-gen + inference +
+        refinement, summed over the candidates each method tries. Weighs FP by real cost
+        (a failed refine runs ~15 ms–20 s). **Under the deployed per-candidate refinement
+        cap** (`refine_cap_s`): a slow near-feasible *trap* is abandoned at the cap, so an
+        *uncapped* total over-punishes the learned ranker (its few failures are the
+        expensive ones). The uncapped total + the cap's tiny FP cost are printed below.
+        VLMPlan's plan-gen is 0 (its generation *is* the inference `infer_s`).
         """
         if ENV.has_timing
         else r"""## 2b · Wall-clock to first success
 
-             _Not available for this environment: its episodes carry no per-candidate refinement
-             wall-clock — only the DD2D v3/v4 refiner-instrumented collections do._
+             _Deferred for this environment: its episodes carry real per-candidate refinement
+             times, but filling §2b needs a per-env refinement cap (the DD2D 2 s cap would
+             censor SB2D's ~10 s feasible refines) plus a precompute run. VLMPlan's own
+             wall-clock is already cached._
              """
     )
     return
@@ -503,13 +462,9 @@ def _(ENV, ENV_VARIANT, METHODS, N_PROBLEMS, np, plt, refine_cap_s, time_tidy):
 def _(mo):
     mo.md(r"""## 3 · Survival curves
 
-          Fraction of problems solved within ≤ k failed attempts (higher & further-left
-          is better). The `ALL` panel is the whole split; the rest split by stratum.
-
-          Each curve is the **mean of the per-seed curves**, matching how §1 averages
-          per-seed statistics. Pooling every (seed, problem) attempt into one curve
-          would fold seed spread into what reads as a distribution over problems, and
-          would make a 3-seed method look smoother than a 1-seed one for no real reason.
+          Fraction of problems solved within ≤ k failed attempts (higher & further-left is
+          better). `ALL` = whole split, the rest by stratum. Each curve is the mean of the
+          per-seed curves.
           """)
     return
 
@@ -552,87 +507,28 @@ def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""## 4 · Ablation — what makes v3 adaptive?
+def _(ENV, mo):
+    (
+        mo.md(
+            r"""## 4 · Ablation — what makes SPECTRE adaptive?
 
-          <!--
-          Two components carry v3, and both are **adaptive**: they are exactly zero at
-          `F=∅` and accrue only as the rollout observes failures.
-          -->
+          Two adaptive components (both exactly zero at `F=∅`, accruing as the rollout
+          observes failures): the **`coverage`/`waste`** columns and **record tokens** (one
+          token per failing query). Both are switched on/off below at a matched setting.
 
-          **`coverage` / `waste`** — two columns on each candidate, computed from the
-          objects the refiner *reported* as blocking (`FailureRecord.culprits`) while
-          failing the candidates already tried:
+          - **`coverage`** = recall over the failures' named-culprit pool `K` — the fraction
+            of `K` a candidate discharges.
+          - **`waste`** = precision over unexplained work — of the steps the abstraction
+            says were unneeded, the fraction answering to nothing the evidence named.
 
-          ```
-          coverage = |S(c) ∩ culprits| / |culprits|
-          waste    = |S(c) \ culprits| / |S(c)|
-          ```
-
-          <!--
-          These are §5.1's necessity features with per-object necessity **observed
-          rather than predicted** — no head, no second loss, no geometry routine. They
-          replaced `dead`, which was a *length* proxy (corr(dead,|S|) = −0.284): right
-          at s3 where long plans are needed, wrong at s1 where short ones are, so tuning
-          it only traded strata.
-
-          
-          **Record tokens** — one token per failing query, carrying the schema,
-          arguments and observed culprits of each failure, attended over by a dedicated
-          evidence channel.
-
-          All arms below are held at the **same matched setting** — `--overlap-mode
-          jaccard`, no record aggregation, no evidence-attention — so each contrast
-          varies only what it names. The *deployed* row also carries record aggregation
-          and evidence-attention — two smaller implementation switches, not part of the
-          contrast under test.
-
-          > **1 seed per arm — unlike §1–§3, which are 3-seed.** Only the deployed
-          > configuration was ever trained at more than one seed; these component arms
-          > are a frozen seed-0 study. They are accepted by **paired bootstrap over
-          > problems** (the project's stated 1-seed convention): pairing removes the
-          > between-problem variance that otherwise dominates. Everything here,
-          > including the v2.2 baseline the Δ column is measured against, is seed 0.
-
-          > **The `deployed` row post-dates the component arms.** It now carries the
-          > state delta (`decisions.md` 2026-07-28) **and the unified coverage/waste
-          > definition** (`decisions.md` 2026-07-31, cache rebuilt 2026-08-01, ~5.78);
-          > the six component arms predate both and score under the old definition, so
-          > `deployed` (~5.78) is not comparable to the matched `cov+waste, tokens` arm
-          > (~7.90) — that gap conflates the definition change with the aggregate-records
-          > and evidence-attention switches. That makes `deployed` context for the
-          > contrast, not a cell in it, which is what it always was.
-
-          > ### What is left when **both** components are off
-          >
-          > (The arm with no coverage/waste *and* no tokens — cached as
-          > `abl_nocov_norec`, not shown in the tables below. Not to be confused with
-          > §4.2's `neither`, which means neither *column* but keeps tokens.)
-          >
-          > Switching both off does **not** leave a static ranker. Three things still
-          > respond to the failure set, and only the first two are model inputs:
-          >
-          > 1. **`avail_mask`** — already-tried candidates are forced to `-inf`. This is
-          >    the "just the previously tried skeletons" channel, but it only *removes*
-          >    them from the argmax; it cannot re-rank the survivors.
-          > 2. **`jaccard`** — `cand_overlap[:, 1]`, the max Jaccard overlap between a
-          >    candidate's manipulated set and any already-failed candidate's set. This
-          >    is the one *learned* adaptive feature left. (Column 0, `dead`, is zeroed
-          >    by `--overlap-mode jaccard`.)
-          > 3. ~~**Proof-demotion**~~ — **cut from the method on 2026-07-30**, so on the
-          >    deployed model there is no longer a third channel: `avail_mask` and
-          >    `jaccard` are all that remain when both components are off. §4.3 prices
-          >    the cut. On this floor arm the offset was worth **1.09 FP** (15.47 →
-          >    16.56) — roughly *all* of the arm's remaining adaptivity — against only
-          >    **0.23** on the deployed model (7.20 → 7.44, 3 seeds), which is what made
-          >    it affordable to remove.
-          >
-          > On `dd2d_v4` there is no fourth channel: the model falls back to v2.2's
-          > hint-tier fact tokens when records are off, but **that collection has no
-          > harvested `post_mortem` facts at all** (0 fact tokens on every example
-          > measured), so the fallback is inert here.
-          -->
-          """)
+          Unified definition (deployed 2026-07-31). ⚠️ The arms below were **scored under
+          the pre-unification definition**, so read §4 internally, not against §1. Arms are
+          **seed 0** (only the deployed config was multi-seed), accepted by paired bootstrap
+          over problems; `Δ vs floor` is measured against the no-columns/no-tokens arm."""
+        )
+        if ENV.has_ablations
+        else mo.md("")
+    )
     return
 
 
@@ -656,11 +552,6 @@ def _(CACHE_DIR, compare, pd):
         "waste column only": "abl_waste_only_adaptive",
         "deployed (cov+waste, tokens)": "spectre3_adaptive",
         "deployed, records suppressed": "abl_suppress_records_adaptive",
-        # §4.3's pair; loaded here too so a missing dir is reported once, in one place.
-        # These are the demotion-ON arms: demotion was cut from the method on 2026-07-30,
-        # so switching it back on is now the ablation.
-        "deployed + demotion": "abl_with_demotion_adaptive",
-        "floor + demotion": "abl_floor_with_demotion_adaptive",
     }
 
     _rows, _missing = [], []
@@ -692,24 +583,29 @@ def _(CACHE_DIR, compare, pd):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    # Restored 2026-07-28: this decorator had been left orphaned when the markdown below
-    # it was commented out in the notebook trim, so it decorated the *next* cell object
-    # and marimo refused to load the file at all.
-    mo.md(r"""### 4.1 · coverage × record tokens
+def _(ENV, mo):
+    (
+        mo.md(
+            r"""### 4.1 · coverage × record tokens
 
-          One component at a time, matched settings. `Δ vs v2.2` is a paired bootstrap
-          over problems against the v2.2 yardstick (negative = better); a CI excluding 0
-          is starred. Everything in this table is **seed 0**, including the baseline.
-          """)
+          One component at a time. `Δ vs floor` is a paired bootstrap over problems against
+          the no-columns/no-tokens arm (negative = better); a CI excluding 0 is starred."""
+        )
+        if ENV.has_ablations
+        else mo.md("")
+    )
     return
 
 
 @app.cell
-def _(STRATA, abl_df, df_seeds, pd):
+def _(ENV, STRATA, abl_df, mo, pd):
     from alphatamp.approaches.spectre import eda as _eda
 
-    def _abl_row(label, sub, base_by_pid, cells=STRATA):
+    # The Δ baseline is the both-off floor arm (no columns AND no tokens), per-pid.
+    _floor = abl_df[abl_df.arm == "neither (no cols, no tokens)"]
+    FLOOR_BY_PID = dict(zip(_floor["problem_id"], _floor["fp"]))
+
+    def _abl_row(label, sub, base_by_pid=FLOOR_BY_PID, cells=STRATA):
         row = {"arm": label, "n": len(sub)}
         row["ALL"] = f"{sub['fp'].mean():.2f}" if len(sub) else "—"
         for k in cells:
@@ -723,41 +619,26 @@ def _(STRATA, abl_df, df_seeds, pd):
             b = pd.Series(base_by_pid).loc[common].to_numpy()
             d = _eda.bootstrap_mean_difference(a, b, num_resamples=10_000, seed=0)
             star = "" if d.ci_low <= 0 <= d.ci_high else " *"
-            row["Δ vs v2.2"] = (
+            row["Δ vs floor"] = (
                 f"{d.point:+.2f} [{d.ci_low:+.2f}, {d.ci_high:+.2f}]{star}"
             )
         else:
-            row["Δ vs v2.2"] = "—"
+            row["Δ vs floor"] = "—"
         return row
 
-    # Seed 0 of v2.2, to match the seed-0 ablation arms. Taken from `df_seeds` rather
-    # than the collapsed `df`, whose v2.2 row is now a 3-seed mean -- pairing a seed-0
-    # arm against a 3-seed mean would make every Δ below a different comparison than the
-    # one it claims to be.
-    _v2 = df_seeds[(df_seeds.method == "SPECTREv2-adaptive") & (df_seeds.seed == 0)]
-    V2_BY_PID = dict(zip(_v2["problem_id"], _v2["fp"]))
-
     _order = [
-        # commented out 2026-07-27 (notebook trim); both arms are still cached and
-        # loaded -- uncomment to restore the full 2x2. `cov+waste, tokens` is the same
-        # cell as `deployed` minus record aggregation and evidence-attention.
-        # "neither (no cols, no tokens)",
-        # "cov+waste, tokens",
         "no cov/waste, tokens",
         "cov+waste, no tokens",
         "deployed (cov+waste, tokens)",
     ]
     _rows = [
-        _abl_row(_a, abl_df[abl_df.arm == _a], V2_BY_PID)
+        _abl_row(_a, abl_df[abl_df.arm == _a])
         for _a in _order
         if _a in set(abl_df["arm"])
     ]
-    # _rows.append(_abl_row("v2.2 yardstick", _v2, V2_BY_PID))
-    # `.set_index("arm")` needs at least one row; a variant with no ablation arms cached
-    # (the kinder variant) yields none, so render an empty table rather than raising.
     ablation_2x2 = pd.DataFrame(_rows).set_index("arm") if _rows else pd.DataFrame()
-    ablation_2x2
-    return V2_BY_PID, ablation_2x2
+    (ablation_2x2 if ENV.has_ablations else mo.md(""))
+    return FLOOR_BY_PID, ablation_2x2
 
 
 # --- commented out 2026-07-27 (notebook trim): the same four numbers as 4.1, arranged
@@ -795,23 +676,17 @@ def _(STRATA, abl_df, df_seeds, pd):
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""### 4.2 · `coverage` vs `waste`, separated
+def _(ENV, mo):
+    (mo.md(r"""### 4.2 · `coverage` vs `waste`, separated
 
-          The two columns have only ever been switched on together. `--coverage-mode`
-          zeroes one of them (rather than narrowing the tensor, so the state-dict shape
-          and the exact-absence equivalence oracle are untouched), which isolates each.
-
-          They ask different questions: **`coverage`** is "does this candidate remove
-          the objects the refiner reported as blocking", **`waste`** is "does it also
-          remove objects that were never implicated". `no cov/waste, tokens` is the
-          floor with neither column.
-          """)
+          Each column on alone (record tokens stay on for all three). `coverage` = recall
+          over the named-culprit pool; `waste` = precision over unexplained work. `neither`
+          keeps tokens but no columns.""") if ENV.has_ablations else mo.md(""))
     return
 
 
 @app.cell
-def _(STRATA, V2_BY_PID, abl_df, pd):
+def _(ENV, FLOOR_BY_PID, STRATA, abl_df, mo, pd):
     from alphatamp.approaches.spectre import eda as _eda2
 
     def _row2(label, sub):
@@ -819,172 +694,35 @@ def _(STRATA, V2_BY_PID, abl_df, pd):
         for k in STRATA:
             s = sub[sub.stratum == k]["fp"]
             r[f"s{k}"] = f"{s.mean():.2f}" if len(s) else "—"
-        common = sorted(set(sub["problem_id"]) & set(V2_BY_PID))
+        common = sorted(set(sub["problem_id"]) & set(FLOOR_BY_PID))
         if common and len(sub):
             a = sub.set_index("problem_id").loc[common, "fp"].to_numpy()
-            b = pd.Series(V2_BY_PID).loc[common].to_numpy()
+            b = pd.Series(FLOOR_BY_PID).loc[common].to_numpy()
             d = _eda2.bootstrap_mean_difference(a, b, num_resamples=10_000, seed=0)
             star = "" if d.ci_low <= 0 <= d.ci_high else " *"
-            r["Δ vs v2.2"] = f"{d.point:+.2f} [{d.ci_low:+.2f}, {d.ci_high:+.2f}]{star}"
+            r["Δ vs floor"] = (
+                f"{d.point:+.2f} [{d.ci_low:+.2f}, {d.ci_high:+.2f}]{star}"
+            )
         else:
-            r["Δ vs v2.2"] = "—"
+            r["Δ vs floor"] = "—"
         return r
 
-    _order = [
-        "no cov/waste, tokens",
-        "waste column only",
-        "coverage column only",
-        # "cov+waste, tokens",
-    ]
-    # "neither" here means neither *column* -- record tokens are still on in all four.
+    _order = ["no cov/waste, tokens", "waste column only", "coverage column only"]
     _labels = {
         "no cov/waste, tokens": "neither",
         "waste column only": "waste only",
         "coverage column only": "coverage only",
-        # "cov+waste, tokens": "both",
     }
     _cov_rows = [
         _row2(_labels[_a], abl_df[abl_df.arm == _a])
         for _a in _order
         if _a in set(abl_df["arm"])
     ]
-    # Empty when the variant has no ablation arms cached (kinder) -- render an empty table
-    # rather than `.set_index("arm")` on a column-less frame.
     coverage_split = (
         pd.DataFrame(_cov_rows).set_index("arm") if _cov_rows else pd.DataFrame()
     )
-    coverage_split
+    (coverage_split if ENV.has_ablations else mo.md(""))
     return (coverage_split,)
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""### 4.3 · What the demotion cut costs
-
-          **Proof-tier demotion was cut from the method on 2026-07-30**
-          (`decisions.md`). SPECTREv3 as reported everywhere above is a **purely learned
-          ranker**: nothing outside the network touches its ordering. This section is
-          the price of that choice.
-
-          The offset it gives up: when an observed failure *proves* a candidate dead,
-          its score was pushed back by a finite amount — never to `-inf`, so a wrong
-          proof could only reorder, never lose the feasible plan (C5 / P-E). Sound, and
-          now off. The machinery is kept and one flag away (`apply_demotion=True`),
-          which is what the `+ demotion` rows below run.
-
-          Both arms are **exactly paired** — same weights, same seeds, same episodes,
-          and the proof state is advanced either way, so they differ only in the offset.
-          It is a deploy-time switch; no retraining is involved.
-
-          Read the two rows against each other: the gap between them is how much of the
-          sound rule's value the *learned* components had already absorbed, and it is
-          why the cut is affordable.
-
-          > **The learned signal is a correlate, not a proof**, so this is a real trade
-          > and not a free simplification — on a domain whose proofs fire more often
-          > than DD2D's 6% it would go the other way. A Δ of exactly 0.00 would instead
-          > mean the switch never took effect, which is why the two cache dirs are
-          > asserted to differ.
-          """)
-    return
-
-
-@app.cell
-def _(CACHE_DIR, ENV_VARIANT, STRATA, compare, mo, np, pd):
-    from alphatamp.approaches.spectre import eda as _eda3
-
-    # Own frame, deliberately NOT `abl_df`: that one is pinned to seed 0 so §4.1/§4.2's
-    # bootstrap gets equal-length arrays. Here the pairs are matched per seed and the
-    # collapse happens before the bootstrap, which is what lets the deployed row use all
-    # three of its seeds.
-    # (label, WITH-demotion dir, WITHOUT-demotion dir). Inverted 2026-07-30: demotion was
-    # cut from the method, so the deployed arm is the *without* column and switching it
-    # back on is the ablation. `Δ` below is (deployed − with demotion), i.e. what the
-    # deployed configuration gives up by being purely learned.
-    _PAIRS = [
-        ("deployed v3", "abl_with_demotion_adaptive", "spectre3_adaptive"),
-        (
-            "floor: jaccard only",
-            "abl_floor_with_demotion_adaptive",
-            "abl_nocov_norec_adaptive",
-        ),
-    ]
-
-    def _by_seed(subdir):
-        """``{seed: {pid: fp}}`` for one cached arm, or None when it is absent."""
-        if not (CACHE_DIR / subdir).is_dir():
-            return None
-        out = {}
-        for r in compare.load_named_fp_records_per_seed(CACHE_DIR, subdir, "x"):
-            out.setdefault(r["seed"], {})[r["problem_id"]] = r["fp"]
-        return out
-
-    def _mean_over(seed_map, pids, stratum=None):
-        sel = [p for p in pids if stratum is None or compare.stratum_of(p) == stratum]
-        if not sel:
-            return float("nan")
-        per_seed = [np.mean([m[p] for p in sel]) for m in seed_map.values()]
-        return float(np.mean(per_seed))
-
-    _rows, _missing = [], []
-    for _label, _on_dir, _off_dir in _PAIRS:
-        _on, _off = _by_seed(_on_dir), _by_seed(_off_dir)
-        if _on is None or _off is None:
-            _missing.append(_label)
-            continue
-        # Only seeds cached for BOTH arms, so the pair is never half-matched.
-        _seeds = sorted(set(_on) & set(_off))
-        _on = {s: _on[s] for s in _seeds}
-        _off = {s: _off[s] for s in _seeds}
-        _pids = sorted(set.intersection(*[set(m) for m in _on.values()]))
-        _variants = (
-            ("deployed — no demotion", _off),
-            ("+ demotion (ablation)", _on),
-        )
-        for _tag, _m in _variants:
-            _r = {
-                "arm": f"{_label} · {_tag}",
-                "seeds": len(_seeds),
-                "ALL": f"{_mean_over(_m, _pids):.2f}",
-            }
-            for _k in STRATA:
-                _r[f"s{_k}"] = f"{_mean_over(_m, _pids, _k):.2f}"
-            _r["Δ cost of the cut"] = ""
-            _rows.append(_r)
-        # Paired bootstrap on the seed-mean per problem -- the same collapse
-        # `spectre_score_v3.py` does before pairing.
-        _a = np.array([np.mean([_off[s][p] for s in _seeds]) for p in _pids])
-        _b = np.array([np.mean([_on[s][p] for s in _seeds]) for p in _pids])
-        _d = _eda3.bootstrap_mean_difference(_a, _b, num_resamples=10_000, seed=0)
-        _star = "" if _d.ci_low <= 0 <= _d.ci_high else " *"
-        _rows[-1][
-            "Δ cost of the cut"
-        ] = f"{_d.point:+.2f} [{_d.ci_low:+.2f}, {_d.ci_high:+.2f}]{_star}"
-        # The failure mode this whole section is exposed to: if the two arms are
-        # identical the switch never took effect and the ablation reads 0.00 with
-        # nothing looking wrong. Say so loudly rather than rendering it as a result.
-        if not np.any(_a != _b):
-            print(
-                f"!! {_label}: demotion-ON and demotion-OFF caches are IDENTICAL — the "
-                "switch did not take effect; do not read the Δ as a measurement"
-            )
-    if _missing:
-        print(f"!! not cached, omitted from §4.3: {_missing}")
-    # Both arms absent is the normal case off DD2D, not a failure: demotion needs a
-    # `DomainSpec` with provable axioms, and an environment resolving to `EMPTY_SPEC`
-    # can never license it, so the ablation would be two bit-identical caches. Render
-    # the reason instead of crashing on an empty frame.
-    if not _rows:
-        demotion_ablation = mo.md(
-            f"*§4.3 does not apply to `{ENV_VARIANT}`: no demotion arms are cached. "
-            "Proof-tier demotion needs a domain with provable query axioms; an "
-            "environment resolving to `EMPTY_SPEC` never licenses it, so switching it "
-            "on would produce a cache identical to switching it off.*"
-        )
-    else:
-        demotion_ablation = pd.DataFrame(_rows).set_index("arm")
-    demotion_ablation
-    return (demotion_ablation,)
 
 
 # --- commented out 2026-07-27 (notebook trim): §4.4, the deploy-time suppress-records
@@ -1072,90 +810,61 @@ def _(CACHE_DIR, ENV_VARIANT, STRATA, compare, mo, np, pd):
 
 
 @app.cell(hide_code=True)
-def _(ENV, ENV_VARIANT, LEGACY_VARIANT, mo):
+def _(ENV, mo):
     mo.md(f"""## 5 · Planner inspector — scene + ordered plans
 
           Step through test problems with **◀ / ▶** (or the dropdown). Three panels:
 
           - **Scene** — {ENV.scene_legend}
-          - **Every method on this problem** — rollout FP and first-feasible rank, so
-            they can be compared without toggling. **Independent of the method
-            dropdown.**
-          - **Ordered plans** for the *selected* method — top-ranked → bottom-ranked.
+          - **Every method on this problem** — rollout FP + first-feasible rank
+            (independent of the method dropdown).
+          - **Ordered plans** for the *selected* method, top-ranked → bottom; VLMPlan
+            shows its own generated attempts (off the shared pool).
 
-          For a `*-adaptive` method the toggle switches between its **realized attempt
-          order** and its **t=0 score order**. In realized order the table also carries
-          the *static twin's* rank and score, so `Δrank` shows exactly which plans
-          adaptivity promoted (`+`) or demoted (`−`), and `demoted@t` names the failure
-          whose proof killed a candidate outright.
-
-          > **Only `{ENV_VARIANT}`-native methods appear here.** A grafted method's
-          > cached scores index the **{LEGACY_VARIANT}** candidate pool, while the scene
-          > and plan list rendered below come from the **{ENV_VARIANT}** episode. Where
-          > the two pools differ (~5% of DD2D problems), its rank column would be
-          > quietly wrong — so grafted methods are excluded from this section rather
-          > than shown with a subtly incorrect ordering. Their FP appears in §1–§3.
-          > (With no graft configured the two names are the same, and nothing is
-          > excluded.)
-
-          > An adaptive ranker re-scores the pool after **every** failure, so no
-          > candidate has a single score. The cache stores the whole per-step matrix;
-          > `ad.score` reports the step each candidate was *picked* on — the opinion the
-          > rollout acted on.
-
-          > **`demoted@t` no longer changes anything for v3.** Proof-demotion was cut on
-          > 2026-07-30, so for SPECTREv3 that column reads as *"a proof would have
-          > killed this candidate at attempt t"* — the deduction is still computed and
-          > recorded, it just no longer moves the ordering. For SPECTREv2, which keeps
-          > its demotion, it is still causal.
-
-          > **This section shows seed 0**, while §1–§3 report 3-seed means. It renders
-          > one checkpoint's per-step score matrix, which has no multi-seed analogue —
-          > an averaged attempt order is not an order any model ran. The `FP` column in
-          > the overview table *is* the 3-seed mean, so it will not generally equal the
-          > `1st-feasible rank` of the seed-0 ordering beside it.
+          For a `*-adaptive` method the toggle switches its **realized attempt order** vs
+          its **t=0 score order**; in realized order `Δrank` shows which plans adaptivity
+          promoted (`+`) / demoted (`−`) vs the static twin. The overview `FP` is the
+          3-seed mean; the plan list is seed 0, so `1st-feasible rank` need not equal it.
           """)
     return
 
 
 @app.cell
-def _(CACHE_DIR, REPO, compare, np):
-    # method -> (kind, static-scores dir, adaptive dir | None). Both modes of a SPECTRE
-    # family share one checkpoint, so an adaptive method's "static twin" scores are its
-    # own t=0 (c₀) logits. Restricted to dd2d_v4-native methods -- see the section note.
+def _(REPO, cache_for, compare, np):
+    # method -> (kind, static-scores dir, adaptive dir | None). The two SPECTRE modes share
+    # one checkpoint, so an adaptive method's "static twin" scores are its own t=0 (c₀)
+    # logits. Each method is read from its own cache via `cache_for` (primary, or the legacy
+    # cache for a grafted method), so on the kinder variant PIGINet (native) and SPECTRE
+    # (grafted) both render.
     INSPECT_SPEC = {
         "astar-dist": ("static", "astar", None),
-        "SPECTREv2-static": ("static", "spectre2_static/seed_0", None),
-        "SPECTREv2-adaptive": (
-            "adaptive",
-            "spectre2_static/seed_0",
-            "spectre2_adaptive",
-        ),
-        "SPECTREv3-static": ("static", "spectre3_static/seed_0", None),
-        "SPECTREv3-adaptive": (
+        "PIGINet": ("static", "piginet/seed_0", None),
+        "SPECTRE-static": ("static", "spectre3_static/seed_0", None),
+        "SPECTRE-adaptive": (
             "adaptive",
             "spectre3_static/seed_0",
             "spectre3_adaptive",
         ),
     }
-    # Sequence methods (VLMPlan) are inspected differently — they produce their own
-    # ordered attempt list off the shared pool, so there is no skeleton to index. They are
-    # rendered from the cached `attempts` in the plan-table cell, not through insp_order.
+    # Sequence methods (VLMPlan) produce their own ordered attempt list off the shared
+    # pool, so there is no skeleton to index; they're rendered from the cached `attempts`.
     INSPECT_SEQ = {
         m: d
         for m, d in compare.SEQUENCE_METHODS.items()
-        if (CACHE_DIR / d / "seed_0").is_dir()
+        if (cache_for(m) / d / "seed_0").is_dir()
     }
     INSPECT_METHODS = [
-        m for m in INSPECT_SPEC if (CACHE_DIR / INSPECT_SPEC[m][1]).is_dir()
+        m for m in INSPECT_SPEC if (cache_for(m) / INSPECT_SPEC[m][1]).is_dir()
     ] + list(INSPECT_SEQ)
 
     def insp_load(method, pid):
-        """``(static scores | None, AdaptiveTrace | None)`` for one method+problem."""
+        """``(static scores | None, AdaptiveTrace | None)`` for one method+problem,
+        read from the method's own cache (primary or legacy)."""
         _kind, sdir, adir = INSPECT_SPEC[method]
-        rec = compare.load_static_scores(CACHE_DIR, sdir, pid) if sdir else None
+        _cache = cache_for(method)
+        rec = compare.load_static_scores(_cache, sdir, pid) if sdir else None
         scores = np.asarray(rec["scores"], float) if rec else None
-        trace = compare.load_adaptive_trace(CACHE_DIR, adir, pid) if adir else None
+        trace = compare.load_adaptive_trace(_cache, adir, pid) if adir else None
         return scores, trace
 
     def insp_effective(trace, step):
@@ -1258,8 +967,8 @@ def _(INSPECT_METHODS, mo):
     # These two drive the plan table only — the scene and the per-method overview below
     # are deliberately method-independent.
     _default = (
-        "SPECTREv3-adaptive"
-        if "SPECTREv3-adaptive" in INSPECT_METHODS
+        "SPECTRE-adaptive"
+        if "SPECTRE-adaptive" in INSPECT_METHODS
         else INSPECT_METHODS[0]
     )
     inspect_model = mo.ui.dropdown(
@@ -1284,12 +993,12 @@ def _(inspect_model, inspect_next, inspect_pid, inspect_prev, inspect_realized, 
 
 @app.cell
 def _(
-    CACHE_DIR,
     ENV_VARIANT,
     INSPECT_METHODS,
     INSPECT_PIDS,
     INSPECT_SEQ,
     REPO,
+    cache_for,
     compare,
     df,
     get_pid,
@@ -1302,7 +1011,7 @@ def _(
 ):
     from alphatamp.approaches.spectre import eda as eda_mod
 
-    _ = (plt, CACHE_DIR)  # keep deps explicit for marimo
+    _ = plt  # keep dep explicit for marimo
 
     # Episodes come from the PRIMARY collection: the inspector renders v4 scenes and v4
     # pools, which is why it only offers v4-native methods.
@@ -1331,7 +1040,7 @@ def _(
             # VLMPlan: its own attempt sequence, not a pool ranking. "1st-feasible rank"
             # is its own first-success index (== FP); a pid outside its stratified subset
             # has no record, shown blank.
-            _vrec = compare.load_vlmplan_attempts(CACHE_DIR, INSPECT_SEQ[_m], _pid)
+            _vrec = compare.load_vlmplan_attempts(cache_for(_m), INSPECT_SEQ[_m], _pid)
             _rows.append(
                 {
                     "": "▶" if _m == inspect_model.value else "",
@@ -1402,10 +1111,10 @@ def _(
 
 @app.cell
 def _(
-    CACHE_DIR,
     ENV,
     INSPECT_SEQ,
     INSPECT_SPEC,
+    cache_for,
     compare,
     ep_by_pid,
     get_pid,
@@ -1438,7 +1147,9 @@ def _(
     if _method in INSPECT_SEQ:
         # VLMPlan: render the model's OWN ordered proposals from the cached record; there
         # is no shared skeleton pool to index (its plans are off-pool by design).
-        _vrec = compare.load_vlmplan_attempts(CACHE_DIR, INSPECT_SEQ[_method], _pid)
+        _vrec = compare.load_vlmplan_attempts(
+            cache_for(_method), INSPECT_SEQ[_method], _pid
+        )
         if _vrec is None:
             inspect_plan_table = mo.md(
                 f"*(**{_method}** has no record for problem {_pid} — its stratified "
@@ -1603,21 +1314,20 @@ def _(
 def _(mo):
     mo.md(r"""## 6 · VLMPlan — usable plans generated per problem
 
-          How much of each VLM arm's attempt list it produced *itself*, before the
-          published-order fallback takes over. `n_proposed` counts the **unique, valid,
-          parseable** plans a run generated (the plan budget is 200, the same size as
-          the candidate pool), so it is a capacity measure, not an attempt count.
-
-          Error bars are ± std **across problems** within a stratum.
+          `n_proposed` = unique, valid, parseable plans each VLM arm generated itself
+          (budget 200) — a capacity measure, not an attempt count. Error bars = ± std
+          across problems within a stratum.
           """)
     return
 
 
 @app.cell
-def _(COLORS, ENV, LEGACY_CACHE, SLAB, STRATA, compare, np, pd, plt):
+def _(COLORS, ENV, SLAB, STRATA, cache_for, compare, np, pd, plt):
     _arms, _frames = [], {}
     for _arm, _subdir in compare.SEQUENCE_METHODS.items():
-        _rows = compare.load_vlmplan_diagnostics(LEGACY_CACHE, _subdir)
+        # Each arm from its own cache: legacy for grafted (VLMPlan-32B), primary for
+        # native (VLMPlan-GPT5.6). Reading LEGACY_CACHE for all dropped the native arm.
+        _rows = compare.load_vlmplan_diagnostics(cache_for(_arm), _subdir)
         if not _rows:
             continue
         _v = pd.DataFrame(_rows)

@@ -74,26 +74,26 @@ def test_load_fp_records_aggregates_and_averages(tmp_path: Path) -> None:
     )
     # SPECTRE static: seed 0 -> FP 1 (neg outranks pos), seed 1 -> FP 0 -> mean 0.5.
     _dump(
-        cache / "spectre_static" / "seed_0" / f"{pid}.json",
+        cache / "spectre3_static" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "scores": [2.0, 1.0], "labels": [0, 1]},
     )
     _dump(
-        cache / "spectre_static" / "seed_1" / f"{pid}.json",
+        cache / "spectre3_static" / "seed_1" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "scores": [2.0, 1.0], "labels": [1, 0]},
     )
     # SPECTRE adaptive: seeds 4 and 6 -> mean 5.
     _dump(
-        cache / "spectre_adaptive" / "seed_0" / f"{pid}.json",
+        cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 4.0},
     )
     _dump(
-        cache / "spectre_adaptive" / "seed_1" / f"{pid}.json",
+        cache / "spectre3_adaptive" / "seed_1" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 6.0},
     )
 
     recs = compare.load_fp_records(cache)
     by_method = {r["method"]: r for r in recs}
-    # v2 family is absent from this fixture -> gracefully skipped (v1-only cache).
+    # SPECTRE is displayed without a version; its cache dirs are `spectre3_*`.
     assert set(by_method) == {
         "astar-dist",
         "PIGINet",
@@ -105,34 +105,6 @@ def test_load_fp_records_aggregates_and_averages(tmp_path: Path) -> None:
     assert by_method["PIGINet"]["fp"] == 0.0
     assert by_method["SPECTRE-static"]["fp"] == 0.5
     assert by_method["SPECTRE-adaptive"]["fp"] == 5.0
-
-
-def test_load_fp_records_includes_v2_family(tmp_path: Path) -> None:
-    """The SPECTRE v2 family (spectre2_*) is read alongside v1 when present."""
-    cache = tmp_path / "compare_cache"
-    pid = 1_600_000  # stratum 2
-    # astar/piginet are the required base static methods.
-    _dump(
-        cache / "astar" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [0.0, -1.0], "labels": [0, 1]},
-    )
-    _dump(
-        cache / "piginet" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [5.0, 1.0], "labels": [1, 0]},
-    )
-    # Only the v2 family present (v1 absent -> gracefully skipped).
-    _dump(
-        cache / "spectre2_static" / "seed_0" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [2.0, 1.0], "labels": [0, 1]},
-    )
-    _dump(
-        cache / "spectre2_adaptive" / "seed_0" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "fp": 3.0, "order": [1, 0]},
-    )
-    by_method = {r["method"]: r["fp"] for r in compare.load_fp_records(cache)}
-    assert by_method["SPECTREv2-static"] == 1.0  # neg (2.0) outranks pos (1.0)
-    assert by_method["SPECTREv2-adaptive"] == 3.0
-    assert "SPECTRE-static" not in by_method  # v1 family absent
 
 
 def test_missing_cache_raises(tmp_path: Path) -> None:
@@ -177,10 +149,10 @@ def test_load_adaptive_trace_legacy_record_has_no_step_scores(tmp_path: Path) ->
     cache = tmp_path / "compare_cache"
     pid = 1_600_000
     _dump(
-        cache / "spectre_adaptive" / "seed_0" / f"{pid}.json",
+        cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 3.0, "order": [2, 1, 0, 4]},
     )
-    tr = compare.load_adaptive_trace(cache, "spectre_adaptive", pid)
+    tr = compare.load_adaptive_trace(cache, "spectre3_adaptive", pid)
     assert tr is not None
     assert tr.order == [2, 1, 0, 4]
     assert tr.step_scores is None
@@ -350,7 +322,7 @@ def test_load_length_fit_records_and_ladder(tmp_path: Path) -> None:
     # SPECTRE static: pure length function (score depends only on length) both seeds.
     for seed in (0, 1):
         _dump(
-            cache / "spectre_static" / f"seed_{seed}" / f"{pid}.json",
+            cache / "spectre3_static" / f"seed_{seed}" / f"{pid}.json",
             {
                 "problem_id": pid,
                 "stratum": 2,
@@ -360,11 +332,11 @@ def test_load_length_fit_records_and_ladder(tmp_path: Path) -> None:
         )
     # SPECTRE adaptive: realized attempt orders (climbing) per seed, with fp too.
     _dump(
-        cache / "spectre_adaptive" / "seed_0" / f"{pid}.json",
+        cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 2.0, "order": [0, 1, 3]},
     )
     _dump(
-        cache / "spectre_adaptive" / "seed_1" / f"{pid}.json",
+        cache / "spectre3_adaptive" / "seed_1" / f"{pid}.json",
         {"problem_id": pid, "stratum": 2, "fp": 2.0, "order": [0, 2, 3]},
     )
 
@@ -411,7 +383,7 @@ def test_vlmplan_absent_is_skipped_not_fatal(tmp_path: Path) -> None:
     _base_cache(cache, 1_600_000)
     methods = {r["method"] for r in compare.load_fp_records(cache)}
     assert not any(m.startswith("VLMPlan") for m in methods)
-    assert not compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen8b")
+    assert not compare.load_vlmplan_diagnostics(cache, "vlmplan_qwen32b")
 
 
 def test_vlmplan_fp_is_read_verbatim_not_derived(tmp_path: Path) -> None:
@@ -422,7 +394,7 @@ def test_vlmplan_fp_is_read_verbatim_not_derived(tmp_path: Path) -> None:
     pid = 1_600_000
     _base_cache(cache, pid)
     _dump(
-        cache / "vlmplan_qwen8b" / "seed_0" / f"{pid}.json",
+        cache / "vlmplan_qwen32b" / "seed_0" / f"{pid}.json",
         {
             "problem_id": pid,
             "stratum": 2,
@@ -443,12 +415,12 @@ def test_vlmplan_fp_is_read_verbatim_not_derived(tmp_path: Path) -> None:
             "loop": {"plans_per_round": 10},
         },
     )
-    rows = [r for r in compare.load_fp_records(cache) if r["method"] == "VLMPlan-8B"]
+    rows = [r for r in compare.load_fp_records(cache) if r["method"] == "VLMPlan-32B"]
     assert rows == [
-        {"problem_id": pid, "stratum": 2, "method": "VLMPlan-8B", "fp": 7.0}
+        {"problem_id": pid, "stratum": 2, "method": "VLMPlan-32B", "fp": 7.0}
     ]
-    assert "VLMPlan-8B" in compare.METHOD_ORDER
     assert "VLMPlan-32B" in compare.METHOD_ORDER
+    assert "VLMPlan-GPT5.6" in compare.METHOD_ORDER
 
 
 def test_vlmplan_diagnostics_expose_the_reported_fields(tmp_path: Path) -> None:
@@ -506,7 +478,7 @@ def test_load_fp_records_per_seed_preserves_the_seed_axis(tmp_path: Path) -> Non
     )
     for seed, fp in ((0, 4.0), (1, 6.0), (2, 8.0)):
         _dump(
-            cache / "spectre_adaptive" / f"seed_{seed}" / f"{pid}.json",
+            cache / "spectre3_adaptive" / f"seed_{seed}" / f"{pid}.json",
             {"problem_id": pid, "stratum": 2, "fp": fp},
         )
 
@@ -597,7 +569,7 @@ def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
                     "seed": seed,
                     "problem_id": pid,
                     "stratum": 2,
-                    "method": "SPECTREv2-adaptive",
+                    "method": "SPECTRE-adaptive",
                     "fp": fp,
                 }
             )
@@ -614,45 +586,15 @@ def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
     header, rows, tidy = mod.build_table(records)
     assert header[:3] == ["method", "seeds", "ALL"]
     by_method = {r[0]: r for r in rows}
-    assert by_method["SPECTREv2-adaptive"][1] == "3"
-    assert by_method["SPECTREv2-adaptive"][2] == "7.00 ± 2.00"
+    assert by_method["SPECTRE-adaptive"][1] == "3"
+    assert by_method["SPECTRE-adaptive"][2] == "7.00 ± 2.00"
     # a single deterministic run reports no spread at all rather than "± 0.00"
     assert by_method["astar-dist"][1] == "-"
     assert by_method["astar-dist"][2] == "3.00"
     entry = next(
-        t for t in tidy if t["method"] == "SPECTREv2-adaptive" and t["stratum"] == "ALL"
+        t for t in tidy if t["method"] == "SPECTRE-adaptive" and t["stratum"] == "ALL"
     )
     assert entry["n_seeds"] == 3 and entry["mean_fp"] == 7.0
-
-
-def test_load_fp_records_includes_v3_family(tmp_path: Path) -> None:
-    """The SPECTRE v3 family (spectre3_*) is read alongside the others when present."""
-    cache = tmp_path / "compare_cache"
-    pid = 1_600_000  # stratum 2
-    _dump(
-        cache / "astar" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [0.0, -1.0], "labels": [0, 1]},
-    )
-    _dump(
-        cache / "piginet" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [5.0, 1.0], "labels": [1, 0]},
-    )
-    # Only the v3 family present -> v1 and v2 gracefully skipped.
-    _dump(
-        cache / "spectre3_static" / "seed_0" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "scores": [2.0, 1.0], "labels": [0, 1]},
-    )
-    _dump(
-        cache / "spectre3_adaptive" / "seed_0" / f"{pid}.json",
-        {"problem_id": pid, "stratum": 2, "fp": 4.0, "order": [1, 0]},
-    )
-    by_method = {r["method"]: r["fp"] for r in compare.load_fp_records(cache)}
-    assert by_method["SPECTREv3-static"] == 1.0  # neg (2.0) outranks pos (1.0)
-    assert by_method["SPECTREv3-adaptive"] == 4.0
-    assert "SPECTREv2-static" not in by_method
-    assert "SPECTRE-static" not in by_method
-    # and it is ordered for display
-    assert "SPECTREv3-adaptive" in compare.METHOD_ORDER
 
 
 def test_load_named_fp_records_per_seed_keeps_the_seed_axis(tmp_path: Path) -> None:
@@ -687,25 +629,25 @@ def _rec(method: str, pid: int, fp: float, seed=0) -> dict:
 
 def test_merge_collections_grafts_only_the_named_methods() -> None:
     """Legacy rows are taken only for methods absent from the primary collection."""
-    primary = [_rec("SPECTREv3-adaptive", 1, 7.0), _rec("SPECTREv2-adaptive", 1, 14.0)]
+    primary = [_rec("SPECTRE-adaptive", 1, 7.0), _rec("VLMPlan-32B", 1, 14.0)]
     legacy = [
         _rec("PIGINet", 1, 18.0, seed=None),
-        _rec("SPECTREv2-adaptive", 1, 13.0),  # exists in primary -> must NOT be taken
-        _rec("VLMPlan-8B", 1, 29.0),
+        _rec("VLMPlan-32B", 1, 13.0),  # exists in primary -> must NOT be taken
+        _rec("astar-dist", 1, 29.0),
     ]
     out = compare.merge_collections(
-        primary, legacy, ["PIGINet", "VLMPlan-8B", "SPECTREv2-adaptive"], "v4", "v3"
+        primary, legacy, ["PIGINet", "astar-dist", "VLMPlan-32B"], "v4", "v3"
     )
     by_method = {r["method"]: r for r in out}
     assert set(by_method) == {
-        "SPECTREv3-adaptive",
-        "SPECTREv2-adaptive",
+        "SPECTRE-adaptive",
+        "VLMPlan-32B",
         "PIGINet",
-        "VLMPlan-8B",
+        "astar-dist",
     }
     # primary wins a name collision, and keeps its own value
-    assert by_method["SPECTREv2-adaptive"]["fp"] == 14.0
-    assert by_method["SPECTREv2-adaptive"]["collection"] == "v4"
+    assert by_method["VLMPlan-32B"]["fp"] == 14.0
+    assert by_method["VLMPlan-32B"]["collection"] == "v4"
     assert by_method["PIGINet"]["collection"] == "v3"
     # every record is tagged, not just the grafted ones
     assert all("collection" in r for r in out)

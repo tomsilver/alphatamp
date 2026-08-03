@@ -52,30 +52,21 @@ from typing import Mapping, Sequence
 import numpy as np
 from numpy.typing import ArrayLike
 
-# Display method name -> cache sub-directory. astar / PIGINet are deterministic
-# (single run); the SPECTRE families have a per-seed sub-directory layer.
+# Display method name -> cache sub-directory. Both are deterministic single runs (astar
+# is a planner order, PIGINet a fixed BCE head); the SPECTRE family has a per-seed layer.
 STATIC_METHODS: dict[str, str] = {
     "astar-dist": "astar",
     "PIGINet": "piginet",
 }
-# SPECTRE v1 (abstract-only re-ranker).
+# SPECTRE (FailureRecord + observed coverage/waste). Only the deployed model is in the
+# comparison, so it is displayed without a version number; the cache dirs stay `spectre3_*`.
 SPECTRE_STATIC_METHOD = "SPECTRE-static"
 SPECTRE_ADAPTIVE_METHOD = "SPECTRE-adaptive"
-SPECTRE_STATIC_DIR = "spectre_static"
-SPECTRE_ADAPTIVE_DIR = "spectre_adaptive"
-# SPECTRE v2.2 (geometry + typed-evidence re-ranker; observed proof-demotion).
-SPECTREV2_STATIC_METHOD = "SPECTREv2-static"
-SPECTREV2_ADAPTIVE_METHOD = "SPECTREv2-adaptive"
-SPECTREV2_STATIC_DIR = "spectre2_static"
-SPECTREV2_ADAPTIVE_DIR = "spectre2_adaptive"
-# SPECTRE v3 (FailureRecord + observed coverage/waste; strict proof-demotion).
-SPECTREV3_STATIC_METHOD = "SPECTREv3-static"
-SPECTREV3_ADAPTIVE_METHOD = "SPECTREv3-adaptive"
-SPECTREV3_STATIC_DIR = "spectre3_static"
-SPECTREV3_ADAPTIVE_DIR = "spectre3_adaptive"
+SPECTRE_STATIC_DIR = "spectre3_static"
+SPECTRE_ADAPTIVE_DIR = "spectre3_adaptive"
 
-# Seeded SPECTRE families: (static_method, static_dir, adaptive_method, adaptive_dir).
-# Both static and adaptive of a family are two deployment modes of one checkpoint.
+# Seeded SPECTRE family: (static_method, static_dir, adaptive_method, adaptive_dir). Both
+# modes are two deployment settings of one checkpoint.
 SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
     (
         SPECTRE_STATIC_METHOD,
@@ -83,37 +74,17 @@ SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
         SPECTRE_ADAPTIVE_METHOD,
         SPECTRE_ADAPTIVE_DIR,
     ),
-    (
-        SPECTREV2_STATIC_METHOD,
-        SPECTREV2_STATIC_DIR,
-        SPECTREV2_ADAPTIVE_METHOD,
-        SPECTREV2_ADAPTIVE_DIR,
-    ),
-    (
-        SPECTREV3_STATIC_METHOD,
-        SPECTREV3_STATIC_DIR,
-        SPECTREV3_ADAPTIVE_METHOD,
-        SPECTREV3_ADAPTIVE_DIR,
-    ),
 ]
 
 # Sequence methods: a method that PRODUCES its own ordered attempt sequence instead of
-# ranking the shared candidate pool. VLMPlan is zero-shot, so it has no pool to rank; its
-# attempts may include plans the 200-candidate pool does not contain, which is why its FP
-# is precomputed at cache-build time (only the builder knows the off-pool labels) and
-# read back verbatim here. Same record shape as an adaptive trace (`fp` + `order`), so
-# the existing seed-averaging reader handles it unchanged, and ``order`` carries ``-1``
-# for an off-pool attempt. Absent dirs are skipped: the notebook loads with no VLM cache.
-#
-# One subdir per *arm* (model): a cache dir is one method row, so two models must never
-# share one. Both arms are Qwen3-VL Instruct, differing only in size, so the pair is a
-# clean scale comparison — see ``decisions.md`` 2026-07-25.
+# ranking the shared candidate pool. VLMPlan is zero-shot, so it has no pool; its FP
+# (including off-pool refined attempts) is precomputed at cache-build time and read back
+# verbatim -- same record shape as an adaptive trace (`fp` + `order`), so the seed-
+# averaging reader handles it unchanged, and ``order`` carries ``-1`` for an off-pool
+# attempt. `VLMPlan-32B` is the local Qwen arm; `VLMPlan-GPT5.6` the frontier
+# (gpt-5.6-luna) arm. One subdir per model -- a cache dir is one method row.
 SEQUENCE_METHODS: dict[str, str] = {
-    "VLMPlan-8B": "vlmplan_qwen8b",
     "VLMPlan-32B": "vlmplan_qwen32b",
-    # The frontier arm (gpt-5.6-luna over the OpenAI Responses API), native on dd2d_v4 and
-    # stickbutton2d_v1_kinder. This is the paper's headline VLMPlan row; the Qwen arms
-    # stay for the local-vs-frontier scale contrast.
     "VLMPlan-GPT5.6": "vlmplan_luna",
 }
 
@@ -123,10 +94,6 @@ METHOD_ORDER: list[str] = [
     "PIGINet",
     SPECTRE_ADAPTIVE_METHOD,
     SPECTRE_STATIC_METHOD,
-    SPECTREV2_ADAPTIVE_METHOD,
-    SPECTREV2_STATIC_METHOD,
-    SPECTREV3_ADAPTIVE_METHOD,
-    SPECTREV3_STATIC_METHOD,
     *SEQUENCE_METHODS,
 ]
 
@@ -1135,8 +1102,8 @@ def render_markdown(header: list[str], rows: list[list[str]]) -> str:
 TIMED_METHODS: dict[str, str] = {
     "astar-dist": "astar",
     "PIGINet": "piginet",
-    SPECTREV3_STATIC_METHOD: SPECTREV3_STATIC_DIR,
-    SPECTREV3_ADAPTIVE_METHOD: SPECTREV3_ADAPTIVE_DIR,
+    SPECTRE_STATIC_METHOD: SPECTRE_STATIC_DIR,
+    SPECTRE_ADAPTIVE_METHOD: SPECTRE_ADAPTIVE_DIR,
     "VLMPlan-GPT5.6": "vlmplan_luna",
 }
 

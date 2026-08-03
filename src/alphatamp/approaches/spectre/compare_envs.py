@@ -62,11 +62,16 @@ class EnvSpec:
     """Whether the v3 ablation arms (§4) are cached for this collection."""
 
     has_timing: bool = False
-    """Whether episodes carry per-candidate refinement wall-clock, enabling the wall-
-    clock section.
+    """Whether the §2b wall-clock section is enabled for this collection.
 
-    True for the DD2D v3/v4 refiner-instrumented collections; False for SB2D (kinder's
-    ``BacktrackingRefiner`` records no per-candidate times).
+    True for the DD2D v3/v4 collections, whose pool-method compare records carry the
+    per-candidate timing fields written by ``precompute_dd2d_cache``. False for SB2D **by
+    choice, not by data**: SB2D episodes *do* carry real per-candidate
+    ``refinement_wall_clock_s`` (the shared collector times every refine), but filling
+    §2b there needs a per-env refinement cap (the DD2D 2 s cap censors SB2D's ~10 s
+    feasible refines), a ``precompute_dd2d_cache.py --env-variant stickbutton2d_v1_kinder
+    --methods astar piginet spectre3`` run, and SPECTRE timing sourced from the legacy
+    cache — deferred, so §2b shows a stub on SB2D.
     """
 
     caveats: tuple[str, ...] = ()
@@ -127,6 +132,17 @@ def _sb2d_scene(episode: EpisodeRecord) -> Image:
     return render_labeled_scene(episode.scene_geometry, episode.object_registry)
 
 
+def _sb2d_kinder_scene(episode: EpisodeRecord) -> Image:
+    """kinder's own env pixels with Set-of-Mark labels overlaid — the SAME render the
+    VLMPlan prompt attaches, so the inspector shows exactly what the model saw."""
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.envs.stickbutton2d.render import (
+        render_kinder_labeled_scene,
+    )
+
+    return render_kinder_labeled_scene(episode)
+
+
 def _short(name: str) -> str:
     """``item_5`` / ``circle_3`` -> the trailing token, matching the render's labels."""
     return name.rsplit("_", 1)[-1]
@@ -166,7 +182,7 @@ def _sb2d_plan_label(steps: Sequence[tuple[str, Sequence[str]]]) -> str:
 
 DD2D = EnvSpec(
     key="dd2d",
-    title="DD2D — SPECTRE v3 vs v2, PIGINet, VLMPlan and pure planning",
+    title="DD2D — SPECTRE vs PIGINet, VLMPlan and pure planning",
     env_variant="dd2d_v4",
     stratum_labels={0: "s0", 1: "s1", 2: "s2", 3: "s3"},
     stratum_meaning=(
@@ -175,14 +191,14 @@ DD2D = EnvSpec(
     ),
     stratum_axis_label="min-feasible-subset stratum",
     legacy_variant="dd2d_v3",
-    # VLMPlan is the only row without a native dd2d_v4 run: regenerating it is two model
-    # arms x 100 problems (~10.5 h) to move a row that cannot plausibly shift on a 0.08%
-    # label change.
-    legacy_only=("VLMPlan-8B", "VLMPlan-32B"),
+    # VLMPlan-32B (the Qwen arm) is the only row without a native dd2d_v4 run -- grafted
+    # from dd2d_v3 rather than regenerated (two model arms x 100 problems to move a row
+    # that cannot plausibly shift on a 0.08% label change). VLMPlan-GPT5.6 is native to v4.
+    legacy_only=("VLMPlan-32B",),
     has_ablations=True,
     has_timing=True,
     caveats=(
-        "The §1/§2 `SPECTREv3` rows are the **deployed unified coverage/waste** "
+        "The §1/§2 `SPECTRE` rows are the **deployed unified coverage/waste** "
         "checkpoint (`checkpoints_v3_unified`), rebuilt 2026-08-01: adaptive 5.78 ± "
         "0.10. The §4 ablation component arms (`abl_*`) predate the 2026-07-31 "
         "unification and score under the **old** coverage/waste definition, so the §4 "
@@ -281,56 +297,48 @@ SB2D_KINDER = EnvSpec(
     stratum_labels={0: "b1", 1: "b2", 2: "b3", 3: "b5"},
     stratum_meaning=SB2D.stratum_meaning,
     stratum_axis_label="button count",
-    # SPECTRE is image-free and its records here are byte-identical to
-    # `stickbutton2d_v1`, so every non-PIGINet learned row is grafted from v1. `astar`
-    # is rebuilt natively (deterministic and cheap; the notebook counts problems from
-    # the primary cache's `astar/` dir), and PIGINet is native because its crops now
-    # come from kinder. Only PIGINet's number can differ from the `sb2d` entry.
+    # PIGINet + VLMPlan-GPT5.6 are native to the kinder cache; SPECTRE and VLMPlan-32B are
+    # image-free / already-collected and byte-identical to `stickbutton2d_v1`, so they are
+    # grafted from that legacy cache. astar is rebuilt natively (deterministic and cheap).
     legacy_variant="stickbutton2d_v1",
-    legacy_only=("SPECTREv3-static", "SPECTREv3-adaptive", "VLMPlan-32B"),
-    has_ablations=False,  # the v3 ablations are SPECTRE-internal; read them on `sb2d`
+    legacy_only=("SPECTRE-static", "SPECTRE-adaptive", "VLMPlan-32B"),
+    has_ablations=False,  # v3 ablations are SPECTRE-internal; §4 is hidden here
     has_timing=False,
     caveats=(
-        "**PIGINet's crops here come from kinder's own renderer, not the schematic.** "
-        "Each per-object crop is a window on the true rendered scene, so it carries "
-        "real context — neighbouring buttons, the stick, the table band, the wall — "
-        "that the `sb2d` entry's schematic (a lone disc on a blank background) threw "
-        "away. It does not make two unpressed buttons look different — they are "
-        "identical red discs in the real env too — so the image channel is *less* "
-        "degenerate but not fully informative; pose/shape still do most of the work. "
-        "**This is the variant to read for the representation contrast**; `sb2d` is "
-        "the schematic-crop baseline.",
-        "**Only PIGINet is native to this variant; every other row is grafted from "
-        "`stickbutton2d_v1`.** SPECTRE is image-free and its inputs are byte-identical "
-        "here, so its numbers cannot differ; VLMPlan likewise. The comparison that "
-        "moves is PIGINet vs SPECTRE.",
-        "**§4 (the v3 ablations) and §5's plan inspector for SPECTRE are not rebuilt "
-        "for this variant** — those arms are SPECTRE-internal and identical to "
-        "`stickbutton2d_v1`; read them on the `sb2d` entry.",
-        "**PIGINet's `at-pose` literals are synthesised** by the adapter. SB2D's "
-        "abstract initial state names no positions, and a low-level predictor with no "
-        "coordinates would be a strawman.",
-        "**b5's training split is 17 episodes** for every learned method — the "
-        "collection was cut at a wall-clock budget — so the b5 column is substantially "
-        "a generalisation result. No method is advantaged; none should be quoted as "
-        "trained-on-b5.",
-        "**`VLMPlan-GPT5.6` (gpt-5.6-luna, the frontier arm) is native here** on the "
-        "kinder-labeled image (kinder's real pixels + Set-of-Mark labels; unlabeled kinder "
-        "discs are unusable by a VLM). It is a genuine planner — 11.85 ALL, self-solves "
+        "**PIGINet's crops come from kinder's own renderer** (a window on the true scene, "
+        "with real context — neighbouring buttons, stick, table, wall), so this is the "
+        "variant to read for the representation contrast. It still does not make two "
+        "unpressed buttons look different (identical red discs in the real env too), so "
+        "the image channel is *less* degenerate but not fully informative; pose/shape do "
+        "most of the work.",
+        "**Only PIGINet and VLMPlan-GPT5.6 are native here; SPECTRE and VLMPlan-32B are "
+        "grafted from `stickbutton2d_v1`** (image-free / byte-identical records). The "
+        "comparison that moves is PIGINet vs SPECTRE.",
+        "**PIGINet's `at-pose` literals are synthesised** by the adapter — SB2D's abstract "
+        "initial state names no positions, and a low-level predictor with no coordinates "
+        "would be a strawman.",
+        "**b5's training split is 17 episodes** for every learned method (collection cut "
+        "at a wall-clock budget), so the b5 column is substantially a generalisation "
+        "result — none should be quoted as trained-on-b5.",
+        "**`VLMPlan-GPT5.6` (gpt-5.6-luna) is a genuine planner** — 11.85 ALL, self-solves "
         "35/40, beats the naive order (16.29) — but **~6× behind the learned rankers** "
         "(1.69–2.28) and roughly tied with the local Qwen-32B (13.18); it over-thinks b3 "
-        "(11.4, worse than astar's 3.0) and only wins at b5. Stratified 40 (10/stratum). "
-        "A frontier VLM does not close the gap to the learned methods — see "
-        "`notebook/07` 2026-08-03.",
+        "and only wins at b5. Stratified 40 (10/stratum). See `notebook/07` 2026-08-03.",
     ),
-    render_scene=_sb2d_scene,
+    render_scene=_sb2d_kinder_scene,
     plan_label=_sb2d_plan_label,
-    scene_legend=SB2D.scene_legend,
+    scene_legend=(
+        "kinder's own initial-scene render (the real env pixels PIGINet's crops come "
+        "from) with Set-of-Mark labels overlaid — the exact image the VLMPlan prompt "
+        "attaches. **Red** discs are unpressed buttons, the brown bar is the stick, the "
+        "purple disc is the robot; labels are the canonical object names used by the plan "
+        "table."
+    ),
 )
 
-#: Registry. Order sets the notebook's default (first entry). `sb2d` (schematic) stays
-#: the default until the kinder cache is built and its PIGINet number validated.
-ENVS: dict[str, EnvSpec] = {spec.key: spec for spec in (SB2D, SB2D_KINDER, DD2D)}
+#: Registry. Order sets the notebook's default (first entry). Only the kinder-rendered
+#: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03).
+ENVS: dict[str, EnvSpec] = {spec.key: spec for spec in (SB2D_KINDER, DD2D)}
 
 
 def get(key: str) -> EnvSpec:
