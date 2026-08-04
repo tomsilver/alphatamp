@@ -4,6 +4,63 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-03-sb2d-2b-wall-clock-spectre-adaptive-fastest-per-env"></a>
+## 2026-08-03 — SB2D §2b wall-clock — SPECTRE-adaptive fastest; per-env 10 s cap; astar benefits most
+
+<!--strip-->
+> **id** `2026-08-03-sb2d-2b-wall-clock-spectre-adaptive-fastest-per-env` · **status**
+> active · **tracks** evaluation, env-stickbutton2d, method
+<!--/strip-->
+
+**What.** Brought the §2b wall-clock-to-first-success breakdown to parity on SB2D (it was a stub;
+DD2D-only). The raw material already existed — every SB2D `OutcomeRecord` carries a measured
+`refinement_wall_clock_s` — so this was wiring, not re-collection: made `REFINE_CAP_S` per-env,
+added an SB2D branch to `_measure_plan_gen` (times the acyclic pool draw via the new
+`collect.time_pool_generation`), grafted SPECTRE's timing from the `stickbutton2d_v1` legacy cache
+(new `compare.merge_time_records`, mirroring the FP graft), and flipped `SB2D_KINDER.has_timing`.
+Rebuilt the caches: `precompute_dd2d_cache.py --env-variant stickbutton2d_v1 --methods spectre3
+--no-ablations --force` (SPECTRE timing into the legacy cache) and `--env-variant
+stickbutton2d_v1_kinder --methods astar piginet --force` (astar/PIGINet timing into the primary
+cache, both under the new cap). FP headline unchanged after the `--force` rebuild (adaptive 1.69,
+static 1.98, PIGINet 2.28) — timing fields added, FP identical. Protocol ADR:
+[decisions/07 2026-08-03](../decisions/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d).
+
+**Cap = 10 s (vs DD2D's 2 s).** SB2D feasible refines run to seconds (per-candidate p95 10.6 s),
+too slow for a DD2D-style cap-above-the-whole-distribution to fit under the 20 s budget. 10 s
+instead clears each problem's *fastest*-feasible (per-problem min-feasible maxes at 8.84 s) with
+margin, so `_feasibility_at_risk(10) = 0` (no problem censored), while still biting hard: **33 % of
+all per-candidate refines exceed 10 s** because SB2D's *failures* run to the 20 s budget (p75 of all
+per-candidate refines is 20.0 s; only ~4 % of candidates are feasible).
+
+**Result (ALL, test n=100 for pool methods / n=40 VLMPlan, under the 10 s cap):**
+
+| method | total s | plan-gen | infer | refine | uncapped s | FP (uncap→cap) |
+|---|---|---|---|---|---|---|
+| **SPECTRE-adaptive** | **11.17** | 0.59 | 0.06 | 10.53 | 13.98 | 1.69 → 2.03 |
+| SPECTRE-static | 12.64 | 0.59 | 0.01 | 12.04 | 16.56 | 1.98 → 2.32 |
+| PIGINet | 15.15 | 0.59 | 0.04 | 14.52 | 24.22 | 2.28 → 2.41 |
+| VLMPlan-GPT5.6 | 53.61 | 0.00 | 37.18 | 16.43 | 105.28 | 11.85 → 11.97 |
+| astar-dist | 97.40 | 0.59 | 0.00 | 96.81 | 145.64 | 16.29 → 16.49 |
+
+Plan-gen per stratum (kinder, 3 problems each): **b1 2.09 s** (the padded-plan `_RAW_CAP` grind —
+b1's 200-slot pool is mostly stick-cycle duplicates the acyclic filter discards), b2 0.16, b3 0.034,
+b5 0.072; the ALL 0.59 s is the balanced-stratum mean. Refinement dominates the total everywhere;
+inference is a sliver (VLMPlan excepted — its generation *is* its inference, 37 s).
+
+**Takeaway — the DD2D cap narrative does not transfer, and the SB2D cap has a real FP cost.**
+On DD2D the cap *flips* v3-adaptive from ~equal-uncapped to fastest, because there astar's failures
+are cheap dead-ends and v3's few failures are the expensive near-feasible traps. On SB2D **all
+failures are uniformly expensive** (they run to the 20 s budget), so FP and wall-clock are aligned:
+SPECTRE-adaptive is fastest **both** capped (11.17 s) and uncapped (13.98 s), and the cap mainly
+compresses astar's huge deficit (−48 s, 145.6 → 97.4). Two things to quote with the table: (1) the
+cap helps the **highest-FP** method most in absolute seconds (astar), the reverse of DD2D; (2) the
+cap costs the learned methods a **real +0.3 FP** (adaptive 1.69 → 2.03), an order of magnitude more
+than DD2D's +0.05, because SB2D's cap sits *inside* the feasible distribution (it abandons slow
+non-fastest feasibles) rather than above it. So on SB2D the cap is a genuine wall-clock/FP trade,
+not the near-free accounting change it is on DD2D.
+
+---
+
 <a id="2026-08-03-vlmplan-frontier-vlm-gpt-5-6-luna-strong"></a>
 ## 2026-08-03 — VLMPlan on a frontier VLM (gpt-5.6-luna): strong on SB2D, weak on DD2D
 

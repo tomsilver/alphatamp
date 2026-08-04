@@ -64,14 +64,16 @@ class EnvSpec:
     has_timing: bool = False
     """Whether the §2b wall-clock section is enabled for this collection.
 
-    True for the DD2D v3/v4 collections, whose pool-method compare records carry the
-    per-candidate timing fields written by ``precompute_dd2d_cache``. False for SB2D **by
-    choice, not by data**: SB2D episodes *do* carry real per-candidate
-    ``refinement_wall_clock_s`` (the shared collector times every refine), but filling
-    §2b there needs a per-env refinement cap (the DD2D 2 s cap censors SB2D's ~10 s
-    feasible refines), a ``precompute_dd2d_cache.py --env-variant stickbutton2d_v1_kinder
-    --methods astar piginet spectre3`` run, and SPECTRE timing sourced from the legacy
-    cache — deferred, so §2b shows a stub on SB2D.
+    True for the DD2D v3/v4 collections and the kinder SB2D variant, whose pool-method
+    compare records carry the per-candidate timing fields written by
+    ``precompute_dd2d_cache`` from the stored ``refinement_wall_clock_s``. The two live
+    variants differ only in the per-candidate refinement cap: DD2D's 2 s sits *above the
+    whole feasible distribution* (feasible p95 0.44 s), while SB2D's feasible refines run to
+    seconds, so it uses 10 s — above each problem's *fastest*-feasible (max 8.84 s, so no
+    problem is censored) but inside the feasible distribution. On the kinder SB2D variant
+    SPECTRE's §2b timing is grafted from the ``stickbutton2d_v1`` legacy cache, the same as
+    its FP (``legacy_only``). Default ``False`` for a freshly onboarded collection until its
+    cache carries the timing fields.
     """
 
     caveats: tuple[str, ...] = ()
@@ -303,7 +305,7 @@ SB2D_KINDER = EnvSpec(
     legacy_variant="stickbutton2d_v1",
     legacy_only=("SPECTRE-static", "SPECTRE-adaptive", "VLMPlan-32B"),
     has_ablations=False,  # v3 ablations are SPECTRE-internal; §4 is hidden here
-    has_timing=False,
+    has_timing=True,  # §2b enabled 2026-08-03: per-env 10s cap, SPECTRE timing grafted
     caveats=(
         "**PIGINet's crops come from kinder's own renderer** (a window on the true scene, "
         "with real context — neighbouring buttons, stick, table, wall), so this is the "
@@ -324,6 +326,13 @@ SB2D_KINDER = EnvSpec(
         "35/40, beats the naive order (16.29) — but **~6× behind the learned rankers** "
         "(1.69–2.28) and roughly tied with the local Qwen-32B (13.18); it over-thinks b3 "
         "and only wins at b5. Stratified 40 (10/stratum). See `notebook/07` 2026-08-03.",
+        "**§2b wall-clock is under a 10 s per-candidate refinement cap** (vs DD2D's 2 s): "
+        "SB2D feasible refines run to seconds, so the cap clears each problem's *fastest* "
+        "feasible (0 censored) but abandons slower candidates. Because SB2D's *failing* "
+        "refines run to the 20 s budget, the cap saves the highest-FP methods (astar) the "
+        "most in absolute seconds — the reverse of DD2D, where it most helped the low-FP "
+        "learned ranker. Refinement dominates the total; plan-gen and inference are small. "
+        "See `notebook/07` 2026-08-03.",
     ),
     render_scene=_sb2d_kinder_scene,
     plan_label=_sb2d_plan_label,

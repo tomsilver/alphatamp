@@ -653,6 +653,38 @@ def test_merge_collections_grafts_only_the_named_methods() -> None:
     assert all("collection" in r for r in out)
 
 
+def test_merge_time_records_grafts_only_named_absent_methods() -> None:
+    """§2b timing graft: a legacy timing row is taken only when its method is named and
+    not already present natively -- the timing analog of merge_collections (no
+    ``collection`` tag). This is what lets the kinder SB2D §2b read SPECTRE's wall-clock
+    from the ``stickbutton2d_v1`` legacy cache while astar/PIGINet stay native."""
+    primary = [_rec("PIGINet", 1, 0.14), _rec("astar-dist", 1, 0.0, seed=None)]
+    legacy = [
+        _rec("SPECTRE-adaptive", 1, 3.0),  # named + absent -> grafted
+        _rec("SPECTRE-static", 1, 2.0),  # named + absent -> grafted
+        _rec("PIGINet", 1, 99.0),  # named but present natively -> NOT taken
+        _rec("astar-dist", 1, 88.0),  # not named -> NOT taken
+    ]
+    out = compare.merge_time_records(
+        primary, legacy, ["SPECTRE-static", "SPECTRE-adaptive", "PIGINet"]
+    )
+    by_method: dict[str, list[float]] = {}
+    for r in out:
+        by_method.setdefault(r["method"], []).append(r["fp"])
+    assert set(by_method) == {
+        "PIGINet",
+        "astar-dist",
+        "SPECTRE-adaptive",
+        "SPECTRE-static",
+    }
+    assert by_method["PIGINet"] == [0.14]  # native wins the name collision
+    assert by_method["astar-dist"] == [0.0]  # unnamed legacy row dropped
+    assert sorted(by_method["SPECTRE-adaptive"] + by_method["SPECTRE-static"]) == [
+        2.0,
+        3.0,
+    ]
+
+
 def test_select_seed_prefers_seed_zero_and_reports_it() -> None:
     """Seed 0 is kept when cached; deterministic rows pass through."""
     records = [

@@ -156,6 +156,46 @@ def _make_plan_generator(
     )
 
 
+def time_pool_generation(cfg: CollectionConfig, problem_id: int) -> float:
+    """Wall-clock (s) to draw the capped skeleton pool for one problem.
+
+    The abstract-plan-generation cost the pool-ranking methods share, measured on its own
+    by mirroring :func:`collect_episode`'s setup up to — and timing only — the ``islice``
+    pool draw, then stopping before any refinement. Env-agnostic: it dispatches the same
+    env models and generator the collection used, so on StickButton2D it times the
+    geometry-aware ``AcyclicPlanGenerator`` exactly as collected. Used by the §2b
+    wall-clock breakdown (``precompute_dd2d_cache._measure_plan_gen``) to supply a
+    per-stratum plan-gen constant, the analog of DD2D's ``planner.plan`` timing.
+    """
+    register_extra_envs()
+    env = kinder.make(cfg.env_id)
+    try:
+        obs, info = env.reset(seed=problem_id)
+        if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME and "_problem" in info:
+            merged: dict[str, object] = dict(obs) if isinstance(obs, dict) else {}
+            merged["_problem"] = info["_problem"]
+            obs = merged
+        env_models = _make_env_models(cfg, env.observation_space, env.action_space)
+        x0 = env_models.observation_to_state(obs)
+        s0 = env_models.state_abstractor(x0)
+        goal = env_models.goal_deriver(x0)
+        bpg: BilevelPlanningGraph = BilevelPlanningGraph()
+        bpg.add_abstract_state_node(s0)
+        bpg.add_state_node(x0)
+        bpg.add_state_abstractor_edge(x0, s0)
+        plan_generator = _make_plan_generator(cfg, env_models, obs, problem_id, x0)
+        start = time.perf_counter()
+        list(
+            itertools.islice(
+                plan_generator(x0, s0, goal, cfg.abstract_plan_timeout_s, bpg),
+                cfg.K_max,
+            )
+        )
+        return time.perf_counter() - start
+    finally:
+        env.close()
+
+
 def _make_trajectory_sampler(
     cfg: CollectionConfig, env_models: SesameModels
 ) -> ParameterizedControllerTrajectorySampler | None:

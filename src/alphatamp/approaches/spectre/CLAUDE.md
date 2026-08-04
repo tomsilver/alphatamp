@@ -172,11 +172,14 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    (`--force` if the arm moved — `_dir_complete` skips a full directory, which is how
    DD2D's v3 row went stale). Render headlessly for any entry with
    `SPECTRE_COMPARE_ENV=<key> python experiments/spectre/compare_methods.py`.
-   A **wall-clock-to-first-success** section (§2b, DD2D only, `EnvSpec.has_timing`) sits
-   beside the FP table: plan-gen + inference + refinement seconds, reusing the stored
+   A **wall-clock-to-first-success** section (§2b, DD2D + kinder SB2D, `EnvSpec.has_timing`)
+   sits beside the FP table: plan-gen + inference + refinement seconds, reusing the stored
    per-candidate `refinement_wall_clock_s` (inference measured on GPU, plan-gen a per-stratum
-   constant; all cached, so a `--force` rebuild is what refreshes them). It is reported under
-   the **deployed per-candidate refinement cap** (`REFINE_CAP_S = 2 s`): each skeleton is
+   constant — an SB2D plan-gen times the acyclic pool draw via `collect.time_pool_generation`;
+   all cached, so a `--force` rebuild is what refreshes them). SPECTRE's SB2D timing is grafted
+   from the `stickbutton2d_v1` legacy cache (`compare.merge_time_records`, the timing analog of
+   the FP `merge_collections`). It is reported under the **deployed per-candidate refinement
+   cap** (`REFINE_CAP_S`, per env-variant: **2 s** on DD2D, **10 s** on SB2D): each skeleton is
    refined for at most C seconds before the next, so a slow near-feasible *trap* costs C, not
    the 20 s budget. The cap is a wall-clock deployment config applied to every method; the
    §1/§2 FP headline stays **uncapped**, and §2b prints the cap's tiny FP delta. Two findings,
@@ -189,7 +192,15 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    retraining); the adaptive order is *re-run* under it (it diverges on 6/300 cells), never
    `min(t, C)`-accounted ([`notebook/07`](docs/notebook/07-stickbutton2d.md#2026-08-02-dd2d-s1-wall-clock-blow-up-diagnosed-per-candidate)
    / [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration)
-   2026-08-02).
+   2026-08-02). **On SB2D the narrative inverts** (2026-08-03): its failures are *uniformly*
+   expensive (all run to the 20 s budget), so FP and wall-clock align — v3-adaptive is fastest
+   capped (11.2 s) *and* uncapped (14.0 s), the cap helps the *highest*-FP method (astar, −48 s)
+   most, and because SB2D's 10 s cap sits *inside* the feasible distribution (a cap above the
+   whole distribution cannot fit under the budget) it costs the learned methods a real **+0.3 FP**
+   — not DD2D's near-free +0.05
+   ([`notebook/07`](docs/notebook/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-spectre-adaptive-fastest-per-env)
+   / [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d)
+   2026-08-03).
 
 ## SPECTRE v3 (in progress, 2026-07-26)
 

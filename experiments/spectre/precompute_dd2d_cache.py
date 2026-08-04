@@ -296,7 +296,7 @@ def _configure_paths(env_variant: str) -> None:
     """(Re)bind every env-variant-dependent module global from ``env_variant``."""
     global ENV_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
-    global CACHE_DIR, N_PROBLEMS
+    global CACHE_DIR, N_PROBLEMS, REFINE_CAP_S
     known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)
     if env_variant not in known:
         raise SystemExit(
@@ -327,6 +327,7 @@ def _configure_paths(env_variant: str) -> None:
     PIGINET_DOMAIN = piginet.get("domain")
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / env_variant / "compare_cache"
     N_PROBLEMS = _count_test_problems(SPECTRE_TEST)
+    REFINE_CAP_S = _REFINE_CAP_S.get(env_variant, _DEFAULT_REFINE_CAP_S)
 
 
 def _write(path: Path, obj: dict, force: bool) -> bool:
@@ -382,13 +383,32 @@ def _refine_seconds(ep, order) -> float:
     return round(total, 6)
 
 
-# Deployed per-candidate refinement-abandonment cap (seconds). A skeleton is refined for at
-# most this long before the deployment moves on; a feasible candidate over the cap is
-# abandoned (its outcome no longer counts as a stopping success). ~4.5x the feasible p95
-# (0.44s on dd2d_v4), so only genuine near-feasible outliers are cut. The §2b wall-clock
-# table reports every pool-ranking method under it; the uncapped fields stay for the FP
-# headline. See decisions/07 2026-08-02.
-REFINE_CAP_S = 2.0
+# Deployed per-candidate refinement-abandonment cap (seconds), **per env-variant**. A
+# skeleton is refined for at most this long before the deployment moves on; a feasible
+# candidate over the cap is abandoned (its outcome no longer counts as a stopping success).
+# The §2b wall-clock table reports every pool-ranking method under it; the uncapped fields
+# stay for the FP headline. See decisions/07 2026-08-02 (DD2D) / 2026-08-03 (SB2D).
+#
+# The right value depends on where a domain's feasible refines sit relative to its budget:
+#   - dd2d_v4: 2.0s = ~4.5x the feasible p95 (0.44s) -- the cap sits *above the whole
+#     feasible distribution*, so no feasible is ever cut and only the 20s-budget dead-ends
+#     are; `_feasibility_at_risk(2.0) == 0`.
+#   - stickbutton2d_v1{,_kinder}: 10.0s. SB2D feasible refines are seconds (p95 10.6s), too
+#     slow for a DD2D-style cap-above-the-distribution to fit under the 20s budget. 10.0s
+#     instead clears the worst *per-problem fastest-feasible* (max 8.84s) with margin --
+#     `_feasibility_at_risk(10.0) == 0`, no problem censored -- while still cutting the many
+#     budget-exhausting failures (33% of all per-candidate refines exceed it). The two SB2D
+#     variants MUST share one value: the kinder §2b grafts SPECTRE timing from the v1 cache,
+#     so their capped fields have to be computed under the same cap.
+_DEFAULT_REFINE_CAP_S = 2.0
+_REFINE_CAP_S: dict[str, float] = {
+    "dd2d_v4": 2.0,
+    "stickbutton2d_v1": 10.0,
+    "stickbutton2d_v1_kinder": 10.0,
+}
+# Rebound per-variant by `_configure_paths`; the module default keeps the historical dd2d
+# behaviour for any variant not listed above.
+REFINE_CAP_S = _DEFAULT_REFINE_CAP_S
 
 
 def _fp_and_refine_capped(ep, order, cap: float) -> tuple[float, float]:
@@ -434,6 +454,63 @@ def _feasibility_at_risk(cap: float) -> int | None:
     return n_at_risk if saw_times else None
 
 
+def _measure_plan_gen_sb2d(per_stratum: int) -> dict[str, float]:
+    """StickButton2D analog of :func:`_measure_plan_gen`'s DD2D body.
+
+    Per stratum, rebuild the kinder env for that button count and time the acyclic pool
+    draw (``collect.time_pool_generation``) on a few test problems — the same generator the
+    collection used. The config mirrors ``sb2d_collect._config`` (``K_max=200``, 60s
+    abstract-plan timeout, default ``closed_form`` ``plan_generator`` — which routes
+    ``stickbutton2d`` to the geometry-aware ``AcyclicPlanGenerator``), so the timed pool is
+    the collected pool. A regenerated proxy (a representative per-stratum constant), like
+    DD2D's. Runs for both ``stickbutton2d_v1`` and ``…_kinder`` — same underlying kinder
+    env and pid encoding.
+    """
+    try:
+        from collections import defaultdict
+
+        from alphatamp.approaches.spectre.collect import time_pool_generation
+        from alphatamp.approaches.spectre.config import CollectionConfig
+        from alphatamp.approaches.spectre.envs.stickbutton2d import strata
+    except Exception as e:  # pragma: no cover - env not importable
+        print(f"[plan_gen] sb2d unavailable, skipping: {type(e).__name__}: {e}")
+        return {}
+
+    groups: dict[int, list[int]] = defaultdict(list)
+    for ep in eda.load_split_episodes(SPECTRE_TEST).episodes:
+        groups[stratum_of(int(ep.provenance.problem_id))].append(
+            int(ep.provenance.problem_id)
+        )
+    out: dict[str, float] = {}
+    for s in sorted(groups):
+        num_buttons = strata.BUTTON_COUNTS[s]
+        cfg = CollectionConfig(
+            env_id=strata.env_id(num_buttons),
+            env_variant=ENV_VARIANT,
+            model_name="stickbutton2d",
+            model_kwargs={"num_buttons": num_buttons},
+            split="test",
+            num_problems=1,
+            problem_seed_start=0,
+            problem_seed_end=1,
+            K_max=200,
+            abstract_plan_timeout_s=60.0,
+            refinement_timeout_s=20.0,
+            num_sampling_attempts_per_step=5,
+            max_trajectory_steps=200,
+        )
+        times: list[float] = []
+        for pid in sorted(groups[s])[:per_stratum]:
+            try:
+                times.append(time_pool_generation(cfg, pid))
+            except Exception as e:  # keep going; a per-problem failure is not fatal
+                print(f"[plan_gen] s{s} pid{pid} skipped: {type(e).__name__}: {e}")
+        if times:
+            out[str(s)] = round(sum(times) / len(times), 6)
+            print(f"[plan_gen] s{s}: {out[str(s)]:.4f}s (n={len(times)})", flush=True)
+    return out
+
+
 def _measure_plan_gen(per_stratum: int = 3) -> dict[str, float]:
     """Per-stratum abstract-plan-generation time (s), shared by all pool-ranking
     methods.
@@ -443,9 +520,11 @@ def _measure_plan_gen(per_stratum: int = 3) -> dict[str, float]:
     (``make_dd2d_planner(prefer='pyperplan', search='astar', heuristic='dist').plan``) —
     the step that produces the ranked candidate pool the models score. A regenerated
     proxy (DD2D's generator is PYTHONHASHSEED-dependent), used as a representative per-
-    stratum constant. DD2D only; ``{}`` (and a 0 fallback in the notebook) elsewhere or
-    on failure.
+    stratum constant. StickButton2D dispatches to :func:`_measure_plan_gen_sb2d`; any other
+    variant returns ``{}`` (and a 0 fallback in the notebook), as on failure.
     """
+    if ENV_VARIANT.startswith("stickbutton2d"):
+        return _measure_plan_gen_sb2d(per_stratum)
     if not ENV_VARIANT.startswith("dd2d"):
         return {}
     try:

@@ -4,6 +4,72 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d"></a>
+## 2026-08-03 — SB2D §2b wall-clock breakdown at parity with DD2D (per-env 10 s refine cap)
+
+<!--strip-->
+> **id** `2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d` · **status** active ·
+> **tracks** method, evaluation, env-stickbutton2d, tooling
+<!--/strip-->
+
+**Context.** The §2b wall-clock-to-first-success breakdown (plan-gen + inference + refinement, per
+method × stratum, capped + uncapped) was complete on DD2D and a stub on SB2D, gated behind
+`EnvSpec.has_timing`. It was deferred *by choice, not by data*: SB2D episodes already carry a real
+per-candidate `refinement_wall_clock_s` (the shared collector in `collect.py` times every refine),
+the precompute (`precompute_dd2d_cache.py`) is env-parameterized, and the `compare.py` loaders are
+env-agnostic. Three concrete gaps blocked it: the refine cap `REFINE_CAP_S = 2.0` is a DD2D
+constant that censors SB2D's seconds-long feasible refines; SB2D plan-gen was unmeasured
+(`_measure_plan_gen` returned `{}` for non-DD2D); and the live SB2D env (`SB2D_KINDER`) grafts
+SPECTRE from the `stickbutton2d_v1` legacy cache, but `load_time_records_per_seed` reads only the
+primary cache.
+
+**Decision.** Enable §2b on `SB2D_KINDER` with these changes:
+
+- **Per-env refine cap.** `REFINE_CAP_S` becomes a per-variant lookup rebound in
+  `_configure_paths` — `dd2d_v4: 2.0`, `stickbutton2d_v1{,_kinder}: 10.0`, default 2.0. The two
+  SB2D variants **must share one value**, because the kinder §2b grafts SPECTRE timing from the v1
+  cache and the capped fields have to be computed under the same cap.
+- **SB2D cap = 10 s, set empirically.** DD2D's 2 s sits above the *whole* feasible distribution
+  (p95 0.44 s). SB2D's feasible refines run to seconds (per-candidate p95 10.6 s), so no
+  cap-above-the-distribution fits under the 20 s budget. 10 s instead clears the worst *per-problem
+  fastest-feasible* (max 8.84 s) with margin — `_feasibility_at_risk(10) = 0`, no problem censored
+  — while cutting the many budget-exhausting failures (33 % of all per-candidate refines exceed
+  it). So SB2D's cap sits *inside* the feasible distribution, a different regime from DD2D's.
+- **SB2D plan-gen measured.** `_measure_plan_gen` dispatches to an SB2D branch that, per stratum,
+  rebuilds the kinder env and times the acyclic pool draw via a new env-agnostic helper
+  `collect.time_pool_generation` (mirrors `collect_episode`'s setup up to — and times only — the
+  `islice` pool draw). Config mirrors `sb2d_collect._config` so the timed pool is the collected
+  pool.
+- **Timing graft.** New `compare.merge_time_records` (the timing analog of `merge_collections`)
+  grafts the `legacy_only` methods' timing from the legacy cache; the notebook loads timing from
+  both primary and legacy and merges. A no-op on DD2D (its `legacy_only` VLMPlan-32B is not in
+  `TIMED_METHODS`).
+
+Both caches rebuilt under the cap: `--env-variant stickbutton2d_v1 --methods spectre3
+--no-ablations --force` and `--env-variant stickbutton2d_v1_kinder --methods astar piginet
+--force`.
+
+**Consequences.**
+
+- §2b renders on SB2D for all methods × {b1,b2,b3,b5,ALL}, capped + uncapped, with a non-zero
+  plan-gen. FP headline byte-unchanged after the `--force` rebuild (adaptive 1.69 / static 1.98 /
+  PIGINet 2.28). DD2D §2b is unchanged (its 2 s cap and numbers preserved; the graft is a no-op).
+  Numbers and the finding are in
+  [notebook/07 2026-08-03](../notebook/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-spectre-adaptive-fastest-per-env).
+- **The DD2D cap narrative does not transfer.** On SB2D all failures are uniformly expensive (run
+  to the 20 s budget), so FP and wall-clock are aligned: SPECTRE-adaptive is fastest capped (11.2 s)
+  *and* uncapped (14.0 s), the cap does not flip the ranking, and it helps the **highest-FP** method
+  (astar, −48 s) most — the reverse of DD2D, where the cap most helped the low-FP learned ranker.
+- **The SB2D cap is a real trade, not near-free accounting.** Because it sits inside the feasible
+  distribution, it abandons slow non-fastest feasibles and costs the learned methods **+0.3 FP**
+  (adaptive 1.69 → 2.03) — an order of magnitude more than DD2D's +0.05. The safety guard
+  (`_feasibility_at_risk`) is what keeps that trade from ever turning a solved problem censored.
+- `collect.time_pool_generation` and `compare.merge_time_records` are env-agnostic, so a third
+  environment gets §2b by adding its variant to the `_REFINE_CAP_S` map and running the precompute
+  — no new timing code.
+
+---
+
 <a id="2026-08-03-frontier-vlm-vlmplan-arm-gpt-5-6-luna-kinder-labeled"></a>
 ## 2026-08-03 — Frontier-VLM VLMPlan arm (gpt-5.6-luna): kinder-labeled SB2D image, wall-clock, inspector
 

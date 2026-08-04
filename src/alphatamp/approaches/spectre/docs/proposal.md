@@ -371,5 +371,10 @@ rollout performance — they are diagnostics only; never optimize for them.
   change) bounds each skeleton's refinement, so on DD2D v3-adaptive goes from ~equal
   uncapped wall-clock to **fastest** at a +0.05 FP cost; see
   [`decisions/07` 2026-08-02](decisions/07-stickbutton2d.md#2026-08-02-per-candidate-refinement-cap-deployed-wall-clock-configuration).
+  The cap is now **per-env** and §2b runs on **SB2D too** (2026-08-03), where the finding
+  **inverts**: SB2D's failures are uniformly expensive, so FP and wall-clock align
+  (v3-adaptive fastest capped *and* uncapped), the cap helps the highest-FP method most, and
+  because SB2D's 10 s cap sits *inside* the feasible distribution it costs a real +0.3 FP — see
+  [`decisions/07` 2026-08-03](decisions/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d).
   Cost-weighted PL — training the ranker to minimize expected wall-clock — remains the
   loss-level version, still deferred.)*

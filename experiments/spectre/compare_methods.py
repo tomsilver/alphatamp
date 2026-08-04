@@ -343,12 +343,26 @@ def _(
 
 
 @app.cell
-def _(CACHE_DIR, ENV, compare):
-    time_records = (
-        compare.load_time_records_per_seed(CACHE_DIR) if ENV.has_timing else []
-    )
-    plan_gen_s = compare.load_plan_gen_s(CACHE_DIR) if ENV.has_timing else {}
-    refine_cap_s = compare.load_refine_cap_s(CACHE_DIR) if ENV.has_timing else None
+def _(CACHE_DIR, ENV, LEGACY_CACHE, LEGACY_ONLY, compare):
+    if not ENV.has_timing:
+        time_records = []
+        plan_gen_s = {}
+        refine_cap_s = None
+    else:
+        # SPECTRE's §2b timing on the kinder SB2D variant is grafted from the legacy cache,
+        # exactly as the FP path grafts its FP -- `load_time_records_per_seed` reads a single
+        # cache dir, so merge the `legacy_only` methods' timing in from `LEGACY_CACHE`. A
+        # no-op on DD2D (its `legacy_only` VLMPlan-32B carries no timing). `plan_gen_s` and
+        # `refine_cap_s` still come from the PRIMARY cache's meta.json.
+        _prim_t = compare.load_time_records_per_seed(CACHE_DIR)
+        _leg_t = (
+            compare.load_time_records_per_seed(LEGACY_CACHE)
+            if LEGACY_CACHE != CACHE_DIR
+            else []
+        )
+        time_records = compare.merge_time_records(_prim_t, _leg_t, LEGACY_ONLY)
+        plan_gen_s = compare.load_plan_gen_s(CACHE_DIR)
+        refine_cap_s = compare.load_refine_cap_s(CACHE_DIR)
     return plan_gen_s, refine_cap_s, time_records
 
 

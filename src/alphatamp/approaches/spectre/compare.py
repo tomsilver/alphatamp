@@ -417,6 +417,28 @@ def merge_collections(
     return out
 
 
+def merge_time_records(
+    primary: list[dict],
+    legacy: list[dict],
+    legacy_methods: Sequence[str],
+) -> list[dict]:
+    """Graft the §2b timing rows for ``legacy_methods`` from ``legacy`` onto ``primary``.
+
+    The timing analog of :func:`merge_collections`: :func:`load_time_records_per_seed`
+    reads a single cache dir, but an env whose SPECTRE rows are grafted from a legacy
+    collection (``EnvSpec.legacy_only``) needs those methods' *timing* from the legacy cache
+    too. Keep every primary row; append a legacy row only when its ``method`` is one of
+    ``legacy_methods`` and is not already present natively. A no-op when ``legacy_methods``
+    names nothing that carries timing (e.g. DD2D's ``VLMPlan-32B``, absent from
+    ``TIMED_METHODS``).
+    """
+    want = set(legacy_methods)
+    have = {r["method"] for r in primary}
+    return list(primary) + [
+        r for r in legacy if r["method"] in want and r["method"] not in have
+    ]
+
+
 def select_seed(
     records: list[dict], prefer: int = 0
 ) -> tuple[list[dict], dict[str, object]]:
