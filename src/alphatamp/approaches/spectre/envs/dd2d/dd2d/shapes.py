@@ -51,6 +51,15 @@ FAMILIES = tuple(_FAMILY_WEIGHTS)
 NEW_SHAPE_WEIGHTS = {"tee": 1.0, "cross": 1.0}
 NEW_SHAPE_FAMILIES = tuple(NEW_SHAPE_WEIGHTS)
 
+# Default per-family linear size, applied on top of ``shift`` in ``sample_shape``. The two
+# new concave figures default to 0.7x (docs/decisions 2026-08-06): at their nominal (1.0)
+# size their convex-hull footprint (tee ~60, cross ~68) is mid-pack and packs awkwardly in
+# the shallow buffer, and the sz07 collection showed the 0.7x figures (hull ~29/33) both
+# grasp and pack cleanly while still being unseen at test time. An explicit
+# ``size_scale={"tee": 1.0}`` overrides this back to nominal. Families not listed default
+# to 1.0.
+_FAMILY_DEFAULT_SCALE = {"tee": 0.7, "cross": 0.7}
+
 
 @dataclass(frozen=True)
 class Shape:
@@ -261,6 +270,7 @@ def sample_shape(
     require_graspable: bool = True,
     max_tries: int = 40,
     extra_weights: dict[str, float] | None = None,
+    size_scale: dict[str, float] | None = None,
 ) -> Shape:
     """Sample one item footprint.
 
@@ -272,6 +282,14 @@ def sample_shape(
     ``NEW_SHAPE_WEIGHTS`` for the held-out shape-generalization set); it has no effect
     when ``family`` is given explicitly. The base ``_FAMILY_WEIGHTS`` is never mutated,
     so a default call is unchanged.
+
+    ``size_scale`` maps a family name to a linear scale on the dimension band (bbox scales
+    linearly, area quadratically). It keys on the *resolved* family (post-swap), so it
+    works for both the forced-family and the weighted-pool paths, and it **overrides** the
+    per-family default (:data:`_FAMILY_DEFAULT_SCALE`) rather than stacking with it -- so a
+    family named here takes exactly that scale. A family named in neither takes 1.0; a
+    family named only in the default (``tee``/``cross`` -> 0.7) takes the default. Passing
+    ``size_scale={"tee": 1.0, "cross": 1.0}`` restores the nominal (pre-2026-08-06) size.
 
     Per spec Section 4, every sampled shape must admit >= 1 grasp in isolation (some
     direction with width <= aperture and a non-empty contact-overlap interval); shapes
@@ -295,7 +313,12 @@ def sample_shape(
             family = _weighted_choice(fams, weights, rng)
         family = swap.get(family, family)
 
-        poly = _build(family, rng, shift)
+        # explicit size_scale overrides the per-family default (does not stack with it)
+        if size_scale and family in size_scale:
+            fam_scale = size_scale[family]
+        else:
+            fam_scale = _FAMILY_DEFAULT_SCALE.get(family, 1.0)
+        poly = _build(family, rng, shift * fam_scale)
         if not poly.is_valid:
             poly = poly.buffer(0)
         poly = _recenter(poly)

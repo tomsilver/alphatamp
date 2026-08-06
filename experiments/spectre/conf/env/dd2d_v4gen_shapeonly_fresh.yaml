@@ -1,0 +1,11 @@
+# DD2D shape-only FRESH un-shrunk control (docs/decisions 2026-08-06).
+#
+# Identical collection knobs to dd2d_v4gen_shapeonly (new tee/cross forced into every
+# scene at the trained 9-12 blocker count, NO size scaling) but a fresh seed band [7M,8M).
+# Its only purpose is to bound collection variance for the size sweep: sz07 (x0.7 shrink)
+# is an unpaired fresh collection, so this un-shrunk fresh draw isolates "did the shrink
+# help?" from "is this just a different, easier sample?" -- s2 is known high-variance.
+env_id: "dd2d/DrawerDeclutter2D-v0"
+env_variant: "dd2d_v4gen_shapeonly_fresh"
+model_name: "dd2d"
+model_kwargs: {}

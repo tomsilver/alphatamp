@@ -227,6 +227,60 @@ DD2D = EnvSpec(
     ),
 )
 
+DD2D_GEN_SHAPEONLY = EnvSpec(
+    key="dd2d_gen_shapeonly",
+    title=(
+        "DD2D shape-only generalization — SPECTRE vs PIGINet "
+        "(train dd2d_v4 / test unseen tee+cross at the default 0.7x size, 9–12 blockers)"
+    ),
+    # The object-generalization test at the current **default** tee/cross size (0.7x
+    # linear, shapes._FAMILY_DEFAULT_SCALE; docs/decisions 2026-08-06). Points at the
+    # `_sz07` collection, which is a 0.7x draw of exactly this test. The full-size draws
+    # (band 5 `dd2d_v4gen_shapeonly` s2=17.27, band 7 `_fresh` s2=5.63) are retained on
+    # disk and in the 2026-08-04/06 notebook entries as the historical / size-sweep
+    # record; the live comparison uses the default size.
+    env_variant="dd2d_v4gen_shapeonly_sz07",
+    stratum_labels={0: "s0", 1: "s1", 2: "s2", 3: "s3"},
+    stratum_meaning=DD2D.stratum_meaning,
+    stratum_axis_label="min-feasible-subset stratum",
+    # SPECTRE + PIGINet are scored natively into this collection's cache (train-old
+    # checkpoints, test-new episodes, via precompute_dd2d_cache.py --test-variant), so
+    # nothing is grafted. VLMPlan and the v3 ablations are out of scope for a gen
+    # section.
+    legacy_variant=None,
+    legacy_only=(),
+    has_ablations=False,
+    has_timing=True,
+    caveats=(
+        "**Train-old / test-new, shape ISOLATED, default 0.7x shapes.** SPECTRE and "
+        "PIGINet are the dd2d_v4-trained checkpoints scored on 40 held-out problems "
+        "(10/stratum) whose ONLY controlled shift is two unseen concave figures — a "
+        "`tee` and a `cross`, ≥1 of each forced into every scene, at their **default** "
+        "0.7x size (hull footprint tee ~29, cross ~33). Blocker count is held at the "
+        "trained 9–12 band (identical to dd2d_v4), so unlike `dd2d_v4gen_shape` (which "
+        "also raised the count to 13–15) this does not confound shape with count. No "
+        "OOV — a shape family is geometry metadata, not a token. Seed band [6M,7M).",
+        "**Shape generalization is essentially free, and SPECTRE beats PIGINet "
+        "decisively.** SPECTRE-adaptive ALL 2.79 — at or below the in-dist dd2d_v4 "
+        "headline 5.78, so no degradation on unseen shapes. It beats PIGINet (22.68) by "
+        "a wide, significant margin (paired bootstrap −19.88, CI [−31.04, −10.07]) and "
+        "astar (34.72). The abstract representation wins the SPECTRE-vs-PIGINet "
+        "contrast on unseen shapes; the failure-conditioned re-ranking (static ALL "
+        "15.00 → adaptive 2.79) does most of the lifting.",
+        "**s2 is collection-variance-dominated — read the ALL win, not a single-draw "
+        "s2.** This is one 0.7x draw; across draws of this test SPECTRE-adaptive s2 = "
+        "17.27 (band 5, full size) / 5.63 (band 7, full size) / 3.17 (here, 0.7x) "
+        "while **astar s2 is stable at 14–15** — physical difficulty does not move, "
+        "only which ~1.5-solution s2 instances land in the k=200 pool (2026-08-02 "
+        "finding). The 0.7x default was chosen because the smaller figures grasp and "
+        "pack cleanly while still being unseen (docs 2026-08-06); the object-gen "
+        "conclusion — SPECTRE ≫ PIGINet on unseen shapes — is robust across all draws.",
+    ),
+    render_scene=_dd2d_scene,
+    plan_label=_dd2d_plan_label,
+    scene_legend=DD2D.scene_legend,
+)
+
 SB2D = EnvSpec(
     key="sb2d",
     title="StickButton2D — SPECTRE v3 vs PIGINet, VLMPlan and pure planning",
@@ -347,7 +401,9 @@ SB2D_KINDER = EnvSpec(
 
 #: Registry. Order sets the notebook's default (first entry). Only the kinder-rendered
 #: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03).
-ENVS: dict[str, EnvSpec] = {spec.key: spec for spec in (SB2D_KINDER, DD2D)}
+ENVS: dict[str, EnvSpec] = {
+    spec.key: spec for spec in (SB2D_KINDER, DD2D, DD2D_GEN_SHAPEONLY)
+}
 
 
 def get(key: str) -> EnvSpec:

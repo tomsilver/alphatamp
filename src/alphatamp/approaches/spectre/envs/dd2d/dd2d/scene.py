@@ -73,6 +73,7 @@ def generate_scene(
     fill_max: float | None = None,
     extra_families: dict[str, float] | None = None,
     require_families: tuple[str, ...] = (),
+    size_scale: dict[str, float] | None = None,
 ) -> DrawerScene:
     """Sample one drawer scene (target + settled clutter).
 
@@ -99,6 +100,9 @@ def generate_scene(
       (e.g. the held-out ``tee``/``cross``); the target pool is left unchanged.
     - ``require_families`` forces >= 1 item of each named family into the scene (best-effort
       placement; the problem generator rejects any scene that still lacks one).
+    - ``size_scale`` maps a family name to a linear size multiplier (the shape-size sweep,
+      docs/decisions 2026-08-06); it is forwarded to every ``sample_shape`` call including
+      the forced-required one, and is inert (1.0) for any family it does not name.
     """
     rng = random.Random((seed * 2_654_435_761 + 0x9E37) & 0xFFFFFFFF)
     drawer, wall_band, buffer, dims = _drawer_geometry(rng, lam)
@@ -114,7 +118,7 @@ def generate_scene(
     # crowding, bias it to a compact round shape so the collar can fully ring it.
     target_fam = rng.choice(_COMPACT_TARGET_FAMILIES) if crowd > 0 else None
     for _ in range(200):
-        shp = sample_shape(rng, family=target_fam, split=split)
+        shp = sample_shape(rng, family=target_fam, split=split, size_scale=size_scale)
         if not _acceptable(shp, W, D):
             continue
         theta = rng.uniform(0, 6.283185307179586)
@@ -144,7 +148,11 @@ def generate_scene(
             )
             collar_fam = None if diverse_crowd else rng.choice(_COLLAR_FAMILIES)
             shp = sample_shape(
-                rng, family=collar_fam, split=split, extra_weights=extra_families
+                rng,
+                family=collar_fam,
+                split=split,
+                extra_weights=extra_families,
+                size_scale=size_scale,
             )
             if not _acceptable(
                 shp, W, D
@@ -172,7 +180,7 @@ def generate_scene(
     # rejects and resamples it -- the same pattern require_subset uses.
     for req_fam in require_families:
         for _ in range(200):
-            shp = sample_shape(rng, family=req_fam, split=split)
+            shp = sample_shape(rng, family=req_fam, split=split, size_scale=size_scale)
             if not _acceptable(shp, W, D):
                 continue
             obstacles = [st.footprint() for st in items.values()] + [wall_band]
@@ -193,7 +201,9 @@ def generate_scene(
     tries = 0
     while len(items) < n_items and coverage < fill and tries < 400:
         tries += 1
-        shp = sample_shape(rng, split=split, extra_weights=extra_families)
+        shp = sample_shape(
+            rng, split=split, extra_weights=extra_families, size_scale=size_scale
+        )
         if not _acceptable(shp, W, D):
             continue
         obstacles = [st.footprint() for st in items.values()] + [wall_band]

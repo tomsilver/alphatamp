@@ -116,6 +116,56 @@ _PIGINET_PATHS = {
         "data": REPO / "data" / "dd2d" / "raw_v4",
         "cache": DD2D / "out_dd2d" / "clip_cache_v4",
     },
+    # DD2D shape-only generalization set (2026-08-04): scored train-old / test-new via
+    # `--test-variant`, so PIGINet's checkpoint comes from the dd2d_v4 (train) entry above
+    # while `data`/`cache` point at the gen collection's native JSON + a fresh CLIP cache
+    # (auto-built by `precompute_clip_cache`). `ckpt` here is the same v4 head, so even a
+    # standalone `--env-variant dd2d_v4gen_shapeonly` PIGINet run stays train-old.
+    "dd2d_v4gen_shapeonly": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+    },
+    # Shape-SIZE sweep (2026-08-06): the physically-shrunk tee/cross collection (x0.7
+    # linear). A real, PIGINet-able variant -- the collector wrote native JSON + crops --
+    # scored train-old / test-new like the shape-only set (same v4 head).
+    "dd2d_v4gen_shapeonly_sz07": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly_sz07",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly_sz07",
+    },
+    # Inference-time geometry interventions (2026-08-06): the shape-only episodes with
+    # tee/cross area (hullarea) or boundary (hullshape) rewritten to their convex hull, to
+    # probe SPECTRE's geometry representation. SPECTRE + astar only -- these are derived
+    # from EpisodeRecord pickles, not a fresh collection, so there are no intervention-
+    # specific PIGINet crops; run with `--methods spectre3 astar`. `data`/`cache` reuse the
+    # shape-only crops only so an accidental PIGINet run does not crash (it would be the
+    # unmodified image, hence meaningless -- do not run `--methods piginet` here).
+    "dd2d_v4gen_shapeonly_hullarea": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+    },
+    "dd2d_v4gen_shapeonly_hullshape": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+    },
+    # scale07: the paired input-only x0.7 shrink (same problems + labels as the shape-only
+    # set; only tee/cross boundary+area shrunk in the model input). SPECTRE + astar only,
+    # like the other interventions.
+    "dd2d_v4gen_shapeonly_scale07": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+    },
+    # fresh un-shrunk control (band 7): bounds collection variance for the sz07 shrink.
+    # A real collection with native crops, so PIGINet-able if wanted; scored SPECTRE+astar.
+    "dd2d_v4gen_shapeonly_fresh": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly_fresh",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly_fresh",
+    },
     # StickButton2D, 2026-08-01. `data` is the SPECTRE data root rather than a record
     # tree: this collection has no PIGINet JSON on disk, so `SB2DDomain` builds the
     # examples from the same `EpisodeRecord` pickles SPECTRE trains on -- which is what
@@ -255,6 +305,10 @@ _V3_DEMOTION_ARMS: dict[str, str] = {
 # (kept byte-identical so importing the module is unchanged); ``_configure_paths``
 # overrides them and, unlike these, derives ``N_PROBLEMS`` from the real test split.
 ENV_VARIANT = DEFAULT_ENV_VARIANT
+# The collection whose vocab + checkpoints are scored. Equals ENV_VARIANT except for a
+# train-old / test-new run (`--test-variant`), where ENV_VARIANT is the TEST/episode
+# collection and CKPT_VARIANT is the TRAIN one.
+CKPT_VARIANT = DEFAULT_ENV_VARIANT
 SPECTRE_TEST = REPO / "data" / "spectre" / "raw" / DEFAULT_ENV_VARIANT / "test"
 VOCAB_PATH = (
     REPO / "data" / "spectre" / "derived" / DEFAULT_ENV_VARIANT / "train_vocab.json"
@@ -292,42 +346,57 @@ def _count_test_problems(test_dir: Path) -> int:
     return n or 140
 
 
-def _configure_paths(env_variant: str) -> None:
-    """(Re)bind every env-variant-dependent module global from ``env_variant``."""
-    global ENV_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
+def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
+    """(Re)bind every env-variant-dependent module global.
+
+    ``env_variant`` is the TEST/episode collection: the raw test split scored, PIGINet's
+    data + CLIP cache, the output ``compare_cache``, ``N_PROBLEMS`` and the refine cap.
+    ``ckpt_variant`` (default ``env_variant``) is the TRAIN collection whose vocab and
+    checkpoints are loaded. They differ only for a train-old / test-new generalization
+    run (``--test-variant``), splitting exactly the way ``spectre_score_v3.py`` does:
+    model + vocab from ``--env-variant``, episodes from ``--test-variant``.
+    """
+    global ENV_VARIANT, CKPT_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
     global CACHE_DIR, N_PROBLEMS, REFINE_CAP_S
+    ckpt_variant = ckpt_variant or env_variant
     known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)
-    if env_variant not in known:
-        raise SystemExit(
-            f"unknown --env-variant {env_variant!r}; known: {sorted(known)} "
-            "(add a _V2_CKPT_SUBDIR or _PIGINET_PATHS entry to onboard a collection)"
-        )
-    # PIGINet is optional per variant: it trains on the *native* DD2D JSON with its own
-    # CLIP cache, so onboarding a collection for the SPECTRE methods does not
-    # automatically give it a PIGINet row. Missing paths become None and only fail if
-    # `--methods piginet` actually asks for it.
-    piginet = _PIGINET_PATHS.get(env_variant, {})
+    for _v, _flag in ((env_variant, "--test-variant"), (ckpt_variant, "--env-variant")):
+        if _v not in known:
+            raise SystemExit(
+                f"unknown {_flag} {_v!r}; known: {sorted(known)} "
+                "(add a _V2_CKPT_SUBDIR or _PIGINET_PATHS entry to onboard a collection)"
+            )
     ENV_VARIANT = env_variant
+    CKPT_VARIANT = ckpt_variant
+    # --- from the TEST/episode variant: what is scored and where the cache is written ---
     SPECTRE_TEST = REPO / "data" / "spectre" / "raw" / env_variant / "test"
-    VOCAB_PATH = (
-        REPO / "data" / "spectre" / "derived" / env_variant / "train_vocab.json"
-    )
-    CKPT_DIR = REPO / "data" / "spectre" / "checkpoints" / env_variant
-    # A collection with no SPECTRE v2.2 checkpoint (StickButton2D: v2 was scoped out) gets
-    # `None` rather than a KeyError, so `--methods spectre2` fails on that method alone
-    # instead of the whole driver refusing to start.
-    _v2_sub = _V2_CKPT_SUBDIR.get(env_variant)
-    V2_CKPT_DIR = (
-        None if _v2_sub is None else REPO / "data" / "spectre" / _v2_sub / env_variant
-    )
-    PIGINET_CKPT = piginet.get("ckpt")
-    PIGINET_DATA = piginet.get("data")
-    PIGINET_CACHE = piginet.get("cache")
-    PIGINET_DOMAIN = piginet.get("domain")
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / env_variant / "compare_cache"
     N_PROBLEMS = _count_test_problems(SPECTRE_TEST)
     REFINE_CAP_S = _REFINE_CAP_S.get(env_variant, _DEFAULT_REFINE_CAP_S)
+    # --- from the TRAIN/checkpoint variant: the vocab and checkpoints being scored ---
+    VOCAB_PATH = (
+        REPO / "data" / "spectre" / "derived" / ckpt_variant / "train_vocab.json"
+    )
+    CKPT_DIR = REPO / "data" / "spectre" / "checkpoints" / ckpt_variant
+    # A collection with no SPECTRE v2.2 checkpoint (StickButton2D: v2 was scoped out) gets
+    # `None` rather than a KeyError, so `--methods spectre2` fails on that method alone
+    # instead of the whole driver refusing to start.
+    _v2_sub = _V2_CKPT_SUBDIR.get(ckpt_variant)
+    V2_CKPT_DIR = (
+        None if _v2_sub is None else REPO / "data" / "spectre" / _v2_sub / ckpt_variant
+    )
+    # PIGINet is optional per variant: it trains on the *native* DD2D JSON with its own
+    # CLIP cache, so onboarding a collection for the SPECTRE methods does not
+    # automatically give it a PIGINet row. Missing paths become None and only fail if
+    # `--methods piginet` actually asks for it. The checkpoint comes from the TRAIN
+    # variant (train-old); the data + cache from the TEST variant (test-new).
+    _ckpt_pig = _PIGINET_PATHS.get(ckpt_variant, {})
+    _test_pig = _PIGINET_PATHS.get(env_variant, {})
+    PIGINET_CKPT = _ckpt_pig.get("ckpt")
+    PIGINET_DATA = _test_pig.get("data")
+    PIGINET_CACHE = _test_pig.get("cache")
+    PIGINET_DOMAIN = _test_pig.get("domain")
 
 
 def _write(path: Path, obj: dict, force: bool) -> bool:
@@ -458,13 +527,13 @@ def _measure_plan_gen_sb2d(per_stratum: int) -> dict[str, float]:
     """StickButton2D analog of :func:`_measure_plan_gen`'s DD2D body.
 
     Per stratum, rebuild the kinder env for that button count and time the acyclic pool
-    draw (``collect.time_pool_generation``) on a few test problems — the same generator the
-    collection used. The config mirrors ``sb2d_collect._config`` (``K_max=200``, 60s
+    draw (``collect.time_pool_generation``) on a few test problems — the same generator
+    the collection used. The config mirrors ``sb2d_collect._config`` (``K_max=200``, 60s
     abstract-plan timeout, default ``closed_form`` ``plan_generator`` — which routes
-    ``stickbutton2d`` to the geometry-aware ``AcyclicPlanGenerator``), so the timed pool is
-    the collected pool. A regenerated proxy (a representative per-stratum constant), like
-    DD2D's. Runs for both ``stickbutton2d_v1`` and ``…_kinder`` — same underlying kinder
-    env and pid encoding.
+    ``stickbutton2d`` to the geometry-aware ``AcyclicPlanGenerator``), so the timed pool
+    is the collected pool. A regenerated proxy (a representative per-stratum constant),
+    like DD2D's. Runs for both ``stickbutton2d_v1`` and ``…_kinder`` — same underlying
+    kinder env and pid encoding.
     """
     try:
         from collections import defaultdict
@@ -520,8 +589,8 @@ def _measure_plan_gen(per_stratum: int = 3) -> dict[str, float]:
     (``make_dd2d_planner(prefer='pyperplan', search='astar', heuristic='dist').plan``) —
     the step that produces the ranked candidate pool the models score. A regenerated
     proxy (DD2D's generator is PYTHONHASHSEED-dependent), used as a representative per-
-    stratum constant. StickButton2D dispatches to :func:`_measure_plan_gen_sb2d`; any other
-    variant returns ``{}`` (and a 0 fallback in the notebook), as on failure.
+    stratum constant. StickButton2D dispatches to :func:`_measure_plan_gen_sb2d`; any
+    other variant returns ``{}`` (and a 0 fallback in the notebook), as on failure.
     """
     if ENV_VARIANT.startswith("stickbutton2d"):
         return _measure_plan_gen_sb2d(per_stratum)
@@ -928,13 +997,15 @@ def _v3_ckpt(ckpt_subdir: str, seed: int) -> Path:
     (``checkpoints_v3_v3final_s3/dd2d_v4/seed_3/best.pt``), which the v1/v2
     ``<dir>/<env>/seed_<n>`` pattern cannot express -- so ``{seed}`` in the sub-dir is
     substituted as well as the path component, exactly as ``spectre_score_v3.py`` does.
+    The env component is ``CKPT_VARIANT`` (the TRAIN collection), so a train-old /
+    test-new run loads the dd2d_v4 checkpoint while scoring the gen episodes.
     """
     return (
         REPO
         / "data"
         / "spectre"
         / ckpt_subdir.replace("{seed}", str(seed))
-        / ENV_VARIANT
+        / CKPT_VARIANT
         / f"seed_{seed}"
         / "best.pt"
     )
@@ -1077,7 +1148,10 @@ def cache_spectre3(
     )
 
     vocab = Vocab.from_json(VOCAB_PATH)
-    spec = spec_for(ENV_VARIANT)
+    # The domain contract is a property of the trained model, so it tracks the checkpoint
+    # (train) variant -- CKPT_VARIANT -- not the scored episodes. Identical for a dd2d ->
+    # dd2d-gen run (both resolve to `_DD2D`), but correct if they ever diverge.
+    spec = spec_for(CKPT_VARIANT)
     test = _RawSplit(SPECTRE_TEST)  # raw: `build_v3_example` canonicalizes
     episodes = [ep for ep in test.episodes if ep.scene_geometry is not None]
 
@@ -1303,8 +1377,20 @@ def main() -> None:
         # was rejected at the CLI even though it has PIGINet and v3 rows. A variant is
         # runnable if *any* method map knows it; a method it lacks fails on its own.
         choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)),
-        help="Which collection to score (repoints test split, vocab, checkpoints, "
-        "PIGINet artifacts, and the cache dir).",
+        help="Which collection to score: repoints vocab, checkpoints and PIGINet's "
+        "checkpoint; also the test split, cache dir and PIGINet data UNLESS "
+        "--test-variant overrides them. With --test-variant this is the TRAIN variant.",
+    )
+    parser.add_argument(
+        "--test-variant",
+        default=None,
+        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)),
+        help="Score THIS collection's test episodes while loading the vocab, model config "
+        "and checkpoints from --env-variant -- the train-old / test-new generalization "
+        "eval (e.g. --env-variant dd2d_v4 --test-variant dd2d_v4gen_shapeonly). The "
+        "compare_cache, N_PROBLEMS, refine cap and PIGINet data/CLIP-cache come from here; "
+        "the SPECTRE + PIGINet checkpoints stay on --env-variant. Mirrors "
+        "spectre_score_v3.py's --test-variant.",
     )
     parser.add_argument(
         "--lenctx-repeats",
@@ -1329,8 +1415,14 @@ def main() -> None:
         global SEEDS  # noqa: PLW0603 - module-level config, mirrored by _configure_paths
         SEEDS = list(dict.fromkeys(args.seeds))
 
-    _configure_paths(args.env_variant)
-    print(f"env_variant={ENV_VARIANT}  test={SPECTRE_TEST}  N_PROBLEMS={N_PROBLEMS}")
+    # --env-variant is the checkpoint/train variant; --test-variant (if given) is the
+    # scored episode variant. Absent, they coincide (the ordinary same-collection run).
+    _episode_variant = args.test_variant or args.env_variant
+    _configure_paths(_episode_variant, ckpt_variant=args.env_variant)
+    print(
+        f"episode_variant={ENV_VARIANT}  ckpt_variant={CKPT_VARIANT}  "
+        f"test={SPECTRE_TEST}  N_PROBLEMS={N_PROBLEMS}"
+    )
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if "astar" in args.methods:
         cache_astar(args.force)
@@ -1346,13 +1438,14 @@ def main() -> None:
             suppress: dict[str, str] = {}
             nodemo: dict[str, str] = {}
         elif args.no_ablations:
-            arms = {"spectre3": _v3_arm_dir("spectre3", ENV_VARIANT)}
+            arms = {"spectre3": _v3_arm_dir("spectre3", CKPT_VARIANT)}
             suppress, nodemo = {}, {}
         else:
             # Through `_v3_arm_dir`, so a collection whose arms live under different run
             # names gets them. Reading `_V3_ARMS` raw here was the bug that made
-            # StickButton2D's six trained arms invisible to the cache.
-            arms = {a: _v3_arm_dir(a, ENV_VARIANT) for a in _V3_ARMS}
+            # StickButton2D's six trained arms invisible to the cache. Keyed on
+            # CKPT_VARIANT: the arm-dir name is a property of the trained checkpoint.
+            arms = {a: _v3_arm_dir(a, CKPT_VARIANT) for a in _V3_ARMS}
             suppress = dict(_V3_SUPPRESS_ARMS)
             nodemo = dict(_V3_DEMOTION_ARMS)
             if ENV_VARIANT.startswith("stickbutton2d"):
@@ -1411,6 +1504,7 @@ def main() -> None:
         json.dumps(
             {
                 "env_variant": ENV_VARIANT,
+                "ckpt_variant": CKPT_VARIANT,
                 "methods": args.methods,
                 "seeds": SEEDS,
                 "n_problems": N_PROBLEMS,

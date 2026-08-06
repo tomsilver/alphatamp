@@ -197,6 +197,7 @@ def generate_dd2d_problem(
     require_families: tuple[str, ...] = (),
     extra_families: dict[str, float] | None = None,
     fill_max: float | None = None,
+    size_scale: dict[str, float] | None = None,
     min_items: int | None = None,
     certify: bool = True,
     budget: int | None = 300,
@@ -247,6 +248,7 @@ def generate_dd2d_problem(
             fill_max=fill_max,
             extra_families=extra_families,
             require_families=require_families,
+            size_scale=size_scale,
         )
         scene.margin = margin
         if require_families and not _scene_has_families(scene, require_families):

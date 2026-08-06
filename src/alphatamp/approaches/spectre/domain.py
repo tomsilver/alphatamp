@@ -261,6 +261,19 @@ DOMAINS: dict[str, DomainSpec] = {
     # not a new schema).
     "dd2d_v4gen_count": _DD2D,
     "dd2d_v4gen_shape": _DD2D,
+    # Shape-only generalization set (docs/decisions 2026-08-04): new tee/cross figures at
+    # the TRAINED 9-12 blocker count, isolating the shape variable from count.
+    "dd2d_v4gen_shapeonly": _DD2D,
+    # Shape-size sweep + inference-time geometry interventions (docs/decisions
+    # 2026-08-06): the physically-shrunk tee/cross collection, and the input-rewrites of
+    # the shape-only episodes (tee/cross area->hull, boundary->hull). All the same DD2D
+    # domain -- a shape family / rescale / hull-rewrite is geometry metadata, not a new
+    # schema, so they resolve to the same spec and reuse the dd2d_v4 vocab (no OOV).
+    "dd2d_v4gen_shapeonly_sz07": _DD2D,
+    "dd2d_v4gen_shapeonly_hullarea": _DD2D,
+    "dd2d_v4gen_shapeonly_hullshape": _DD2D,
+    "dd2d_v4gen_shapeonly_scale07": _DD2D,  # x0.7 boundary shrink, input-only (fixed labels)
+    "dd2d_v4gen_shapeonly_fresh": _DD2D,  # fresh un-shrunk control (collection-variance bound)
 }
 
 

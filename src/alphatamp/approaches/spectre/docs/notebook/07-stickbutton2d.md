@@ -4,6 +4,152 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size"></a>
+## 2026-08-06 — DD2D shape-size sweep + geometry interventions: size is not the s2 driver
+
+<!--strip-->
+> **id** `2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size` · **status**
+> active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** Chased the shape-only s2 number (adaptive **17.27** vs in-dist 10.49;
+[2026-08-04](#2026-08-04-dd2d-shape-only-generalization-shapes-isolated-count)) to a cause. The
+inspector suggested SPECTRE fails when it must pick up the new tee/cross figures; the guess was
+they are *bigger* (harder to fit the buffer). First established that **v3 is image-free but
+geometry-AWARE** — `build_v3_example` requires `scene_geometry`; the `SceneEncoder` feeds every
+candidate a footprint point-set encoding of each object's boundary, its pose, raw `o.area`,
+area/target-area, and a concave flag — so the size hypothesis is a testable *representational*
+claim, not just a physical one. Then tested it three ways (gate → input interventions → physical
+shrink + variance control). New tooling: `spectre_intervene_geometry.py` (rewrite tee/cross model
+input on fixed problems), a `--family-size-scale` collector lever, `spectre_probe_shape_geometry.py`.
+
+**Result — size is not the driver, at either level.**
+
+*Gate (stored data, no compute).* By convex-**hull** footprint (packing-relevant — nothing packs
+into a concavity) cross 46.9→67.9, tee 43.2→60.1, still rank 5th–6th of 9. Failures: pick 66% /
+retrieve 28% / **place-buffer-volume 5.3%**. Buffer hull-occupancy ~40–48% even for *feasible*
+candidates and **lower** for infeasible ones (0.33–0.37) — capacity never binds; the constraint is
+grasp accessibility. New shapes are the failing object 4.8% of the time (< their ~20% share).
+
+*Input interventions (paired; same problems + labels; only tee/cross model-input geometry rewritten;
+score the same dd2d_v4 checkpoint).* All three are **inert to the digit**:
+
+| adaptive FP | ALL | s2 | paired Δ vs baseline (ALL / s2) | max\|Δscore\| |
+|---|---|---|---|---|
+| baseline | 6.77 | 17.27 | — | — |
+| hullarea (area 45→hull 64) | 6.77 | 17.27 | +0.00 [+0.00,+0.00] / +0.00 | 0.0003 |
+| hullshape (boundary→convex hull) | 6.77 | 17.27 | +0.00 [+0.00,+0.00] / +0.00 | ~0 |
+| scale07 (input ×0.7) | 6.77 | 17.27 | +0.00 [+0.00,+0.00] / +0.00 | 0.0009 |
+
+The astar arm (reads only labels) is byte-identical — the built-in null. So **SPECTRE's ranking
+does not use the new shapes' geometry input**; correcting area, convexifying, and shrinking all do
+nothing. (A footprint-OOD probe: tee is the *most* novel shape to the encoder, kNN-to-train 0.105 >
+box 0.070; cross mid 0.039 — yet even that does not move the ranking.)
+
+*Physical shrink + variance control.* The `--family-size-scale` lever collected
+`dd2d_v4gen_shapeonly_sz07` (tee/cross ×0.7, hull 60/68→29/33). It *appears* to help hugely — but a
+**fresh un-shrunk control** (band 7) shows the improvement is collection variance:
+
+| SPECTRE-adaptive s2 | astar-dist s2 |
+|---|---|
+| baseline (band 5, unshrunk) **17.27** | 14.20 |
+| fresh (band 7, unshrunk, 3 seeds) **5.63** | 14.60 |
+| sz07 (band 6, shrunk ×0.7) **3.17** | 13.70 |
+
+**astar s2 is stable at 14–15 across all three** while SPECTRE's swings 17→5.6→3.2, and a fresh
+*un-shrunk* draw already reads **5.63 — below the in-dist 10.49**. So the shape-only s2=17.27 does
+not reproduce; it was a high-variance draw, and the gap between the two *un-shrunk* collections
+(17.27 vs 5.63) dwarfs the shrink's residual (5.63 vs 3.17). (Full all-methods: sz07 adaptive ALL
+2.79 / static 15.00 / PIGINet 22.68 *worse* / astar 34.73 — no uniform difficulty change.)
+
+**Takeaway/next.** A size sweep does not resolve the s2 number because **there is no size-driven
+deficit** — physical packing is 5% of failures, SPECTRE is provably blind to the new shapes'
+geometry input, and s2 is dominated by collection/pool-composition variance (~1.5 unique feasible
+solutions; SPECTRE's learned order is sensitive to which land in the k=200 pool — the
+[2026-08-02](#2026-08-02-s2-ood-degradation-pool-composition-artifact-model) finding, now shown to
+bite the shape-only set too). Read shape/size-generalization at s3 or against a fresh un-shrunk
+control, never a single-collection s2 point. ADR + the new invariant:
+[decisions/07 2026-08-06](../decisions/07-stickbutton2d.md#2026-08-06-shape-generalization-s2-deficit-collection-variance-shape).
+(All numbers 3 seeds, uncensored, n=40, dd2d_v4 checkpoints train-old / test-new.)
+
+**Addendum — tee/cross now DEFAULT to 0.7x, and the object-gen test uses that default.** Given
+the size interventions are inert and the deficit is variance (above), we make the two new
+concave figures **default to 0.7x linear** (`shapes._FAMILY_DEFAULT_SCALE`; an explicit
+`--family-size-scale tee=1.0` restores nominal). The rationale is design, not a size-drives-FP
+claim: at 0.7x the tee/cross hull footprint (~29/33) grasps and packs cleanly in the shallow
+buffer while still being unseen at test time. `compare_methods.py`'s `dd2d_gen_shapeonly` now
+reads a 0.7x collection (the `_sz07` draw, band 6, PIGINet scored on it), so the live object-gen
+comparison is at the default size. There: SPECTRE-adaptive **ALL 2.79** (≤ in-dist 5.78 — shape
+generalization free) beats **PIGINet 22.68** decisively (paired **−19.88, CI [−31.04, −10.07]**)
+and astar 34.72. **Honest caveat:** 2.79 is one 0.7x draw and s2 is variance-dominated (draws of
+this test read adaptive s2 = 17.27 / 5.63 / 3.17 at fixed astar ~14); the *robust* statement is
+the ALL win over PIGINet, not the exact 2.79. The full-size draws (band 5 `dd2d_v4gen_shapeonly`,
+band 7 `_fresh` — the latter scored all-4 at adaptive 5.03 / PIGINet 18.30, paired −13.27) and
+their 2026-08-04 entry are retained on disk as the historical / size-sweep record. tee/cross are
+held out of training, so the default-size change needs no retraining.
+
+---
+
+<a id="2026-08-04-dd2d-shape-only-generalization-shapes-isolated-count"></a>
+## 2026-08-04 — DD2D shape-only generalization: shapes isolated from count
+
+<!--strip-->
+> **id** `2026-08-04-dd2d-shape-only-generalization-shapes-isolated-count` ·
+> **status** active · **tracks** env-dd2d, evaluation, method
+<!--/strip-->
+
+**What.** The `dd2d_v4gen_shape` set moved two variables at once (unseen 13–15 blocker
+count *and* the new tee/cross figures), and its s2 FP blew up. To attribute that we built a
+**shape-only** held-out set, `dd2d_v4gen_shapeonly`: the two concave figures forced into
+every scene (≥1 tee + ≥1 cross) at the **trained 9–12 blocker count** (the collector's
+default count mechanism — no `--n-items-*`), 40 problems stratified s0–s3, seed band [5M,6M).
+Grasp correctness first re-verified with `demo_grasp_concave --families tee cross` (0 floating
+cells; 5–10 internal/concave-region grasps per shape; all clutter scenes grasped). Scored the
+dd2d_v4-trained SPECTRE + PIGINet train-old / test-new via a new
+`precompute_dd2d_cache.py --test-variant` (protocol ADR
+[decisions/07 2026-08-04](../decisions/07-stickbutton2d.md#2026-08-04-shape-only-dd2d-gen-variant-precompute---test-variant)),
+and added it as a `compare_methods.py` dropdown env (`dd2d_gen_shapeonly`) with FP + §2b
+wall-clock. Two instruments (the compare cache and `spectre_score_v3.py`) agree to the digit.
+
+**Result (mean FP, 3 seeds, uncensored, n=40; in-dist dd2d_v4 headline in brackets):**
+
+| method | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| **SPECTRE-adaptive** | **6.77 ± 0.81** | 0.00 | 3.80 | 17.27 | 6.03 |
+| PIGINet | 15.27 ± 1.57 | 0.37 | 14.17 | 7.73 | 38.80 |
+| SPECTRE-static | 22.55 ± 1.46 | 0.00 | 18.93 | 35.07 | 36.20 |
+| astar-dist | 31.45 | 0.00 | 2.20 | 14.20 | 109.40 |
+| *(in-dist adaptive)* | *5.78* | *0.00* | *3.44* | *10.49* | *9.19* |
+
+- **The shape shift is mild and s3 IMPROVES.** Adaptive ALL 6.77 vs in-dist 5.78 (~1.17×),
+  far under the count+shape set's 11.26 (~1.9×). s0/s1 unchanged, **s3 9.19→6.03**, s2
+  10.49→17.27 — moderate, and nowhere near the count-confounded set's s2 (~32). So the severe
+  s2 OOD degradation reported 2026-08-02 was **primarily count-driven pool composition, not the
+  shapes**; the residual shape-only s2 lift is real but small. Read the generalization at s3
+  (in-regime), where the shapes if anything *help*.
+- **Representation win survives OOD; adaptivity carries it here.** Adaptive beats PIGINet
+  (6.77 vs 15.27, ~2.3×) and astar (31.45); paired bootstrap vs astar −24.68, CI
+  [−41.95, −8.88]. But **SPECTRE-static (22.55) is *worse* than PIGINet** — under the shape
+  shift the static t=0 order degrades badly and the failure-conditioned re-ranking
+  (static→adaptive 22.55→6.77) recovers it. In-dist the static representation carried ~73% of
+  the margin; that split **inverts** OOD.
+- **§2b wall-clock (2 s cap): adaptive is FP-best but the SLOWEST capped** — astar 3.22 <
+  PIGINet 3.51 < static 4.41 < adaptive 6.68 — inverting the in-dist headline where adaptive
+  was fastest. It is all s2 (adaptive 19.65 s), where the rollout's many failed attempts each
+  incur a full pool re-scoring (infer_s ≈3.6 s ALL) on top of refinement. The cap costs
+  adaptive +0.67 FP (6.77→7.44) vs DD2D's near-free +0.05, because it bites exactly those
+  expensive s2 near-feasible candidates. 0 problems censored by the cap.
+
+**Takeaway/next.** Isolating the variable pays off: the s2 alarm from `dd2d_v4gen_shape` was
+mostly the count regime, not the new shapes — shape-only s2 sits roughly midway and s3
+improves. The learned ranker's advantage over both PIGINet and the planner order is robust to
+an unseen-shape shift, but the *source* of the advantage moves: adaptivity, not the static
+representation, is what holds up OOD here. The wall-clock inversion (FP-best ≠ time-best when
+a stratum's failures are both frequent and re-scoring-heavy) is the same lesson §2b taught on
+SB2D, now visible under distribution shift.
+
+---
+
 <a id="2026-08-03-sb2d-2b-wall-clock-spectre-adaptive-fastest-per-env"></a>
 ## 2026-08-03 — SB2D §2b wall-clock — SPECTRE-adaptive fastest; per-env 10 s cap; astar benefits most
 

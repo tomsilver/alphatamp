@@ -1,0 +1,30 @@
+# DD2D held-out generalization set — NEW SHAPE FIGURES ONLY (headline blocker count).
+#
+# A test-only collection (docs/decisions 2026-08-04) for the DD2D shape-generalization
+# experiment. Same domain / generator / refiner as dd2d_v4, and — unlike dd2d_v4gen_shape —
+# the SAME item count as training (10–13 items = 9–12 blockers). The ONLY thing the
+# dd2d_v4-trained model never saw is the two new concave shape families:
+#   * a T (`tee`) and a symmetric plus (`cross`), added to the clutter/collar pool, with
+#     >= 1 of EACH forced into every scene (--shape-set augmented --require-families).
+#   * blocker count held at the trained 9–12 band (no --n-items-*), so this ISOLATES the
+#     shape variable — dd2d_v4gen_shape confounds it with unseen count, and the s2
+#     degradation there was a count-driven pool-composition artifact, not the shapes
+#     (docs/notebook/07 2026-08-02).
+# The grasp model is geometry-general (grasps.py reads only shape.polygon), so the refiner
+# grasps the new shapes and their concave regions with no per-shape code (verified:
+# demo_grasp_concave --families tee cross, 0 floating cells, internal grasps present).
+#
+# Collected with:
+#   python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+#     --out-root data/dd2d/raw_v4gen_shapeonly --splits test --seed-band-base 5 \
+#     --target-test 40 --shape-set augmented --require-families tee,cross
+# then converted (test split only) and scored against the dd2d_v4 vocab + checkpoints
+# (train-old / test-new): spectre_score_v3.py --env-variant dd2d_v4 \
+#   --test-variant dd2d_v4gen_shapeonly --astar-baseline ...
+#
+# As with v2/v3/v4 the data is wired via the JSON->EpisodeRecord converter, not a live
+# SesameModels env; env_id / model_name / model_kwargs are unused placeholders.
+env_id: "dd2d/DrawerDeclutter2D-v0"
+env_variant: "dd2d_v4gen_shapeonly"
+model_name: "dd2d"
+model_kwargs: {}

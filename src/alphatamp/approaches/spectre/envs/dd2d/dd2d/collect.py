@@ -74,6 +74,10 @@ class DD2DCollectConfig:
     require_families: tuple[str, ...] = ()  # force >= 1 of each into every scene
     extra_families: dict[str, float] | None = None  # augment the clutter/collar pool
     fill_max: float | None = None  # raise the coverage cap for denser scenes
+    # Shape-size sweep (docs/decisions 2026-08-06): per-family linear size multiplier,
+    # forwarded to every shape draw; inert (1.0) for any family not named. Used to shrink
+    # tee/cross to test whether the s2 shape-generalization deficit is size-driven.
+    size_scale: dict[str, float] | None = None
 
 
 @dataclass
@@ -185,6 +189,7 @@ def collect_problem(
                 require_families=config.require_families,
                 extra_families=config.extra_families,
                 fill_max=config.fill_max,
+                size_scale=config.size_scale,
                 min_items=(config.n_items_range[0] if config.n_items_range else None),
                 certify=True,
                 budget=config.budget,
@@ -301,6 +306,7 @@ def collect_problem(
                     "require_families": list(config.require_families),
                     "extra_families": config.extra_families,
                     "fill_max": config.fill_max,
+                    "size_scale": config.size_scale,
                     "min_items": (
                         config.n_items_range[0] if config.n_items_range else None
                     ),
@@ -854,6 +860,12 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated families to force >=1 of into every scene (e.g. tee,cross)",
     )
     ap.add_argument("--fill-max", type=float, default=None)
+    ap.add_argument(
+        "--family-size-scale",
+        default="",
+        help="comma-separated family=scale linear size multipliers, e.g. "
+        "'tee=0.7,cross=0.7'; inert (1.0) for any family omitted. The shape-size sweep.",
+    )
     args = ap.parse_args(argv)
 
     if args.smoke:
@@ -875,6 +887,19 @@ def main(argv: list[str] | None = None) -> int:
     require_families = tuple(
         f.strip() for f in args.require_families.split(",") if f.strip()
     )
+    size_scale: dict[str, float] | None = None
+    if args.family_size_scale.strip():
+        size_scale = {}
+        for tok in args.family_size_scale.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            fam, sep, val = tok.partition("=")
+            if not sep or not val.strip():
+                ap.error(
+                    f"--family-size-scale expects family=scale tokens, got {tok!r}"
+                )
+            size_scale[fam.strip()] = float(val)
 
     config = DD2DCollectConfig(
         crowd=args.crowd,
@@ -884,6 +909,7 @@ def main(argv: list[str] | None = None) -> int:
         require_families=require_families,
         extra_families=extra_families,
         fill_max=args.fill_max,
+        size_scale=size_scale,
     )
     bands = _split_bands(args.band)
     if args.seed_band_base is not None:

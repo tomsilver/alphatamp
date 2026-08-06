@@ -4,6 +4,155 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-06-shape-generalization-s2-deficit-collection-variance-shape"></a>
+## 2026-08-06 — Shape-generalization s2 deficit is collection variance, not shape size or geometry representation
+
+<!--strip-->
+> **id** `2026-08-06-shape-generalization-s2-deficit-collection-variance-shape` ·
+> **status** active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**Context.** The shape-only set
+([2026-08-04](#2026-08-04-shape-only-dd2d-gen-variant-precompute---test-variant)) showed
+SPECTRE-adaptive **s2 = 17.27** vs in-dist 10.49, and its §2b wall-clock was the worst of any
+method. A hypothesis (from planner-inspector viewing) was that the new tee/cross figures are
+**bigger** — harder to fit the buffer — so they degrade s2. Two facts had to be established
+before that could be tested: whether the effect is physical (packing) or representational (how
+SPECTRE encodes the shapes), and **whether v3 even reads geometry**. It does — `build_v3_example`
+*requires* `scene_geometry` and the deployed `SceneEncoder` consumes, per object, a footprint
+point-set encoding of the boundary ring, pose, raw `o.area`, area-relative-to-target and a
+concave flag; those scene tokens are cross-attended by every candidate. So "image-free" is not
+"geometry-blind", and the size hypothesis was a live, testable representational claim.
+
+**Decision.** Test it three ways, cheapest first, and let the data pick the framing
+([notebook 2026-08-06](../notebook/07-stickbutton2d.md#2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size)):
+
+1. **Stored-data gate** (no compute): by convex-hull footprint (the packing-relevant measure —
+   nothing packs into a concavity) tee/cross rank 5th–6th of 9; place-buffer *volume* failures
+   are 5.3% of all failures; buffer hull-occupancy is ~40% even for feasible candidates and
+   *lower* for infeasible ones. Physical packing is not the binding constraint.
+2. **Inference-time input interventions** (new `spectre_intervene_geometry.py`): rewrite ONLY
+   the tee/cross model-input geometry of the shape-only episodes — area→hull (`hullarea`),
+   boundary→convex-hull (`hullshape`), or shrink ×0.7 (`scale07`) — holding skeletons + outcomes
+   (true feasibility) fixed, and re-score the *same* dd2d_v4 checkpoint. All three are **inert to
+   the digit** (adaptive FP 6.77 / s2 17.27, paired bootstrap +0.00 on every problem; astar
+   control byte-identical). SPECTRE's ranking does not use the new shapes' geometry input.
+3. **Physical shrink + variance control**: a `--family-size-scale` collector lever (new) collects
+   `dd2d_v4gen_shapeonly_sz07` (tee/cross ×0.7). It appears to help hugely (s2 3.17), but a
+   **fresh un-shrunk control** (`dd2d_v4gen_shapeonly_fresh`, band 7) reads s2 5.63 — *below*
+   the in-dist 10.49 — while **astar s2 is stable at 14–15 across all three collections**. So the
+   apparent improvement is collection variance, not size: the gap between the two *un-shrunk*
+   collections (17.27 vs 5.63) dwarfs the shrink's residual (5.63 vs 3.17).
+
+Conclusion: **the s2 shape-generalization deficit is a pool-composition / collection-variance
+artifact, not shape size and not SPECTRE's geometry representation.** The `17.27` that motivated
+the investigation is a high-variance draw of an s2 stratum with ~1.5 unique feasible solutions
+(the [2026-08-02](#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact)
+finding), on which SPECTRE's learned order — but not the geometry-free astar order — is sensitive
+to which solutions land in the k=200 pool.
+
+**Consequences.**
+- **Invariant added — read a shape/size-generalization number against a fresh un-shrunk control,
+  not a single collection.** s2 is variance-dominated (three draws: 17.27 / 5.63 / 3.17 at fixed
+  astar ~14); a single-collection s2 point estimate is not a model signal. This is the
+  [2026-08-02](#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact)
+  caveat, now shown to bite the shape-only set too.
+- **Inference-time geometry interventions are the right tool for "does the model use feature X?"**
+  — they hold the problem + labels fixed and rewrite one input, so any FP change is purely the
+  model's response. The astar arm (reads only labels) is the built-in null control. Reusable via
+  `spectre_intervene_geometry.py` (`hullarea|hullshape|scaleNN`) + `precompute_dd2d_cache.py
+  --test-variant`.
+- **v3's geometry channel is weakly weighted for ranking.** Consistent with the 2026-07 finding
+  that coverage/waste + records carry v3; the footprint/pose/area features are present but the
+  deployed ranking is inert to perturbing them for the new shapes (a tee is the most OOD to the
+  footprint encoder — kNN-to-train 0.105 — yet that does not move the ranking).
+- **New code, all off-by-default / additive:** `shapes.sample_shape(size_scale=)` threaded through
+  `scene`/`problem`/`collect` + a `--family-size-scale` CLI flag; `spectre_intervene_geometry.py`;
+  `spectre_probe_shape_geometry.py`; a `dd2d_gen_shapeonly_sz07` compare_methods EnvSpec whose
+  caveats state size is not the driver; four `DOMAINS` + `_PIGINET_PATHS` variant registrations
+  (all resolve to `_DD2D`; a rescale/hull-rewrite is geometry metadata, not a new schema, so the
+  dd2d_v4 vocab is reused with no OOV).
+- **Does not touch the deployed method or any published number.** Purely diagnostic; the v3
+  checkpoint, loss, and headline FP are unchanged.
+- **Convention change (2026-08-06 addendum): tee/cross DEFAULT to 0.7x linear**
+  (`shapes._FAMILY_DEFAULT_SCALE`; explicit `size_scale` *overrides*, does not stack, so
+  `--family-size-scale tee=1.0` restores nominal). This is a **design** choice, not a
+  size-drives-FP claim (the interventions above show the ranking is inert to the shapes'
+  geometry): at 0.7x the tee/cross hull footprint (~29/33) grasps and packs cleanly in the
+  shallow buffer while staying unseen at test time. The `compare_methods.py` object-gen env
+  (`dd2d_gen_shapeonly`) now reads a 0.7x collection (the `_sz07` draw) and the separate
+  `dd2d_gen_shapeonly_sz07` dropdown was folded into it. tee/cross are held out of training, so
+  no retraining. **Read the object-gen numbers as the ALL win over PIGINet (robust across
+  draws), not the single-draw s2** — s2 stays variance-dominated at any size.
+
+---
+
+<a id="2026-08-04-shape-only-dd2d-gen-variant-precompute---test-variant"></a>
+## 2026-08-04 — Shape-only DD2D gen variant + precompute --test-variant
+
+<!--strip-->
+> **id** `2026-08-04-shape-only-dd2d-gen-variant-precompute---test-variant` ·
+> **status** active · **tracks** env-dd2d, evaluation, method, tooling
+<!--/strip-->
+
+**Context.** The DD2D generalization test
+([2026-08-01](#2026-08-01-dd2d-generalization-test-unseen-count-unseen)) used
+`dd2d_v4gen_shape`, which changed **two** variables — an unseen 13–15 blocker count *and* the
+new tee/cross figures. Its s2 FP degraded sharply; that was later characterized as a
+**count-driven pool-composition artifact**
+([2026-08-02](#2026-08-02-s2-generalization-degradation-characterized-pool-composition-artifact)),
+not the shapes — but the confound meant the shape effect itself was never measured cleanly. A
+clean attribution needs the shapes isolated from count. Two things blocked rendering it in the
+comparison notebook: there was no such collection, and `precompute_dd2d_cache.py` bakes one
+`env_variant` into both the checkpoint paths and the episode/output paths and rejects unknown
+variants, so it could not write a `compare_cache` for a train-old / test-new set the way
+`spectre_score_v3.py --test-variant` already scores one.
+
+**Decision.** Three parts.
+
+1. **A shape-only held-out variant, `dd2d_v4gen_shapeonly`.** The tee/cross figures forced
+   into every scene (`--shape-set augmented --require-families tee,cross`) at the **trained
+   9–12 blocker count** — achieved by *omitting* `--n-items-*` so the collector's default
+   count mechanism (10–13 items, no realized floor) is byte-identical to dd2d_v4's. 40 test
+   problems stratified s0–s3, seed band [5M,6M) disjoint from train/val/test and the count/shape
+   gensets. Reproducer script `collect_dd2d_shapeonly.sh`; conf `dd2d_v4gen_shapeonly.yaml`;
+   `DOMAINS["dd2d_v4gen_shapeonly"] = _DD2D` (a shape family is geometry metadata, so no new
+   schema and the dd2d_v4 vocab is reused — no OOV).
+2. **`precompute_dd2d_cache.py --test-variant`**, mirroring `spectre_score_v3.py`'s convention:
+   `--env-variant` is the TRAIN/checkpoint collection, `--test-variant` the TEST/episode one.
+   `_configure_paths` gained a `ckpt_variant` argument and a `CKPT_VARIANT` global; the vocab,
+   SPECTRE/PIGINet checkpoints, `_v3_ckpt`'s env component and `spec_for` now key off the train
+   variant, while the test split, `compare_cache`, `N_PROBLEMS`, refine cap and PIGINet
+   data/CLIP-cache key off the episode variant. A `_PIGINET_PATHS["dd2d_v4gen_shapeonly"]` entry
+   points its data + fresh CLIP cache at the gen collection (checkpoint from the train entry).
+   The same-collection path (no `--test-variant`) is byte-identical to before.
+3. **A native `EnvSpec` (`dd2d_gen_shapeonly`)** in `compare_envs.py` (reusing DD2D's scene
+   renderer, plan formatter and stratum meaning), so the notebook renders the full FP + §2b
+   wall-clock layout for the gen set with no notebook-cell edits.
+
+**Consequences.**
+
+- **The shape effect is now isolated and small.** SPECTRE-adaptive ALL 6.77 ± 0.81 vs in-dist
+  5.78 (~1.17×), against the count+shape set's 11.26 (~1.9×); s3 *improves* (9.19→6.03) and s2
+  degrades only moderately (10.49→17.27) rather than to ~32. This **confirms** the 2026-08-02
+  attribution: the severe s2 OOD degradation was primarily count/pool-composition, not the new
+  figures. Numbers and the wall-clock inversion are in
+  [notebook/07 2026-08-04](../notebook/07-stickbutton2d.md#2026-08-04-dd2d-shape-only-generalization-shapes-isolated-count).
+- **The two scoring instruments agree exactly** (compare cache vs `spectre_score_v3.py`: 6.77 ±
+  0.81, s0–s3 identical, paired bootstrap vs astar −24.68 CI [−41.95, −8.88]), which is the
+  cross-check that the `--test-variant` split loads the right checkpoints against the right
+  episodes.
+- **The representation-vs-adaptivity attribution is not shift-invariant.** In-dist the static
+  abstract representation carries ~73% of the margin; under the unseen-shape shift SPECTRE-static
+  (22.55) falls *behind* PIGINet (15.27) and only the adaptive re-ranking recovers the win — so a
+  cross-environment/OOD claim must say *which* component it credits.
+- **Onboarding another train-old/test-new gen set is now one `_PIGINET_PATHS` entry + one
+  `DOMAINS` line + one `EnvSpec`**, no per-run plumbing. `--test-variant` is the reusable lever.
+- Collection remains `PYTHONHASHSEED`-dependent, so the raw `data/dd2d/raw_v4gen_shapeonly` dir
+  is the authoritative record (archive it); a re-collection draws a fresh sample.
+
+---
+
 <a id="2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d"></a>
 ## 2026-08-03 — SB2D §2b wall-clock breakdown at parity with DD2D (per-env 10 s refine cap)
 

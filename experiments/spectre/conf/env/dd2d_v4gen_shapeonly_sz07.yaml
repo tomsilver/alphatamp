@@ -1,0 +1,28 @@
+# DD2D shape-SIZE-sweep set — tee/cross shrunk to x0.7 linear (headline blocker count).
+#
+# The confirmatory shrink for the shape-generalization investigation (docs/decisions
+# 2026-08-06). Identical to dd2d_v4gen_shapeonly (same domain/generator/refiner, the two
+# new concave families forced into every scene at the trained 9-12 blocker count) EXCEPT
+# the tee/cross families are uniformly scaled to 0.7 linear (~0.49 area; convex-hull
+# footprint tee 60->29, cross 68->33), via the new collector `--family-size-scale` lever.
+#
+# Purpose: test whether the s2 shape-generalization deficit is driven by the new shapes'
+# physical size. Read across ALL methods (astar/PIGINet/SPECTRE): a size effect must show
+# on the geometry-free planner too; a SPECTRE-only shift means it is representational, not
+# physical. Complements the inference-time input interventions (hullarea/hullshape), which
+# probe the same question on the existing checkpoint without re-collection.
+#
+# Collected with:
+#   python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+#     --out-root data/dd2d/raw_v4gen_shapeonly_sz07 --splits test --seed-band-base 6 \
+#     --target-test 40 --shape-set augmented --require-families tee,cross \
+#     --family-size-scale tee=0.7,cross=0.7
+# then converted (test split only) and scored against the dd2d_v4 vocab + checkpoints
+# (train-old / test-new).
+#
+# As with v2/v3/v4 the data is wired via the JSON->EpisodeRecord converter, not a live
+# SesameModels env; env_id / model_name / model_kwargs are unused placeholders.
+env_id: "dd2d/DrawerDeclutter2D-v0"
+env_variant: "dd2d_v4gen_shapeonly_sz07"
+model_name: "dd2d"
+model_kwargs: {}

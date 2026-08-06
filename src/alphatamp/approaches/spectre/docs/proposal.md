@@ -330,9 +330,32 @@ rollout performance — they are diagnostics only; never optimize for them.
   token). *Caveat: the s2 collapse is a pool-composition artifact — s2 problems have
   only ~1.5 unique feasible solutions, padded in-distribution by redundant feasible
   triples the k=200 pool crowds out at high count — not a clean model signal; read the
-  generalization at s3 (diagnosed 2026-08-02).* See
+  generalization at s3 (diagnosed 2026-08-02).* **Confirmed by a shape-only isolation
+  (2026-08-04):** a held-out set that forces the tee/cross figures at the *trained* 9–12
+  blocker count (`dd2d_v4gen_shapeonly`) degrades only ~1.17× overall (adaptive 6.77 vs
+  5.78), s3 *improves* (9.19→6.03) and s2 lifts only moderately (10.49→17.27, vs the
+  count-confounded ~32) — so the severe s2 OOD degradation was primarily count-driven, not
+  the new shapes. One twist: under the shape shift **SPECTRE-static falls behind PIGINet**
+  (22.55 vs 15.27) and only the adaptive re-ranking recovers the win, so the
+  representation-vs-adaptivity attribution is not shift-invariant. See
   [`decisions/07` 2026-08-01](decisions/07-stickbutton2d.md#2026-08-01-dd2d-generalization-test-unseen-count-unseen)
-  and [`notebook/07` 2026-08-02](notebook/07-stickbutton2d.md#2026-08-02-s2-ood-degradation-pool-composition-artifact-model).
+  and [`notebook/07` 2026-08-02](notebook/07-stickbutton2d.md#2026-08-02-s2-ood-degradation-pool-composition-artifact-model),
+  and the shape-only follow-up
+  [`decisions/07` 2026-08-04](decisions/07-stickbutton2d.md#2026-08-04-shape-only-dd2d-gen-variant-precompute---test-variant)
+  / [`notebook/07` 2026-08-04](notebook/07-stickbutton2d.md#2026-08-04-dd2d-shape-only-generalization-shapes-isolated-count).
+  *⚠️ Even the residual shape-only s2 lift is not real (2026-08-06): it is collection variance,
+  not the new shapes' size. Three probes settle it — the new shapes are mid-sized even by
+  convex-hull footprint and buffer packing is 5% of failures (physical gate); **v3 is image-free
+  but geometry-AWARE** (it encodes each object's boundary/pose/area), yet paired inference-time
+  interventions that rewrite the tee/cross model-input geometry — correcting area to hull,
+  convexifying the boundary, shrinking ×0.7 — leave FP identical to the digit, so the ranking is
+  inert to the new shapes' geometry; and a fresh un-shrunk control reads s2 5.63 (below the
+  in-dist 10.49) while astar s2 is stable at 14–15 across collections. So the shape-only s2=17.27
+  was a high-variance draw of a ~1.5-solution stratum, not a shape effect. This also refines the
+  §0 framing: "abstract-first / image-free" does not mean geometry-free — v3 already ingests
+  object-centric geometry, it is simply weakly weighted for ranking. See
+  [`decisions/07` 2026-08-06](decisions/07-stickbutton2d.md#2026-08-06-shape-generalization-s2-deficit-collection-variance-shape)
+  / [`notebook/07` 2026-08-06](notebook/07-stickbutton2d.md#2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size).*
 - **x₀-conditioned prior.** A PIGINet-style feasibility predictor over the
   concrete initial state as an additional scorer input — a strict
   generalization of the current deliberately x₀-free setup (writeup, Future
