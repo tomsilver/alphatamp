@@ -12,7 +12,7 @@ import random
 import numpy as np
 import pytest
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.demo_grasp_concave import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.demo_grasp_concave import (
     CONCAVE_FAMILIES,
     contact_runs,
     finger_contacts,
@@ -21,12 +21,12 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.demo_grasp_concave import (
     pad_to_common,
     select_cells,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.grasps import (
     FINGER_WIDTH,
     grasp_cells,
     grasp_cfree,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import sample_shape
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import sample_shape
 
 _TOL = 1e-6
 

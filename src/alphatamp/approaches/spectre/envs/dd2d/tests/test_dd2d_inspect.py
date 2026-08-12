@@ -10,11 +10,11 @@ from __future__ import annotations
 import glob
 import os
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.inspect_example import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.inspect_example import (
     _find_record,
     visualize_record,
 )

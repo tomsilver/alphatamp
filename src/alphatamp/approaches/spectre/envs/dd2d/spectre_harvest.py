@@ -32,7 +32,7 @@ from alphatamp.approaches.spectre.schema import (
     SceneGeometry,
 )
 
-from .dd2d.certificate import certify_infeasible_by_packing
+from .drawer.certificate import certify_infeasible_by_packing
 from .soundness import DD2D_REGISTRY, SoundnessRegistry
 from .spectre_geometry import (
     grasp_witness_after_removing,

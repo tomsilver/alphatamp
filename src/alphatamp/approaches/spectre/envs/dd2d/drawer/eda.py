@@ -137,7 +137,7 @@ def _classify_seed(task) -> tuple[int, int | None, str]:
     """Generate the instance for ``seed`` and return (seed, min_feasible_subset,
     err)."""
     seed, gkw = task
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
         generate_dd2d_problem,
     )
 
@@ -151,11 +151,11 @@ def _classify_seed(task) -> tuple[int, int | None, str]:
 def _run_episode(task) -> dict:
     """Regenerate the instance for ``seed`` and run the pyperplan baseline episode."""
     seed, stratum, gkw, k = task
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import make_dd2d_planner
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.planning import make_dd2d_planner
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
         generate_dd2d_problem,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
 
     row = {
         "seed": seed,

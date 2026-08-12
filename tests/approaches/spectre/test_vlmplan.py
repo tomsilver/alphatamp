@@ -330,7 +330,7 @@ def test_dd2d_geometry_discloses_gripper_dimensions(episode, adapter) -> None:
     The numbers must be the grasp model's own constants (imported, not hardcoded), so a
     change to the env's gripper can never silently diverge from what the VLM is told.
     """
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d import grasps
+    from alphatamp.approaches.spectre.envs.dd2d.drawer import grasps
 
     geo = adapter._geometry_str(episode)
     assert "parallel-jaw" in geo

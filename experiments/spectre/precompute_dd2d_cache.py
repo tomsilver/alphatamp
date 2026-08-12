@@ -626,10 +626,10 @@ def _measure_plan_gen(per_stratum: int = 3) -> dict[str, float]:
     try:
         from collections import defaultdict
 
-        from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import (
+        from alphatamp.approaches.spectre.envs.dd2d.drawer.planning import (
             make_dd2d_planner,
         )
-        from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+        from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
             generate_dd2d_problem,
         )
     except Exception as e:  # pragma: no cover - env not importable

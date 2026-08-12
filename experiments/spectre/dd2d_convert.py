@@ -8,7 +8,7 @@ to one ``EpisodeRecord`` and writes it into the standard SPECTRE data layout so
     <data_root>/raw/<env_variant>/<split>/episodes/ep_<problem_seed>.pkl.gz
 
 To generate *fresh* DD2D data, run DD2D's own collector
-(``python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect --out-root ...``)
+(``python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect --out-root ...``)
 and re-point ``raw_root`` at its output. Usage::
 
     python experiments/spectre/dd2d_convert.py

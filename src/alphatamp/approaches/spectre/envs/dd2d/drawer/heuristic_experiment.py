@@ -143,11 +143,11 @@ def _run_problem(task) -> dict:
     ``{"seed", "ok", "reason", "rows"}``.
     """
     seed, gkw, ref_kw, k, max_expansions = task
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import make_dd2d_planner
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.planning import make_dd2d_planner
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
         generate_dd2d_problem,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
 
     t0 = time.perf_counter()
     try:

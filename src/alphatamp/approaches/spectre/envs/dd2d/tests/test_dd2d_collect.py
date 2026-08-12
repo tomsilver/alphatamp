@@ -15,17 +15,17 @@ import os
 
 import pytest
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import collect
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer import collect
+from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
     _scene_has_families,
     generate_dd2d_problem,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.scene import generate_scene
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import (
     NEW_SHAPE_FAMILIES,
     NEW_SHAPE_WEIGHTS,
 )

@@ -28,10 +28,10 @@ from shapely.geometry import Polygon
 
 from alphatamp.approaches.spectre.schema import ObjectGeometry, SceneGeometry
 
-from .dd2d.grasps import has_grasp
-from .dd2d.scene import WALL_BAND
-from .dd2d.shapes import Shape
-from .dd2d.world import DrawerScene, ItemState, place_polygon
+from .drawer.grasps import has_grasp
+from .drawer.scene import WALL_BAND
+from .drawer.shapes import Shape
+from .drawer.world import DrawerScene, ItemState, place_polygon
 
 
 def _item_polygon(geom: ObjectGeometry) -> Polygon:
@@ -124,7 +124,7 @@ def grasp_witness_after_removing(
     Intersection of the per-corridor blocker sets over corridors that are not walled
     off; empty if the target is already graspable or no corridor is jointly blocked.
     """
-    from .dd2d.enumerate import _blocker_sets, _footprints
+    from .drawer.enumerate import _blocker_sets, _footprints
 
     view = _scene_without(scene, set(subset))
     sets = [s for s in _blocker_sets(view, _footprints(view)) if s]

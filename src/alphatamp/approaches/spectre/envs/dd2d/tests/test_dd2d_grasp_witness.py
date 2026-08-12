@@ -16,14 +16,14 @@ import pytest
 from shapely import box as shp_box
 from shapely.geometry import Point
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.grasps import (
     grasp_blocker,
     grasp_cells,
     grasp_cfree,
     has_grasp,
     has_grasp_witness,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import FAMILIES, sample_shape
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import FAMILIES, sample_shape
 
 
 def _obstacle_battery(rng: random.Random) -> list[list]:

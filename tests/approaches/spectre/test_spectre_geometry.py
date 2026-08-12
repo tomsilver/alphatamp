@@ -51,11 +51,11 @@ def _scene_geometry_from_live(scene) -> SceneGeometry:
 
 
 def _live_blocked_after(scene, subset) -> bool:
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.enumerate import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.enumerate import (
         _footprints,
         _obstacles,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import has_grasp
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.grasps import has_grasp
 
     present = set(scene.item_names()) - set(subset) - {scene.target}
     obs = _obstacles(_footprints(scene), present, scene.target, scene.wall_band)
@@ -64,7 +64,7 @@ def _live_blocked_after(scene, subset) -> bool:
 
 
 def test_wall_band_matches_live_env():
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.scene import generate_scene
 
     scene = generate_scene(seed=3, lam=0.8, crowd=5)
     frame = {"drawer_w": scene.dims["W"], "drawer_d": scene.dims["D"]}
@@ -76,7 +76,7 @@ def test_wall_band_matches_live_env():
 def test_reconstruction_equivalent_to_live_grasp_check(seed):
     """Reconstructed blocked-after-removing == the env's own check, over many
     subsets."""
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.scene import generate_scene
 
     scene = generate_scene(seed=seed, lam=0.8, crowd=5)
     sg = _scene_geometry_from_live(scene)
@@ -92,7 +92,7 @@ def test_reconstruction_equivalent_to_live_grasp_check(seed):
 def test_removing_all_clutter_opens_target():
     """Sanity: with every non-target item removed, the target is graspable (not
     blocked)."""
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.scene import generate_scene
 
     scene = generate_scene(seed=2, lam=0.8, crowd=5)
     sg = _scene_geometry_from_live(scene)

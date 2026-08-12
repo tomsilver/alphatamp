@@ -51,7 +51,7 @@ def _scene_geometry_from_live(scene) -> SceneGeometry:
 
 
 def _live_scene(seed=4):
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.scene import generate_scene
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.scene import generate_scene
 
     return generate_scene(seed=seed, lam=0.8, crowd=5)
 

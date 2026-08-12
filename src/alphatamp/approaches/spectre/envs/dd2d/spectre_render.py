@@ -30,7 +30,7 @@ from matplotlib.path import Path as MplPath
 from PIL import Image
 from shapely.geometry.base import BaseGeometry
 
-from .dd2d.world import DrawerScene, place_polygon
+from .drawer.world import DrawerScene, place_polygon
 
 # Palette. The target must be unmistakable — a VLM asked "which item is the target"
 # should be able to answer from colour alone, since the prompt says it is red.

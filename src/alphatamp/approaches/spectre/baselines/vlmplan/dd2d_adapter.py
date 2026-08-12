@@ -23,7 +23,7 @@ from typing import Sequence
 
 from PIL.Image import Image
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.grasps import (
     FINGER_THICK,
     FINGER_WIDTH,
     MAX_APERTURE,

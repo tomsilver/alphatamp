@@ -39,8 +39,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from alphatamp.approaches.spectre import compare, eda
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.render import render_episode
+from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
+from alphatamp.approaches.spectre.envs.dd2d.drawer.render import render_episode
 from alphatamp.approaches.spectre.envs.dd2d.skeleton import Skeleton
 from alphatamp.approaches.spectre.envs.dd2d.spectre_geometry import reconstruct_scene
 

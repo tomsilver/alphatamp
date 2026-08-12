@@ -24,7 +24,7 @@ Two clips per sampled item, concatenated into one mp4:
   what ``has_grasp`` actually does: walk the cells in order, drawing fingers red where they
   penetrate a neighbour/wall, until the first collision-free cell, then lift.
 
-    python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.demo_grasp_concave
+    python -m alphatamp.approaches.spectre.envs.dd2d.drawer.demo_grasp_concave
     # -> out_dd2d/grasp_demos/{horseshoe,shoe,dumbbell}_s{seed}.mp4  (+ a printed contact table)
 
 Units: centimetres, matching the rest of DD2D.

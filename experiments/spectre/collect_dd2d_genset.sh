@@ -26,13 +26,13 @@ mkdir -p "$LOGDIR"
 echo "# PYTHONHASHSEED=$PYTHONHASHSEED workers=$WORKERS"
 
 echo "=== A: dd2d_v4gen_count (unseen count, old shapes) ==="
-python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
     --out-root data/dd2d/raw_v4gen_count --splits test --seed-band-base 3 \
     --target-test 40 --n-items-min 14 --n-items-max 16 --fill-max 0.72 \
     --workers "$WORKERS" 2>&1 | tee "$LOGDIR/collect_dd2d_v4gen_count.log"
 
 echo "=== B: dd2d_v4gen_shape (unseen count + forced tee/cross) ==="
-python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
     --out-root data/dd2d/raw_v4gen_shape --splits test --seed-band-base 4 \
     --target-test 40 --n-items-min 14 --n-items-max 16 --fill-max 0.72 \
     --shape-set augmented --require-families tee,cross \

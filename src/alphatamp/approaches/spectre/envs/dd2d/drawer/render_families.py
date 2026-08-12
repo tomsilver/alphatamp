@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib.patches import Polygon as MplPoly
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import (
     FAMILIES,
     NEW_SHAPE_FAMILIES,
     sample_shape,

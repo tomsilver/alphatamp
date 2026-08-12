@@ -11,7 +11,7 @@
 # count effect. See dd2d_v4gen_shape for the count+new-shape set.
 #
 # Collected with:
-#   python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+#   python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
 #     --out-root data/dd2d/raw_v4gen_count --splits test --seed-band-base 3 \
 #     --target-test 40 --n-items-min 14 --n-items-max 16 --fill-max 0.72
 # then converted (test split only) and scored against the dd2d_v4 vocab + checkpoints

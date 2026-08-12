@@ -58,7 +58,7 @@ def _running() -> list[tuple[str, str, str]]:
         return []
     keys = (
         "spectre.train",
-        "dd2d.dd2d.collect",
+        "dd2d.drawer.collect",
         "sb2d_render_convert",
         "precompute_dd2d_cache",
         "vlmplan_",

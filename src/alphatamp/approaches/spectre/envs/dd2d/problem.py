@@ -294,7 +294,7 @@ def _generate_dd2d_problem(*args, **kwargs):
     # DD2D -- Drawer Decluttering in 2D (a different world: Shapely rotated polygons +
     # a grasp model + target-retrieval). Lazily imported so ``import blocks_tamp.problem``
     # never requires shapely/matplotlib. Takes DD2D's own kwargs (lam, margin, seed, ...).
-    from .dd2d.problem import generate_dd2d_problem
+    from .drawer.problem import generate_dd2d_problem
 
     return generate_dd2d_problem(*args, **kwargs)
 

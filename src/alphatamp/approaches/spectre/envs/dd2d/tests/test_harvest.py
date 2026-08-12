@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import harvest as H
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import generate_dd2d_problem
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
+from alphatamp.approaches.spectre.envs.dd2d.drawer import harvest as H
+from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import generate_dd2d_problem
+from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
 from alphatamp.approaches.spectre.envs.dd2d.soundness import (
     DD2D_REGISTRY,
     EMPTY_REGISTRY,

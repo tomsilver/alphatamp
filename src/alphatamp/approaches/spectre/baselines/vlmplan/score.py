@@ -50,10 +50,10 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     _stable_seed as _collector_stable_seed,)
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import staging_skeleton
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
+from alphatamp.approaches.spectre.envs.dd2d.drawer.planning import staging_skeleton
+from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
 from alphatamp.approaches.spectre.envs.dd2d.spectre_geometry import reconstruct_scene
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 

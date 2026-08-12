@@ -16,11 +16,11 @@ from shapely import box as shp_box
 from shapely.affinity import rotate
 from shapely.geometry import Point
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import enumerate as EN
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import label as L
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import scene as SC
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.enumerate import Candidate
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer import enumerate as EN
+from alphatamp.approaches.spectre.envs.dd2d.drawer import label as L
+from alphatamp.approaches.spectre.envs.dd2d.drawer import scene as SC
+from alphatamp.approaches.spectre.envs.dd2d.drawer.enumerate import Candidate
+from alphatamp.approaches.spectre.envs.dd2d.drawer.grasps import (
     FINGER_WIDTH,
     direction_admissible,
     finger_rects,
@@ -28,24 +28,24 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
     has_grasp,
     isolation_graspable,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.label import min_feasible_subset_size
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.planning import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.label import min_feasible_subset_size
+from alphatamp.approaches.spectre.envs.dd2d.drawer.planning import (
     DD2DPlanner,
     make_dd2d_planner,
     staging_skeleton,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import generate_dd2d_problem
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.refine import DD2DRefiner
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.render import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import generate_dd2d_problem
+from alphatamp.approaches.spectre.envs.dd2d.drawer.refine import DD2DRefiner
+from alphatamp.approaches.spectre.envs.dd2d.drawer.render import (
     render_episode,
     render_scene,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import (
     FAMILIES,
     Shape,
     sample_shape,
 )
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.world import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.world import (
     DrawerWorld,
     collar_pose,
     collision_free,
@@ -335,7 +335,7 @@ def test_candidates_published_order_and_validity(problem):
 
 def test_buried_member_is_extraction_infeasible():
     # a hand-built scene: target blocked by a blocker that is itself walled into a corner
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.world import DrawerScene, ItemState
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
 
     drawer = shp_box(0, 0, 40, 30)
     outer = shp_box(-1.5, -1.5, 41.5, 31.5)
@@ -650,7 +650,7 @@ def test_deep_baseline_reaches_the_feasible_plan(subset_problem):
 # --------------------------------------------------------------------------- #
 def test_samples_per_step_is_threaded_as_m_p(problem, monkeypatch):
     seen: list[int] = []
-    import alphatamp.approaches.spectre.envs.dd2d.dd2d.refine as R
+    import alphatamp.approaches.spectre.envs.dd2d.drawer.refine as R
 
     orig = R.sample_buffer_pose
     monkeypatch.setattr(
@@ -752,10 +752,10 @@ def test_gbf_dist_reorders_off_ascending_length(subset_problem):
 def test_distance_heuristic_sign():
     """H falls when a NEAR (blocking) item is cleared vs when a FAR (distractor) item
     is."""
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.heuristics import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.heuristics import (
         distance_heuristic_factory,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.world import DrawerScene, ItemState
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
 
     drawer, wall, buf = (
         shp_box(0, 0, 40, 30),

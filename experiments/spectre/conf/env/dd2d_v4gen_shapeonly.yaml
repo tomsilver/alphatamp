@@ -15,7 +15,7 @@
 # demo_grasp_concave --families tee cross, 0 floating cells, internal grasps present).
 #
 # Collected with:
-#   python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+#   python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
 #     --out-root data/dd2d/raw_v4gen_shapeonly --splits test --seed-band-base 5 \
 #     --target-test 40 --shape-set augmented --require-families tee,cross
 # then converted (test split only) and scored against the dd2d_v4 vocab + checkpoints

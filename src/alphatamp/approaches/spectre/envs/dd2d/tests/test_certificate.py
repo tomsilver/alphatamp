@@ -17,9 +17,9 @@ import pytest
 from shapely import MultiPoint, Point, Polygon, box
 from shapely.affinity import rotate, translate
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d import certificate as C
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import Shape
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.world import DrawerScene, ItemState
+from alphatamp.approaches.spectre.envs.dd2d.drawer import certificate as C
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import Shape
+from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
 
 
 # --------------------------------------------------------------------------- #

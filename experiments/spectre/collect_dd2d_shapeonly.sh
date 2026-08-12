@@ -33,7 +33,7 @@ mkdir -p "$LOGDIR"
 echo "# PYTHONHASHSEED=$PYTHONHASHSEED workers=$WORKERS"
 
 echo "=== dd2d_v4gen_shapeonly (headline 9-12 blockers + forced tee/cross) ==="
-python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
     --out-root data/dd2d/raw_v4gen_shapeonly --splits test --seed-band-base 5 \
     --target-test 40 --shape-set augmented --require-families tee,cross \
     --workers "$WORKERS" 2>&1 | tee "$LOGDIR/collect_dd2d_v4gen_shapeonly.log"

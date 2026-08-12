@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import imageio.v2 as imageio
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import generate_dd2d_problem
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.record_ext import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import generate_dd2d_problem
+from alphatamp.approaches.spectre.envs.dd2d.drawer.record_ext import (
     build_dd2d_example,
     write_crops,
 )

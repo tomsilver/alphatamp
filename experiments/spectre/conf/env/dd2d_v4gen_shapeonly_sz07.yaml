@@ -13,7 +13,7 @@
 # probe the same question on the existing checkpoint without re-collection.
 #
 # Collected with:
-#   python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+#   python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
 #     --out-root data/dd2d/raw_v4gen_shapeonly_sz07 --splits test --seed-band-base 6 \
 #     --target-test 40 --shape-set augmented --require-families tee,cross \
 #     --family-size-scale tee=0.7,cross=0.7

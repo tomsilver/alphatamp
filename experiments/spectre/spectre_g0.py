@@ -53,11 +53,11 @@ class _SceneResult:
 def _one_scene(args) -> _SceneResult:
     """Generate + label one scene worker-side; return lightweight feature rows."""
     lam, seed = args
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d import label as L
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.enumerate import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer import label as L
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.enumerate import (
         enumerate_candidates,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.dd2d.problem import (
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.problem import (
         generate_dd2d_problem,
     )
 

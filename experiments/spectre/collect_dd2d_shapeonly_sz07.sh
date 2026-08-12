@@ -28,7 +28,7 @@ mkdir -p "$LOGDIR"
 echo "# PYTHONHASHSEED=$PYTHONHASHSEED workers=$WORKERS"
 
 echo "=== dd2d_v4gen_shapeonly_sz07 (forced tee/cross at x0.7 linear, 9-12 blockers) ==="
-python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect \
+python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect \
     --out-root data/dd2d/raw_v4gen_shapeonly_sz07 --splits test --seed-band-base 6 \
     --target-test 40 --shape-set augmented --require-families tee,cross \
     --family-size-scale tee=0.7,cross=0.7 \

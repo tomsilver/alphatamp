@@ -6,8 +6,8 @@ import numpy as np
 from shapely import Polygon, box
 from shapely.affinity import translate
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.shapes import Shape
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.world import DrawerScene, ItemState
+from alphatamp.approaches.spectre.envs.dd2d.drawer.shapes import Shape
+from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
 from alphatamp.approaches.spectre.g0 import (
     FEATURE_NAMES,
     G0Point,

@@ -13,7 +13,7 @@ import os
 import pytest
 import torch
 
-from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
+from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
