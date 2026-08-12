@@ -13,11 +13,11 @@ import os
 import pytest
 import torch
 
+from alphatamp.approaches.spectre.baselines.piginet.encoders import D, Encoders
 from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.baselines.piginet.encoders import D, Encoders
 
 
 @pytest.fixture(scope="module")

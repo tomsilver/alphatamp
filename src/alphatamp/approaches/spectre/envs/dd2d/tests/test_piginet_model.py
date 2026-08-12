@@ -9,15 +9,15 @@ import numpy as np
 import pytest
 import torch
 
+from alphatamp.approaches.spectre.baselines.piginet.dataset import record_tokens
+from alphatamp.approaches.spectre.baselines.piginet.encoders import Encoders
+from alphatamp.approaches.spectre.baselines.piginet.model import PIGINet
+from alphatamp.approaches.spectre.baselines.piginet.tokenize import PIGINetTokenizer
 from alphatamp.approaches.spectre.envs.dd2d.drawer.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
 from alphatamp.approaches.spectre.envs.dd2d.record import PIGINetExample
-from alphatamp.approaches.spectre.baselines.piginet.dataset import record_tokens
-from alphatamp.approaches.spectre.baselines.piginet.encoders import Encoders
-from alphatamp.approaches.spectre.baselines.piginet.model import PIGINet
-from alphatamp.approaches.spectre.baselines.piginet.tokenize import PIGINetTokenizer
 
 
 @pytest.fixture(scope="module")

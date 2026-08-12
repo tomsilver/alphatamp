@@ -25,9 +25,7 @@ from alphatamp.approaches.spectre.io import atomic_write_pickle_gz
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 from alphatamp.approaches.spectre.vocab import OOV_TOKEN, extract_vocab
 
-_RAW_V2 = (
-    Path(spectre_pkg.__file__).resolve().parents[4] / "data" / "dd2d" / "raw_v2"
-)
+_RAW_V2 = Path(spectre_pkg.__file__).resolve().parents[4] / "data" / "dd2d" / "raw_v2"
 
 
 def _first_train_problem() -> Path:

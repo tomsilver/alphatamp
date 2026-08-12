@@ -34,8 +34,8 @@ import pytest
 import torch
 
 from alphatamp.approaches.spectre.dataset import (
-    build_record_arrays,
     build_example,
+    build_record_arrays,
     collate,
 )
 from alphatamp.approaches.spectre.domain import spec_for
@@ -47,8 +47,8 @@ from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.model import (
     MAX_DELTA_ATOMS,
     RecordEncoder,
-    SpectreModel,
     SpectreConfig,
+    SpectreModel,
 )
 from alphatamp.approaches.spectre.tags import assign_tags
 from alphatamp.approaches.spectre.vocab import Vocab
@@ -219,8 +219,8 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
     from alphatamp.approaches.spectre.inference import load_checkpoint
     from alphatamp.approaches.spectre.model import (
         N_OVERLAP_V3,
-        SpectreModel,
         SpectreConfig,
+        SpectreModel,
     )
     from alphatamp.approaches.spectre.train import TrainConfig
 

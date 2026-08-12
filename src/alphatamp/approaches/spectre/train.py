@@ -55,14 +55,14 @@ from alphatamp.approaches.spectre.dataset import (
     sample_context,
 )
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.encoders import D_REL_V3
 from alphatamp.approaches.spectre.inference import deployed_rollout_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
-from alphatamp.approaches.spectre.encoders import D_REL_V3
 from alphatamp.approaches.spectre.model import (
     N_OVERLAP_V3,
-    SpectreModel,
     SpectreConfig,
+    SpectreModel,
 )
 from alphatamp.approaches.spectre.vocab import Vocab
 

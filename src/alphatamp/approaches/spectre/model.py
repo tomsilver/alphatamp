@@ -31,7 +31,6 @@ from typing import Optional
 import torch
 from torch import Tensor, nn
 
-from alphatamp.approaches.spectre.layers import D_MODEL, FFN_DIM, N_HEADS
 from alphatamp.approaches.spectre.encoders import (
     D_REL,
     D_REL_V3,
@@ -44,6 +43,7 @@ from alphatamp.approaches.spectre.encoders import (
     SceneEncoder,
     SpectreV2Batch,
 )
+from alphatamp.approaches.spectre.layers import D_MODEL, FFN_DIM, N_HEADS
 from alphatamp.approaches.spectre.tags import PAD_TAG
 
 DROPOUT = 0.1

@@ -19,6 +19,24 @@ from prpl_llm_utils.models import OrderedResponseModel
 from prpl_llm_utils.structs import Response
 from relational_structs import GroundAtom, Object
 
+from alphatamp.approaches.spectre.baselines.vlmplan import runio
+from alphatamp.approaches.spectre.baselines.vlmplan import score as score_mod
+from alphatamp.approaches.spectre.baselines.vlmplan.adapter import SkillSpec
+from alphatamp.approaches.spectre.baselines.vlmplan.dd2d_adapter import DD2DAdapter
+from alphatamp.approaches.spectre.baselines.vlmplan.loop import (
+    LoopConfig,
+    generate_sequence,
+)
+from alphatamp.approaches.spectre.baselines.vlmplan.parsing import (
+    parse_response,
+    split_plan_blocks,
+)
+from alphatamp.approaches.spectre.baselines.vlmplan.template import (
+    BASE_SLOTS,
+    PromptConfig,
+    build_prompt,
+    check_placeholders,
+)
 from alphatamp.approaches.spectre.envs.dd2d.spectre_operators import (
     OPERATOR_BY_NAME,
     PREDICATE_BY_NAME,
@@ -35,21 +53,6 @@ from alphatamp.approaches.spectre.schema import (
     SummaryBlock,
 )
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
-from alphatamp.approaches.spectre.baselines.vlmplan import runio
-from alphatamp.approaches.spectre.baselines.vlmplan import score as score_mod
-from alphatamp.approaches.spectre.baselines.vlmplan.adapter import SkillSpec
-from alphatamp.approaches.spectre.baselines.vlmplan.dd2d_adapter import DD2DAdapter
-from alphatamp.approaches.spectre.baselines.vlmplan.loop import LoopConfig, generate_sequence
-from alphatamp.approaches.spectre.baselines.vlmplan.parsing import (
-    parse_response,
-    split_plan_blocks,
-)
-from alphatamp.approaches.spectre.baselines.vlmplan.template import (
-    BASE_SLOTS,
-    PromptConfig,
-    build_prompt,
-    check_placeholders,
-)
 
 N_ITEMS = 4
 TARGET = "item_3"

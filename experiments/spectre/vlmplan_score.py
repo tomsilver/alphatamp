@@ -33,13 +33,13 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig
 
-from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.baselines.vlmplan import runio
 from alphatamp.approaches.spectre.baselines.vlmplan import score as score_mod
 from alphatamp.approaches.spectre.baselines.vlmplan.registry import (
     make_adapter,
     make_labeler_factory,
 )
+from alphatamp.approaches.spectre.compare import stratum_of
 
 REPO = Path(__file__).resolve().parents[2]
 

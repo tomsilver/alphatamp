@@ -335,7 +335,10 @@ def test_candidates_published_order_and_validity(problem):
 
 def test_buried_member_is_extraction_infeasible():
     # a hand-built scene: target blocked by a blocker that is itself walled into a corner
-    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import (
+        DrawerScene,
+        ItemState,
+    )
 
     drawer = shp_box(0, 0, 40, 30)
     outer = shp_box(-1.5, -1.5, 41.5, 31.5)
@@ -755,7 +758,10 @@ def test_distance_heuristic_sign():
     from alphatamp.approaches.spectre.envs.dd2d.drawer.heuristics import (
         distance_heuristic_factory,
     )
-    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import DrawerScene, ItemState
+    from alphatamp.approaches.spectre.envs.dd2d.drawer.world import (
+        DrawerScene,
+        ItemState,
+    )
 
     drawer, wall, buf = (
         shp_box(0, 0, 40, 30),

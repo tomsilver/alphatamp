@@ -14,7 +14,10 @@ from types import SimpleNamespace
 from alphatamp.approaches.spectre import compare, compare_envs
 from alphatamp.approaches.spectre.baselines.vlmplan.loop import RoundLog, _record_usage
 from alphatamp.approaches.spectre.baselines.vlmplan.runio import _stratified
-from alphatamp.approaches.spectre.baselines.vlmplan.score import Attempt, _fp_refine_capped
+from alphatamp.approaches.spectre.baselines.vlmplan.score import (
+    Attempt,
+    _fp_refine_capped,
+)
 
 
 def test_sb2d_plan_label_is_not_retrieve_question_mark() -> None:

@@ -25,8 +25,8 @@ from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.encoders import D_REL_V3
 from alphatamp.approaches.spectre.model import (
     N_OVERLAP_V3,
-    SpectreModel,
     SpectreConfig,
+    SpectreModel,
 )
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.vocab import Vocab
@@ -306,7 +306,5 @@ def deployed_rollout(
 
     See :func:`deployed_rollout_traced` for the trace.
     """
-    attempts, _ = deployed_rollout_traced(
-        model, episode, vocab, device, spec, max_tags
-    )
+    attempts, _ = deployed_rollout_traced(model, episode, vocab, device, spec, max_tags)
     return attempts

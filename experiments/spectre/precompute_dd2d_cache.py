@@ -373,8 +373,8 @@ def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
     data + CLIP cache, the output ``compare_cache``, ``N_PROBLEMS`` and the refine cap.
     ``ckpt_variant`` (default ``env_variant``) is the TRAIN collection whose vocab and
     checkpoints are loaded. They differ only for a train-old / test-new generalization
-    run (``--test-variant``), splitting exactly the way ``spectre_score.py`` does:
-    model + vocab from ``--env-variant``, episodes from ``--test-variant``.
+    run (``--test-variant``), splitting exactly the way ``spectre_score.py`` does: model
+    + vocab from ``--env-variant``, episodes from ``--test-variant``.
     """
     global ENV_VARIANT, CKPT_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
@@ -802,9 +802,9 @@ class _RawSplit:
     ``canonicalize_episode`` is not idempotent. Double canonicalization silently changes
     the object->tag binding relative to training, which loads raw.
 
-    **Every model cache function must load through this.** Double-canonicalization is why
-    the dd2d_v3 v2 number (13.68) was retracted (``decisions.md`` 2026-07-26). Training
-    loads raw, so raw is what makes evaluation match training.
+    **Every model cache function must load through this.** Double-canonicalization is
+    why the dd2d_v3 v2 number (13.68) was retracted (``decisions.md`` 2026-07-26).
+    Training loads raw, so raw is what makes evaluation match training.
 
     Exposes ``.episodes`` -- the only attribute the cache functions read.
     """

@@ -145,8 +145,8 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     from alphatamp.approaches.spectre.inference import load_checkpoint
     from alphatamp.approaches.spectre.model import (
         N_OVERLAP_V3,
-        SpectreModel,
         SpectreConfig,
+        SpectreModel,
     )
     from alphatamp.approaches.spectre.train import TrainConfig
 

@@ -33,16 +33,25 @@ from typing import Any
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.baselines.vlmplan import runio
-from alphatamp.approaches.spectre.baselines.vlmplan.loop import LoopConfig, generate_sequence
-from alphatamp.approaches.spectre.baselines.vlmplan.models import ModelConfig, make_model
+from alphatamp.approaches.spectre.baselines.vlmplan.loop import (
+    LoopConfig,
+    generate_sequence,
+)
+from alphatamp.approaches.spectre.baselines.vlmplan.models import (
+    ModelConfig,
+    make_model,
+)
 from alphatamp.approaches.spectre.baselines.vlmplan.registry import (
     make_adapter,
     make_labeler_factory,
 )
 from alphatamp.approaches.spectre.baselines.vlmplan.score import label_step_sequence
-from alphatamp.approaches.spectre.baselines.vlmplan.template import PromptConfig, build_prompt
+from alphatamp.approaches.spectre.baselines.vlmplan.template import (
+    PromptConfig,
+    build_prompt,
+)
+from alphatamp.approaches.spectre.compare import stratum_of
 
 REPO = Path(__file__).resolve().parents[2]
 

@@ -15,7 +15,10 @@ import numpy as np
 import pytest
 
 from alphatamp.approaches.spectre.baselines.piginet.dd2d_adapter import DD2DDomain
-from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import GLOSSES, SB2DDomain
+from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import (
+    GLOSSES,
+    SB2DDomain,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SPLIT = _ROOT / "data" / "spectre" / "raw" / "stickbutton2d_v1" / "test"
