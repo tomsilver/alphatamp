@@ -7,7 +7,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from alphatamp.approaches.spectre.piginet.losses import (
+from alphatamp.approaches.spectre.baselines.piginet.losses import (
     focal_loss,
     listwise_ranking_loss,
     weighted_bce,

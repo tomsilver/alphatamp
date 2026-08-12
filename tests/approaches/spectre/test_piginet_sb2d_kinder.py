@@ -109,7 +109,7 @@ def converted(tmp_path_factory):
 # --------------------------------------------------------------------------- #
 def test_factory_dispatches_on_variant() -> None:
     """The kinder variant gets the PNG-reading domain; everything else the schematic."""
-    from alphatamp.approaches.spectre.piginet.sb2d_adapter import (
+    from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import (
         SB2DDomain,
         SB2DKinderDomain,
         make_sb2d_domain,
@@ -131,7 +131,7 @@ def test_crop_window_constant_stays_in_sync() -> None:
     They live in two modules; a silent drift would reframe every kinder crop against the
     scale the schematic (and the pose/shape features) assume.
     """
-    from alphatamp.approaches.spectre.piginet import sb2d_adapter
+    from alphatamp.approaches.spectre.baselines.piginet import sb2d_adapter
 
     conv = _load_convert()
 
@@ -168,7 +168,7 @@ def test_records_are_copied_verbatim(converted) -> None:
 # --------------------------------------------------------------------------- #
 def test_crops_cover_every_object_and_scene_png_exists(converted) -> None:
     """One crop per geometry object, plus a full-scene overview for future use."""
-    from alphatamp.approaches.spectre.piginet.sb2d_adapter import SB2DKinderDomain
+    from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import SB2DKinderDomain
 
     data_root, items = converted
     dom = SB2DKinderDomain(data_root, "stickbutton2d_v1_kinder")
@@ -192,7 +192,7 @@ def test_crops_cover_every_object_and_scene_png_exists(converted) -> None:
 def test_missing_png_is_omitted_not_errored(converted) -> None:
     """A missing crop becomes a zero vector downstream, matching DD2D's stored-PNG
     path."""
-    from alphatamp.approaches.spectre.piginet.sb2d_adapter import SB2DKinderDomain
+    from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import SB2DKinderDomain
 
     data_root, items = converted
     pid = items[0][0]
@@ -219,7 +219,7 @@ def test_button_crops_carry_context_not_identical(converted) -> None:
     multi-button scene the button crops differ. This is the direct contrast to
     ``test_piginet_sb2d.test_crops_preserve_relative_scale``.
     """
-    from alphatamp.approaches.spectre.piginet.sb2d_adapter import SB2DKinderDomain
+    from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import SB2DKinderDomain
 
     data_root, items = converted
     # the b5 episode -- the one with several buttons

@@ -14,8 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from alphatamp.approaches.spectre.piginet.dd2d_adapter import DD2DDomain
-from alphatamp.approaches.spectre.piginet.sb2d_adapter import GLOSSES, SB2DDomain
+from alphatamp.approaches.spectre.baselines.piginet.dd2d_adapter import DD2DDomain
+from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import GLOSSES, SB2DDomain
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SPLIT = _ROOT / "data" / "spectre" / "raw" / "stickbutton2d_v1" / "test"
@@ -116,7 +116,7 @@ def test_pose_literals_are_synthesised_for_every_object(sample) -> None:
     emits an `at-pose` literal per object exactly as DD2D's records carry one.
     """
     # pylint: disable=import-outside-toplevel
-    from alphatamp.approaches.spectre.piginet.dataset import POSE_PREDICATE
+    from alphatamp.approaches.spectre.baselines.piginet.dataset import POSE_PREDICATE
 
     _, examples, _ = sample
     ex = examples[0]

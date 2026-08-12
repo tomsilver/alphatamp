@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from alphatamp.approaches.spectre.piginet.record import (
+from alphatamp.approaches.spectre.baselines.piginet.record import (
     SCHEMA_VERSION,
     ImageRef,
     PIGINetExample,

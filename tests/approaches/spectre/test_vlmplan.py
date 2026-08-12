@@ -35,16 +35,16 @@ from alphatamp.approaches.spectre.schema import (
     SummaryBlock,
 )
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
-from alphatamp.approaches.spectre.vlmplan import runio
-from alphatamp.approaches.spectre.vlmplan import score as score_mod
-from alphatamp.approaches.spectre.vlmplan.adapter import SkillSpec
-from alphatamp.approaches.spectre.vlmplan.dd2d_adapter import DD2DAdapter
-from alphatamp.approaches.spectre.vlmplan.loop import LoopConfig, generate_sequence
-from alphatamp.approaches.spectre.vlmplan.parsing import (
+from alphatamp.approaches.spectre.baselines.vlmplan import runio
+from alphatamp.approaches.spectre.baselines.vlmplan import score as score_mod
+from alphatamp.approaches.spectre.baselines.vlmplan.adapter import SkillSpec
+from alphatamp.approaches.spectre.baselines.vlmplan.dd2d_adapter import DD2DAdapter
+from alphatamp.approaches.spectre.baselines.vlmplan.loop import LoopConfig, generate_sequence
+from alphatamp.approaches.spectre.baselines.vlmplan.parsing import (
     parse_response,
     split_plan_blocks,
 )
-from alphatamp.approaches.spectre.vlmplan.template import (
+from alphatamp.approaches.spectre.baselines.vlmplan.template import (
     BASE_SLOTS,
     PromptConfig,
     build_prompt,
@@ -826,7 +826,7 @@ def test_stop_at_first_success_preserves_fp() -> None:
     leave alone.
     """
     # pylint: disable=import-outside-toplevel
-    from alphatamp.approaches.spectre.vlmplan.loop import (
+    from alphatamp.approaches.spectre.baselines.vlmplan.loop import (
         GenerationResult,
         Proposal,
         RoundLog,
@@ -854,7 +854,7 @@ def test_stop_at_first_success_preserves_fp() -> None:
 def test_stop_check_is_consulted_and_halts_generation() -> None:
     """`generate_sequence` breaks when the check fires, and flags why."""
     # pylint: disable=import-outside-toplevel
-    from alphatamp.approaches.spectre.vlmplan import loop as loop_mod
+    from alphatamp.approaches.spectre.baselines.vlmplan import loop as loop_mod
 
     calls: list[int] = []
 

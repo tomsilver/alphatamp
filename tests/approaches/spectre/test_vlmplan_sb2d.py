@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from alphatamp.approaches.spectre.vlmplan.adapter import RawPlan
-from alphatamp.approaches.spectre.vlmplan.registry import make_adapter
-from alphatamp.approaches.spectre.vlmplan.sb2d_adapter import _lifted_by_name
+from alphatamp.approaches.spectre.baselines.vlmplan.adapter import RawPlan
+from alphatamp.approaches.spectre.baselines.vlmplan.registry import make_adapter
+from alphatamp.approaches.spectre.baselines.vlmplan.sb2d_adapter import _lifted_by_name
 
 _EPISODES = Path("data/spectre/raw/stickbutton2d_v1/test/episodes")
 

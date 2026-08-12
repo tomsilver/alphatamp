@@ -34,9 +34,9 @@ import hydra
 from omegaconf import DictConfig
 
 from alphatamp.approaches.spectre.compare import stratum_of
-from alphatamp.approaches.spectre.vlmplan import runio
-from alphatamp.approaches.spectre.vlmplan import score as score_mod
-from alphatamp.approaches.spectre.vlmplan.registry import (
+from alphatamp.approaches.spectre.baselines.vlmplan import runio
+from alphatamp.approaches.spectre.baselines.vlmplan import score as score_mod
+from alphatamp.approaches.spectre.baselines.vlmplan.registry import (
     make_adapter,
     make_labeler_factory,
 )

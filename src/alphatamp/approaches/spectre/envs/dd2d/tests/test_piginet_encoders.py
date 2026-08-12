@@ -17,7 +17,7 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
     DD2DCollectConfig,
     collect_problem,
 )
-from alphatamp.approaches.spectre.piginet.encoders import D, Encoders
+from alphatamp.approaches.spectre.baselines.piginet.encoders import D, Encoders
 
 
 @pytest.fixture(scope="module")

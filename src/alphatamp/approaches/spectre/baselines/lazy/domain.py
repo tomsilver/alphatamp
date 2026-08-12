@@ -53,7 +53,7 @@ def make_lazy_domain(
         )
     if env_variant.startswith("stickbutton2d"):
         # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.piginet.sb2d_adapter import _config_scales
+        from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import _config_scales
 
         frame, shape_max = _config_scales()
         return LazyDomain(

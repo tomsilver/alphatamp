@@ -18,8 +18,8 @@ from alphatamp.approaches.spectre.envs.dd2d.dd2d.collect import (
     collect_problem,
 )
 from alphatamp.approaches.spectre.envs.dd2d.record import PIGINetExample
-from alphatamp.approaches.spectre.piginet.encoders import Encoders
-from alphatamp.approaches.spectre.piginet.tokenize import PIGINetTokenizer
+from alphatamp.approaches.spectre.baselines.piginet.encoders import Encoders
+from alphatamp.approaches.spectre.baselines.piginet.tokenize import PIGINetTokenizer
 
 
 @pytest.fixture(scope="module")

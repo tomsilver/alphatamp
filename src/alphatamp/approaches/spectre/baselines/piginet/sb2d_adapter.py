@@ -40,8 +40,8 @@ from typing import Iterator
 import numpy as np
 from kinder.envs.kinematic2d.stickbutton2d import StickButton2DEnvConfig
 
-from alphatamp.approaches.spectre.piginet.dataset import POSE_PREDICATE
-from alphatamp.approaches.spectre.piginet.record import PIGINetExample
+from alphatamp.approaches.spectre.baselines.piginet.dataset import POSE_PREDICATE
+from alphatamp.approaches.spectre.baselines.piginet.record import PIGINetExample
 
 #: StickButton2D vocabulary -> colloquial NL glosses for the CLIP-text encoder (§IV-A).
 #: Operators and predicates come from kinder's own model

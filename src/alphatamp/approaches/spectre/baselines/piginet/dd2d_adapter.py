@@ -21,7 +21,7 @@ from typing import Iterator
 
 import numpy as np
 
-from alphatamp.approaches.spectre.piginet.record import PIGINetExample
+from alphatamp.approaches.spectre.baselines.piginet.record import PIGINetExample
 
 #: DD2D domain vocabulary → colloquial NL glosses for the CLIP-text encoder (paper §IV-A).
 #: PIGINet feeds each domain word through a frozen language model as a short English phrase

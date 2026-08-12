@@ -30,7 +30,7 @@ from typing import Iterator, Protocol, Sequence
 
 import numpy as np
 
-from alphatamp.approaches.spectre.piginet.record import PIGINetExample
+from alphatamp.approaches.spectre.baselines.piginet.record import PIGINetExample
 
 
 class PIGINetDomain(Protocol):

@@ -730,12 +730,12 @@ def cache_piginet(force: bool, device: str) -> None:
             print(f"[{tag}] !! missing {ckpt}; skipping", flush=True)
             continue
         # Local import: vendored piginet stack (pulls in open_clip / CLIP).
-        from alphatamp.approaches.spectre.piginet.eval import score_split
+        from alphatamp.approaches.spectre.baselines.piginet.eval import score_split
 
         print(f"[{tag}] running fresh inference on test split ...")
         domain = None
         if PIGINET_DOMAIN == "stickbutton2d":
-            from alphatamp.approaches.spectre.piginet.sb2d_adapter import (
+            from alphatamp.approaches.spectre.baselines.piginet.sb2d_adapter import (
                 make_sb2d_domain,
             )
 
