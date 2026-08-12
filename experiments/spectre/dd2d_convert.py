@@ -3,7 +3,7 @@
 DD2D ships an already-collected PIGINet-style dataset (per-problem directories
 of ``NNN.json`` skeleton records). This entry point maps each problem directory
 to one ``EpisodeRecord`` and writes it into the standard SPECTRE data layout so
-``spectre_build_vocab.py`` / ``spectre_train.py`` consume it unchanged::
+``spectre_build_vocab.py`` / the ``train`` module consume it unchanged::
 
     <data_root>/raw/<env_variant>/<split>/episodes/ep_<problem_seed>.pkl.gz
 
