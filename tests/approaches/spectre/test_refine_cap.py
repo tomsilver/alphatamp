@@ -5,7 +5,7 @@ Two code paths carry the cap, tested separately:
 - **Fixed-order accounting** (``precompute_dd2d_cache._fp_and_refine_capped``) for the
   score-ordered methods (astar / PIGINet / SPECTRE-static): pure, so it is pinned fast
   on toy episodes with hand-checked ``(fp_capped, refine_s_capped)``.
-- **The rollout** (``inference_v3.deployed_rollout_v3_traced(refine_cap_s=…)``): a
+- **The rollout** (``inference_v3.deployed_rollout_traced(refine_cap_s=…)``): a
   slow-feasible candidate over the cap must stop being a *stopping* success -- it is
   abandoned into the failure context and the loop continues -- so the adaptive order can
   diverge. Verified on real dd2d_v4 episodes (slow, skipped without the gitignored
@@ -149,22 +149,22 @@ def _refine_along(ep, order, cap) -> float:
 @_needs_v4
 def test_rollout_cap_none_is_identical_and_diverges_when_capped() -> None:
     """refine_cap_s=None matches the default; a cap diverges on a slow-feasible stop."""
-    from alphatamp.approaches.spectre.inference_v3 import (
-        deployed_rollout_v3_traced,
-        load_v3_checkpoint,
+    from alphatamp.approaches.spectre.inference import (
+        deployed_rollout_traced,
+        load_checkpoint,
     )
     from alphatamp.approaches.spectre.vocab import Vocab
 
     vocab = Vocab.from_json(_VOCAB)
-    model, deploy = load_v3_checkpoint(_CKPT, vocab, "cpu")
+    model, deploy = load_checkpoint(_CKPT, vocab, "cpu")
     cap = 2.0
 
     diverged = False
     checked_fast = 0
     for ep in _strided_episodes(40):
-        a0, t0 = deployed_rollout_v3_traced(model, ep, vocab, "cpu", **deploy)
+        a0, t0 = deployed_rollout_traced(model, ep, vocab, "cpu", **deploy)
         # refine_cap_s=None must reproduce the default call bit-for-bit.
-        a_none, t_none = deployed_rollout_v3_traced(
+        a_none, t_none = deployed_rollout_traced(
             model, ep, vocab, "cpu", refine_cap_s=None, **deploy
         )
         assert (a_none, t_none.order) == (a0, t0.order)
@@ -173,7 +173,7 @@ def test_rollout_cap_none_is_identical_and_diverges_when_capped() -> None:
             _refine_along(ep, t0.order, None), abs=1e-6
         )
 
-        a_cap, t_cap = deployed_rollout_v3_traced(
+        a_cap, t_cap = deployed_rollout_traced(
             model, ep, vocab, "cpu", refine_cap_s=cap, **deploy
         )
         # The trace's capped refine equals min(t, cap) summed along the capped order.

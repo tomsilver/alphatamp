@@ -10,7 +10,7 @@ a silently-wrong ablation:
 2. The *other* column must be untouched, or "coverage only" is really "coverage plus a
    perturbed waste".
 3. The choice must round-trip through the checkpoint into the deploy kwargs. It changes
-   what ``build_v3_example`` *emits*, not what the model *contains*, so a mismatch is
+   what ``build_example`` *emits*, not what the model *contains*, so a mismatch is
    invisible to ``load_state_dict`` and would fail silently at deploy.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from alphatamp.approaches.spectre.dataset_v3 import build_v3_example
+from alphatamp.approaches.spectre.dataset import build_example
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.vocab import Vocab
 
@@ -33,7 +33,7 @@ _COVERAGE_COL, _WASTE_COL = 2, 3  # cand_overlap = [dead, jaccard, coverage, was
 
 
 def _overlap(episode, vocab, ctx, mode: str) -> np.ndarray:
-    example, _ = build_v3_example(
+    example, _ = build_example(
         episode,
         vocab,
         rng=None,
@@ -114,7 +114,7 @@ def test_coverage_mode_default_is_exact_absence() -> None:
     """
     episode, vocab, ctx = _episode_with_evidence()
     explicit = _overlap(episode, vocab, ctx, "both")
-    example, _ = build_v3_example(
+    example, _ = build_example(
         episode,
         vocab,
         rng=None,
@@ -127,14 +127,14 @@ def test_coverage_mode_default_is_exact_absence() -> None:
 
 
 @pytest.mark.skipif(not _VOCAB.is_file(), reason="dd2d_v4 vocab absent")
-def test_load_v3_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
+def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     """The switches that change what the tensorizer emits come back off the checkpoint.
 
     ``load_state_dict(strict=True)`` catches a wrong *architecture*, but ``overlap_mode``
     and ``coverage_mode`` are invisible to it -- deploying under the wrong one feeds the
     model a column it never saw populated. So they are read back, never passed in.
 
-    Self-contained: it saves a checkpoint through the same ``asdict(TrainV3Config)`` path
+    Self-contained: it saves a checkpoint through the same ``asdict(TrainConfig)`` path
     ``train_v3`` uses, rather than reading a disk artifact -- a real deployed checkpoint is
     the width-3 narrowed model now, and a pre-narrowing artifact no longer loads by design.
     """
@@ -142,18 +142,18 @@ def test_load_v3_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
 
     import torch
 
-    from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint
-    from alphatamp.approaches.spectre.model_v3 import (
+    from alphatamp.approaches.spectre.inference import load_checkpoint
+    from alphatamp.approaches.spectre.model import (
         N_OVERLAP_V3,
-        SpectreV3Model,
-        V3Config,
+        SpectreModel,
+        SpectreConfig,
     )
-    from alphatamp.approaches.spectre.train_v3 import TrainV3Config
+    from alphatamp.approaches.spectre.train import TrainConfig
 
     vocab = Vocab.from_json(_VOCAB)
     # the deployed arm: jaccard overlap, coverage on both columns, records aggregated,
     # state-delta off (the v3final flags) -- built and saved exactly as train_v3 does.
-    cfg = TrainV3Config(
+    cfg = TrainConfig(
         overlap_mode="jaccard",
         use_overlap=True,
         coverage_feats=True,
@@ -162,10 +162,10 @@ def test_load_v3_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         evidence_attn=True,
         use_state_delta=False,
     )
-    model = SpectreV3Model(
+    model = SpectreModel(
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
-        cfg=V3Config(
+        cfg=SpectreConfig(
             n_overlap_feats=N_OVERLAP_V3,
             n_prior_feats=0,
             d_rel=cfg.d_rel,
@@ -186,7 +186,7 @@ def test_load_v3_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         ckpt,
     )
 
-    _model, deploy = load_v3_checkpoint(ckpt, vocab, "cpu")
+    _model, deploy = load_checkpoint(ckpt, vocab, "cpu")
     assert set(deploy) == {
         "overlap_mode",
         "aggregate_records",

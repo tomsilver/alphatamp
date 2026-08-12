@@ -22,15 +22,15 @@ from typing import cast
 
 import torch
 
-from alphatamp.approaches.spectre.model_v3 import (
-    SpectreV3Model,
-    V3Config,
+from alphatamp.approaches.spectre.model import (
+    SpectreModel,
+    SpectreConfig,
     sinusoidal_positions,
 )
 
 
 def _keys(**kw) -> set[str]:
-    return set(SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(**kw)).state_dict())
+    return set(SpectreModel(n_ops=4, max_arity=1, cfg=SpectreConfig(**kw)).state_dict())
 
 
 def test_sinusoidal_is_defined_and_distinct_past_the_training_max() -> None:
@@ -69,7 +69,7 @@ def test_default_config_is_unchanged_by_the_g9_addition() -> None:
 
 def test_sinusoidal_model_runs_on_a_longer_plan_than_any_it_was_built_for() -> None:
     """End-to-end shape check at a plan length past the s0-s2 training maximum."""
-    from alphatamp.approaches.spectre.model_v2 import SpectreV2Batch
+    from alphatamp.approaches.spectre.encoders import SpectreV2Batch
 
     b, k, ell, n = 1, 3, 7, 4
     batch = SpectreV2Batch(
@@ -89,7 +89,7 @@ def test_sinusoidal_model_runs_on_a_longer_plan_than_any_it_was_built_for() -> N
         aux_relevant=torch.full((b, n), -1.0),
         glob_feats=torch.zeros(b, 6),
     )
-    model = SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(sinusoidal_pos=True))
+    model = SpectreModel(n_ops=4, max_arity=1, cfg=SpectreConfig(sinusoidal_pos=True))
     model.eval()
     with torch.no_grad():
         logits, _ = model(batch)
@@ -126,7 +126,7 @@ def test_aggregation_keeps_one_record_per_query_and_loses_nothing_encoded() -> N
     Everything the token actually encodes is preserved; what is dropped is the
     multiplicity of failed *poses*, which the token never carried in the first place.
     """
-    from alphatamp.approaches.spectre.dataset_v3 import _aggregate_per_query
+    from alphatamp.approaches.spectre.dataset import _aggregate_per_query
 
     out = _aggregate_per_query(
         [
@@ -145,7 +145,7 @@ def test_aggregation_keeps_one_record_per_query_and_loses_nothing_encoded() -> N
 
 
 def test_aggregation_is_idempotent_and_never_grows_the_set() -> None:
-    from alphatamp.approaches.spectre.dataset_v3 import _aggregate_per_query
+    from alphatamp.approaches.spectre.dataset import _aggregate_per_query
 
     recs = [
         _rec("place-buffer", ["o1"], step=i, n=1, culprits=[f"c{i}"]) for i in range(20)
@@ -171,7 +171,7 @@ def test_object_evidence_is_absent_before_any_failure_is_observed() -> None:
     """
     import numpy as np
 
-    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+    from alphatamp.approaches.spectre.dataset import _object_evidence
 
     ev = _object_evidence(frozenset(), [], ["a", "b"], [], [])
     assert ev.shape == (2, 5)
@@ -183,7 +183,7 @@ def test_object_evidence_binds_counts_to_the_right_objects_and_stays_normalized(
     None
 ):
     """Each column is a fraction in [0, 1] attached to the object it names."""
-    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+    from alphatamp.approaches.spectre.dataset import _object_evidence
 
     objects = ["a", "b", "c"]
     subsets = [frozenset({"a"}), frozenset({"a", "b"})]
@@ -205,10 +205,10 @@ def test_object_evidence_binds_counts_to_the_right_objects_and_stays_normalized(
 
 def test_object_evidence_changes_the_scene_projection_width_only_when_enabled() -> None:
     """It is a real input change, so it must be visible in the parameter shapes."""
-    from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+    from alphatamp.approaches.spectre.model import SpectreModel, SpectreConfig
 
     def width(flag: bool) -> int:
-        m = SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(use_obj_evidence=flag))
+        m = SpectreModel(n_ops=4, max_arity=1, cfg=SpectreConfig(use_obj_evidence=flag))
         first = cast(torch.nn.Linear, m.scene.proj[0])
         return int(first.in_features)
 
@@ -223,7 +223,7 @@ def test_proof_tier_culprits_reach_column_4_and_nothing_else() -> None:
     ourselves. It must not leak into the hint columns, which is what would re-import L4's
     "blocked sets are large" correlate.
     """
-    from alphatamp.approaches.spectre.dataset_v3 import _object_evidence
+    from alphatamp.approaches.spectre.dataset import _object_evidence
 
     objects = ["a", "b"]
     proof = [_rec("retrieve", ["t"], step=6, n=1, culprits=["b"])]

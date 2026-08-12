@@ -57,8 +57,7 @@ def _running() -> list[tuple[str, str, str]]:
     except Exception:  # pragma: no cover - ps should exist
         return []
     keys = (
-        "train_v2",
-        "train_v3",
+        "spectre.train",
         "dd2d.dd2d.collect",
         "sb2d_render_convert",
         "precompute_dd2d_cache",

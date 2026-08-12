@@ -120,7 +120,7 @@ PRESETS: dict[str, dict[str, str]] = {
     # `checkpoints_v3_v3final_s{0..5}`; this preset now writes over that name, so use
     # `--out-suffix` if you need both on disk at once.
     # 2026-07-31: coverage/waste now use the **unified** definitions by default
-    # (`TrainV3Config.unified_coverage=True`), so this preset needs no extra flag and a
+    # (`TrainConfig.unified_coverage=True`), so this preset needs no extra flag and a
     # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above. Pass
     # `--legacy-coverage` to train the older definition; it lands in a `_legacycov`
     # directory so the two can never overwrite each other.
@@ -128,7 +128,7 @@ PRESETS: dict[str, dict[str, str]] = {
     # higher-variance, and the default ma3 selection window locked onto unlucky val epochs
     # (the s1 regression). Widening to ma5 recovers parity with the frozen baseline (5.92
     # vs 5.78, CI includes 0) and collapses the variance -- see docs/decisions 2026-08-08.
-    # The `TrainV3Config` default stays 3 so the frozen baseline's provenance is untouched;
+    # The `TrainConfig` default stays 3 so the frozen baseline's provenance is untouched;
     # the deployed recipe opts in here.
     "v3final": {
         "v3final": (
@@ -217,7 +217,7 @@ def launch(name: str, extra: str, env: str, seed: int, epochs: int, workers: int
     cmd = [
         "python",
         "-m",
-        "alphatamp.approaches.spectre.train_v3",
+        "alphatamp.approaches.spectre.train",
         "--env",
         env,
         "--seed",

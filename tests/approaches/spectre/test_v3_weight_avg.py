@@ -20,8 +20,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from alphatamp.approaches.spectre.train_v3 import (  # noqa: E402
-    TrainV3Config,
+from alphatamp.approaches.spectre.train import (  # noqa: E402
+    TrainConfig,
     _ema_update,
 )
 
@@ -89,7 +89,7 @@ def test_ema_update_copies_non_float_tensors() -> None:
 
 
 def test_config_default_is_off() -> None:
-    assert TrainV3Config().weight_avg == "none"
+    assert TrainConfig().weight_avg == "none"
 
 
 # --------------------------------------------------------------------------- e2e
@@ -108,10 +108,10 @@ def test_weight_avg_none_never_builds_the_shadow(tmp_path) -> None:
     """
     import json
 
-    from alphatamp.approaches.spectre.train_v3 import train_v3
+    from alphatamp.approaches.spectre.train import train_v3
 
     vocab = _vocab()
-    cfg = TrainV3Config(seed=0, weight_avg="none", **_FAST)
+    cfg = TrainConfig(seed=0, weight_avg="none", **_FAST)
     out = tmp_path / "none"
     train_v3(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]
@@ -132,10 +132,10 @@ def test_weight_avg_ema_is_not_inert(tmp_path) -> None:
     """
     import json
 
-    from alphatamp.approaches.spectre.train_v3 import train_v3
+    from alphatamp.approaches.spectre.train import train_v3
 
     vocab = _vocab()
-    cfg = TrainV3Config(seed=0, weight_avg="ema", ema_start_epoch=0, **_FAST)
+    cfg = TrainConfig(seed=0, weight_avg="ema", ema_start_epoch=0, **_FAST)
     out = tmp_path / "ema"
     train_v3(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]

@@ -71,7 +71,7 @@ for seed in "${SEEDS[@]}"; do
     # --select-window 5 (2026-08-08): the narrowed-input model is higher-variance, so the
     # deployed recipe widens the val-selection window (ma3 -> ma5) to select reliably; the
     # TrainV3Config default stays 3. See docs/decisions 2026-08-08.
-    python -u -m alphatamp.approaches.spectre.train_v3 \
+    python -u -m alphatamp.approaches.spectre.train \
       --env $ENV_VARIANT --seed "$seed" --epochs 30 --num-workers 3 \
       --overlap-mode jaccard --coverage-feats --coverage-mode "$arm" \
       --aggregate-records --evidence-attn --state-delta --select-window 5 \

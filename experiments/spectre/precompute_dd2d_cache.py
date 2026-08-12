@@ -13,46 +13,28 @@ the cache dir together:
     astar/<pid>.json                     {problem_id, stratum, scores, labels}
     piginet/<pid>.json                   {problem_id, stratum, scores, labels}
         (PIGINet trained with BCE = the paper baseline; see piginet/train.py)
-    spectre_static/seed_<s>/<pid>.json   {problem_id, stratum, scores, labels}
-    spectre_adaptive/seed_<s>/<pid>.json {problem_id, stratum, fp, order,
-                                          step_scores, step_dead}
-        (``order`` = the realized attempt sequence of pool indices, until first
-        success; consumed by the notebook's realized-order + length-ladder views.
-        ``step_scores[t]`` = the raw (K,) logits the step-t pick was made from —
-        before the tried-mask and before any demotion offset — so the planner
-        inspector can show what the adaptive ranker thought at each step without
-        running inference. ``step_dead[t]`` = the provably-dead indices in force at
-        step t; always empty for v1, which has no proof-demotion.)
-    spectre2_static/seed_<s>/<pid>.json  {problem_id, stratum, scores, labels}
-        (SPECTRE v2.2 empty-context logits)
-    spectre2_adaptive/seed_<s>/<pid>.json{problem_id, stratum, fp, order,
-                                          step_scores, step_dead}
-        (SPECTRE v2.2 deployed_rollout, observed proof-demotion)
     spectre3_static/seed_<s>/<pid>.json  {problem_id, stratum, scores, labels}
     spectre3_adaptive/seed_<s>/<pid>.json{problem_id, stratum, fp, order,
                                           step_scores, step_dead}
-        (SPECTRE v3 deployed ranker: observed coverage/waste + record tokens + the
-        record state delta. **No proof-demotion** -- cut from the method 2026-07-30, so
-        nothing outside the network touches the ordering. ``step_dead`` is still recorded
-        and now reads as "what a proof would have demoted".)
+        (SPECTRE deployed ranker: observed coverage/waste + record tokens + the record
+        state delta. ``order`` = the realized attempt sequence of pool indices, until
+        first success; consumed by the notebook's realized-order + length-ladder views.
+        ``step_scores[t]`` = the raw (K,) logits the step-t pick was made from, before the
+        tried-mask. **No proof-demotion** -- cut from the method 2026-07-30, so nothing
+        outside the network touches the ordering; ``step_dead`` is retained as an
+        always-empty list so the cache schema is unchanged.)
     abl_<arm>_adaptive/seed_<s>/<pid>.json
-        (one dir per v3 ablation arm -- see ``_V3_ARMS``; adaptive shape only)
-    abl_with_demotion_adaptive/…, abl_floor_with_demotion_adaptive/…
-        (the same checkpoints re-scored with the proof-demotion offset switched back ON --
-        see ``_V3_DEMOTION_ARMS``. Demotion is OFF in the deployed method as of
-        2026-07-30, so this is the ablation; pair them with ``spectre3_adaptive`` and
-        ``abl_nocov_norec_adaptive`` respectively)
-    spectre_lenctx/seed_<s>/<pid>.json   {problem_id, stratum, fp, order}
-        (T1 length-only-context intervention: adaptive rollout with identity-
-        scrambled same-length failure contexts; fp = mean over surrogate draws)
+        (one dir per ablation arm -- see ``_V3_ARMS``; adaptive shape only)
+    lazy_adaptive/seed_<s>/<pid>.json     {problem_id, stratum, fp, order, ...}
+        (LAZY policy-guided adaptive re-ranker; see ``cache_lazy``)
 
 Usage::
 
     python experiments/spectre/precompute_dd2d_cache.py            # default methods
     python experiments/spectre/precompute_dd2d_cache.py --force
-    python experiments/spectre/precompute_dd2d_cache.py --methods piginet spectre2
+    python experiments/spectre/precompute_dd2d_cache.py --methods piginet spectre3
     python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v3 --force
-    # v3 + its ablation arms (dd2d_v4 is the only collection with v3 checkpoints)
+    # SPECTRE + its ablation arms (dd2d_v4 is the only collection with checkpoints)
     python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v4 \
         --methods spectre3
 
@@ -77,11 +59,6 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from alphatamp.approaches.spectre import eda
 from alphatamp.approaches.spectre.compare import stratum_of
-from alphatamp.approaches.spectre.inference import (
-    init_inference_state,
-    load_checkpoint,
-    load_prior_for_checkpoint,
-)
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
@@ -340,21 +317,6 @@ def _v3_arm_dir(arm: str, env_variant: str) -> str:
 # separate "training with records damaged the weights" from "the model ignores them".
 _V3_SUPPRESS_ARMS: dict[str, str] = {
     "abl_suppress_records": "checkpoints_v3_v3final_s{seed}",
-}
-# The proof-demotion ablation, INVERTED on 2026-07-30: demotion was cut from the deployed
-# method, so every arm above now runs without it and the *diagnostic* is switching it back
-# ON. Prices what the deployed model gives up by being purely learned.
-#
-# These need their own registry rather than `--v3-arm` because `--v3-arm` carries only
-# `prefix:ckpt_subdir` and leaves `apply_demotion` at its default: pointing it at the
-# deployed checkpoint would write a **byte-identical copy of `spectre3_adaptive`** under a
-# name asserting demotion is on, i.e. render the ablation as exactly 0.00 with nothing
-# looking wrong. Pair each entry with its demotion-OFF twin:
-#   abl_with_demotion       <-> spectre3          (the deployed model)
-#   abl_floor_with_demotion <-> abl_nocov_norec   (jaccard only, no coverage, no tokens)
-_V3_DEMOTION_ARMS: dict[str, str] = {
-    "abl_with_demotion": "checkpoints_v3_v3delta_s{seed}",
-    "abl_floor_with_demotion": "checkpoints_v3_norec_abl_jac_norec_nocov",
 }
 
 # Env-variant-dependent path globals. The cache functions read these as module globals
@@ -831,228 +793,26 @@ def cache_piginet(force: bool, device: str) -> None:
         print(f"[{tag}] wrote {n} problems -> {out}")
 
 
-@torch.no_grad()
-def cache_spectre(force: bool, device: str) -> None:
-    """SPECTRE adaptive (rollout FP) + static (empty-context logits) per seed."""
-    vocab = Vocab.from_json(VOCAB_PATH)
-    # RAW: `init_inference_state` canonicalizes, so a pre-canonicalized split would be
-    # canonicalized twice -- see `_RawSplit`. This was wrong until 2026-07-27; the v1
-    # rows in any cache built before then are stale by ~1.5 FP and need `--force`.
-    test = _RawSplit(SPECTRE_TEST)
-    for seed in SEEDS:
-        adir = CACHE_DIR / "spectre_adaptive" / f"seed_{seed}"
-        sdir = CACHE_DIR / "spectre_static" / f"seed_{seed}"
-        need_a = force or not _dir_complete(adir)
-        need_s = force or not _dir_complete(sdir)
-        if not need_a and not need_s:
-            print(f"[spectre seed {seed}] complete; skipping")
-            continue
-        ck = CKPT_DIR / f"seed_{seed}" / "best.pt"
-        model = load_checkpoint(ck, vocab, device=device)
-        prior = load_prior_for_checkpoint(ck)
-
-        if need_a:
-            # Traced variant: same loop/cost as spectre_evaluate, but also returns
-            # the realized attempt order per problem so the notebook's T0 length
-            # ladder (does adaptive climb to longer plans as it fails?) needs no
-            # re-run. ``fp`` is byte-identical to the untraced path.
-            res, traces = eda.spectre_evaluate_traced(
-                test,
-                model,
-                vocab,
-                attempt_budget=200,
-                prior=prior,
-                device=device,
-                freeze_context=False,
-            )
-            na = 0
-            for pid, att, trace in zip(res.problem_ids, res.attempts, traces):
-                pid = int(pid)
-                na += _write(
-                    adir / f"{pid}.json",
-                    {
-                        "problem_id": pid,
-                        "stratum": stratum_of(pid),
-                        "fp": float(att) - 1.0,
-                        "order": [int(cs.idx) for cs in trace],
-                        "step_scores": _round_rows(
-                            [cs.scores or [] for cs in trace],
-                        ),
-                        # v1 has no proof-demotion — recorded explicitly (as empty
-                        # dead sets) rather than omitted, so the notebook can tell
-                        # "no demotion in this method" from "field missing".
-                        "step_dead": [[] for _ in trace],
-                    },
-                    force,
-                )
-            print(f"[spectre-adaptive seed {seed}] wrote {na} -> {adir}")
-
-        if need_s:
-            ns = 0
-            for ep in test.episodes:
-                pid = int(ep.provenance.problem_id)
-                state = init_inference_state(
-                    model, ep, vocab, prior=prior, device=device
-                )
-                dim = state.e_S.size(-1)
-                f_emb = torch.zeros(
-                    1, 1, dim, device=state.e_S.device, dtype=state.e_S.dtype
-                )
-                f_mask = torch.zeros(1, 1, dtype=torch.bool, device=state.e_S.device)
-                c = model.encode_context(f_emb, f_mask)
-                logits = model.score(
-                    state.e_S.unsqueeze(0),
-                    c,
-                    state.priors.unsqueeze(0),
-                    prior_dropout=False,
-                )[0]
-                labels = [1 if o.outcome == "success" else 0 for o in ep.outcomes]
-                ns += _write(
-                    sdir / f"{pid}.json",
-                    {
-                        "problem_id": pid,
-                        "stratum": stratum_of(pid),
-                        "scores": [float(x) for x in logits.tolist()],
-                        "labels": labels,
-                    },
-                    force,
-                )
-            print(f"[spectre-static seed {seed}] wrote {ns} -> {sdir}")
-
-
 class _RawSplit:
     """``eda.LoadedSplit``-shaped view over **un-canonicalized** episodes.
 
     ``eda.load_split_episodes`` canonicalizes on load, which is right for the EDA
     baselines (they key on canonical skeletons) but wrong for anything that then calls a
-    tensorizer, because ``build_v2_example`` / ``build_v3_example`` /
-    ``inference.init_inference_state`` all canonicalize again and
+    tensorizer, because ``build_example`` canonicalizes again and
     ``canonicalize_episode`` is not idempotent. Double canonicalization silently changes
     the object->tag binding relative to training, which loads raw.
 
-    **Every model cache function must load through this**, v1 included. Measured on
-    dd2d_v3, feeding v1 pre-canonicalized episodes moved its mean FP 21.41 -> 22.93 and
-    changed per-problem FP on 39/100 problems; the same defect is why the dd2d_v3 v2
-    number (13.68) was retracted (``decisions.md`` 2026-07-26). Training loads raw, so
-    raw is what makes evaluation match training.
+    **Every model cache function must load through this.** Double-canonicalization is why
+    the dd2d_v3 v2 number (13.68) was retracted (``decisions.md`` 2026-07-26). Training
+    loads raw, so raw is what makes evaluation match training.
 
-    Exposes ``.episodes`` -- the only attribute the cache functions and
-    ``eda.spectre_evaluate_traced`` (via ``_trainable_episodes``) actually read.
+    Exposes ``.episodes`` -- the only attribute the cache functions read.
     """
 
     def __init__(self, split_dir: Path) -> None:
         from alphatamp.approaches.spectre.io import list_episodes, load_episode
 
         self.episodes = [load_episode(p) for p in list_episodes(split_dir)]
-
-
-def _load_v2_model(ckpt: Path, vocab: Vocab, device: str):
-    """Rebuild a trained SpectreV2Model from a checkpoint.
-
-    The checkpoint's ``cfg`` records ``use_prior`` / ``use_overlap`` (the deployed
-    ``_ov`` checkpoint has both), which size the scorer's extra inputs — a strict
-    ``load_state_dict`` fails unless the model is reconstructed with them.
-    """
-    from alphatamp.approaches.spectre.model_v2 import (
-        N_OVERLAP,
-        N_PRIOR,
-        SpectreV2Model,
-    )
-
-    ck = torch.load(ckpt, map_location=device, weights_only=False)
-    cfg = ck["cfg"]
-    model = SpectreV2Model(
-        n_ops=int(ck["n_ops"]),
-        max_arity=vocab.max_operator_arity,
-        max_tags=int(cfg["max_tags"]),
-        n_overlap_feats=N_OVERLAP if cfg.get("use_overlap") else 0,
-        n_prior_feats=N_PRIOR if cfg.get("use_prior") else 0,
-        dropout_p=0.0,
-    )
-    model.load_state_dict(ck["state_dict"])
-    model.eval().to(device)
-    return model
-
-
-@torch.no_grad()
-def cache_spectre2(force: bool, device: str) -> None:
-    """SPECTRE v2.2 static (empty-context logits) + adaptive (deployed_rollout).
-
-    Two deployment modes of the same ``_ov`` checkpoint (evidence + prior + overlap,
-    observed proof-demotion). Static ranks the pool once at ``F=∅``; adaptive is the
-    full deployed ranker (model scores + sound proof-demotion, re-ranked per failure).
-    1-seed dev (only seed_0 exists).
-    """
-    from alphatamp.approaches.spectre.dataset_v2 import build_v2_example, collate_v2
-    from alphatamp.approaches.spectre.evidence import deployed_rollout_traced
-
-    vocab = Vocab.from_json(VOCAB_PATH)
-    # RAW episodes, deliberately not `eda.load_split_episodes`. That helper returns
-    # *canonicalized* episodes, and `build_v2_example` canonicalizes again --
-    # `canonicalize_episode` is **not idempotent** (a second pass permutes object names
-    # differently, e.g. item_10 -> item_2), so the doubly-canonicalized episode carries a
-    # different object->tag binding than the singly-canonicalized one training sees.
-    # Measured on dd2d_v4: identical scene poses, but per-problem FP differs on 35/100
-    # and per-stratum by up to 2-3 FP (s2 26.00 vs 23.92, s3 26.44 vs 29.32).
-    # Training loads raw (`SpectreV2Dataset.__getitem__` -> `load_episode`), so raw is
-    # what makes evaluation match training.
-    test = _RawSplit(SPECTRE_TEST)
-    for seed in SEEDS:
-        adir = CACHE_DIR / "spectre2_adaptive" / f"seed_{seed}"
-        sdir = CACHE_DIR / "spectre2_static" / f"seed_{seed}"
-        need_a = force or not _dir_complete(adir)
-        need_s = force or not _dir_complete(sdir)
-        if not need_a and not need_s:
-            print(f"[spectre2 seed {seed}] complete; skipping")
-            continue
-        ck = V2_CKPT_DIR / f"seed_{seed}" / "best.pt"
-        model = _load_v2_model(ck, vocab, device)
-
-        na = ns = 0
-        for ep in test.episodes:
-            if (
-                ep.scene_geometry is None
-            ):  # v2 needs geometry (all λ=0.8 test eps have it)
-                continue
-            pid = int(ep.provenance.problem_id)
-            labels = [1 if o.outcome == "success" else 0 for o in ep.outcomes]
-            if need_s:
-                ex = build_v2_example(ep, vocab, rng=None, evidence=False)
-                batch = collate_v2([ex], max_arity=vocab.max_operator_arity).to(device)
-                logits, _ = model(batch)
-                scores = [float(x) for x in logits[0].detach().cpu().numpy()]
-                ns += _write(
-                    sdir / f"{pid}.json",
-                    {
-                        "problem_id": pid,
-                        "stratum": stratum_of(pid),
-                        "scores": scores,
-                        "labels": labels,
-                    },
-                    force,
-                )
-            if need_a:
-                attempts, trace = deployed_rollout_traced(
-                    model,
-                    ep,
-                    vocab,
-                    device,
-                    demotion_source="observed",
-                )
-                na += _write(
-                    adir / f"{pid}.json",
-                    {
-                        "problem_id": pid,
-                        "stratum": stratum_of(pid),
-                        "fp": float(attempts) - 1.0,
-                        "order": trace.order,
-                        "step_scores": _round_rows(trace.step_scores),
-                        "step_dead": trace.step_dead,
-                    },
-                    force,
-                )
-        print(f"[spectre2-static seed {seed}] wrote {ns} -> {sdir}")
-        print(f"[spectre2-adaptive seed {seed}] wrote {na} -> {adir}")
 
 
 def _v3_ckpt(ckpt_subdir: str, seed: int) -> Path:
@@ -1182,34 +942,29 @@ def cache_spectre3(
     arms: dict[str, str],
     static_arms: frozenset[str] = frozenset({"spectre3"}),
     suppress_records: bool = False,
-    apply_demotion: bool = False,
 ) -> None:
-    """SPECTRE v3 adaptive (deployed rollout) + static (empty-context logits) per seed.
+    """SPECTRE adaptive (deployed rollout) + static (empty-context logits) per seed.
 
     ``arms`` maps *cache sub-dir prefix* -> *checkpoint sub-dir* (which may contain
     ``{seed}``). The deployed method writes ``spectre3_{static,adaptive}``; every other
     arm is an ablation and writes ``<prefix>_adaptive`` only -- the ablation table is an
     FP table and needs no static row.
 
-    Feature switches are read back off each checkpoint by ``load_v3_checkpoint`` and
+    Feature switches are read back off each checkpoint by ``load_checkpoint`` and
     splatted into both the tensorizer and the rollout, so an arm cannot be deployed
     under a different ``overlap_mode``/``coverage_mode`` than it trained under.
 
-    ``suppress_records`` and ``apply_demotion`` are the two *deploy-time* diagnostics, and
-    they are deliberately NOT read off the checkpoint: they are properties of how a run is
-    scored, not of how it was trained. Both are train/deploy mismatches on purpose. Note
-    ``apply_demotion`` defaults to **False**, matching the deployed method since
-    2026-07-30: v3 is a purely learned ranker and nothing outside the network touches its
-    ordering. An arm cached with ``apply_demotion=True`` differs from its demotion-OFF twin
-    only in the ranking offset -- same weights, same seeds, same episodes -- so the pair is
-    exactly paired and a *zero* difference means the switch never took effect rather than
-    that the offset is worthless.
+    ``suppress_records`` is a *deploy-time* diagnostic, deliberately NOT read off the
+    checkpoint: it is a property of how a run is scored, not of how it was trained -- a
+    train/deploy mismatch on purpose. The deployed method is a purely learned ranker
+    (proof-tier demotion was cut on 2026-07-30), so nothing outside the network reorders
+    the pool.
     """
-    from alphatamp.approaches.spectre.dataset_v3 import build_v3_example, collate_v3
+    from alphatamp.approaches.spectre.dataset import build_example, collate
     from alphatamp.approaches.spectre.domain import spec_for
-    from alphatamp.approaches.spectre.inference_v3 import (
-        deployed_rollout_v3_traced,
-        load_v3_checkpoint,
+    from alphatamp.approaches.spectre.inference import (
+        deployed_rollout_traced,
+        load_checkpoint,
     )
 
     vocab = Vocab.from_json(VOCAB_PATH)
@@ -1217,7 +972,7 @@ def cache_spectre3(
     # (train) variant -- CKPT_VARIANT -- not the scored episodes. Identical for a dd2d ->
     # dd2d-gen run (both resolve to `_DD2D`), but correct if they ever diverge.
     spec = spec_for(CKPT_VARIANT)
-    test = _RawSplit(SPECTRE_TEST)  # raw: `build_v3_example` canonicalizes
+    test = _RawSplit(SPECTRE_TEST)  # raw: `build_example` canonicalizes
     episodes = [ep for ep in test.episodes if ep.scene_geometry is not None]
 
     for prefix, ckpt_subdir in arms.items():
@@ -1241,11 +996,11 @@ def cache_spectre3(
                     flush=True,
                 )
                 continue
-            model, deploy = load_v3_checkpoint(ckpt, vocab, device)
+            model, deploy = load_checkpoint(ckpt, vocab, device)
             # Warm up so one-time CUDA init/autotune does not land in the first problem's
             # measured inference time (no-op cost on cpu).
             if episodes and device.startswith("cuda"):
-                _wex, _wr = build_v3_example(
+                _wex, _wr = build_example(
                     episodes[0],
                     vocab,
                     rng=None,
@@ -1255,7 +1010,7 @@ def cache_spectre3(
                     spec=spec,
                     **deploy,
                 )
-                _wb = collate_v3(
+                _wb = collate(
                     [_wex], max_arity=vocab.max_operator_arity, records=[_wr]
                 ).to(device)
                 for _ in range(3):
@@ -1268,7 +1023,7 @@ def cache_spectre3(
                 if need_s:
                     # Time the full static-inference path: tensorize + collate + forward.
                     _t0 = time.perf_counter()
-                    ex, recs = build_v3_example(
+                    ex, recs = build_example(
                         ep,
                         vocab,
                         rng=None,
@@ -1278,7 +1033,7 @@ def cache_spectre3(
                         spec=spec,
                         **deploy,
                     )
-                    batch = collate_v3(
+                    batch = collate(
                         [ex], max_arity=vocab.max_operator_arity, records=[recs]
                     ).to(device)
                     logits, _ = model(batch)
@@ -1305,30 +1060,26 @@ def cache_spectre3(
                         force,
                     )
                 if need_a:
-                    attempts, trace = deployed_rollout_v3_traced(
+                    attempts, trace = deployed_rollout_traced(
                         model,
                         ep,
                         vocab,
                         device,
                         spec=spec,
-                        mode="strict",
                         suppress_records=suppress_records,
-                        apply_demotion=apply_demotion,
                         **deploy,
                     )
                     # Second, capped rollout: a slow-feasible candidate over the cap is
                     # abandoned into the failure context, so the adaptive order can
                     # diverge from the uncapped one -- it must be re-run, not derived by
                     # capping the uncapped order's stored times.
-                    attempts_cap, trace_cap = deployed_rollout_v3_traced(
+                    attempts_cap, trace_cap = deployed_rollout_traced(
                         model,
                         ep,
                         vocab,
                         device,
                         spec=spec,
-                        mode="strict",
                         suppress_records=suppress_records,
-                        apply_demotion=apply_demotion,
                         refine_cap_s=REFINE_CAP_S,
                         **deploy,
                     )
@@ -1435,75 +1186,17 @@ def cache_lazy(force: bool, device: str) -> None:
         print(f"[lazy seed {seed}] wrote {n} -> {out}")
 
 
-@torch.no_grad()
-def cache_lenctx(force: bool, device: str, repeats: int = 3) -> None:
-    """T1 length-only-context intervention: adaptive rollout with identity-
-
-    scrambled (same-length, random-id) failure contexts. Per seed, run the intervention
-    ``repeats`` times with distinct surrogate RNGs and cache the per-problem FP averaged
-    over repeats (damps Monte-Carlo noise). Layout mirrors ``spectre_adaptive``:
-    ``spectre_lenctx/seed_<s>/<pid>.json {problem_id, stratum, fp, order}`` (``order``
-    from the first repeat). If this matches ``spectre_adaptive`` FP, Ψ ignores failed-
-    skeleton identity (H2).
-    """
-    vocab = Vocab.from_json(VOCAB_PATH)
-    test = _RawSplit(SPECTRE_TEST)  # raw, for the reason in `_RawSplit`
-    for seed in SEEDS:
-        out = CACHE_DIR / "spectre_lenctx" / f"seed_{seed}"
-        if _dir_complete(out) and not force:
-            print(f"[lenctx seed {seed}] complete; skipping")
-            continue
-        ck = CKPT_DIR / f"seed_{seed}" / "best.pt"
-        model = load_checkpoint(ck, vocab, device=device)
-        prior = load_prior_for_checkpoint(ck)
-
-        fp_sum: dict[int, float] = {}
-        order0: dict[int, list[int]] = {}
-        for rep in range(repeats):
-            res, traces = eda.spectre_evaluate_length_only_context(
-                test,
-                model,
-                vocab,
-                attempt_budget=200,
-                prior=prior,
-                device=device,
-                seed=seed * 100 + rep,
-                scramble=True,
-            )
-            for pid, att, trace in zip(res.problem_ids, res.attempts, traces):
-                pid = int(pid)
-                fp_sum[pid] = fp_sum.get(pid, 0.0) + (float(att) - 1.0)
-                if rep == 0:
-                    order0[pid] = [int(cs.idx) for cs in trace]
-        n = 0
-        for pid, total in fp_sum.items():
-            n += _write(
-                out / f"{pid}.json",
-                {
-                    "problem_id": pid,
-                    "stratum": stratum_of(pid),
-                    "fp": total / repeats,
-                    "order": order0[pid],
-                },
-                force,
-            )
-        print(f"[lenctx seed {seed}] wrote {n} (mean of {repeats} draws) -> {out}")
-
-
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--methods",
         nargs="+",
-        default=["astar", "piginet", "spectre", "spectre2"],
+        default=["astar", "piginet", "spectre3"],
         choices=[
             "astar",
             "piginet",
-            "spectre",
-            "spectre2",
             "spectre3",
-            "lenctx",
             "lazy",
         ],
     )
@@ -1547,12 +1240,6 @@ def main() -> None:
         "spectre_score_v3.py's --test-variant.",
     )
     parser.add_argument(
-        "--lenctx-repeats",
-        type=int,
-        default=3,
-        help="Surrogate draws per seed for the T1 length-only-context intervention",
-    )
-    parser.add_argument(
         "--seeds",
         type=int,
         nargs="+",
@@ -1582,18 +1269,13 @@ def main() -> None:
         cache_astar(args.force)
     if "piginet" in args.methods:
         cache_piginet(args.force, args.device)
-    if "spectre" in args.methods:
-        cache_spectre(args.force, args.device)
-    if "spectre2" in args.methods:
-        cache_spectre2(args.force, args.device)
     if "spectre3" in args.methods:
         if args.v3_arm:
             arms = dict(a.split(":", 1) for a in args.v3_arm)
             suppress: dict[str, str] = {}
-            nodemo: dict[str, str] = {}
         elif args.no_ablations:
             arms = {"spectre3": _v3_arm_dir("spectre3", CKPT_VARIANT)}
-            suppress, nodemo = {}, {}
+            suppress = {}
         else:
             # Through `_v3_arm_dir`, so a collection whose arms live under different run
             # names gets them. Reading `_V3_ARMS` raw here was the bug that made
@@ -1601,16 +1283,12 @@ def main() -> None:
             # CKPT_VARIANT: the arm-dir name is a property of the trained checkpoint.
             arms = {a: _v3_arm_dir(a, CKPT_VARIANT) for a in _V3_ARMS}
             suppress = dict(_V3_SUPPRESS_ARMS)
-            nodemo = dict(_V3_DEMOTION_ARMS)
             if ENV_VARIANT.startswith("stickbutton2d"):
-                # Proof-tier demotion was cut from the method, and StickButton2D resolves
-                # to EMPTY_SPEC, so `licenses_demotion` is always False -- a demotion arm
-                # would be bit-identical to its base. Skipped as vacuous, not overlooked.
                 # `suppress` needs a `v3final`-named checkpoint this collection never
-                # trained, so it goes too.
-                suppress, nodemo = {}, {}
-        _assert_same_selector({**arms, **suppress, **nodemo})
-        _warn_if_undertrained({**arms, **suppress, **nodemo})
+                # trained, so it is skipped here.
+                suppress = {}
+        _assert_same_selector({**arms, **suppress})
+        _warn_if_undertrained({**arms, **suppress})
         cache_spectre3(args.force, args.device, arms)
         if suppress:
             cache_spectre3(
@@ -1620,22 +1298,8 @@ def main() -> None:
                 static_arms=frozenset(),
                 suppress_records=True,
             )
-        if nodemo:
-            # Separate call, exactly as `suppress` is: the diagnostic is a property of the
-            # scoring run, so it cannot ride in the arms dict without changing what every
-            # other arm means. Demotion is OFF everywhere else, so THIS is the arm that
-            # turns it on.
-            cache_spectre3(
-                args.force,
-                args.device,
-                nodemo,
-                static_arms=frozenset(),
-                apply_demotion=True,
-            )
     if "lazy" in args.methods:
         cache_lazy(args.force, args.device)
-    if "lenctx" in args.methods:
-        cache_lenctx(args.force, args.device, repeats=args.lenctx_repeats)
 
     # Per-stratum abstract-plan-generation time (shared across pool-ranking methods). Preserve
     # a prior good measurement if this run measured nothing (e.g. a non-DD2D or lenctx-only run).

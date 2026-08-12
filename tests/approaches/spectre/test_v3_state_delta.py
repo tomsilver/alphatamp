@@ -33,10 +33,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from alphatamp.approaches.spectre.dataset_v3 import (
+from alphatamp.approaches.spectre.dataset import (
     build_record_arrays,
-    build_v3_example,
-    collate_v3,
+    build_example,
+    collate,
 )
 from alphatamp.approaches.spectre.domain import spec_for
 from alphatamp.approaches.spectre.failure_record import (
@@ -44,11 +44,11 @@ from alphatamp.approaches.spectre.failure_record import (
     records_for_candidate,
 )
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.model_v3 import (
+from alphatamp.approaches.spectre.model import (
     MAX_DELTA_ATOMS,
     RecordEncoder,
-    SpectreV3Model,
-    V3Config,
+    SpectreModel,
+    SpectreConfig,
 )
 from alphatamp.approaches.spectre.tags import assign_tags
 from alphatamp.approaches.spectre.vocab import Vocab
@@ -102,7 +102,7 @@ def _episode_with_evidence(min_depth: int = 0):
 
 
 def _records(episode, vocab, ctx, state_delta: bool):
-    return build_v3_example(
+    return build_example(
         episode,
         vocab,
         rng=None,
@@ -117,7 +117,7 @@ def _records(episode, vocab, ctx, state_delta: bool):
 
 
 def _batch(example, records, vocab):
-    return collate_v3(
+    return collate(
         [example],
         max_arity=vocab.max_operator_arity,
         records=[records],
@@ -125,7 +125,7 @@ def _batch(example, records, vocab):
     )
 
 
-def _model(vocab, *, state_delta: bool, seed: int = 0) -> SpectreV3Model:
+def _model(vocab, *, state_delta: bool, seed: int = 0) -> SpectreModel:
     torch.manual_seed(seed)
     extra = (
         dict(
@@ -136,10 +136,10 @@ def _model(vocab, *, state_delta: bool, seed: int = 0) -> SpectreV3Model:
         if state_delta
         else {}
     )
-    return SpectreV3Model(
+    return SpectreModel(
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
-        cfg=V3Config(**_DEPLOYED, **extra),  # type: ignore[arg-type]
+        cfg=SpectreConfig(**_DEPLOYED, **extra),  # type: ignore[arg-type]
     ).eval()
 
 
@@ -207,7 +207,7 @@ def test_zero_init_delta_branch_is_a_functional_no_op_at_init() -> None:
 def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> None:
     """A state-delta-off checkpoint round-trips: loads strictly, no ``delta_proj``.
 
-    Self-contained (saved through ``asdict(TrainV3Config)`` like ``train_v3``) rather than
+    Self-contained (saved through ``asdict(TrainConfig)`` like ``train_v3``) rather than
     reading a disk artifact -- a pre-narrowing width-8 checkpoint no longer loads by
     design, and the narrowing is orthogonal to what this asserts (that state-delta OFF
     yields a records encoder without the delta branch).
@@ -216,16 +216,16 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
 
     import torch
 
-    from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint
-    from alphatamp.approaches.spectre.model_v3 import (
+    from alphatamp.approaches.spectre.inference import load_checkpoint
+    from alphatamp.approaches.spectre.model import (
         N_OVERLAP_V3,
-        SpectreV3Model,
-        V3Config,
+        SpectreModel,
+        SpectreConfig,
     )
-    from alphatamp.approaches.spectre.train_v3 import TrainV3Config
+    from alphatamp.approaches.spectre.train import TrainConfig
 
     vocab = _vocab()
-    cfg = TrainV3Config(
+    cfg = TrainConfig(
         overlap_mode="jaccard",
         use_overlap=True,
         coverage_feats=True,
@@ -234,10 +234,10 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
         evidence_attn=True,
         use_state_delta=False,
     )
-    model = SpectreV3Model(
+    model = SpectreModel(
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
-        cfg=V3Config(
+        cfg=SpectreConfig(
             n_overlap_feats=N_OVERLAP_V3,
             n_prior_feats=0,
             d_rel=cfg.d_rel,
@@ -259,7 +259,7 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
         ckpt,
     )
 
-    loaded, deploy = load_v3_checkpoint(ckpt, vocab, "cpu")
+    loaded, deploy = load_checkpoint(ckpt, vocab, "cpu")
     assert deploy["state_delta"] is False
     assert loaded.records is not None and loaded.records.delta_proj is None
 
@@ -371,7 +371,7 @@ def test_aggregation_keeps_the_deepest_delta() -> None:
     This is why the delta is derived at tensorize time rather than merged: "the state at
     the furthest point this query reached" falls out of the record that already survives.
     """
-    from alphatamp.approaches.spectre.dataset_v3 import _aggregate_per_query
+    from alphatamp.approaches.spectre.dataset import _aggregate_per_query
 
     spec = spec_for("dd2d_v4")
     paths = list_episodes(_V4)
@@ -406,7 +406,7 @@ def test_delta_tags_follow_the_tag_permutation() -> None:
 
     vocab = _vocab()
     episode, ctx = _episode_with_evidence(min_depth=2)
-    example, records = build_v3_example(
+    example, records = build_example(
         episode,
         vocab,
         rng=np.random.default_rng(0),

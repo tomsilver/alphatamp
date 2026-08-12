@@ -16,7 +16,6 @@ Usage::
     python experiments/spectre/spectre_score_v3.py \\
         --arm "records+overlap:checkpoints_v3_g6_recON_ovON" \\
         --arm "records only:checkpoints_v3_noov_g6_recON_ovOFF" \\
-        --v2-arm "v2.2 yardstick:checkpoints_v2_evidence_ov" \\
         --baseline "no records:checkpoints_v3_norec_noov_g6_recOFF_ovOFF"
 """
 
@@ -25,19 +24,15 @@ from __future__ import annotations
 import argparse
 import time
 from pathlib import Path
-from typing import Literal, cast
 
 import numpy as np
 import torch
 
 from alphatamp.approaches.spectre.compare import rollout_fp, stratum_of
 from alphatamp.approaches.spectre.domain import spec_for
-from alphatamp.approaches.spectre.inference_v3 import (
-    deployed_rollout_v3_traced,
-)
-from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint as load_v3
+from alphatamp.approaches.spectre.inference import deployed_rollout_traced
+from alphatamp.approaches.spectre.inference import load_checkpoint as load_v3
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.model_v3 import load_v2_checkpoint
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
@@ -49,21 +44,17 @@ def score(
     vocab,
     device,
     spec,
-    mode: Literal["permissive", "strict"],
-    apply_demotion: bool = False,
     deploy: dict | None = None,
 ) -> dict[int, float]:
     """Uncensored deployed FP per problem id."""
     out = {}
     for ep in episodes:
-        attempts, _ = deployed_rollout_v3_traced(
+        attempts, _ = deployed_rollout_traced(
             model,
             ep,
             vocab,
             device,
             spec=spec,
-            mode=mode,
-            apply_demotion=apply_demotion,
             **(deploy or {}),
         )
         out[int(ep.provenance.problem_id)] = float(attempts) - 1.0
@@ -108,15 +99,6 @@ def main(argv: list[str] | None = None) -> int:
         "paired-bootstrap baseline -- the SPECTREv3-vs-astar comparison. No checkpoint.",
     )
     ap.add_argument("--arm", action="append", default=[], help='"label:ckpt_subdir"')
-    ap.add_argument(
-        "--v2-arm",
-        action="append",
-        default=[],
-        help='"label:ckpt_subdir" for a train_v2 checkpoint, loaded in compat mode '
-        "(D-8) so the yardstick is scored by this instrument on these episodes -- "
-        "which is what makes a v3-vs-v2.2 paired bootstrap meaningful rather than a "
-        "comparison of two separately-produced numbers",
-    )
     ap.add_argument("--baseline", help='"label:ckpt_subdir" to compare arms against')
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
@@ -130,15 +112,6 @@ def main(argv: list[str] | None = None) -> int:
         "is what lets a single-directory arm aggregate too. Missing seeds are skipped "
         "with a warning. Reports mean +- std ACROSS SEEDS of the per-stratum mean, "
         "which is the spread a gate is judged on.",
-    )
-    ap.add_argument("--mode", default="strict", choices=["strict", "permissive"])
-    ap.add_argument(
-        "--with-demotion",
-        action="store_true",
-        help="re-enable the proof-demotion offset. OFF by default since 2026-07-30: the "
-        "deployed method is a purely learned ranker and nothing outside the network "
-        "touches its ordering. Worth 0.23 FP on DD2D; kept available because the "
-        "deduction is sound and a domain whose proofs fire more often may want it",
     )
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     a = ap.parse_args(argv)
@@ -160,11 +133,10 @@ def main(argv: list[str] | None = None) -> int:
     pids = [int(e.provenance.problem_id) for e in episodes]
     strata = np.array([stratum_of(p) for p in pids])
 
-    specs = [(e, False) for e in list(a.arm) + ([a.baseline] if a.baseline else [])]
-    specs += [(e, True) for e in a.v2_arm]
+    specs = list(a.arm) + ([a.baseline] if a.baseline else [])
     # per label: one dict[problem_id -> FP] per seed that actually had a checkpoint
     results: dict[str, list[dict[int, float]]] = {}
-    for entry, is_v2 in specs:
+    for entry in specs:
         label, _, subdir = entry.partition(":")
         # `--seeds` applies to every arm: the checkpoint path's own `seed_<n>` component
         # always varies, and `{seed}` in the subdir is substituted as well when the arm
@@ -187,14 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"!! {ckpt} was written {age:.0f}s ago — a run may still own it; "
                     f"this is a MID-TRAINING model, not a result"
                 )
-            if is_v2:
-                model, _ = load_v2_checkpoint(ckpt)
-                model = model.eval().to(a.device)
-                ov_mode: dict = {}
-            else:
-                model, ov_mode = load_v3(ckpt, vocab, a.device)
-            # argparse `choices` constrains this; `cast` tells mypy the same
-            mode = cast(Literal["permissive", "strict"], a.mode)
+            model, ov_mode = load_v3(ckpt, vocab, a.device)
             results.setdefault(label, []).append(
                 score(
                     model,
@@ -202,8 +167,6 @@ def main(argv: list[str] | None = None) -> int:
                     vocab,
                     a.device,
                     spec,
-                    mode,
-                    a.with_demotion,
                     ov_mode,
                 )
             )
@@ -221,11 +184,10 @@ def main(argv: list[str] | None = None) -> int:
                 astar_fp[int(ep.provenance.problem_id)] = float(fp)
         results["astar-dist"] = [astar_fp]
 
-    demo = f"on ({a.mode})" if a.with_demotion else "off (deployed default)"
     title = (
         a.env_variant if not a.test_variant else f"{a.env_variant}->{a.test_variant}"
     )
-    print(f"\n# {title} test, uncensored deployed FP, demotion={demo}, n={len(pids)}")
+    print(f"\n# {title} test, uncensored deployed FP, n={len(pids)}")
     wide = any(len(v) > 1 for v in results.values())
     w = 15 if wide else 8
     print(
