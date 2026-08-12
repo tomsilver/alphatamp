@@ -94,17 +94,10 @@ class TrainConfig:
     # Dropping `dead` is C5 hygiene (the sound rule stays outside the net as demotion);
     # see the note in `dataset_v3.build_example`.
     overlap_mode: str = "both"
-    # >0 switches on rollout-aligned |F| sampling out to this size. v2.2's inherited cap
-    # of 8 never shows the model the |F| ~ 20-40 regime an s3 rollout actually spends
-    # most of its attempts in.
-    tail_max_f: int = 0
-    sinusoidal_pos: bool = False
     # Collapse a candidate's failures to one record per (schema, args). The refiner
     # emits one per failed *sample*, which lets one unlucky candidate contribute
     # hundreds of tokens; §6.1 defines a record per failing *query*.
     aggregate_records: bool = False
-    # Per-object evidence summary on scene tokens (SceneEncoderV3).
-    use_obj_evidence: bool = False
     # Separate cross-attention channel for evidence (CrossAttentionScorerV3).
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
@@ -112,13 +105,6 @@ class TrainConfig:
     # Which of the pair the net sees, by zeroing the other column: both | coverage |
     # waste. They have only ever been measured together, so this isolates them.
     coverage_mode: str = "both"
-    unified_coverage: bool = True
-    """Compute coverage/waste by the unified definitions rather than the deployed
-    ``S(c) = args \\ goal_objects`` formula.
-
-    Default since 2026-07-31: measured -1.66 FP against the 7.44 baseline on dd2d_v4
-    over 3 seeds, CI [-2.71, -0.71], with every seed beating every baseline seed.
-    """
     # §6.1's `s_j`: each record token also carries the abstract state at its failing
     # step,
     # as the delta from s_0 (which atoms the prefix added, which it deleted).
@@ -214,7 +200,6 @@ class SpectreV3Dataset(Dataset):
             rng,
             p_empty=self.cfg.p_empty,
             p_drop_facts=self.cfg.p_drop_facts,
-            tail_max_f=self.cfg.tail_max_f,
         )
         example, records = build_example(
             episode,
@@ -230,7 +215,6 @@ class SpectreV3Dataset(Dataset):
             aggregate_records=self.cfg.aggregate_records,
             coverage_feats=self.cfg.coverage_feats,
             coverage_mode=self.cfg.coverage_mode,
-            unified_coverage=self.cfg.unified_coverage,
             state_delta=self.cfg.use_state_delta,
         )
         if not self.cfg.use_records:
@@ -315,7 +299,6 @@ def deployed_val_fp(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
-    unified_coverage: bool = False,
     state_delta: bool = False,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
@@ -340,7 +323,6 @@ def deployed_val_fp(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
-            unified_coverage=unified_coverage,
             state_delta=state_delta,
         )
         fps.append(float(attempts) - 1.0)
@@ -454,8 +436,6 @@ def train_v3(
             max_tags=cfg.max_tags,
             dropout_p=cfg.dropout_p,
             use_records=cfg.use_records,
-            sinusoidal_pos=cfg.sinusoidal_pos,
-            use_obj_evidence=cfg.use_obj_evidence,
             evidence_attn=cfg.evidence_attn,
             coverage_feats=cfg.coverage_feats,
             use_state_delta=cfg.use_state_delta,
@@ -471,7 +451,6 @@ def train_v3(
         f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
         f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
-        f"tail_max_f={cfg.tail_max_f or 'off'} "
         f"state_delta={cfg.use_state_delta} "
         f"weight_avg={cfg.weight_avg}"
         f"{f'(decay={cfg.ema_decay},start={cfg.ema_start_epoch})' if cfg.weight_avg == 'ema' else ''} "
@@ -529,7 +508,6 @@ def train_v3(
                 aggregate_records=cfg.aggregate_records,
                 coverage_feats=cfg.coverage_feats,
                 coverage_mode=cfg.coverage_mode,
-                unified_coverage=cfg.unified_coverage,
                 state_delta=cfg.use_state_delta,
             )
 
@@ -631,12 +609,6 @@ def main(argv=None) -> int:
         "outside the net as demotion regardless",
     )
     ap.add_argument(
-        "--tail-max-f",
-        type=int,
-        default=0,
-        help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
-    )
-    ap.add_argument(
         "--p-empty",
         type=float,
         default=TrainConfig.p_empty,
@@ -655,17 +627,6 @@ def main(argv=None) -> int:
         "features, grounded in reported culprits instead of a predicted head)",
     )
     ap.add_argument(
-        "--legacy-coverage",
-        action="store_false",
-        dest="unified_coverage",
-        default=TrainConfig.unified_coverage,
-        help="compute coverage/waste by the pre-2026-07-31 deployed formula "
-        "(S(c)=args\\goal_objects) instead of the unified definitions of "
-        "docs/unified_culprits_coverage_waste.md. Same two columns and the same tensor "
-        "shape either way; only the scalars change. Kept so the older arm stays "
-        "reproducible -- it measures 1.66 FP worse",
-    )
-    ap.add_argument(
         "--coverage-mode",
         default=TrainConfig.coverage_mode,
         choices=["both", "coverage", "waste"],
@@ -679,19 +640,9 @@ def main(argv=None) -> int:
         "compete with the scene inside one softmax",
     )
     ap.add_argument(
-        "--obj-evidence",
-        action="store_true",
-        help="summarise failures onto scene tokens via the tag join (SceneEncoderV3)",
-    )
-    ap.add_argument(
         "--aggregate-records",
         action="store_true",
         help="one record token per (schema, args) instead of per failed sample",
-    )
-    ap.add_argument(
-        "--sinusoidal-pos",
-        action="store_true",
-        help="sinusoidal step positions (G9); retires the D-8 equivalence oracle",
     )
     ap.add_argument(
         "--state-delta",
@@ -747,17 +698,13 @@ def main(argv=None) -> int:
         val_episodes=a.val_episodes,
         select_budget=a.select_budget,
         overlap_mode=a.overlap_mode,
-        tail_max_f=a.tail_max_f,
         aggregate_records=a.aggregate_records,
-        use_obj_evidence=a.obj_evidence,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,
-        unified_coverage=a.unified_coverage,
         use_state_delta=a.state_delta,
         p_empty=a.p_empty,
         p_drop_facts=a.p_drop_facts,
-        sinusoidal_pos=a.sinusoidal_pos,
         train_strata=tuple(a.train_strata),
         weight_avg=a.weight_avg,
         ema_decay=a.ema_decay,
@@ -769,11 +716,6 @@ def main(argv=None) -> int:
         sub += "_norec"
     if a.no_overlap:
         sub += "_noov"
-    if not a.unified_coverage:
-        # Distinct directory: the two definitions produce different features, so a run
-        # must never land on top of a checkpoint trained under the other one. The
-        # *default* (unified) keeps the clean name; the legacy arm is the one marked.
-        sub += "_legacycov"
     sub += a.out_suffix
     out = root / sub / a.env / f"seed_{a.seed}"
     res = train_v3(

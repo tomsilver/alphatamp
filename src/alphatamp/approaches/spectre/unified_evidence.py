@@ -13,9 +13,9 @@ The replacements here derive everything from the **operator schemas**: which obj
 failure's own explanation names, and which of a candidate's steps the abstraction's causal
 chain cannot account for. Nothing below names a drawer, a button or a stick.
 
-**Status: deployed.** These are the definitions ``dataset_v3`` emits by default since
-2026-07-31 (``TrainV3Config.unified_coverage``); the checkpoint records which definition
-it was trained under, so older models keep being scored on theirs. The module still
+**Status: deployed.** These are the coverage/waste definitions ``dataset`` emits (the
+deployed definition since 2026-07-31; the earlier ``S(c) = args \\ goal_objects`` formula
+has been removed). The module still
 carries its own lightweight :class:`UnifiedRecord` rather than extending
 :class:`failure_record.FailureRecord`, which is now a deliberate boundary rather than a
 staging area: ``FailureRecord`` is what a collection *stored*, this is what the features

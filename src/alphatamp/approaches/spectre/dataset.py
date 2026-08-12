@@ -50,7 +50,6 @@ from alphatamp.approaches.spectre.model import (
     MAX_DELTA_ATOMS,
     MAX_RECORD_ARGS,
     MAX_RECORD_CULPRITS,
-    N_OBJ_EVIDENCE,
     N_OVERLAP_V3,
     N_RECORD_SCALARS,
     SpectreBatch,
@@ -241,139 +240,22 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     )
 
 
-@dataclasses.dataclass
-class _V3Example(_V2Example):
-    """``_V2Example`` plus the per-object evidence summary.
-
-    A subclass rather than a third return value: ``collate_v2`` reads attributes, so a
-    ``_V3Example`` flows through the v2 collation untouched, and every existing caller of
-    ``build_example`` keeps its two-tuple. The field defaults to ``None``, so the
-    compat path is byte-identical (D-8).
-    """
-
-    obj_evidence: Optional[np.ndarray] = None
-
-
-def records_for_evidence(
-    episode: EpisodeRecord, ctx: frozenset, spec: DomainSpec
-) -> tuple[list, list]:
-    """Split the context's records into ``(hint_tier, proof_tier)``.
-
-    The token path consumes only the hint tier, exactly as v2.2 did. The object summary
-    consumes both, but keeps them in **separate columns** -- see
-    :func:`_object_evidence` for why that is not a violation of the tier split.
-    """
-    hint, proof = [], []
-    for idx in sorted(ctx):
-        for rec in records_for_candidate(episode, idx, spec):
-            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
-                proof.append(rec)
-            else:
-                hint.append(rec)
-    return hint, proof
-
-
-def _object_evidence(
-    ctx: frozenset,
-    subsets: list,
-    objects: list,
-    hint_records: list,
-    proof_records: list,
-    max_len: int = 8,
-) -> np.ndarray:
-    """Summarise the observed failures onto the objects they name.
-
-    See SceneEncoderV3.
-        Five columns per object, all fractions in [0, 1], all zero before any failure:
-
-        0. fraction of failed candidates that manipulate ``o``
-        1. fraction of hint records naming ``o`` as an argument
-        2. fraction of hint records naming ``o`` as a culprit
-        3. mean normalized depth of the records naming ``o``
-        4. fraction of **proof-tier** records naming ``o`` as a culprit
-
-        **Column 4 needs its own justification, because it looks like a tier violation and is
-        not.** Proof-tier records are kept out of the *token* path because what a token
-        exposes there is the failed **set**, and the net learns the crude size correlate from
-        it ("blocked sets are large, so prefer longer") -- L4, which cost +13.5 FP on s1.
-        Column 4 exposes something categorically different: the **identity of an object the
-        refiner's own collision check reported as blocking**. That is an *observation* (C2's
-        legal source), not the *deduction*; the deduction still acts only outside the net as
-        demotion (C5), and no weight can override it.
-
-        It is also the honest, observed version of the `clears` predicate that L2 rejected.
-        `clears` was rejected for being a hand-coded per-environment geometric routine we ran
-        ourselves. This is the refiner reporting what it already computed -- the same
-        legality class as `failure_action`, and exactly what §6.1 lists ``culprits`` for. On
-        dd2d_v4 `retrieve` records carry culprits 100% of the time, so this column is where
-        "which object is actually blocking the target" enters the model at all.
-    """
-    ev = np.zeros((len(objects), N_OBJ_EVIDENCE), dtype=np.float32)
-    if not ctx:
-        return ev
-    index = {o: i for i, o in enumerate(objects)}
-    n_ctx = float(len(ctx))
-    for f in ctx:
-        for o in subsets[f]:
-            if o in index:
-                ev[index[o], 0] += 1.0 / n_ctx
-    n_hint = float(len(hint_records)) or 1.0
-    depth_sum = np.zeros(len(objects), dtype=np.float32)
-    depth_cnt = np.zeros(len(objects), dtype=np.float32)
-    for rec in hint_records:
-        for o in rec.args:
-            if o in index:
-                ev[index[o], 1] += 1.0 / n_hint
-                depth_sum[index[o]] += rec.step_index
-                depth_cnt[index[o]] += 1.0
-        # `culprits or dev_blame`: class-1 envs (DD2D) report `culprits`; class-2 envs
-        # (SB2D, and any future kinder env) report `dev_blame` instead. The token path
-        # (build_record_arrays) already falls back this way; without it here, this column
-        # is identically zero on every class-2 environment -- the same silent per-env
-        # degradation the goal-channel fix removed. See docs/decisions 2026-08-08.
-        for o in rec.culprits or rec.dev_blame:
-            if o in index:
-                ev[index[o], 2] += 1.0 / n_hint
-    # Normalise depth by the episode's own longest plan, not a hard-coded DD2D constant of
-    # 8. `step_index` ranges over plan positions, so the right scale is the deepest plan in
-    # this problem's pool; `/ 8.0` under-normalised SB2D (plans length 6) and would
-    # mis-scale any env whose plans are longer.
-    ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / float(max(max_len, 1))
-    n_proof = float(len(proof_records)) or 1.0
-    for rec in proof_records:
-        for o in rec.culprits:
-            if o in index:
-                ev[index[o], 4] += 1.0 / n_proof
-    return np.clip(ev, 0.0, 1.0)
-
-
 def sample_context(
     fail_idx: list[int],
     rng: np.random.Generator,
     p_empty: float = 0.35,
     p_drop_facts: float = 0.3,
     max_f: int = 8,
-    tail_max_f: int = 0,
 ) -> tuple[frozenset[int], bool]:
     """Sample a failure context ``F`` plus an evidence-dropout flag.
 
     Mass is heavy at ``|F| = 0`` because that is the deployment start: the static pathway
     has to stand on its own before any failure has been observed. ``hide_facts`` drops
     the evidence for an example so the ranker cannot become dependent on it.
-
-    ``tail_max_f > 0`` switches on **rollout-aligned** sampling: half the non-empty mass
-    stays uniform on ``1..max_f`` (the easy strata, where rollouts end after a few
-    attempts) and half spreads uniformly out to ``tail_max_f``. The default ``max_f=8``
-    inherited from v2.2 is a genuine train/deploy mismatch at the hard strata -- an s3
-    rollout is queried at ``|F|`` up to ~40, a regime training never showed it -- and
-    this is the knob that closes it. Named for the original RT2D
-    ``rollout_aligned_mix``, whose purpose was the same: make training mass match the
-    test-time visit distribution.
     """
     if not fail_idx or rng.random() < p_empty:
         return frozenset(), False
-    hi = max_f if (tail_max_f <= 0 or rng.random() < 0.5) else tail_max_f
-    size = int(rng.integers(1, min(hi, len(fail_idx)) + 1))
+    size = int(rng.integers(1, min(max_f, len(fail_idx)) + 1))
     chosen = rng.choice(np.asarray(fail_idx), size=size, replace=False)
     return frozenset(int(i) for i in chosen), bool(rng.random() < p_drop_facts)
 
@@ -540,14 +422,6 @@ def build_example(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
-    # Deliberately **False** here even though unified is the deployed default since
-    # 2026-07-31. This is the primitive; policy lives one level up, in
-    # ``TrainConfig`` (what a new run trains with) and in the checkpoint cfg (what a
-    # trained model is scored with, via ``inference_v3._emit_kwargs``). Flipping it here
-    # would silently change definition for any caller that does not pass it -- e.g.
-    # ``spectre_d2_s2.py``, a frozen diagnostic that must keep reproducing its
-    # deployed-definition numbers.
-    unified_coverage: bool = False,
     state_delta: bool = False,
 ) -> tuple[_V2Example, list[RecordArray]]:
     """Tensorize one geometry-carrying episode for the v3 model.
@@ -693,14 +567,13 @@ def build_example(
     want_waste = want_cov and coverage_mode in ("both", "waste")
     n_ov = N_OVERLAP_V3 if want_cov else 2
     overlap = [[0.0] * n_ov for _ in range(k)]
-    culprits: frozenset = frozenset()
     _uni_records: list = []
     _uni_pool: frozenset = frozenset()
     _uni_universal: frozenset = frozenset()
     if ctx and not hide:
         blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
         failed = [subsets[f] for f in ctx]
-        if want_cov and unified_coverage:
+        if want_cov:
             # Lifted operators come from the pool's own `GroundOperator.parent`, so the
             # filters stay env-agnostic -- nothing here needs to know the domain.
             lifted = frozenset(
@@ -716,9 +589,6 @@ def build_example(
                 for n in _unified_blame(r)
                 if n in actionable and n not in _uni_universal
             )
-        elif want_cov:
-            _h, _p = records_for_evidence(canon, ctx, spec)
-            culprits = frozenset(o for r in (_h + _p) for o in r.culprits)
         for i, si in enumerate(subsets):
             dead = 1.0 if any(si <= b for b in blocked) else 0.0
             jaccard = max(
@@ -728,14 +598,12 @@ def build_example(
                 dead if want_dead else 0.0,
                 float(jaccard) if want_jac else 0.0,
             ]
-            if want_cov and unified_coverage:
-                # The unified definitions (`unified_evidence.py`). Same two columns and
-                # the same tensor shape, so the state dict is untouched -- what changes
-                # is only how each scalar is computed. Deployed asks "is this culprit in
-                # `args \ goal_objects`"; unified asks "does this candidate discharge the
-                # culprit before re-entering the situation that named it", and computes
-                # discretionary work from the candidate's own causal structure rather
-                # than from a goal-object subtraction.
+            if want_cov:
+                # The unified definitions (`unified_evidence.py`). Deployed since
+                # 2026-07-31. Computes discretionary work from the candidate's own causal
+                # structure -- "does this candidate discharge the culprit before
+                # re-entering the situation that named it" -- rather than from a
+                # goal-object subtraction.
                 _cov, _wst = coverage_and_waste(
                     list(canon.skeleton_pool[i].operator_seq),
                     _uni_records,
@@ -748,22 +616,6 @@ def build_example(
                     _cov if want_coverage else 0.0,
                     _wst if want_waste else 0.0,
                 ]
-            elif want_cov:
-                # §5.1's `coverage` / `waste`, but grounded in **observed** culprits
-                # instead of a predicted necessity head -- which makes them more
-                # C2-legal, not less: nothing is inferred by us, the refiner reported
-                # which objects blocked. This is the signal `dead` was crudely proxying
-                # for. At s3 three distinct objects block, and the right candidate is
-                # the one that removes all three; a length bias can only ever
-                # approximate that.
-                row += [
-                    (
-                        len(si & culprits) / max(len(culprits), 1)
-                        if want_coverage
-                        else 0.0
-                    ),
-                    (len(si - culprits) / max(len(si), 1) if want_waste else 0.0),
-                ]
             overlap[i] = row
 
     records = (
@@ -774,15 +626,8 @@ def build_example(
         else []
     )
 
-    obj_evidence = None
-    if ctx and not hide:
-        _hint, _proof = records_for_evidence(canon, ctx, spec)
-        obj_evidence = _object_evidence(
-            ctx, subsets, [o.name for o in geo.objects], _hint, _proof, max_len=max_len
-        )
-
     return (
-        _V3Example(
+        _V2Example(
             obj_tags,
             obj_boundary,
             obj_pose,
@@ -799,7 +644,6 @@ def build_example(
             farg,
             prior,
             overlap,
-            obj_evidence,
         ),
         records,
     )
@@ -842,14 +686,6 @@ def collate(
             for ki, row in enumerate(e.overlap[:k_]):
                 ov_arr[bi, ki] = row
         batch.cand_overlap = torch.as_tensor(ov_arr)
-    evs = [getattr(e, "obj_evidence", None) for e in examples]
-    if any(e is not None for e in evs):
-        n_obj = int(batch.obj_tags.shape[1])
-        stacked = np.zeros((len(examples), n_obj, N_OBJ_EVIDENCE), np.float32)
-        for bi, ev in enumerate(evs):
-            if ev is not None:
-                stacked[bi, : ev.shape[0]] = ev[:n_obj]
-        batch.obj_evidence = torch.as_tensor(stacked)
     if not records or not any(records):
         return batch
 

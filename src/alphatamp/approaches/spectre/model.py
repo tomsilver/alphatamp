@@ -25,7 +25,6 @@ equivalence test is expected to be run in compat mode only.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -34,8 +33,6 @@ from torch import Tensor, nn
 
 from alphatamp.approaches.spectre.layers import D_MODEL, FFN_DIM, N_HEADS
 from alphatamp.approaches.spectre.encoders import (
-    D_DESCRIPTOR,
-    D_POSE,
     D_REL,
     D_REL_V3,
     D_TAG,
@@ -88,7 +85,6 @@ class SpectreBatch(SpectreV2Batch):
     rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
     rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
     rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
-    obj_evidence: Optional[Tensor] = None  # (B, N, N_OBJ_EVIDENCE) float
     # `s_j - s_0` per record. Role axis is [added, deleted] — kept apart for the same
     # reason arg-tags and culprit-tags are: "the prefix put o1 on the buffer" and "the
     # prefix took o1 out of the drawer" are different claims about o1.
@@ -208,8 +204,7 @@ class RecordEncoder(nn.Module):
             # Substituted zeros rather than a skipped branch: a batch whose records all
             # sit at j=0 must encode identically to the same record beside a batch-mate
             # that has a delta. Deploy collates ONE example at a time, so the two cases
-            # are not hypothetical. Mirrors `SceneEncoderV3`'s missing-`obj_evidence`
-            # fallback.
+            # are not hypothetical.
             if delta_pred_ids is None or delta_arg_tags is None:
                 b, r = schema_ids.shape
                 delta_pred_ids = schema_ids.new_zeros(b, r, 2, MAX_DELTA_ATOMS)
@@ -220,25 +215,6 @@ class RecordEncoder(nn.Module):
                 self._delta(delta_pred_ids, delta_arg_tags)
             )
         return self.proj[2](self.proj[1](hidden)) * mask.unsqueeze(-1)
-
-
-def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
-    """Standard transformer sinusoidal encoding evaluated at arbitrary integer positions.
-
-    Returns ``(*pos.shape, dim)``. Unlike a learned table this is *defined* at every
-    position, which is the whole point: the absolute ``nn.Embedding(64, D)`` it replaces
-    has untrained rows beyond the longest plan seen in training, so a model trained on
-    s0-s2 (plans of <= 5 operators) and deployed on s3 (7) would read
-    randomly-initialized vectors at steps 5 and 6 -- and the length-generalization
-    experiment would be measuring initialization noise rather than generalization.
-    """
-    half = dim // 2
-    freqs = torch.exp(
-        torch.arange(half, device=pos.device, dtype=torch.float32)
-        * (-math.log(10000.0) / max(half - 1, 1))
-    )
-    ang = pos.unsqueeze(-1).float() * freqs
-    return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
 
 
 class CrossAttentionScorerV3(CrossAttentionScorer):
@@ -344,95 +320,6 @@ geometry (`decisions.md` 2026-07-26); once the refiner reports culprits, the sam
 features are available by observation and need no head at all.
 """
 
-N_OBJ_EVIDENCE = 5
-"""Per-object evidence summary width; see :class:`SceneEncoderV3`."""
-
-
-class SceneEncoderV3(SceneEncoder):
-    """:class:`SceneEncoder` plus a per-object summary of the failures observed so far.
-
-    **Why here, and not as more tokens.** Measured on the G6b checkpoint: deploying a
-    records-trained model with its evidence memory emptied at every step moves it by 0.23
-    FP (16.17 -> 16.40). The model had learned to *ignore* the per-failure tokens. What
-    it does use is `cand_overlap` -- two compact scalars per candidate summarising the
-    same failure set. So the failure is not "evidence is useless" but "free-floating
-    tokens are the wrong shape for this architecture": the scorer's strength is the tag
-    join between objects and candidate arguments, and a record token participates in
-    that join only weakly, through pooled tag slots.
-
-    This routes the same observations onto the objects they *name*, where the tag join
-    already lives. Four scalars per object, all in [0, 1], all zero when no failure has
-    been observed yet:
-
-    ``[frac of failed candidates that manipulate o,
-       frac of hint records naming o as an argument,
-       frac of hint records naming o as a culprit,
-       mean normalized depth of the records naming o]``
-
-    Domain-agnostic by construction -- set membership over record fields, no geometry and
-    no per-environment predicate (C1). Proof-tier records stay excluded exactly as they
-    are from the token path, so nothing here re-imports the "blocked sets are large,
-    prefer longer" correlate that L4 warns about.
-    """
-
-    def __init__(
-        self,
-        max_tags: int = MAX_TAGS_DEFAULT,
-        dropout_p: float = DROPOUT,
-        d_rel: int = D_REL_V3,
-    ) -> None:
-        super().__init__(max_tags, dropout_p, d_rel=d_rel)
-        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + d_rel + 1 + N_OBJ_EVIDENCE
-        self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
-
-    def forward(self, batch: SpectreV2Batch) -> Tensor:
-        tag = self.tag_emb(batch.obj_tags)
-        desc = self.footprint(batch.obj_boundary, batch.obj_mask)
-        pose = self.pose_proj(batch.obj_pose)
-        rel = self.rel_proj(batch.obj_rel)
-        tgt = batch.obj_is_goal.unsqueeze(-1)
-        ev = getattr(batch, "obj_evidence", None)
-        if ev is None:
-            ev = torch.zeros(
-                *batch.obj_tags.shape,
-                N_OBJ_EVIDENCE,
-                device=tag.device,
-                dtype=tag.dtype,
-            )
-        tok = self.proj(torch.cat([tag, desc, pose, rel, tgt, ev], dim=-1))
-        tok = self.sab1(tok, batch.obj_mask)
-        tok = self.sab2(tok, batch.obj_mask)
-        return tok * batch.obj_mask.unsqueeze(-1)
-
-
-class CandidateEncoderV3(CandidateEncoder):
-    """:class:`CandidateEncoder` with the learned absolute position table removed.
-
-    Subclassed rather than edited in place because v2 modules are frozen (D-7). The
-    ``pos_emb`` submodule is *deleted*, not merely bypassed, so it leaves the state dict
-    -- which is exactly why enabling this retires the D-8 equivalence oracle: a v2.2
-    checkpoint can no longer load ``strict=True`` into this model. That is planned (G9 is
-    the last architectural change), not accidental.
-    """
-
-    def __init__(
-        self, n_ops: int, max_tags: int, max_arity: int, dropout_p: float = DROPOUT
-    ) -> None:
-        super().__init__(n_ops, max_tags, max_arity, dropout_p)
-        del self.pos_emb
-
-    def forward(self, batch: SpectreV2Batch) -> Tensor:
-        b, k, ell = batch.cand_op_ids.shape
-        op = self.op_emb(batch.cand_op_ids)
-        pos = sinusoidal_positions(batch.cand_pos, D_MODEL)
-        args = self.tag_emb(batch.cand_arg_tags)
-        args = args.reshape(b, k, ell, self.max_arity * D_TAG)
-        step = self.step_ln(op + pos + self.arg_proj(args))
-        step = step.reshape(b * k, ell, D_MODEL)
-        smask = batch.cand_step_mask.reshape(b * k, ell)
-        emb = self.pool(step, smask).reshape(b, k, D_MODEL)
-        return emb * batch.pool_mask.unsqueeze(-1)
-
 
 @dataclass(frozen=True)
 class SpectreConfig:
@@ -464,13 +351,6 @@ class SpectreConfig:
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
     use_necessity: bool = False  # G8: necessity head + its candidate features
-    # G9: sinusoidal step positions instead of the learned absolute table. Turning this
-    # on RETIRES the D-8 equivalence oracle (pos_emb leaves the state dict), so it is the
-    # last architectural change by design.
-    sinusoidal_pos: bool = False
-    # Per-object evidence summary on the scene tokens (see SceneEncoderV3). Changes the
-    # scene projection's input width, so it also retires the D-8 oracle.
-    use_obj_evidence: bool = False
     # Give evidence its own cross-attention channel instead of making it compete with
     # the scene inside one softmax. See CrossAttentionScorerV3.
     evidence_attn: bool = False
@@ -525,12 +405,9 @@ class SpectreModel(nn.Module):
         super().__init__()
         self.cfg = cfg or SpectreConfig()
         c = self.cfg
-        scene_cls = SceneEncoderV3 if c.use_obj_evidence else SceneEncoder
-        # Scene width comes from the config: 3 deployed, 8 in compat mode. Passed to
-        # whichever encoder is chosen -- both take ``d_rel``.
-        self.scene = scene_cls(c.max_tags, c.dropout_p, d_rel=c.d_rel)
-        cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
-        self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
+        # Scene width comes from the config: 3 deployed, 8 in compat mode.
+        self.scene = SceneEncoder(c.max_tags, c.dropout_p, d_rel=c.d_rel)
+        self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
         scorer_cls = CrossAttentionScorerV3 if c.evidence_attn else CrossAttentionScorer
         self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)

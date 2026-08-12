@@ -193,10 +193,6 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         "coverage_feats",
         "coverage_mode",
         "state_delta",
-        # Added 2026-07-31: which coverage/waste *definition* the checkpoint was trained
-        # under. It must ride the checkpoint, not the CLI, or a model trained on the
-        # unified features could be scored against the deployed ones.
-        "unified_coverage",
     }
     # the deployed arm: jaccard overlap, coverage on, both columns
     assert deploy["overlap_mode"] == "jaccard"

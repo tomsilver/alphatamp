@@ -69,10 +69,10 @@ def load_checkpoint(
     what makes that unrepresentable. Splat the dict into
     :func:`deployed_rollout_traced` / :func:`build_example`.
 
-    Switches that *do* change the architecture (``use_records``, ``evidence_attn``,
-    ``use_obj_evidence``, ``sinusoidal_pos``, and ``coverage_feats`` via the
-    ``cand_overlap`` width) are rebuilt into ``SpectreConfig`` here, where ``strict=True``
-    catches any error. Older checkpoints predate several of these keys, hence ``.get``.
+    Switches that *do* change the architecture (``use_records``, ``evidence_attn``, and
+    ``coverage_feats`` via the ``cand_overlap`` width) are rebuilt into ``SpectreConfig``
+    here, where ``strict=True`` catches any error. Older checkpoints predate several of
+    these keys, hence ``.get``.
     """
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cfg = ck["cfg"]
@@ -94,8 +94,6 @@ def load_checkpoint(
             max_tags=int(cfg.get("max_tags", 32)),
             dropout_p=0.0,
             use_records=bool(cfg.get("use_records")),
-            sinusoidal_pos=bool(cfg.get("sinusoidal_pos")),
-            use_obj_evidence=bool(cfg.get("use_obj_evidence")),
             evidence_attn=bool(cfg.get("evidence_attn")),
             coverage_feats=bool(cfg.get("coverage_feats")),
             use_state_delta=bool(cfg.get("use_state_delta")),
@@ -109,12 +107,6 @@ def load_checkpoint(
         "aggregate_records": bool(cfg.get("aggregate_records")),
         "coverage_feats": bool(cfg.get("coverage_feats")),
         "coverage_mode": str(cfg.get("coverage_mode", "both")),
-        # Absent key => False, and that is load-bearing rather than incidental: every
-        # checkpoint trained before 2026-07-31 was trained on the deployed
-        # `S(c) = args \ goal_objects` features and must keep being scored on them, even
-        # though unified is now the default for new runs. The checkpoint decides, not
-        # the current default.
-        "unified_coverage": bool(cfg.get("unified_coverage")),
         # Architectural *and* emitted: the encoder needs the submodules and the
         # tensorizer
         # needs to produce the arrays, so it appears in both places -- exactly as
@@ -176,7 +168,6 @@ def deployed_rollout_traced(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
-    unified_coverage: bool = False,
     state_delta: bool = False,
     suppress_records: bool = False,
     zero_scene_cols: frozenset[str] = frozenset(),
@@ -258,7 +249,6 @@ def deployed_rollout_traced(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
-            unified_coverage=unified_coverage,
             state_delta=state_delta,
         )
         # Records are passed at deployment too, not just in training. Omitting them here
