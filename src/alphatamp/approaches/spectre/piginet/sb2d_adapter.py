@@ -328,6 +328,13 @@ class SB2DKinderDomain(SB2DDomain):
 _SB2D_CROP_SOURCE: dict[str, str] = {
     "stickbutton2d_v1": "schematic",
     "stickbutton2d_v1_kinder": "kinder",
+    # Held-out-stratum generalization variant. Its raw dir is symlinked to
+    # `stickbutton2d_v1_kinder`, so `self.root/<split>/images` resolves to the same
+    # kinder-rendered PNGs; it must read them, not fall back to the schematic rasteriser.
+    "stickbutton2d_v1_kinder_holdout_b5": "kinder",
+    # b5-correct-size collection: the full-strata PIGINet control reads kinder crops
+    # (b1/b2/b3 reused from v1_kinder + freshly-rendered b5).
+    "stickbutton2d_v2_kinder": "kinder",
 }
 
 

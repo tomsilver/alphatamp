@@ -43,7 +43,7 @@ from alphatamp.approaches.spectre.dataset_v2 import (
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.facts import TIER_IDS, gather_context_facts
 from alphatamp.approaches.spectre.failure_record import records_for_candidate
-from alphatamp.approaches.spectre.model_v2 import D_REL, MAX_FACT_ARGS
+from alphatamp.approaches.spectre.model_v2 import D_REL_V3, MAX_FACT_ARGS
 from alphatamp.approaches.spectre.model_v3 import (
     MAX_DELTA_ATOMS,
     MAX_RECORD_ARGS,
@@ -119,6 +119,7 @@ def _object_evidence(
     objects: list,
     hint_records: list,
     proof_records: list,
+    max_len: int = 8,
 ) -> np.ndarray:
     """Summarise the observed failures onto the objects they name.
 
@@ -165,10 +166,19 @@ def _object_evidence(
                 ev[index[o], 1] += 1.0 / n_hint
                 depth_sum[index[o]] += rec.step_index
                 depth_cnt[index[o]] += 1.0
-        for o in rec.culprits:
+        # `culprits or dev_blame`: class-1 envs (DD2D) report `culprits`; class-2 envs
+        # (SB2D, and any future kinder env) report `dev_blame` instead. The token path
+        # (build_record_arrays) already falls back this way; without it here, this column
+        # is identically zero on every class-2 environment -- the same silent per-env
+        # degradation the goal-channel fix removed. See docs/decisions 2026-08-08.
+        for o in rec.culprits or rec.dev_blame:
             if o in index:
                 ev[index[o], 2] += 1.0 / n_hint
-    ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / 8.0
+    # Normalise depth by the episode's own longest plan, not a hard-coded DD2D constant of
+    # 8. `step_index` ranges over plan positions, so the right scale is the deepest plan in
+    # this problem's pool; `/ 8.0` under-normalised SB2D (plans length 6) and would
+    # mis-scale any env whose plans are longer.
+    ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / float(max(max_len, 1))
     n_proof = float(len(proof_records)) or 1.0
     for rec in proof_records:
         for o in rec.culprits:
@@ -413,13 +423,29 @@ def build_v3_example(
     # falls back to `scale = 1.0` -- unnormalised, which is what the older RT2D/kinder
     # records get and what SB2D would silently get if it wrote neither spelling.
     frame = geo.frame or {}
-    scale = max(
-        float(frame.get("drawer_w", frame.get("frame_w", 0.0))),
-        float(frame.get("drawer_d", frame.get("frame_d", 0.0))),
-        1.0,
-    )
-    target = next((o for o in geo.objects if o.is_target), None)
-    tx, ty = (target.pose[0], target.pose[1]) if target else (0.0, 0.0)
+    # `drawer_w`/`drawer_d` are DD2D's spelling; `frame_w`/`frame_d` the generic one a
+    # second environment writes. Require at least one: an absent frame used to fall back to
+    # scale=1.0 *silently*, leaving obj_pose unnormalized and mixing units across
+    # environments (cm on DD2D, m on SB2D). Fail loudly and name the fix instead.
+    _fw = frame.get("drawer_w", frame.get("frame_w"))
+    _fd = frame.get("drawer_d", frame.get("frame_d"))
+    if _fw is None and _fd is None:
+        raise ValueError(
+            "scene_geometry.frame lacks a normalization extent: write frame_w/frame_d "
+            "(DD2D uses drawer_w/drawer_d). Without it obj_pose is unnormalized "
+            "(scale=1)."
+        )
+    scale = max(float(_fw or 0.0), float(_fd or 0.0), 1.0)
+    # The goal channel is `is_goal` (any object named by the goal atoms), not `is_target`
+    # (the one object a DD2D JSON flagged). `is_target` presupposes a single distinguished
+    # target and is silently all-zero on an env whose goal names several objects (SB2D);
+    # `is_goal` is well-defined for any goal, including N>1 targets, and is byte-identical
+    # to `is_target` on every DD2D episode (proven 720/720). The target-anchored `obj_rel`
+    # columns (dx, dy, dist to the target, area ratio to the target) and the privileged
+    # `concave` flag are cut for the same reason -- only the three anchor-free per-object
+    # scalars `[area, sinθ, cosθ]` remain. Absolute position is unaffected (it lives in
+    # `obj_pose`). See docs/decisions 2026-08-08.
+    goal_objs = spec.goal_objects(canon)
 
     n_obj = len(geo.objects)
     obj_tags = np.array([tags[o.name] for o in geo.objects], dtype=np.int64)
@@ -428,18 +454,14 @@ def build_v3_example(
         [[o.pose[0] / scale, o.pose[1] / scale, o.pose[2]] for o in geo.objects],
         dtype=np.float32,
     )
-    obj_is_target = np.array(
-        [1.0 if o.is_target else 0.0 for o in geo.objects], dtype=np.float32
+    obj_is_goal = np.array(
+        [1.0 if o.name in goal_objs else 0.0 for o in geo.objects], dtype=np.float32
     )
-    rel = np.zeros((n_obj, D_REL), dtype=np.float32)
+    rel = np.zeros((n_obj, D_REL_V3), dtype=np.float32)
     for i, o in enumerate(geo.objects):
-        dx, dy = (o.pose[0] - tx) / scale, (o.pose[1] - ty) / scale
-        rel[i, :6] = [dx, dy, math.hypot(dx, dy), o.area, *_sin_cos(o.pose[2])]
-        rel[i, 6] = 1.0 if o.concave else 0.0
-        rel[i, 7] = float(o.area) / (target.area if target else 1.0)
+        rel[i] = [o.area, *_sin_cos(o.pose[2])]
 
     # --- candidate tokens ---------------------------------------------------
-    goal_objs = spec.goal_objects(canon)
     op_ids: list[list[int]] = []
     arg_tags: list[list[list[int]]] = []
     success: list[Optional[bool]] = []
@@ -596,7 +618,7 @@ def build_v3_example(
     if ctx and not hide:
         _hint, _proof = records_for_evidence(canon, ctx, spec)
         obj_evidence = _object_evidence(
-            ctx, subsets, [o.name for o in geo.objects], _hint, _proof
+            ctx, subsets, [o.name for o in geo.objects], _hint, _proof, max_len=max_len
         )
 
     return (
@@ -605,7 +627,7 @@ def build_v3_example(
             obj_boundary,
             obj_pose,
             rel,
-            obj_is_target,
+            obj_is_goal,
             op_ids,
             arg_tags,
             success,

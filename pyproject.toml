@@ -17,6 +17,7 @@ dependencies = [
    "types-seaborn>=0.13.2",
    "scikit-learn",
    "torch",
+   "torch_geometric",  # LAZY baseline GAT policy (GATv2Conv); see baselines/lazy/
    "pymunk==7.1.0",
    "scipy-stubs",
    "hydra-joblib-launcher",
@@ -65,7 +66,7 @@ target-version = ["py311"]
 py_version = 311
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*", "kb/*"]
+skip_glob = ["venv/*", ".venv/*", "kb/*", "**/baselines/drake-tamp/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -94,18 +95,26 @@ exclude = [
     # moment to impose strict typing on it. `domain.py`, `record.py` and the per-env
     # adapters are ours and stay checked.
     "src/alphatamp/approaches/spectre/piginet/(?!domain|record|.*_adapter)",
+    # The LAZY baseline's torch_geometric GAT stack, same treatment as PIGINet's ML
+    # modules: the env-agnostic contract files (domain, tree, feasibility) stay checked;
+    # the graph/model/dataset/rollout/train/eval modules (torch_geometric, untyped) are
+    # excluded from strict mypy. See baselines/lazy/PROVENANCE.md.
+    "src/alphatamp/approaches/spectre/baselines/lazy/(?!domain|tree|feasibility|__init__)",
     # Untracked sibling reference checkout (see .gitignore /kb/). Not part of
     # alphatamp; excluded from repo-wide `mypy .`.
     "^kb/",
+    # Vendored LAZY reference clone (py2-era; see .gitignore). Reference only.
+    "src/alphatamp/approaches/spectre/baselines/drake-tamp/",
 ]
 
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
-# `kb` = untracked sibling reference checkout (see .gitignore /kb/); keep the
-# pytest defaults and add it so `pytest . --pylint` never collects/lints it.
-norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb"]
+# `kb` = untracked sibling reference checkout (see .gitignore /kb/); `drake-tamp` = the
+# vendored LAZY reference clone (py2-era). Both are kept out so `pytest . --pylint` never
+# collects/lints them.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb", "drake-tamp"]
 
 [tool.uv.sources]
 kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }

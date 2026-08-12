@@ -63,10 +63,12 @@ _SAMPLES_PER_STEP = 5
 _MAX_TRAJECTORY_STEPS = 200
 
 
-def _config(num_buttons: int, split: str) -> CollectionConfig:
+def _config(
+    num_buttons: int, split: str, env_variant: str = ENV_VARIANT
+) -> CollectionConfig:
     return CollectionConfig(
         env_id=env_id(num_buttons),
-        env_variant=ENV_VARIANT,
+        env_variant=env_variant,
         model_name="stickbutton2d",
         model_kwargs={"num_buttons": num_buttons},
         split=split,  # type: ignore[arg-type]
@@ -81,24 +83,26 @@ def _config(num_buttons: int, split: str) -> CollectionConfig:
     )
 
 
-def _collect_one(args: tuple[int, str, int, str]) -> dict:
+def _collect_one(args: tuple[int, str, int, str, str]) -> dict:
     """Worker: collect one problem, keep it only if some skeleton refined.
 
     Returns a verdict dict rather than raising, so one pathological problem cannot take
-    a worker down and strand the pool.
+    a worker down and strand the pool. ``env_variant`` travels in the args tuple because
+    workers are spawned (fresh module import), so a module-global override in ``main``
+    would not reach them.
     """
-    num_buttons, split, index, data_root = args
+    num_buttons, split, index, data_root, env_variant = args
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre.collect import collect_episode, episode_path
     from alphatamp.approaches.spectre.io import atomic_write_pickle_gz
 
     pid = problem_id(split, num_buttons, index)
-    path = episode_path(Path(data_root), ENV_VARIANT, split, pid)
+    path = episode_path(Path(data_root), env_variant, split, pid)
     start = time.perf_counter()
     if path.exists():
         return {"pid": pid, "kept": True, "cached": True, "index": index, "s": 0.0}
     try:
-        episode = collect_episode(_config(num_buttons, split), pid)
+        episode = collect_episode(_config(num_buttons, split, env_variant), pid)
     except BaseException as exc:  # pylint: disable=broad-exception-caught
         return {
             "pid": pid,
@@ -203,6 +207,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=30)
     ap.add_argument("--data-root", default="data/spectre")
     ap.add_argument(
+        "--env-variant",
+        default=ENV_VARIANT,
+        help="collection variant to write into (default the standard stickbutton2d_v1). "
+        "Set to a NEW variant (e.g. stickbutton2d_v2) to top up / expand a stratum "
+        "without mutating v1's frozen collection.",
+    )
+    ap.add_argument(
         "--variants",
         default=",".join(str(b) for b in BUTTON_COUNTS),
         help="button counts to collect",
@@ -243,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
 
     variants = [int(v) for v in a.variants.split(",") if v.strip()]
     splits = [s for s in a.splits.split(",") if s.strip()]
+    env_variant = a.env_variant
     overrides = dict(
         (k.strip(), int(v))
         for k, v in (p.split("=", 1) for p in a.targets.split(",") if p.strip())
@@ -262,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
 
     total = sum(s.target for s in states)
     print(
-        f"collecting {total} episodes into {ENV_VARIANT}"
+        f"collecting {total} episodes into {env_variant}"
         f" (variants {variants}, splits {splits}, {a.workers} workers)",
         flush=True,
     )
@@ -294,7 +306,13 @@ def main(argv: list[str] | None = None) -> int:
                         break
                     fut = pool.submit(
                         _collect_one,
-                        (state.num_buttons, state.split, state.next_index(), root),
+                        (
+                            state.num_buttons,
+                            state.split,
+                            state.next_index(),
+                            root,
+                            env_variant,
+                        ),
                     )
                     pending[fut] = state
                     free -= 1
@@ -321,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     # job but the last to exit -- which is the normal way this is run, since the variants
     # differ by ~2x in cost and are launched separately.
     tag = "b" + "".join(str(v) for v in variants) + "_" + "".join(s[0] for s in splits)
-    out = Path(root) / "raw" / ENV_VARIANT / f"collection_census_{tag}.json"
+    out = Path(root) / "raw" / env_variant / f"collection_census_{tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(census, indent=2))
 

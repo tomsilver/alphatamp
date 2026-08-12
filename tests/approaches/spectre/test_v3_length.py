@@ -76,8 +76,8 @@ def test_sinusoidal_model_runs_on_a_longer_plan_than_any_it_was_built_for() -> N
         obj_tags=torch.ones(b, n, dtype=torch.long),
         obj_boundary=torch.zeros(b, n, 32, 2),
         obj_pose=torch.zeros(b, n, 3),  # pose_proj is Linear(3, D_POSE)
-        obj_rel=torch.zeros(b, n, 8),
-        obj_is_target=torch.zeros(b, n),
+        obj_rel=torch.zeros(b, n, 3),  # v3 scene relation is the anchor-free triple
+        obj_is_goal=torch.zeros(b, n),
         obj_mask=torch.ones(b, n, dtype=torch.bool),
         cand_op_ids=torch.ones(b, k, ell, dtype=torch.long),
         cand_pos=torch.arange(ell).view(1, 1, ell).expand(b, k, ell).contiguous(),

@@ -124,10 +124,35 @@ PRESETS: dict[str, dict[str, str]] = {
     # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above. Pass
     # `--legacy-coverage` to train the older definition; it lands in a `_legacycov`
     # directory so the two can never overwrite each other.
+    # `--select-window 5` added 2026-08-08: the domain-agnostic (narrowed-input) model is
+    # higher-variance, and the default ma3 selection window locked onto unlucky val epochs
+    # (the s1 regression). Widening to ma5 recovers parity with the frozen baseline (5.92
+    # vs 5.78, CI includes 0) and collapses the variance -- see docs/decisions 2026-08-08.
+    # The `TrainV3Config` default stays 3 so the frozen baseline's provenance is untouched;
+    # the deployed recipe opts in here.
     "v3final": {
         "v3final": (
             "--overlap-mode jaccard --coverage-feats "
-            "--aggregate-records --evidence-attn --state-delta"
+            "--aggregate-records --evidence-attn --state-delta --select-window 5"
+        ),
+    },
+    # EMA weight-averaging arm of the deployed config, to recover the domain-agnostic
+    # (narrowed-input) model's inflated across-seed variance without touching inputs or
+    # architecture (docs/decisions 2026-08-08). Same flag set as v3final plus
+    # `--weight-avg ema`; writes `checkpoints_v3_v3ema_s{seed}` (a NEW location, so the
+    # deployed `checkpoints_v3_unified` is never touched until an arm is verified and
+    # promoted). `sb2dema` is the StickButton2D twin for the cheap variance-attribution
+    # triage. `--select-window 5` can be appended ad-hoc via `--arm` for the selector probe.
+    "v3ema": {
+        "v3ema": (
+            "--overlap-mode jaccard --coverage-feats --aggregate-records "
+            "--evidence-attn --state-delta --weight-avg ema"
+        ),
+    },
+    "sb2dema": {
+        "sb2dema": (
+            "--overlap-mode jaccard --coverage-feats --aggregate-records "
+            "--evidence-attn --state-delta --weight-avg ema"
         ),
     },
     "p4": {

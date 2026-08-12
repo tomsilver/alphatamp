@@ -115,7 +115,7 @@ class _V2Example:
     obj_boundary: np.ndarray
     obj_pose: np.ndarray
     obj_rel: np.ndarray
-    obj_is_target: np.ndarray
+    obj_is_goal: np.ndarray
     op_ids: list  # list[list[int]] per candidate
     arg_tags: list  # list[list[list[int]]]
     success: list
@@ -186,7 +186,13 @@ def build_v2_example(
         [[o.pose[0] / scale, o.pose[1] / scale, o.pose[2]] for o in geo.objects],
         dtype=np.float32,
     )
-    obj_is_target = np.array(
+    # The shared batch field is ``obj_is_goal`` (an object named by the goal). v2.2 is
+    # frozen and runs only on DD2D, where the single ``target`` *is* the sole goal object
+    # (goal ``(extracted target)``), so the stored target flag equals goal membership
+    # byte-for-byte -- proven 720/720 across every DD2D split. v3 computes true goal
+    # membership from the goal atoms; here the DD2D-equivalent flag is kept to leave the
+    # frozen baseline's inputs untouched.
+    obj_is_goal = np.array(
         [1.0 if o.is_target else 0.0 for o in geo.objects], np.float32
     )
     rel = np.zeros((n, D_REL), dtype=np.float32)
@@ -307,7 +313,7 @@ def build_v2_example(
         obj_boundary,
         obj_pose,
         rel,
-        obj_is_target,
+        obj_is_goal,
         op_ids,
         arg_tags,
         success,
@@ -341,11 +347,19 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
 
     fmax = max((len(e.fact_type_ids) for e in examples), default=0)
 
+    # ``obj_rel`` width comes from the examples, not the ``D_REL`` constant: v2.2 emits 8
+    # (target-anchored), v3 emits 3 (anchor-free), and one collator serves both. All
+    # examples in a batch share a builder and therefore a width; assert it rather than
+    # silently truncating a mismatched one to ``examples[0]``.
+    d_rel = examples[0].obj_rel.shape[-1] if examples else D_REL
+    assert all(
+        e.obj_rel.shape[-1] == d_rel for e in examples
+    ), "obj_rel width differs within a batch"
     obj_tags = np.zeros((b, n), np.int64)
     obj_boundary = np.zeros((b, n, p, 2), np.float32)
     obj_pose = np.zeros((b, n, 3), np.float32)
-    obj_rel = np.zeros((b, n, D_REL), np.float32)
-    obj_is_target = np.zeros((b, n), np.float32)
+    obj_rel = np.zeros((b, n, d_rel), np.float32)
+    obj_is_goal = np.zeros((b, n), np.float32)
     obj_mask = np.zeros((b, n), bool)
     cand_op_ids = np.zeros((b, k, ell), np.int64)
     cand_arg_tags = np.zeros((b, k, ell, max_arity), np.int64)
@@ -371,7 +385,7 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         obj_boundary[bi, :no] = e.obj_boundary
         obj_pose[bi, :no] = e.obj_pose
         obj_rel[bi, :no] = e.obj_rel
-        obj_is_target[bi, :no] = e.obj_is_target
+        obj_is_goal[bi, :no] = e.obj_is_goal
         obj_mask[bi, :no] = True
         aux_nec[bi, :no] = e.aux_necessary
         aux_rel[bi, :no] = e.aux_relevant
@@ -401,7 +415,7 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
         obj_boundary=t(obj_boundary),
         obj_pose=t(obj_pose),
         obj_rel=t(obj_rel),
-        obj_is_target=t(obj_is_target),
+        obj_is_goal=t(obj_is_goal),
         obj_mask=t(obj_mask),
         cand_op_ids=t(cand_op_ids),
         cand_arg_tags=t(cand_arg_tags),

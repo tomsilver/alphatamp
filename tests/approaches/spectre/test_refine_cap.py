@@ -103,11 +103,14 @@ def test_deployed_cap_constant_is_positive() -> None:
 # --------------------------------------------------------------------------- #
 _V4 = _ROOT / "data" / "spectre" / "raw" / "dd2d_v4" / "test"
 _VOCAB = _ROOT / "data" / "spectre" / "derived" / "dd2d_v4" / "train_vocab.json"
+# The deployed DD2D checkpoint. Repointed 2026-08-08 from `checkpoints_v3_v3final_s0`:
+# the cap regimes (sub-cap stop vs slow-feasible stop) need a trained model's realistic
+# picks, and this is the canonical deployed dir, now the width-3 narrowed model.
 _CKPT = (
     _ROOT
     / "data"
     / "spectre"
-    / "checkpoints_v3_v3final_s0"
+    / "checkpoints_v3_unified"
     / "dd2d_v4"
     / "seed_0"
     / "best.pt"

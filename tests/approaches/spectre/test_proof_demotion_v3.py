@@ -284,23 +284,19 @@ def test_apply_demotion_false_withholds_only_the_offset() -> None:
     from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
     from alphatamp.approaches.spectre.vocab import Vocab
 
-    ckpt = (
-        _ROOT
-        / "data"
-        / "spectre"
-        / "checkpoints_v3_g6b_recON_ovON"
-        / "dd2d_v4"
-        / "seed_0"
-        / "best.pt"
-    )
-    if not ckpt.is_file():
-        pytest.skip("G6b checkpoint absent")
     vocab = Vocab.from_json(
         _ROOT / "data" / "spectre" / "derived" / "dd2d_v4" / "train_vocab.json"
     )
-    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    # A fresh (untrained) model, seeded for determinism. This asserts rollout *mechanics*
+    # -- the offset is either advanced-and-acted-on or advanced-only -- which do not depend
+    # on the weights: the demotion offset is 1e6, so it flips whatever argmax it touches
+    # regardless of the logits. A trained checkpoint was previously loaded, but a
+    # pre-narrowing one is width-8 and cannot forward on the width-3 scene the rollout now
+    # tensorizes; the mechanics are what this test is about, so a synthetic model is the
+    # honest fixture.
+    torch.manual_seed(0)
     model = SpectreV3Model(
-        n_ops=int(ck["n_ops"]),
+        n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
         cfg=V3Config(
             n_overlap_feats=2,
@@ -309,9 +305,7 @@ def test_apply_demotion_false_withholds_only_the_offset() -> None:
             dropout_p=0.0,
             use_records=True,
         ),
-    )
-    model.load_state_dict(ck["state_dict"], strict=True)
-    model.eval()
+    ).eval()
 
     diverged = 0
     # Stride, never truncate: episodes are stored in seed order and the collector fills

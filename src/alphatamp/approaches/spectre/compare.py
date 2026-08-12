@@ -81,12 +81,23 @@ SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
 # (including off-pool refined attempts) is precomputed at cache-build time and read back
 # verbatim -- same record shape as an adaptive trace (`fp` + `order`), so the seed-
 # averaging reader handles it unchanged, and ``order`` carries ``-1`` for an off-pool
-# attempt. `VLMPlan-32B` is the local Qwen arm; `VLMPlan-GPT5.6` the frontier
-# (gpt-5.6-luna) arm. One subdir per model -- a cache dir is one method row.
+# attempt. `VLMPlan-32B` is the local Qwen arm; `VLMPlan-GPT5.6` the frontier arm
+# (gpt-5.6-terra, replacing the weaker gpt-5.6-luna and generated with the gripper-geometry
+# disclosure -- prompts/PROVENANCE.md deviation 9). One subdir per model -- a cache dir is
+# one method row.
 SEQUENCE_METHODS: dict[str, str] = {
     "VLMPlan-32B": "vlmplan_qwen32b",
-    "VLMPlan-GPT5.6": "vlmplan_luna",
+    "VLMPlan-GPT5.6": "vlmplan_terra",
 }
+
+# LAZY (Khodeir et al) — a learned *adaptive* pool re-ranker (GAT policy π × online
+# feasibility ϕ, π̄=π·ϕ/Σ). Registered as its own family, not in SPECTRE_FAMILIES (whose
+# 4-tuple forces a static twin) and not in SEQUENCE_METHODS (whose off-pool, order=-1
+# semantics misdescribe a pool ranker): LAZY ranks the pool and its `order` is pool
+# indices. One row, adaptive-only. See baselines/lazy/ and decisions/07 2026-08-09.
+LAZY_ADAPTIVE_METHOD = "LAZY-adaptive"
+LAZY_ADAPTIVE_DIR = "lazy_adaptive"
+LAZY_FAMILIES: list[tuple[str, str]] = [(LAZY_ADAPTIVE_METHOD, LAZY_ADAPTIVE_DIR)]
 
 # Presentation order used by the notebook.
 METHOD_ORDER: list[str] = [
@@ -94,6 +105,7 @@ METHOD_ORDER: list[str] = [
     "PIGINet",
     SPECTRE_ADAPTIVE_METHOD,
     SPECTRE_STATIC_METHOD,
+    LAZY_ADAPTIVE_METHOD,
     *SEQUENCE_METHODS,
 ]
 
@@ -288,6 +300,7 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
         seeded.append((adap_m, adap_d, True))
         seeded.append((stat_m, stat_d, False))
     seeded.extend((m, d, True) for m, d in SEQUENCE_METHODS.items())
+    seeded.extend((m, d, True) for m, d in LAZY_FAMILIES)  # adaptive pool ranker
 
     for method, subdir, adaptive in seeded:
         parent = cache_dir / subdir
@@ -361,6 +374,16 @@ def load_fp_records(cache_dir: Path | str) -> list[dict]:
                 {"problem_id": pid, "stratum": stratum, "method": method, "fp": fp}
             )
 
+    for method, subdir in LAZY_FAMILIES:  # adaptive pool ranker, seed-averaged
+        parent = cache_dir / subdir
+        if not parent.is_dir():
+            continue
+        by_pid = _spectre_seed_mean(parent, is_adaptive=True)
+        for pid, (stratum, fp) in by_pid.items():
+            records.append(
+                {"problem_id": pid, "stratum": stratum, "method": method, "fp": fp}
+            )
+
     return records
 
 
@@ -422,15 +445,16 @@ def merge_time_records(
     legacy: list[dict],
     legacy_methods: Sequence[str],
 ) -> list[dict]:
-    """Graft the §2b timing rows for ``legacy_methods`` from ``legacy`` onto ``primary``.
+    """Graft the §2b timing rows for ``legacy_methods`` from ``legacy`` onto
+    ``primary``.
 
     The timing analog of :func:`merge_collections`: :func:`load_time_records_per_seed`
     reads a single cache dir, but an env whose SPECTRE rows are grafted from a legacy
-    collection (``EnvSpec.legacy_only``) needs those methods' *timing* from the legacy cache
-    too. Keep every primary row; append a legacy row only when its ``method`` is one of
-    ``legacy_methods`` and is not already present natively. A no-op when ``legacy_methods``
-    names nothing that carries timing (e.g. DD2D's ``VLMPlan-32B``, absent from
-    ``TIMED_METHODS``).
+    collection (``EnvSpec.legacy_only``) needs those methods' *timing* from the legacy
+    cache too. Keep every primary row; append a legacy row only when its ``method`` is
+    one of ``legacy_methods`` and is not already present natively. A no-op when
+    ``legacy_methods`` names nothing that carries timing (e.g. DD2D's ``VLMPlan-32B``,
+    absent from ``TIMED_METHODS``).
     """
     want = set(legacy_methods)
     have = {r["method"] for r in primary}
@@ -651,8 +675,8 @@ def load_vlmplan_attempts(
     cover every pid). The returned ``attempts`` each carry the full ``steps`` (so the
     env's ``plan_label`` can render the actual plan), the feasibility ``label``,
     ``in_pool`` / ``source`` (a VLM proposal vs a published-order fill) and ``round``.
-    Unlike the pool methods, this is the sequence the model *itself* produced — there is no
-    shared pool to index, which is the point of showing it separately.
+    Unlike the pool methods, this is the sequence the model *itself* produced — there is
+    no shared pool to index, which is the point of showing it separately.
     """
     path = Path(cache_dir) / subdir / f"seed_{int(seed)}" / f"{int(problem_id)}.json"
     if not path.is_file():
@@ -1126,7 +1150,8 @@ TIMED_METHODS: dict[str, str] = {
     "PIGINet": "piginet",
     SPECTRE_STATIC_METHOD: SPECTRE_STATIC_DIR,
     SPECTRE_ADAPTIVE_METHOD: SPECTRE_ADAPTIVE_DIR,
-    "VLMPlan-GPT5.6": "vlmplan_luna",
+    LAZY_ADAPTIVE_METHOD: LAZY_ADAPTIVE_DIR,
+    "VLMPlan-GPT5.6": "vlmplan_terra",
 }
 
 
@@ -1233,6 +1258,50 @@ def _per_seed_means(recs: list[dict], seeds: list, key: str) -> list[float]:
     return out
 
 
+def _record_total_s(
+    r: dict, plan_gen_s: dict[int, float], use_capped: bool = True
+) -> float:
+    """Wall-clock-to-first-success seconds for one per-problem time record.
+
+    ``plan_gen + refine + infer``. A sequence method (VLMPlan) has no pool to enumerate,
+    so its ``infer_s`` already IS its plan generation and the pool ``plan_gen_s``
+    constant is not added (it would double-count). ``use_capped`` picks the per-
+    candidate-cap refinement (the deployed configuration) over the uncapped sum. This is
+    the single definition of the total, shared by :func:`build_time_table` and
+    :func:`per_problem_time_records`, so the aggregate table and the per-problem view
+    cannot drift.
+    """
+    if r["method"] in SEQUENCE_METHODS:
+        plan_gen = 0.0
+    else:
+        plan_gen = plan_gen_s.get(r["stratum"], 0.0)
+    refine_key = "refine_s_capped" if use_capped else "refine_s"
+    return plan_gen + r.get(refine_key, r["refine_s"]) + r["infer_s"]
+
+
+def per_problem_time_records(
+    records: list[dict], plan_gen_s: dict[int, float], use_capped: bool = True
+) -> list[dict]:
+    """Per-``(method, seed, problem)`` wall-clock-to-first-success total seconds.
+
+    ``{method, seed, problem_id, stratum, total_s}`` per input record -- the wall-clock
+    analog of the notebook's per-problem FP frame. ``total_s`` comes from
+    :func:`_record_total_s`, the same formula :func:`build_time_table` aggregates, so a
+    per-problem scatter and the §2b table share one definition. Collapse seeds
+    downstream (mean per ``(method, problem_id)``) exactly as the FP frame does.
+    """
+    return [
+        {
+            "method": r["method"],
+            "seed": r["seed"],
+            "problem_id": r["problem_id"],
+            "stratum": r["stratum"],
+            "total_s": _record_total_s(r, plan_gen_s, use_capped),
+        }
+        for r in records
+    ]
+
+
 def build_time_table(
     records: list[dict], plan_gen_s: dict[int, float], use_capped: bool = True
 ) -> tuple[list[str], list[list[str]], list[dict]]:
@@ -1248,9 +1317,10 @@ def build_time_table(
     notebook can price the cap's (small) FP cost.
     """
     refine_key = "refine_s_capped" if use_capped else "refine_s"
-    # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already IS its
-    # plan generation; adding the pool `plan_gen_s` constant would double-count. Pool
-    # rankers pay plan_gen (enumerate) + infer (score) + refine.
+    # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already IS
+    # its plan generation; adding the pool `plan_gen_s` constant would double-count. Pool
+    # rankers pay plan_gen (enumerate) + infer (score) + refine. `total_s` comes from the
+    # shared `_record_total_s`, so this table and the per-problem scatter cannot drift.
     aug = [
         {
             **r,
@@ -1260,15 +1330,7 @@ def build_time_table(
                 if r["method"] in SEQUENCE_METHODS
                 else plan_gen_s.get(r["stratum"], 0.0)
             ),
-            "total_s": (
-                (
-                    0.0
-                    if r["method"] in SEQUENCE_METHODS
-                    else plan_gen_s.get(r["stratum"], 0.0)
-                )
-                + r.get(refine_key, r["refine_s"])
-                + r["infer_s"]
-            ),
+            "total_s": _record_total_s(r, plan_gen_s, use_capped),
         }
         for r in records
     ]

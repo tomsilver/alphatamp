@@ -45,11 +45,12 @@ def _default_word_idx() -> dict[str, int]:
 def precompute_clip_cache(
     data_root, split, encoders, cache_dir, progress=True, domain=None
 ) -> str:
-    """Frozen CLIP-512 per (problem, object), written once to ``<cache>/<split>/<pid>.npz``.
+    """Frozen CLIP-512 per (problem, object), written once to
+    ``<cache>/<split>/<pid>.npz``.
 
     The crops come from the domain, so an environment that stores rendered PNGs and one
-    that rasterises from stored geometry both land in the same cache format. An object the
-    domain has no crop for gets a zero vector, which is what the DD2D path did for a
+    that rasterises from stored geometry both land in the same cache format. An object
+    the domain has no crop for gets a zero vector, which is what the DD2D path did for a
     missing file.
     """
     dom = domain if domain is not None else DD2DDomain(data_root)
@@ -177,6 +178,20 @@ def _subsample(recs, k: int, rng):
 # --------------------------------------------------------------------------- #
 # dataset (grouped by problem)
 # --------------------------------------------------------------------------- #
+def _pid_stratum(pid) -> int:
+    """Stratum index (0-3) recovered from a problem id, matching ``compare.stratum_of``.
+
+    Both DD2D (``dd2d_..._s<seed>``) and StickButton2D (``sb2d_s<pid>``) ids end in
+    ``_s<int>``. StickButton2D examples carry no ``stratum`` in provenance (only
+    ``num_buttons``), so this pid-derived value is the one uniform source the held-out
+    training filter and the eval per-stratum breakdown both agree on.
+    """
+    # Local import: ``compare`` imports ``piginet.eval``, so a top-level import is circular.
+    from alphatamp.approaches.spectre.compare import stratum_of  # noqa: PLC0415
+
+    return stratum_of(int(str(pid).rsplit("_s", 1)[-1]))
+
+
 class PIGINetDataset(Dataset):
     def __init__(
         self,
@@ -188,6 +203,7 @@ class PIGINetDataset(Dataset):
         problem_ids=None,
         seed=0,
         domain=None,
+        keep_strata=None,
     ):
         self.n_max = n_max
         self.k = subsample_k
@@ -196,12 +212,19 @@ class PIGINetDataset(Dataset):
         self.domain = domain if domain is not None else DD2DDomain(data_root)
         self.word_idx = {w: i for i, w in enumerate(self.domain.vocab)}
         keep = None if problem_ids is None else set(problem_ids)
+        # Held-out-stratum training: keep only problems whose pid-derived stratum index is
+        # in ``keep_strata`` (0-3). ``None`` keeps every stratum, so the default path is
+        # unchanged. Stratum comes from the pid (via ``_pid_stratum``), not provenance,
+        # because SB2D examples carry no ``stratum`` field -- deriving it uniformly is what
+        # makes the filter correct on both environments.
+        keep_s = None if keep_strata is None else set(keep_strata)
         self.groups = [
             g
             for g in (
                 self._build_group(pid, recs)
                 for pid, recs in self.domain.problems(split)
-                if keep is None or pid in keep
+                if (keep is None or pid in keep)
+                and (keep_s is None or _pid_stratum(pid) in keep_s)
             )
             if g is not None
         ]

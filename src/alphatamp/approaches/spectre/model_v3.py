@@ -37,6 +37,7 @@ from alphatamp.approaches.spectre.model_v2 import (
     D_DESCRIPTOR,
     D_POSE,
     D_REL,
+    D_REL_V3,
     D_TAG,
     MAX_TAGS_DEFAULT,
     AuxHead,
@@ -375,10 +376,13 @@ class SceneEncoderV3(SceneEncoder):
     """
 
     def __init__(
-        self, max_tags: int = MAX_TAGS_DEFAULT, dropout_p: float = DROPOUT
+        self,
+        max_tags: int = MAX_TAGS_DEFAULT,
+        dropout_p: float = DROPOUT,
+        d_rel: int = D_REL_V3,
     ) -> None:
-        super().__init__(max_tags, dropout_p)
-        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + D_REL + 1 + N_OBJ_EVIDENCE
+        super().__init__(max_tags, dropout_p, d_rel=d_rel)
+        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + d_rel + 1 + N_OBJ_EVIDENCE
         self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
 
     def forward(self, batch: SpectreV2Batch) -> Tensor:
@@ -386,7 +390,7 @@ class SceneEncoderV3(SceneEncoder):
         desc = self.footprint(batch.obj_boundary, batch.obj_mask)
         pose = self.pose_proj(batch.obj_pose)
         rel = self.rel_proj(batch.obj_rel)
-        tgt = batch.obj_is_target.unsqueeze(-1)
+        tgt = batch.obj_is_goal.unsqueeze(-1)
         ev = getattr(batch, "obj_evidence", None)
         if ev is None:
             ev = torch.zeros(
@@ -448,6 +452,15 @@ class V3Config:
     n_prior_feats: int = 0
     max_tags: int = MAX_TAGS_DEFAULT
     dropout_p: float = DROPOUT
+    # Scene-relation width: 3 for deployed v3 (the anchor-free ``[area, sinθ, cosθ]``
+    # triple; the target-anchored offsets, target area ratio and privileged ``concave``
+    # flag are cut -- see model_v2.D_REL_V3), 8 only in compat mode where the goal is to
+    # reload a frozen v2.2 checkpoint byte-for-byte. Unlike the feature switches above,
+    # narrowing is the *default*: v3 should not have to opt in to dropping inputs that do
+    # not generalize. It is persisted (it changes ``scene.rel_proj``'s shape), and it
+    # RETIRES the v2.2 rollout-equivalence oracle -- a deployed v3 no longer reads the same
+    # scene columns v2.2 did, by design (docs/decisions 2026-08-08).
+    d_rel: int = D_REL_V3
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
     use_necessity: bool = False  # G8: necessity head + its candidate features
@@ -488,6 +501,10 @@ class V3Config:
             n_prior_feats=2 if cfg.get("use_prior") else 0,
             max_tags=int(cfg.get("max_tags", MAX_TAGS_DEFAULT)),
             dropout_p=float(cfg.get("dropout_p", DROPOUT)),
+            # Compat means "reproduce this v2.2 checkpoint exactly", and v2.2's scene is
+            # the width-8 target-anchored vector. So compat keeps d_rel=8 even though
+            # deployed v3 narrows to 3 -- the loader must match the weights on disk.
+            d_rel=D_REL,
         )
 
 
@@ -509,7 +526,9 @@ class SpectreV3Model(nn.Module):
         self.cfg = cfg or V3Config()
         c = self.cfg
         scene_cls = SceneEncoderV3 if c.use_obj_evidence else SceneEncoder
-        self.scene = scene_cls(c.max_tags, c.dropout_p)
+        # Scene width comes from the config: 3 deployed, 8 in compat mode. Passed to
+        # whichever encoder is chosen -- both take ``d_rel``.
+        self.scene = scene_cls(c.max_tags, c.dropout_p, d_rel=c.d_rel)
         cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
         self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)

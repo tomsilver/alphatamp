@@ -27,12 +27,13 @@ everything.** It said "the first press is ``...FromNothing``, every later press 
 ``...FromButton``", which holds only *within* one homogeneous run of presses. Three
 things break it: ``PlaceStick`` and ``PickStickFromButton`` both re-add
 ``(AboveNoButton)``, so the press after either is ``...FromNothing`` again; and arm
-presses track ``RobotAboveButton`` while stick presses track ``StickAboveButton``, so the
-two chains can never link to each other. A model obeying the old rule emits mixed plans
-that cannot ground — round 0 of b5 problem 750000 was **19 parsed, 19 inapplicable**.
-Combined with ``PlaceStick`` being ungroundable at all (see :func:`_domain_operators`),
-both b5 pilots returned zero usable plans. A prompt that states a precondition must state
-it correctly; a *wrong* disclosure is worse than none, because the model follows it.
+presses track ``RobotAboveButton`` while stick presses track ``StickAboveButton``, so
+the two chains can never link to each other. A model obeying the old rule emits mixed
+plans that cannot ground — round 0 of b5 problem 750000 was **19 parsed, 19
+inapplicable**. Combined with ``PlaceStick`` being ungroundable at all (see
+:func:`_domain_operators`), both b5 pilots returned zero usable plans. A prompt that
+states a precondition must state it correctly; a *wrong* disclosure is worse than none,
+because the model follows it.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Sequence
 
+from kinder.envs.kinematic2d.stickbutton2d import StickButton2DEnvConfig
 from PIL.Image import Image
 
 from alphatamp.approaches.spectre.envs.stickbutton2d.geometry import robot_reach_max_y
@@ -310,6 +312,17 @@ class SB2DAdapter(EnvAdapter):
             f"this CANNOT be pressed by RobotPressButton* — it needs the stick. A "
             f"button below it can be pressed either way."
         )
+        # Deviation 8 (prompts/PROVENANCE.md). SB2D already draws the gripper and lists
+        # the stick/base sizes; this states the arm/gripper dimensions in text too, for
+        # parity with the DD2D gripper disclosure. The reach limit above stays the
+        # load-bearing number. Pulled from the env config so they can never drift.
+        cfg = StickButton2DEnvConfig()
+        header.append(
+            f"- The robot arm extends up to {float(cfg.robot_arm_length):.2f} m from its "
+            f"base and its gripper jaw is {float(cfg.robot_gripper_width):.2f} m wide; the "
+            "stick it can pick up and wield (listed below) is far longer, which is why "
+            "the stick reaches buttons beyond the arm's reach limit."
+        )
         header.append("- Each object below: name, type, centre position, size.")
 
         rows: list[str] = []
@@ -338,8 +351,8 @@ class SB2DAdapter(EnvAdapter):
 
         ``image_source="kinder_labeled"`` sends kinder's own environment pixels with
         Set-of-Mark labels overlaid (the PIGINet-parity image); the default
-        ``"schematic"`` sends the spectre-drawn vector render. Both label objects with the
-        same canonical names the prompt uses, so the model can ground either one.
+        ``"schematic"`` sends the spectre-drawn vector render. Both label objects with
+        the same canonical names the prompt uses, so the model can ground either one.
         """
         episode = _as_episode(problem)
         if not self._with_images or episode.scene_geometry is None:
@@ -359,8 +372,8 @@ class SB2DAdapter(EnvAdapter):
         """Reject anything the symbolic model says is inapplicable or goal-missing.
 
         Uses the same ``reconstruct_trajectory`` precondition check the collection's own
-        pool satisfies, so a VLM proposal is held to exactly the standard a
-        planner-emitted skeleton already meets — no more, no less.
+        pool satisfies, so a VLM proposal is held to exactly the standard a planner-
+        emitted skeleton already meets — no more, no less.
         """
         episode = _as_episode(problem)
         lifted = _lifted_by_name(episode)

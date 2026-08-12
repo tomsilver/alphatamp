@@ -93,7 +93,7 @@ def manipulated(skeleton: SkeletonRecord, goal_objs: frozenset[str]) -> frozense
     Goal objects are excluded because they appear in *every* candidate (DD2D's target is
     retrieved by all of them), so including them would add a constant to every set --
     harmless for the subset relations, but it would make the necessity head spend a
-    logit predicting a label that is always 1 and already stated by ``obj_is_target``.
+    logit predicting a label that is always 1 and already stated by ``obj_is_goal``.
 
     Verified equal to DD2D's hand-written ``place-buffer`` filter on **120000/120000**
     dd2d_v3 skeletons, so replacing the literal is a proof, not a hope.

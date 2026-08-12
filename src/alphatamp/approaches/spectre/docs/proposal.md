@@ -107,23 +107,48 @@ problems, so a zero-shot VLM planner (the KinDER LLMPlan/VLMPlan convention) is 
 comparison method alongside PIGINet (trained low-level) and SPECTRE (trained
 abstract-first) — `vlmplan/`, wired into both the DD2D and StickButton2D comparisons; see
 `decisions.md` 2026-07-24 for the protocol. **The headline arm is a frontier VLM,
-`gpt-5.6-luna` over the OpenAI Responses API** (2026-08-03), so the corner is not
-dismissible as "you only tried a weak local model"; the earlier local Qwen arms are kept
-for a local-vs-frontier contrast. It is framed as **a corner of the grid, not a defeated
-rival**, and it answers the reviewer-obvious "did you try just asking a VLM?" on the
-record. Three properties are load-bearing for it to be a fair point rather than a straw
-man: it never sees refinement outcomes (static, so it is not competing with SPECTRE's
-adaptivity); it is given the operator semantics and the object-centric geometry that every
-other method reads from the domain and the state — on StickButton2D that means kinder's
-own scene render with Set-of-Mark object labels overlaid, because kinder draws every
-unpressed button as an identical unlabeled disc; and because it *generates* plans instead
-of reordering the candidate pool, its off-pool proposals are refined for real and charged
-as attempts. Its wall-clock is now reported too (generation-dominated — the Responses
-round-trip + reasoning dwarfs the sub-second refinements). Empirically it is a **genuine
-planner on the relational StickButton2D** but **weak on the DD2D packing negative
-control** (it over-stages; its proposals fail the geometric refinement) — see
-[`notebook/07` 2026-08-03](notebook/07-stickbutton2d.md). Deviations from the KinDER
-template are enumerated in `vlmplan/prompts/PROVENANCE.md` for the appendix.
+`gpt-5.6-terra` over the OpenAI Responses API** (2026-08-08, replacing the weaker
+`gpt-5.6-luna`), so the corner is not dismissible as "you only tried a weak local model";
+the earlier local Qwen arms are kept for a local-vs-frontier contrast. It is framed as **a
+corner of the grid, not a defeated rival**, and it answers the reviewer-obvious "did you try
+just asking a VLM?" on the record. Three properties are load-bearing for it to be a fair
+point rather than a straw man: it never sees refinement outcomes (static, so it is not
+competing with SPECTRE's adaptivity); it is given the operator semantics and the
+object-centric geometry that every other method reads from the domain and the state —
+including, since 2026-08-08, the **gripper's own dimensions** (finger size, aperture; the
+fixed domain constant the trained methods absorb from labels — `PROVENANCE.md` deviation 9),
+and on StickButton2D kinder's own scene render with Set-of-Mark object labels overlaid,
+because kinder draws every unpressed button as an identical unlabeled disc; and because it
+*generates* plans instead of reordering the candidate pool, its off-pool proposals are
+refined for real and charged as attempts. Its wall-clock is now reported too
+(generation-dominated — the Responses round-trip + reasoning dwarfs the sub-second
+refinements). Empirically, terra + the gripper disclosure roughly **halve** the earlier luna
+FP on both environments (**SB2D 11.85→6.42, DD2D 62.98→35.23**): it is a **genuine planner on
+the relational StickButton2D** (self-solves 39/40, beats the naive order across the board, but
+still ~3–4× behind the learned rankers) yet only reaches **parity with the naive planner order
+on the DD2D packing negative control** (35.23 vs astar 34.52, bimodal — trivially-graspable
+targets solved instantly, staging problems flailed) and stays far behind the learned rankers
+there. A full-scale medium-effort DD2D arm confirmed reasoning effort does not rescue it (33.5,
+tied with low). So the stronger model does not overturn the negative control; it makes the
+bound more defensible. See [`notebook/07` 2026-08-08](notebook/07-stickbutton2d.md). Deviations
+from the KinDER template are enumerated in `vlmplan/prompts/PROVENANCE.md` for the appendix.
+
+**The learned-adaptive competitor: LAZY.** PIGINet is a *static* learned ranker; to show
+SPECTRE beats other *adaptive* methods the comparison needs a learned adaptive competitor, so
+**LAZY** (Khodeir et al, *Policy-Guided Lazy Search with Feedback*) is re-implemented over the
+fixed candidate pool as a comparison method — a GAT policy π guiding refinement order, updated
+online by feasibility statistics ϕ (`baselines/lazy/`, deviations in
+`baselines/lazy/PROVENANCE.md`; protocol
+[`decisions/07` 2026-08-09](decisions/07-stickbutton2d.md#2026-08-09-lazy-policy-guided-adaptive-baseline-added-dd2d)).
+It is wired into both the DD2D and StickButton2D figures as `LAZY-adaptive`, 3 seeds.
+Empirically it draws the **adaptive-method bar** the same way the representation story splits:
+**on DD2D (packing) both learned rankers beat it decisively** — LAZY 23.26 vs SPECTRE 5.92 /
+PIGINet 17.27 (paired CIs exclude 0), though it still beats the naive order (34.52) and VLMPlan
+(35.23), carried by s3 — **while on StickButton2D no method separates** (LAZY 1.85 ≈
+SPECTRE 1.84 ≈ PIGINet 2.28; paired CIs include 0), extending the standing SB2D non-separation
+finding to a third adaptive method. A policy-isolation diagnostic confirms the GAT policy is
+load-bearing (not just the ϕ feedback). See
+[`notebook/07` 2026-08-09](notebook/07-stickbutton2d.md#2026-08-09-lazy-baseline-results-dd2d-sb2d).
 
 ---
 
@@ -356,6 +381,39 @@ rollout performance — they are diagnostics only; never optimize for them.
   object-centric geometry, it is simply weakly weighted for ranking. See
   [`decisions/07` 2026-08-06](decisions/07-stickbutton2d.md#2026-08-06-shape-generalization-s2-deficit-collection-variance-shape)
   / [`notebook/07` 2026-08-06](notebook/07-stickbutton2d.md#2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size).*
+  *(2026-08-08: the scene inputs were then **narrowed to domain-agnostic columns** acting on
+  exactly this inertness — the target-anchored `obj_rel` offsets and the privileged `concave`
+  flag were cut, `obj_is_target` became goal-derived `obj_is_goal`, and an inference probe priced
+  the removal at Δ 0.00 FP on both deployed models. v3 stays geometry-AWARE — it still ingests
+  each object's boundary, pose and area — but only the **anchor-free** subset, so "image-free"
+  now also means target-agnostic. See
+  [`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target).)*
+  **A third generalization axis — held-out *stratum* — was added 2026-08-09.** Distinct from
+  the unseen-count/shape tests (which hold out geometry), this holds out a whole stratum from
+  *training*: SPECTRE + PIGINet trained on s0–s2 (DD2D) / b1/b2/b3 (SB2D) and evaluated on the
+  never-trained s3 / b5 (same test problems; astar + VLMPlan training-free and reused). It
+  reproduces the cross-environment story of the other two axes: **on DD2D the abstract ranker
+  generalizes and the low-level predictor collapses** — held-out s3 SPECTRE-adaptive 9.97 vs
+  PIGINet 85.89 (~9×), SPECTRE's ALL 5.35 ≈ its in-dist 5.78 while PIGINet blows out
+  17.27 → 27.88 — **and again the static representation alone is not shift-invariant** (s3 static
+  44.27 → adaptive 9.97; the failure-conditioned re-ranking recovers the win). **On SB2D the
+  advantage does not reproduce**: held-out b5 PIGINet 5.36 ≈ SPECTRE-adaptive 6.87 (PIGINet
+  marginally ahead, within seed spread), the same non-separation as in-distribution.
+  **Coherence follow-up (2026-08-10).** Read the *other* axis — subset-vs-full, "does a training
+  superset help?" — the first pass looked incoherent (subset ALL below the deployed full; SB2D
+  ranking flipped). With **matched full-strata controls** (current-code, not the frozen yardstick)
+  and a **per-stratum paired bootstrap**, that dissolves: the aggregate deltas are within noise
+  (DD2D SPECTRE ALL Δ −0.57 ns; SB2D ALL Δ ≈ 0), the held-out stratum is *directionally coherent*
+  (full ≥ subset) — significant only where the effect is large (DD2D PIGINet s3 45.20 ≪ 85.89) —
+  and the one robust effect is **trained-strata specialization** (holding out the hard stratum
+  measurably *improves* an easy one: DD2D s1, SB2D b3). SB2D's b5 train was expanded **17→100**
+  (new frozen-preserving variant `stickbutton2d_v2`) to remove the 6 %-perturbation artifact, which
+  killed the "flip." See
+  [`decisions/07` 2026-08-09](decisions/07-stickbutton2d.md#2026-08-09-held-out-stratum-generalization-train-s0-s2-b1-b3-evaluate)
+  / [`notebook/07` 2026-08-09](notebook/07-stickbutton2d.md#2026-08-09-held-out-stratum-comparison-spectre-generalizes-dd2d-s3),
+  resolved in
+  [`decisions/07` 2026-08-10](decisions/07-stickbutton2d.md#2026-08-10-held-out-stratum-anomalies-resolved-matched-controls-per-stratum)
+  / [`notebook/07` 2026-08-10](notebook/07-stickbutton2d.md#2026-08-10-held-out-vs-matched-full-controls-anomaly-confound).
 - **x₀-conditioned prior.** A PIGINet-style feasibility predictor over the
   concrete initial state as an additional scorer input — a strict
   generalization of the current deliberately x₀-free setup (writeup, Future

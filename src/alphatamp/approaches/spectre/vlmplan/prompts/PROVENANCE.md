@@ -101,6 +101,30 @@ editing the file above.
    reset actions, and gives a correct example of each of the two mixed strategies. Pinned
    by `test_vlmplan_sb2d.py::test_mixed_stick_then_arm_plan_grounds` and its converse.
 
+9. **Quantitative gripper geometry in the geometry block** (`dd2d_adapter._geometry_str`,
+   `sb2d_adapter._geometry_str`; added 2026-08-08 with the terra arm). Deviation 4 discloses
+   the domain semantics *qualitatively* ("items obstruct the gripper's access"); an input
+   audit found the prompt never gave the gripper's actual dimensions, even though DD2D
+   feasibility is decided by exactly those dimensions — whether a two-finger, 2.5×2.0 cm,
+   0.5–12 cm-aperture gripper can close on the target past its neighbours. The DD2D block now
+   states the finger size, the aperture range and the number of approach angles; the SB2D
+   block adds the arm-extension and gripper-jaw widths (its reach limit already carried the
+   operative consequence). **The numbers are imported from the env** — `envs/dd2d/dd2d/grasps.py`
+   (`FINGER_WIDTH`, `FINGER_THICK`, `MIN_APERTURE`, `MAX_APERTURE`, `N_DIRECTIONS`) and
+   `StickButton2DEnvConfig` — so they can never drift from the model the refiner enforces.
+
+   Same class as deviations 4/7/8: it **removes a handicap rather than granting an advantage**.
+   The gripper is a fixed domain constant that every trained method absorbs from labels
+   (SPECTRE from the feasibility labels, PIGINet from the same); a zero-shot VLM has no training
+   to absorb it, so withholding it is a handicap unique to this baseline. It says nothing about
+   *which* items to stage or in what order — the decision under test. Pinned by
+   `test_vlmplan.py::test_dd2d_geometry_discloses_gripper_dimensions`.
+
+   **Version note:** the **terra** arm (2026-08-08) is generated *with* this disclosure; the
+   earlier **luna** and local-Qwen arms predate it. luna is dropped as the headline row, so the
+   headline VLMPlan number is on the disclosed prompt; where the local `VLMPlan-32B` row still
+   appears it is annotated as pre-disclosure.
+
 ## Decode settings (part of reproducing a run)
 
 `temperature = 1.0` and `max_tokens = 8192`, recorded into every cache record via

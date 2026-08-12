@@ -1,0 +1,39 @@
+# VLMPlan on StickButton2D with the GPT-5.6-terra frontier VLM (OpenAI Responses API).
+# Overlay over `vlmplan.yaml`. Replaces the gpt-5.6-luna arm as the paper's VLMPlan row
+# (terra is the stronger tier; see prompts/PROVENANCE.md deviation 8 and
+# docs/decisions/07-stickbutton2d.md).
+#
+#   export OPENAI_API_KEY=sk-...            # a REAL key; this arm is billed
+#   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_terra
+#   python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_terra
+#
+# Runs on `stickbutton2d_v1_kinder` so the pixels the VLM sees come from kinder's own
+# renderer (PIGINet-parity), NOT the schematic. But kinder draws every unpressed button as
+# an identical unlabeled red disc, so `image_source: kinder_labeled` overlays Set-of-Mark
+# object labels (the canonical `circle_N`/`rectangle_N`/`crv_robot_N` names, matching the
+# prompt) on those real pixels — without them a VLM cannot tell one button from another.
+defaults:
+  - vlmplan
+  - override env: stickbutton2d_v1_kinder
+  - _self_
+
+split: "test"
+n_problems: 0
+stratified_per_stratum: 10   # 40 problems total, 10/stratum; stride, never truncate
+run: "sb2d_terra"
+cache_subdir: "vlmplan_terra"
+image_source: "kinder_labeled"
+
+model:
+  backend: "openai_responses"
+  model_name: "gpt-5.6-terra"
+  base_url: "https://api.openai.com/v1"
+  cache_path: "data/spectre/derived/${env.env_variant}/vlmplan_terra_cache.db"
+  decode:
+    temperature: 1.0
+    # SB2D prompts invite longer reasoning (reach, sweep order, chaining) than DD2D, so
+    # keep the generous cap. -> max_output_tokens; watch `n_truncated`.
+    max_tokens: 16384
+    # Effort chosen from the low-vs-medium pilot (see the DD2D terra config).
+    reasoning:
+      effort: "low"

@@ -56,15 +56,6 @@ from alphatamp.approaches.spectre.vocab import Vocab
 _ROOT = Path(__file__).resolve().parents[3]
 _V4 = _ROOT / "data" / "spectre" / "raw" / "dd2d_v4" / "test"
 _VOCAB = _ROOT / "data" / "spectre" / "derived" / "dd2d_v4" / "train_vocab.json"
-_CKPT = (
-    _ROOT
-    / "data"
-    / "spectre"
-    / "checkpoints_v3_v3final_s0"
-    / "dd2d_v4"
-    / "seed_0"
-    / "best.pt"
-)
 
 _needs_data = pytest.mark.skipif(not _V4.is_dir(), reason="dd2d_v4 collection absent")
 
@@ -213,14 +204,64 @@ def test_zero_init_delta_branch_is_a_functional_no_op_at_init() -> None:
     assert torch.equal(logits_off[finite], logits_on[finite])
 
 
-@pytest.mark.skipif(not _CKPT.is_file(), reason="v3 deployed checkpoint absent")
-def test_state_delta_off_loads_the_deployed_checkpoint_strictly() -> None:
-    """The real 6-seed baseline artifact still loads, so it can still be re-scored."""
-    from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint
+def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> None:
+    """A state-delta-off checkpoint round-trips: loads strictly, no ``delta_proj``.
 
-    model, deploy = load_v3_checkpoint(_CKPT, _vocab(), "cpu")
+    Self-contained (saved through ``asdict(TrainV3Config)`` like ``train_v3``) rather than
+    reading a disk artifact -- a pre-narrowing width-8 checkpoint no longer loads by
+    design, and the narrowing is orthogonal to what this asserts (that state-delta OFF
+    yields a records encoder without the delta branch).
+    """
+    from dataclasses import asdict
+
+    import torch
+
+    from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint
+    from alphatamp.approaches.spectre.model_v3 import (
+        N_OVERLAP_V3,
+        SpectreV3Model,
+        V3Config,
+    )
+    from alphatamp.approaches.spectre.train_v3 import TrainV3Config
+
+    vocab = _vocab()
+    cfg = TrainV3Config(
+        overlap_mode="jaccard",
+        use_overlap=True,
+        coverage_feats=True,
+        aggregate_records=True,
+        use_records=True,
+        evidence_attn=True,
+        use_state_delta=False,
+    )
+    model = SpectreV3Model(
+        n_ops=len(vocab.operators),
+        max_arity=vocab.max_operator_arity,
+        cfg=V3Config(
+            n_overlap_feats=N_OVERLAP_V3,
+            n_prior_feats=0,
+            d_rel=cfg.d_rel,
+            use_records=True,
+            evidence_attn=True,
+            coverage_feats=True,
+            use_state_delta=False,
+            n_predicates=len(vocab.predicates),
+            max_pred_arity=vocab.max_predicate_arity,
+        ),
+    )
+    ckpt = tmp_path / "best.pt"
+    torch.save(
+        {
+            "cfg": asdict(cfg),
+            "n_ops": len(vocab.operators),
+            "state_dict": model.state_dict(),
+        },
+        ckpt,
+    )
+
+    loaded, deploy = load_v3_checkpoint(ckpt, vocab, "cpu")
     assert deploy["state_delta"] is False
-    assert model.records is not None and model.records.delta_proj is None
+    assert loaded.records is not None and loaded.records.delta_proj is None
 
 
 # ------------------------------------------------------------------------- semantics

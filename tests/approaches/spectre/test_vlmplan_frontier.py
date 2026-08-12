@@ -1,9 +1,9 @@
 """Tests for the frontier-VLM (gpt-5.6-luna) VLMPlan additions.
 
 Covers the env-agnostic pieces that do not need a model or kinder: the per-env plan
-formatters (the ``retrieve ?`` inspector bug), stratified problem selection (the
-stride-never-truncate trap), the Responses-API usage normalisation, the wall-clock
-capped-refinement accounting, and the method registration.
+formatters (the ``retrieve ?`` inspector bug), stratified problem selection (the stride-
+never-truncate trap), the Responses-API usage normalisation, the wall-clock capped-
+refinement accounting, and the method registration.
 """
 
 from __future__ import annotations
@@ -46,14 +46,16 @@ def test_dd2d_plan_label() -> None:
 
 
 def test_every_env_has_a_plan_label() -> None:
-    """A registered environment must format its own plans (else the inspector breaks)."""
+    """A registered environment must format its own plans (else the inspector
+    breaks)."""
     for spec in compare_envs.ENVS.values():
         assert spec.plan_label is not None
         assert callable(spec.plan_label)
 
 
 def test_stratified_selection_balances_and_strides() -> None:
-    """``_stratified`` takes ``per_stratum`` from each stratum, not the first N (band)."""
+    """``_stratified`` takes ``per_stratum`` from each stratum, not the first N
+    (band)."""
     # 4 strata x 25 pids in the DD2D test band, in problem-id order.
     eps = [
         SimpleNamespace(
@@ -135,9 +137,9 @@ def test_fp_refine_capped_abandons_slow_feasible() -> None:
 
 
 def test_frontier_arm_is_registered() -> None:
-    """The luna arm is a sequence method and carries wall-clock timing."""
-    assert compare.SEQUENCE_METHODS.get("VLMPlan-GPT5.6") == "vlmplan_luna"
-    assert compare.TIMED_METHODS.get("VLMPlan-GPT5.6") == "vlmplan_luna"
+    """The frontier arm (gpt-5.6-terra) is a sequence method and carries timing."""
+    assert compare.SEQUENCE_METHODS.get("VLMPlan-GPT5.6") == "vlmplan_terra"
+    assert compare.TIMED_METHODS.get("VLMPlan-GPT5.6") == "vlmplan_terra"
     assert "VLMPlan-GPT5.6" in compare.METHOD_ORDER
 
 
@@ -183,7 +185,8 @@ def test_build_time_table_zeroes_plan_gen_for_sequence_methods() -> None:
 
 
 def test_build_time_table_reports_per_component_std() -> None:
-    """`infer_std`/`refine_std` are each component's across-seed spread; NaN at 1 seed."""
+    """`infer_std`/`refine_std` are each component's across-seed spread; NaN at 1
+    seed."""
     records = [
         # a 2-seed pool method: inference 0.4/0.6, refinement 1.0/2.0 across seeds
         {

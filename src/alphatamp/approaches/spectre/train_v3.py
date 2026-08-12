@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import copy
 import json
 import math
 import os
@@ -57,6 +58,7 @@ from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
+from alphatamp.approaches.spectre.model_v2 import D_REL_V3
 from alphatamp.approaches.spectre.model_v3 import (
     N_OVERLAP_V3,
     SpectreV3Model,
@@ -121,6 +123,12 @@ class TrainV3Config:
     # step,
     # as the delta from s_0 (which atoms the prefix added, which it deleted).
     use_state_delta: bool = False
+    # Scene-relation width, persisted so ``load_v3_checkpoint`` reloads the right shape.
+    # Fixed at the deployed 3 (the anchor-free triple); a field only so it round-trips
+    # through the saved cfg and a checkpoint predating the narrowing (no key -> 8-wide)
+    # fails to load rather than scoring the un-narrowed model. See docs/decisions
+    # 2026-08-08.
+    d_rel: int = D_REL_V3
     # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
     # evidence from 30% of the rest, so >half of training carries no evidence -- while a
     # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
@@ -133,6 +141,25 @@ class TrainV3Config:
     # this is neither: it decides which episodes exist during training, exactly as the
     # proposal's "train s0-s2, deploy s3" protocol (§7.4 A4) requires.
     train_strata: tuple[int, ...] = ()
+    # Weight averaging for lower-variance deployment. "none" | "ema". This is a training
+    # *process* lever, not an input or architecture switch: it changes which weights are
+    # saved, never what the model contains or what `build_v3_example` emits. OFF ("none")
+    # never constructs the EMA shadow and takes the current code path byte-for-byte (the
+    # D-8 exact-absence discipline), so `weight_avg="none"` runs are bit-identical to
+    # pre-change training. Added 2026-08-08 to recover the domain-agnostic (narrowed-input)
+    # model's across-seed variance without touching inputs/architecture -- the removed
+    # scene columns were inference-inert (probe Δ0.00) and the best narrowed seed matches
+    # the baseline, so the gap is optimization variance, which EMA targets directly.
+    weight_avg: str = "none"
+    # Per-optimizer-step EMA decay; effective averaging window ~ 1/(1-decay) steps. 0.999
+    # over the post-warmup tail is a fine-grained local average in the single basin the
+    # cosine-to-zero LR settles into. On a tiny dataset (few steps/epoch, e.g. SB2D) drop
+    # toward 0.99 if the EMA barely separates from the raw model.
+    ema_decay: float = 0.999
+    # Epoch at which the EMA shadow is (re-)seeded from the live weights and updates begin.
+    # Default = warmup_epochs so the shadow never averages in the random init or the
+    # high-LR warmup iterates.
+    ema_start_epoch: int = 2
 
 
 class SpectreV3Dataset(Dataset):
@@ -329,7 +356,25 @@ def deployed_val_fp(
     return float(np.mean(fps)) if fps else float("inf")
 
 
-def _run_epoch(model, loader, device, wl_weight: float, opt=None) -> float:
+def _ema_update(ema, model, decay: float) -> None:
+    """In-place EMA of ``model``'s weights into ``ema``.
+
+    Float tensors decay toward the live weights; the rare non-float tensor (none exist in
+    this LayerNorm-only model today) is copied verbatim so the shadow stays a valid,
+    loadable state dict. Called only when EMA is enabled; the ``None`` guard in
+    :func:`_run_epoch` keeps the OFF path bit-identical to pre-change training.
+    """
+    with torch.no_grad():
+        for e, p in zip(ema.state_dict().values(), model.state_dict().values()):
+            if e.is_floating_point():
+                e.mul_(decay).add_(p.detach(), alpha=1.0 - decay)
+            else:
+                e.copy_(p)
+
+
+def _run_epoch(
+    model, loader, device, wl_weight: float, opt=None, ema=None, ema_decay: float = 0.0
+) -> float:
     train = opt is not None
     model.train(train)
     total, n = 0.0, 0
@@ -350,6 +395,8 @@ def _run_epoch(model, loader, device, wl_weight: float, opt=None) -> float:
             loss.backward()  # type: ignore[no-untyped-call]
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+            if ema is not None:
+                _ema_update(ema, model, ema_decay)
         total += float(loss.item())
         n += 1
     return total / max(n, 1)
@@ -412,6 +459,7 @@ def train_v3(
                 (N_OVERLAP_V3 if cfg.coverage_feats else 2) if cfg.use_overlap else 0
             ),
             n_prior_feats=0,
+            d_rel=cfg.d_rel,
             max_tags=cfg.max_tags,
             dropout_p=cfg.dropout_p,
             use_records=cfg.use_records,
@@ -434,6 +482,8 @@ def train_v3(
         f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
         f"tail_max_f={cfg.tail_max_f or 'off'} "
         f"state_delta={cfg.use_state_delta} "
+        f"weight_avg={cfg.weight_avg}"
+        f"{f'(decay={cfg.ema_decay},start={cfg.ema_start_epoch})' if cfg.weight_avg == 'ema' else ''} "
         f"selection=deployed-val-FP(ma{cfg.select_window}, "
         f"n={len(val_episodes)}, "
         f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
@@ -443,55 +493,107 @@ def train_v3(
     log: list[dict] = []
     best = float("inf")
     t0 = time.time()
+    # EMA shadow: built lazily at `ema_start_epoch` from the post-warmup weights, so it
+    # only ever averages in-basin iterates (never the random init / warmup). `None`
+    # everywhere when weight_avg != "ema", which keeps the OFF path byte-identical.
+    ema_model: Optional[SpectreV3Model] = None
     for epoch in range(cfg.epochs):
         train_ds.set_epoch(epoch)
         for g in opt.param_groups:
             g["lr"] = _lr_at(epoch, cfg)
-        tr = _run_epoch(model, train_loader, device, cfg.within_length_weight, opt)
+        if cfg.weight_avg == "ema" and epoch == cfg.ema_start_epoch:
+            ema_model = copy.deepcopy(model).eval()
+            for p in ema_model.parameters():
+                p.requires_grad_(False)
+        tr = _run_epoch(
+            model,
+            train_loader,
+            device,
+            cfg.within_length_weight,
+            opt,
+            ema=ema_model,
+            ema_decay=cfg.ema_decay,
+        )
         va = _run_epoch(model, val_loader, device, 0.0, None)
+
         # Keyword, not positional: the selector must see exactly the inputs training
         # feeds,
         # and a parameter inserted into this list would otherwise shift every switch
         # after
         # it by one -- silently selecting under a different configuration than it
         # trained.
-        fp = deployed_val_fp(
-            model,
-            val_episodes,
-            vocab,
-            device,
-            spec,
-            max_tags=cfg.max_tags,
-            budget=cfg.select_budget,
-            overlap_mode=cfg.overlap_mode,
-            aggregate_records=cfg.aggregate_records,
-            coverage_feats=cfg.coverage_feats,
-            coverage_mode=cfg.coverage_mode,
-            unified_coverage=cfg.unified_coverage,
-            state_delta=cfg.use_state_delta,
+        def _val_fp(m: SpectreV3Model) -> float:
+            # Closes over the epoch's selector config so the raw and EMA passes are scored
+            # identically (select what you deploy). Kwargs inlined, not splatted, so mypy
+            # checks each against `deployed_val_fp`'s typed signature.
+            return deployed_val_fp(
+                m,
+                val_episodes,
+                vocab,
+                device,
+                spec,
+                max_tags=cfg.max_tags,
+                budget=cfg.select_budget,
+                overlap_mode=cfg.overlap_mode,
+                aggregate_records=cfg.aggregate_records,
+                coverage_feats=cfg.coverage_feats,
+                coverage_mode=cfg.coverage_mode,
+                unified_coverage=cfg.unified_coverage,
+                state_delta=cfg.use_state_delta,
+            )
+
+        fp = _val_fp(model)
+        # Select what you deploy: when EMA is on, the EMA weights are the ones that would
+        # be shipped, so the selector must score *them* -- not only the raw model. `None`
+        # until the shadow exists (epoch < ema_start_epoch).
+        fp_ema = _val_fp(ema_model) if ema_model is not None else None
+        log.append(
+            {
+                "epoch": epoch,
+                "train_loss": tr,
+                "val_loss": va,
+                "val_fp": fp,
+                "val_fp_ema": fp_ema,
+            }
         )
-        log.append({"epoch": epoch, "train_loss": tr, "val_loss": va, "val_fp": fp})
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
-        # epochs would systematically pick the luckiest one rather than the best model
+        # epochs would systematically pick the luckiest one rather than the best model.
+        # Keep-the-better: smooth the raw and (when present) the EMA series separately and
+        # save whichever weights produced the lower smoothed val_fp. Because both are
+        # scored on the same metric, turning EMA on can never select a *worse* checkpoint
+        # than off -- it can only help or be inert (the arm's safety property).
         window = [r["val_fp"] for r in log[-cfg.select_window :]]
         smoothed = float(np.mean(window))
-        improved = smoothed < best
+        candidates: list[tuple[float, str, SpectreV3Model]] = [(smoothed, "raw", model)]
+        ema_window = [
+            r["val_fp_ema"]
+            for r in log[-cfg.select_window :]
+            if r.get("val_fp_ema") is not None
+        ]
+        smoothed_ema = float(np.mean(ema_window)) if ema_window else None
+        if smoothed_ema is not None and ema_model is not None:
+            candidates.append((smoothed_ema, "ema", ema_model))
+        cand_val, which, winner = min(candidates, key=lambda c: c[0])
+        improved = cand_val < best
         if improved:
-            best = smoothed
+            best = cand_val
             torch.save(
                 {
-                    "state_dict": model.state_dict(),
+                    "state_dict": winner.state_dict(),
                     "cfg": asdict(cfg),
                     "n_ops": len(vocab.operators),
+                    "selected": which,
                 },
                 out_dir / "best.pt",
             )
         if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
             per = (time.time() - t0) / (epoch + 1)
+            ema_str = f" ema={fp_ema:.2f}" if fp_ema is not None else ""
             print(
                 f"[train_v3] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
-                f"train={tr:.4f} val={va:.4f} val_fp={fp:.2f} ma={smoothed:.2f} "
-                f"best={best:.2f}{' *' if improved else ''} | "
+                f"train={tr:.4f} val={va:.4f} val_fp={fp:.2f}{ema_str} "
+                f"ma={smoothed:.2f} best={best:.2f}"
+                f"{f' *{which}' if improved else ''} | "
                 f"{per:.1f}s/ep ETA {per * (cfg.epochs - epoch - 1) / 60:.1f}m",
                 flush=True,
             )
@@ -613,6 +715,31 @@ def main(argv=None) -> int:
         default=[],
         help="restrict the TRAINING split to these strata, e.g. --train-strata 0 1 2",
     )
+    ap.add_argument(
+        "--weight-avg",
+        default=TrainV3Config.weight_avg,
+        choices=["none", "ema"],
+        help="EMA weight averaging for lower-variance deployment; 'none' is the "
+        "byte-identical current path",
+    )
+    ap.add_argument(
+        "--ema-decay",
+        type=float,
+        default=TrainV3Config.ema_decay,
+        help="per-step EMA decay (only with --weight-avg ema)",
+    )
+    ap.add_argument(
+        "--ema-start-epoch",
+        type=int,
+        default=TrainV3Config.ema_start_epoch,
+        help="epoch at which the EMA shadow is seeded (default = warmup_epochs)",
+    )
+    ap.add_argument(
+        "--select-window",
+        type=int,
+        default=TrainV3Config.select_window,
+        help="moving-average window for the val-FP selector; widen for a jitterier model",
+    )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -641,6 +768,10 @@ def main(argv=None) -> int:
         p_drop_facts=a.p_drop_facts,
         sinusoidal_pos=a.sinusoidal_pos,
         train_strata=tuple(a.train_strata),
+        weight_avg=a.weight_avg,
+        ema_decay=a.ema_decay,
+        ema_start_epoch=a.ema_start_epoch,
+        select_window=a.select_window,
     )
     sub = "checkpoints_v3"
     if a.no_records:

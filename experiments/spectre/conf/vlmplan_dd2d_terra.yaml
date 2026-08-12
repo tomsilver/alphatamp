@@ -1,0 +1,48 @@
+# VLMPlan on DD2D with the GPT-5.6-terra frontier VLM (OpenAI Responses API).
+# Overlay over `vlmplan.yaml`. Replaces the gpt-5.6-luna arm as the paper's VLMPlan row
+# (terra is the stronger tier; luna predates the gripper-geometry disclosure — see
+# prompts/PROVENANCE.md deviation 8 and docs/decisions/07-stickbutton2d.md).
+#
+#   export OPENAI_API_KEY=sk-...            # a REAL key; this arm is billed
+#   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_dd2d_terra
+#   python experiments/spectre/vlmplan_score.py --config-name vlmplan_dd2d_terra
+#
+# Pilot one problem per stratum (stratified_per_stratum=1 -> s0..s3), own run/cache so it
+# never pollutes the real dirs; try low vs medium reasoning effort:
+#   python experiments/spectre/vlmplan_run.py --config-name vlmplan_dd2d_terra \
+#       run=dd2d_terra_pilot_low cache_subdir=vlmplan_terra_pilot_low \
+#       stratified_per_stratum=1 model.decode.reasoning.effort=low \
+#       model.cache_path=data/spectre/derived/dd2d_v4/vlmplan_terra_pilot_low_cache.db
+#
+# The frontier arm needs the `openai_responses` backend: GPT-5 reasoning models reject
+# `max_tokens`/`temperature` over chat completions, and the Responses backend remaps
+# `max_tokens`->`max_output_tokens`, drops `temperature`/`seed`, and passes `reasoning`
+# through. `base_url` is named explicitly so the run can never silently hit the wrong
+# endpoint, and it is the api.openai.com opt-in the make_model guardrail wants.
+defaults:
+  - vlmplan
+  - override env: dd2d_v4
+  - _self_
+
+split: "test"
+n_problems: 0
+stratified_per_stratum: 10   # 40 problems total, 10/stratum; stride, never truncate
+run: "dd2d_terra"
+cache_subdir: "vlmplan_terra"
+
+model:
+  backend: "openai_responses"
+  model_name: "gpt-5.6-terra"
+  base_url: "https://api.openai.com/v1"
+  cache_path: "data/spectre/derived/${env.env_variant}/vlmplan_terra_cache.db"
+  decode:
+    # Dropped by the responses backend (reasoning models fix it); kept so the same config
+    # still works against a local chat-completions server.
+    temperature: 1.0
+    # -> max_output_tokens. A reasoning model bills reasoning tokens against this cap, so
+    # it must hold reasoning + 10 plan blocks. Watch `n_truncated` in the score summary.
+    max_tokens: 16384
+    # Effort chosen from the low-vs-medium pilot. The stronger terra tier can reason
+    # longer, so watch `n_truncated`; raise max_tokens if it climbs.
+    reasoning:
+      effort: "low"

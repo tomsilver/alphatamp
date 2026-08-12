@@ -1,10 +1,10 @@
 """Tests for the VLMPlan baseline — parser, adapter, generation loop, scorer.
 
-Everything here runs offline: no network, no GPU, no model weights, and no dependence
-on the gitignored DD2D collection. A synthetic four-item DD2D episode stands in for a
-real one, built so that **staging order matters** (pool index 3 succeeds, its permutation
-at index 4 fails), which is the property the dedup key and the off-pool labeller both
-have to respect.
+Everything here runs offline: no network, no GPU, no model weights, and no dependence on
+the gitignored DD2D collection. A synthetic four-item DD2D episode stands in for a real
+one, built so that **staging order matters** (pool index 3 succeeds, its permutation at
+index 4 fails), which is the property the dedup key and the off-pool labeller both have
+to respect.
 """
 
 from __future__ import annotations
@@ -290,8 +290,8 @@ def test_rejects_malformed_lines(episode, adapter, line: str) -> None:
 def test_markdown_decoration_is_repaired_and_counted(episode, adapter) -> None:
     """The template forbids formatting; models add it anyway.
 
-    Reporting a ~100% parse-failure rate caused by asterisks would measure
-    instruction-following, not planning, so the decoration is stripped and counted.
+    Reporting a ~100% parse-failure rate caused by asterisks would measure instruction-
+    following, not planning, so the decoration is stripped and counted.
     """
     text = "**Plan 1:**\n- **pick(item_0:item)[]**\n- `place-buffer(item_0:item)[]`\n"
     text += "- retrieve(item_3:item)[]\n"
@@ -322,6 +322,22 @@ def test_prompt_renders_with_all_slots_filled(episode, adapter) -> None:
         assert expected in prompt
     # Geometry must reach the prompt: the PDDL alone makes every plan look equivalent.
     assert "drawer interior spans" in prompt and "THE TARGET" in prompt
+
+
+def test_dd2d_geometry_discloses_gripper_dimensions(episode, adapter) -> None:
+    """PROVENANCE deviation 9: the gripper's real dimensions reach the prompt.
+
+    The numbers must be the grasp model's own constants (imported, not hardcoded), so a
+    change to the env's gripper can never silently diverge from what the VLM is told.
+    """
+    from alphatamp.approaches.spectre.envs.dd2d.dd2d import grasps
+
+    geo = adapter._geometry_str(episode)
+    assert "parallel-jaw" in geo
+    assert f"{grasps.FINGER_WIDTH:.1f} cm" in geo
+    assert f"{grasps.FINGER_THICK:.1f} cm" in geo
+    assert f"{grasps.MIN_APERTURE:.1f} and {grasps.MAX_APERTURE:.1f} cm" in geo
+    assert f"{grasps.N_DIRECTIONS} approach angles" in geo
 
 
 def test_prompt_never_leaks_an_outcome(episode, adapter) -> None:
@@ -378,8 +394,8 @@ def test_ground_accepts_a_valid_plan(episode, adapter) -> None:
 def test_ground_rejects_inapplicable_plan(episode, adapter) -> None:
     """Picking the target then retrieving it violates ``retrieve``'s handempty.
 
-    This is the single most common real failure mode observed from the local model, so it
-    is pinned rather than assumed.
+    This is the single most common real failure mode observed from the local model, so
+    it is pinned rather than assumed.
     """
     text = (
         "Plan 1:\n"
@@ -542,7 +558,8 @@ def test_loop_counts_a_backend_failure_as_a_stalled_round(
 
 
 class _ExplodingLabeler(score_mod.OffPoolLabeler):
-    """Fails loudly if the scorer ever live-refines something it should read off disk."""
+    """Fails loudly if the scorer ever live-refines something it should read off
+    disk."""
 
     def label(self, episode, steps):  # type: ignore[no-untyped-def]
         raise AssertionError(f"refiner called for in-pool plan {steps}")
@@ -628,7 +645,7 @@ def test_off_pool_labels_are_memoised_to_disk(episode, tmp_path) -> None:
 
 
 def test_refiner_preset_is_per_collection() -> None:
-    """v2 and v3 collections ran different refiner budgets; a live label must match.
+    """V2 and v3 collections ran different refiner budgets; a live label must match.
 
     Using one hard-coded budget would draw off-pool labels from a different distribution
     than the stored in-pool ones.
@@ -712,8 +729,8 @@ def test_mixing_two_runs_in_one_cache_dir_is_refused(
     """A cache dir is one method row, so it must hold exactly one run's records.
 
     Two runs writing there (a 5-problem pilot and a 16-problem smoke, say) would be
-    averaged into a row that is neither — the failure this guard exists to prevent, which
-    happened for real during the pilot.
+    averaged into a row that is neither — the failure this guard exists to prevent,
+    which happened for real during the pilot.
     """
     result = score_mod.score_sequence(
         episode, [], adapter, stratum=2, labeler=_ExplodingLabeler()

@@ -472,6 +472,16 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--tiny", action="store_true", help="20-problem overfit sanity gate"
     )
+    ap.add_argument(
+        "--train-strata",
+        type=int,
+        nargs="*",
+        default=None,
+        help="restrict train AND val to these stratum indices (0-3; empty/omitted = "
+        "all). Held-out-stratum generalization: --train-strata 0 1 2 trains on s0-s2 "
+        "(DD2D) / b1-b3 (SB2D) and, because val is filtered too, never lets the "
+        "checkpoint selector see the held-out stratum.",
+    )
     # W&B (opt-in; auth via WANDB_API_KEY env var, never stored in the repo)
     ap.add_argument(
         "--wandb", action="store_true", help="log curves to Weights & Biases"
@@ -532,6 +542,8 @@ def main(argv=None) -> int:
     # do not diverge if that default ever changes.
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    # None (default) keeps every stratum; an empty --train-strata is treated as None too.
+    keep_strata = set(args.train_strata) if args.train_strata else None
     tds = PIGINetDataset(
         args.data_root,
         "train",
@@ -539,6 +551,7 @@ def main(argv=None) -> int:
         subsample_k=args.k,
         seed=args.seed,
         domain=domain,
+        keep_strata=keep_strata,
     )
     vds = PIGINetDataset(
         args.data_root,
@@ -547,6 +560,7 @@ def main(argv=None) -> int:
         subsample_k=0,
         seed=args.seed,
         domain=domain,
+        keep_strata=keep_strata,
     )
     pw = _pos_weight(tds)
     print(f"# train groups {len(tds)} | val groups {len(vds)} | pos_weight {pw:.1f}")

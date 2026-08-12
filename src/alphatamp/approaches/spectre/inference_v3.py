@@ -32,6 +32,7 @@ import torch
 from alphatamp.approaches.spectre.dataset_v3 import build_v3_example, collate_v3
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.failure_record import records_for_candidate
+from alphatamp.approaches.spectre.model_v2 import D_REL_V3
 from alphatamp.approaches.spectre.model_v3 import (
     N_OVERLAP_V3,
     SpectreV3Model,
@@ -49,6 +50,25 @@ from alphatamp.approaches.spectre.vocab import Vocab
 # Sentinel applied to already-attempted candidates before the argmax. Distinct from the
 # demotion offset so the two effects stay legible in a trace.
 _TRIED = -1e9
+
+
+def _zero_scene_columns(batch, cols: frozenset[str]):
+    """Zero a whole scene channel in place -- a deploy-time diagnostic.
+
+    Mirrors ``suppress_records``: it feeds a trained model a *null* version of an input it
+    was trained on, to price how much the deployed model leans on that channel.
+    ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the anchor-free
+    ``obj_rel`` triple ``[area, sinθ, cosθ]``. Not a deployment mode: it only measures
+    reliance. Batch tensors are rebuilt every step, so mutating them never leaks across
+    steps. (An earlier form of this hook, tied to the pre-narrowing width-8 ``obj_rel``,
+    priced the removal of the target-anchored columns before they were cut -- see the
+    Step-0 measurement in docs/notebook 2026-08-08.)
+    """
+    if "is_goal" in cols:
+        batch.obj_is_goal.zero_()
+    if "rel" in cols:
+        batch.obj_rel.zero_()
+    return batch
 
 
 def load_v3_checkpoint(
@@ -82,6 +102,11 @@ def load_v3_checkpoint(
                 else 0
             ),
             n_prior_feats=0,
+            # Scene-relation width is bound to the checkpoint: deployed v3 is 3, and a
+            # checkpoint predating the narrowing has no key and was 8-wide. `strict=True`
+            # below is the backstop -- a wrong width fails to load rather than silently
+            # scoring the un-narrowed model.
+            d_rel=int(cfg.get("d_rel", D_REL_V3)),
             max_tags=int(cfg.get("max_tags", 32)),
             dropout_p=0.0,
             use_records=bool(cfg.get("use_records")),
@@ -168,6 +193,7 @@ def deployed_rollout_v3_traced(
     unified_coverage: bool = False,
     state_delta: bool = False,
     suppress_records: bool = False,
+    zero_scene_cols: frozenset[str] = frozenset(),
     refine_cap_s: Optional[float] = None,
 ) -> tuple[int, V3Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
@@ -208,6 +234,12 @@ def deployed_rollout_v3_traced(
     with records damaged the weights" (still bad with records suppressed) from "the
     evidence input misleads at deploy" (good with them suppressed). Never report a number
     produced with it as a method result.
+
+    ``zero_scene_cols`` is the geometry analogue of ``suppress_records`` and is likewise a
+    **diagnostic**: it blanks a scene channel at deploy to price how much the model leans
+    on it. ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the
+    anchor-free ``obj_rel`` triple. A small FP delta means the channel is close to inert
+    for ranking; a large one means it is load-bearing. Never a method number.
 
     There is no ``demotion_source`` knob: v3 reads the refiner's own report, and the
     geometry-reconstruction alternative is not ported (R2).
@@ -271,6 +303,8 @@ def deployed_rollout_v3_traced(
             records=[[] if suppress_records else records],
             max_pred_arity=vocab.max_predicate_arity,
         ).to(device)
+        if zero_scene_cols:
+            batch = _zero_scene_columns(batch, zero_scene_cols)
         logits, _ = model(batch)
         raw = logits[0].detach().cpu().numpy().astype(float)
         # end-to-end inference time: tensorize + collate + forward. The .cpu() above

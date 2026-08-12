@@ -49,6 +49,7 @@ scope. ClutteredStorage2D-b5/b7 and StickButton2D-b5 collections are historical.
 | **StickButton2D** — the second evaluation environment | `src/alphatamp/approaches/spectre/envs/stickbutton2d/` — thin adapters over kinder's own env and refiner: `heuristic.py` (geometry-aware A* + the acyclic pool filter), `scene_geometry.py`, `sampler.py`/`instrumented_refiner.py` (class-2 evidence), `strata.py` (pooled-variant problem ids), `geometry.py`, `diagnostics.py`. Collected as env_variant **`stickbutton2d_v1`** (b1/b2/b3/b5 pooled, button count = stratum; b10 dropped). Entry points `experiments/spectre/sb2d_{collect,baselines,rerank_gate}.py` + `sb2d_finalize.sh` |
 | VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/vlmplan/` — env-agnostic core; per-env `{dd2d,sb2d}_adapter.py` (prompt + grounding) and `sb2d_label.py` (off-pool labeler), dispatched by `registry.py`; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `decisions/04` 2026-07-24; env-agnostic refactor: `decisions/07` 2026-08-01; prompt deviations: `vlmplan/prompts/PROVENANCE.md` |
 | PIGINet baseline (low-level predictor) | `src/alphatamp/approaches/spectre/piginet/` — env-agnostic core behind a `PIGINetDomain` protocol; per-env `{dd2d,sb2d}_adapter.py`. `decisions/07` 2026-08-01 |
+| LAZY baseline (learned adaptive re-ranker) | `src/alphatamp/approaches/spectre/baselines/lazy/` — Khodeir et al re-implemented over the fixed pool: prefix-tree GAT policy (`torch_geometric` GATv2Conv) + online feasibility ϕ. Trained via `experiments/spectre/lazy_train.py`; cached by `cache_lazy` in `precompute_dd2d_cache.py`; registered as `LAZY_FAMILIES` in `compare.py`. `decisions/07` 2026-08-09; `baselines/lazy/PROVENANCE.md`. (PIGINet will move under `baselines/` too.) |
 | **Method comparison** — one notebook, N environments | `experiments/spectre/compare_methods.py` (marimo) over `compare.py` (loaders, rollout sim, bootstrap) and `compare_envs.py` (**the env registry — a new environment is one `EnvSpec`**). `decisions/07` 2026-08-01 |
 | Docs (living proposal, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | **ADR log** and **lab notebook** — chaptered by era, newest first | `docs/decisions/` and `docs/notebook/`, each with a **generated `README.md`** (chapter list, full entry ledger, by-track index, ID-resolution table, do-not-quote ledger, legacy date→entry map). Pre-split monoliths frozen in `docs/archive/*_monolithic.md`; `docs/decisions.md` / `docs/notebook.md` are stubs. Tooling: `doclog.py` + `experiments/spectre/decisions_index.py` |
@@ -135,22 +136,29 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_32b
    python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_32b
    ```
-   **Frontier arm (`gpt-5.6-luna`, the headline VLMPlan row, 2026-08-03).** Named configs
-   `vlmplan_{dd2d,sb2d}_luna` set `backend: openai_responses` (GPT-5 reasoning models need
+   **Frontier arm (`gpt-5.6-terra`, the headline VLMPlan row, 2026-08-08).** Named configs
+   `vlmplan_{dd2d,sb2d}_terra` set `backend: openai_responses` (GPT-5 reasoning models need
    the Responses API — chat completions rejects `max_tokens`/`temperature`),
    `base_url: https://api.openai.com/v1` (billed) and `reasoning.effort: low`; export a real
-   `OPENAI_API_KEY` first. They run **native** on `dd2d_v4` / `stickbutton2d_v1_kinder`, a
-   **stratified 40** (`stratified_per_stratum: 10`, stride-not-truncate), and save the exact
-   scene image sent to `…/vlmplan/<run>/images/<pid>.png`. SB2D uses
-   `image_source: kinder_labeled` — kinder's real pixels with Set-of-Mark labels overlaid
-   (unlabeled kinder discs are unusable by a VLM). Pilot first (`stratified_per_stratum=1`,
-   its own `run`/`cache_subdir`) and watch `n_truncated`.
+   `OPENAI_API_KEY` first. **terra replaces the weaker `gpt-5.6-luna`** and is generated
+   *with* the gripper-geometry disclosure (`prompts/PROVENANCE.md` deviation 9), which
+   together roughly halve FP: **DD2D 62.98→35.23** (now ~tied with astar 34.52; was the worst
+   method), **SB2D 11.85→6.42** (self-solves 39/40, 0 censored). A full-scale
+   **medium-effort DD2D arm confirmed low** (33.5 vs 35.23, paired 95% CI [−18.6, +15.1]), so
+   `effort: low` stands (also matching luna for a clean tier swap). They run **native** on
+   `dd2d_v4` / `stickbutton2d_v1_kinder`, a **stratified 40** (`stratified_per_stratum: 10`,
+   stride-not-truncate), and save the exact scene image sent to
+   `…/vlmplan/<run>/images/<pid>.png`. SB2D uses `image_source: kinder_labeled` — kinder's
+   real pixels with Set-of-Mark labels overlaid (unlabeled kinder discs are unusable by a
+   VLM). **Pilot on ≥1 problem per stratum** (`stratified_per_stratum=1`, its own
+   `run`/`cache_subdir`) and watch `n_truncated` — a 1-per-stratum DD2D pilot draws only
+   easy-mode (trivially-graspable) problems and badly under-estimates FP (0 vs the true ~27).
    ```bash
-   export OPENAI_API_KEY=sk-...   # a real key; this arm is billed (~$1-2 for both envs)
-   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_dd2d_luna
-   python experiments/spectre/vlmplan_score.py --config-name vlmplan_dd2d_luna
-   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_luna
-   python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_luna
+   export OPENAI_API_KEY=sk-...   # a real key; this arm is billed (~$5-10 for both envs)
+   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_dd2d_terra
+   python experiments/spectre/vlmplan_score.py --config-name vlmplan_dd2d_terra
+   python experiments/spectre/vlmplan_run.py   --config-name vlmplan_sb2d_terra
+   python experiments/spectre/vlmplan_score.py --config-name vlmplan_sb2d_terra
    ```
    The score record now carries wall-clock (`infer_s` VLM generation + `refine_s`), so
    VLMPlan appears in §2b; `VLMPlan-GPT5.6` is a `SEQUENCE_METHOD` in `compare.py`.
@@ -227,6 +235,18 @@ each**:
 |---|---|---|---|---|---|
 | v3 deployed | **5.78 ± 0.10** | 0.00 | **3.44 ± 1.36** | **10.49 ± 0.77** | **9.19 ± 0.76** |
 | v2.2 yardstick | 17.27 ± 3.02 | 0.00 | 13.67 ± 14.20 | 23.45 ± 2.76 | 31.95 ± 5.62 |
+
+**⚠️ Update 2026-08-09 — the deployed model is now the *domain-agnostic* input surface + a wider
+selection window; the 5.78 above is the frozen target-anchored yardstick.** The scene inputs were
+narrowed to domain-agnostic columns (`obj_is_target`→`obj_is_goal`, `obj_rel` 8→3, `d_rel=3`;
+[`decisions/07` 2026-08-08](docs/decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)),
+which regressed the *mean* as optimization variance (not information loss — best seed ≈ baseline,
+probe Δ0.00). The fix is a training-side lever, **`--select-window 5`** (now in the `v3final` preset
+and `sb2d_finalize.sh`; `TrainV3Config` default stays 3), which **recovers parity: DD2D 5.92 ± 0.29
+(s1 4.84), SB2D 1.84 ± 0.26** — both tie the frozen 5.78 / 1.69 (paired CI includes 0). EMA
+weight-averaging (`--weight-avg ema`) was built and tested but is **inert on both envs** (kept, one
+flag away).
+[`decisions/07` 2026-08-09](docs/decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider).
 
 **≈ −11.5 FP vs v2.2** (the paired CI for that pair is not computed — `spectre_score_v3`
 cannot take a v2 arm as `--baseline`). Against the *previous* v3 deployed definition the
@@ -384,7 +404,10 @@ all b1.
 reads 0.08 FP) — the shape DD2D's `s0 = 0.00` already has. Do not read a pooled "ALL"
 mean over unbalanced strata as a method comparison.
 
-**Headline (3 seeds, uncensored, test n=100).** Mean failed attempts before first success:
+**Headline (3 seeds, uncensored, test n=100).** Mean failed attempts before first success. *(The
+**1.69** here is the frozen target-anchored model; the deployed model since 2026-08-09 is the
+domain-agnostic narrowed inputs + `--select-window 5`, which ties it at **1.84 ± 0.26** — see the
+"Where v3 stands" update above and [`decisions/07` 2026-08-09](docs/decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider).)*
 
 | | ALL | b1 | b2 | b3 | b5 |
 |---|---|---|---|---|---|
@@ -400,10 +423,21 @@ mean over unbalanced strata as a method comparison.
 | method | ALL | b1 | b2 | b3 | b5 |
 |---|---|---|---|---|---|
 | astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
-| VLMPlan-32B (n=40) | 13.18 | 0.70 | 1.30 | 6.20 | 44.50 |
+| VLMPlan-32B (local Qwen, n=40) | 13.18 | 0.70 | 1.30 | 6.20 | 44.50 |
+| VLMPlan-GPT5.6 (terra, n=40) | 6.42 | 0.00 | 2.40 | 0.90 | 22.40 |
+| LAZY-adaptive (Khodeir et al) | 1.85 ± 0.02 | 0.08 | 0.36 | 2.44 | 4.56 |
 | PIGINet (low-level) | 2.02 ± 0.19 | 0.08 | 0.32 | 1.31 | 6.39 |
 | SPECTREv3-static | 1.98 ± 0.28 | 0.08 | 0.32 | 1.52 | 5.99 |
 | SPECTREv3-adaptive | **1.69 ± 0.26** | 0.08 | 0.24 | 1.13 | 5.29 |
+
+**LAZY (`baselines/lazy/`, added 2026-08-09) is the learned *adaptive* competitor** (GAT
+policy π + online feasibility ϕ, π̄=π·ϕ/Σ; PIGINet is static). On SB2D it **ties everything**
+(paired vs LAZY: SPECTRE-adaptive −0.01 CI [−0.72,+0.72]; LAZY−PIGINet −0.44 CI [−1.18,+0.29]),
+extending the SB2D non-separation finding to a third adaptive method. On **DD2D both learned
+rankers beat it decisively** (LAZY 23.26 vs SPECTRE 5.92 / PIGINet 17.27, CIs exclude 0; still
+beats astar 34.52 / VLMPlan 35.23, carried by s3). SB2D numbers rest on the small 17-episode b5
+train split (b5=4.56 is largely a generalization number). `decisions/07` / `notebook/07`
+2026-08-09; deviations from literal LAZY in `baselines/lazy/PROVENANCE.md`.
 
 **VLMPlan-32B (the zero-data corner) is a genuine planner here** — 35/40 problems
 self-solved, 0 censored, stratified n=40 (10/stratum, so the ALL is comparable). It sits
@@ -414,6 +448,14 @@ SPECTREv3/PIGINet by ~7×. The 2-problem train pilot badly mis-estimated it (dre
 tail — "loses to astar, censored on b5"); the stratified test sample overturns that. See
 [`notebook/07`](docs/notebook/07-stickbutton2d.md) 2026-08-01. The full 100 was descoped
 (b3/b5 tail problems run to the stall cap, ~16 h) — the ~7× gap and ordering are settled.
+
+**The frontier arm `VLMPlan-GPT5.6` is now gpt-5.6-terra with gripper disclosure (2026-08-08),
+replacing gpt-5.6-luna** (`prompts/PROVENANCE.md` deviation 9). On SB2D it reads **6.42 ALL**
+(b1 0.00, b2 2.40, b3 0.90, b5 22.40), self-solving 39/40 with 0 censored — roughly half luna's
+11.85 and clearing the local 32B (13.18). It now beats the naive order across the board (notably
+b3 0.90 < astar 2.96, where luna had over-thought) but still trails the learned rankers by ~3–4×,
+so the representation ordering is unchanged. Single generation seed → bare mean (like astar); use
+the across-problem bootstrap for a spread.
 
 **On SB2D the representation advantage does not reproduce.** Paired bootstrap over the 100
 test problems: v3-static − PIGINet = −0.05, CI [−0.44, +0.35]; v3-adaptive − PIGINet =

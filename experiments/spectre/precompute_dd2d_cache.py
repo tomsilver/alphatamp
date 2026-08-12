@@ -191,6 +191,64 @@ _PIGINET_PATHS = {
         "cache": DERIVED_ROOT / "stickbutton2d_v1_kinder" / "clip_cache",
         "domain": "stickbutton2d",
     },
+    # ------------------------------------------------------------------------------ #
+    # Held-out-STRATUM generalization (2026-08-09). The learned methods are trained on
+    # s0-s2 (DD2D) / b1-b3 (SB2D) and evaluated on the held-out stratum s3 / b5, via the
+    # `--train-strata 0 1 2` filter -- NOT a re-collection. Each variant's raw dir is a
+    # symlink to its backing collection (so `test/episodes` + `images` resolve unchanged);
+    # only the trained checkpoint differs. astar + VLMPlan are training-free and reused.
+    #
+    # DD2D single cache: the holdout PIGINet head; data + CLIP cache reuse dd2d_v4's
+    # (same test images -- CLIP is checkpoint-independent).
+    "dd2d_v4_holdout_s3": {
+        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_holdout_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v4",
+        "cache": DD2D / "out_dd2d" / "clip_cache_v4",
+    },
+    # SB2D SPECTRE-only cache (instrumented v1 refiner). No PIGINet is run here -- SPECTRE
+    # is image-free -- but the variant must be a known `--env-variant`, so it mirrors
+    # `stickbutton2d_v1`; the `ckpt` below is inert (never loaded without `--methods
+    # piginet`).
+    "stickbutton2d_v1_holdout_b5": {
+        "ckpt": DERIVED_ROOT / "stickbutton2d_v1" / "piginet_bce_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v1" / "clip_cache",
+        "domain": "stickbutton2d",
+    },
+    # SB2D primary cache (kinder crops): the holdout PIGINet head trained on kinder crops;
+    # data + CLIP cache reuse the deployed kinder variant's. `make_sb2d_domain` reads the
+    # kinder PNGs for this variant (registered in `sb2d_adapter._SB2D_CROP_SOURCE`).
+    "stickbutton2d_v1_kinder_holdout_b5": {
+        "ckpt": DERIVED_ROOT
+        / "stickbutton2d_v1_kinder"
+        / "piginet_bce_holdout_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v1_kinder" / "clip_cache",
+        "domain": "stickbutton2d",
+    },
+    # ------------------------------------------------------------------------------ #
+    # b5-correct-size collection (2026-08-09). `stickbutton2d_v2` reuses v1's b1/b2/b3
+    # (and val/test) and collects b5 TRAIN to the full 100, so the held-out-b5 contrast
+    # is a proper ~25% perturbation instead of v1's near-null 6% (17 episodes). v1 stays
+    # frozen. v2 is the SPECTRE (image-free) side; `stickbutton2d_v2_kinder` carries the
+    # full-strata PIGINet head on the re-rendered kinder crops. Only the FULL model is new
+    # -- the subset (b1/b2/b3) is identical to v1 and reuses the held-out checkpoints.
+    "stickbutton2d_v2": {
+        "ckpt": DERIVED_ROOT / "stickbutton2d_v1" / "piginet_bce_s{seed}" / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v1" / "clip_cache",
+        "domain": "stickbutton2d",
+    },
+    "stickbutton2d_v2_kinder": {
+        "ckpt": DERIVED_ROOT
+        / "stickbutton2d_v2_kinder"
+        / "piginet_bce_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": DERIVED_ROOT / "stickbutton2d_v2_kinder" / "clip_cache",
+        "domain": "stickbutton2d",
+    },
 }
 
 # Which SPECTRE-v2 deployed checkpoint a collection uses. The training run name encodes
@@ -474,6 +532,13 @@ _REFINE_CAP_S: dict[str, float] = {
     "dd2d_v4": 2.0,
     "stickbutton2d_v1": 10.0,
     "stickbutton2d_v1_kinder": 10.0,
+    # Held-out-stratum variants share their backing collection's cap so §2b is comparable.
+    "dd2d_v4_holdout_s3": 2.0,
+    "stickbutton2d_v1_holdout_b5": 10.0,
+    "stickbutton2d_v1_kinder_holdout_b5": 10.0,
+    # b5-correct-size collection (SB2D matched full control).
+    "stickbutton2d_v2": 10.0,
+    "stickbutton2d_v2_kinder": 10.0,
 }
 # Rebound per-variant by `_configure_paths`; the module default keeps the historical dd2d
 # behaviour for any variant not listed above.
@@ -1290,6 +1355,87 @@ def cache_spectre3(
 
 
 @torch.no_grad()
+def cache_lazy(force: bool, device: str) -> None:
+    """LAZY (policy-guided lazy search, Khodeir et al): adaptive pool re-ranker.
+
+    Per seed, load ``checkpoints/<CKPT_VARIANT>/lazy_s<seed>/ckpt.pt`` (the GAT policy +
+    the fitted feasibility prior ϕ), then per test problem run the online π̄=π·ϕ/Σ rollout
+    (uncapped + capped) and write the adaptive record shape. The policy π is evaluated
+    once per problem (one batched GAT forward over the prefix tree); the capped rollout is
+    re-run rather than derived, exactly as ``cache_spectre3``.
+    """
+    # Local imports: the vendored torch_geometric GAT stack.
+    from alphatamp.approaches.spectre.baselines.lazy.dataset import load_structs
+    from alphatamp.approaches.spectre.baselines.lazy.domain import make_lazy_domain
+    from alphatamp.approaches.spectre.baselines.lazy.eval import (
+        load_lazy_checkpoint,
+        rollout_episode,
+    )
+    from alphatamp.approaches.spectre.baselines.lazy.graph import build_feature_spec
+
+    vocab = Vocab.from_json(VOCAB_PATH)
+    spec = build_feature_spec(vocab)
+    # Scales are family-based (dd2d cm vs sb2d config), so the scored (ENV) variant is fine;
+    # the vocab/model come from CKPT_VARIANT above (train-old / test-new safe).
+    domain = make_lazy_domain(ENV_VARIANT)
+    structs = load_structs(
+        SPECTRE_TEST, vocab, spec, domain.frame_extent, domain.shape_max
+    )
+
+    for seed in SEEDS:
+        out = CACHE_DIR / "lazy_adaptive" / f"seed_{seed}"
+        if _dir_complete(out) and not force:
+            print(f"[lazy seed {seed}] complete; skipping")
+            continue
+        ckpt = (
+            REPO
+            / "data"
+            / "spectre"
+            / "checkpoints"
+            / CKPT_VARIANT
+            / f"lazy_s{seed}"
+            / "ckpt.pt"
+        )
+        if not ckpt.is_file():
+            print(f"[lazy seed {seed}] !! missing {ckpt}; skipping", flush=True)
+            continue
+        model, phi = load_lazy_checkpoint(ckpt, device)
+        # Warm up CUDA so init does not land in the first problem's measured infer time.
+        if structs and device.startswith("cuda"):
+            for _ in range(3):
+                rollout_episode(model, structs[0], vocab, spec, phi, device)
+            torch.cuda.synchronize()
+        n = 0
+        for st in structs:
+            ep = st.episode
+            pid = int(ep.provenance.problem_id)
+            _t0 = time.perf_counter()
+            r = rollout_episode(model, st, vocab, spec, phi, device)
+            if device.startswith("cuda"):
+                torch.cuda.synchronize()
+            infer_s = round(time.perf_counter() - _t0, 6)
+            r_cap = rollout_episode(
+                model, st, vocab, spec, phi, device, cap=REFINE_CAP_S
+            )
+            n += _write(
+                out / f"{pid}.json",
+                {
+                    "problem_id": pid,
+                    "stratum": stratum_of(pid),
+                    "fp": float(r.attempts) - 1.0,
+                    "order": r.order,
+                    "refine_s": r.refine_s,
+                    "refine_s_capped": r_cap.refine_s,
+                    "fp_capped": float(r_cap.attempts) - 1.0,
+                    "order_capped": r_cap.order,
+                    "infer_s": infer_s,
+                },
+                force,
+            )
+        print(f"[lazy seed {seed}] wrote {n} -> {out}")
+
+
+@torch.no_grad()
 def cache_lenctx(force: bool, device: str, repeats: int = 3) -> None:
     """T1 length-only-context intervention: adaptive rollout with identity-
 
@@ -1351,7 +1497,15 @@ def main() -> None:
         "--methods",
         nargs="+",
         default=["astar", "piginet", "spectre", "spectre2"],
-        choices=["astar", "piginet", "spectre", "spectre2", "spectre3", "lenctx"],
+        choices=[
+            "astar",
+            "piginet",
+            "spectre",
+            "spectre2",
+            "spectre3",
+            "lenctx",
+            "lazy",
+        ],
     )
     parser.add_argument(
         "--v3-arm",
@@ -1478,6 +1632,8 @@ def main() -> None:
                 static_arms=frozenset(),
                 apply_demotion=True,
             )
+    if "lazy" in args.methods:
+        cache_lazy(args.force, args.device)
     if "lenctx" in args.methods:
         cache_lenctx(args.force, args.device, repeats=args.lenctx_repeats)
 

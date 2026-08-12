@@ -4,6 +4,325 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-10-held-out-vs-matched-full-controls-anomaly-confound"></a>
+## 2026-08-10 — Held-out vs matched-full controls: the anomaly is confound+noise; b5 expanded to 100
+
+<!--strip-->
+> **id** `2026-08-10-held-out-vs-matched-full-controls-anomaly-confound` · **status**
+> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** The [held-out-stratum experiment](#2026-08-09-held-out-stratum-comparison-spectre-generalizes-dd2d-s3)
+looked incoherent (subset-trained beat full on DD2D ALL; SB2D ranking flipped, PIGINet *improving*
+when b5 held out). Re-ran it properly: **matched full-strata controls** (current-code, same recipe,
+same test problems — not the frozen 5.78/1.69 yardstick), **per-stratum paired bootstrap over
+problems** (`holdout_vs_full.py`), and — the root-cause fix for SB2D — **b5 train collected to the
+correct 100** in a new `stickbutton2d_v2` variant (v1 frozen; only the full model retrained, subset
+reused). DD2D full = deployed `dd2d_v4` cache (fresh arm trained pathologically slowly, abandoned).
+Protocol/decisions: [`decisions/07` 2026-08-10](../decisions/07-stickbutton2d.md#2026-08-10-held-out-stratum-anomalies-resolved-matched-controls-per-stratum).
+
+**Result — Δ = subset − full, paired bootstrap (positive ⇒ subset worse / full better; `*` = CI excludes 0).**
+
+| env · method | ALL | trained strata | **held-out (s3 / b5)** |
+|---|---|---|---|
+| DD2D SPECTRE-adaptive | −0.57 [−1.51, +0.29] | **s1 −2.96 [−4.93, −1.31] \*** | +1.19 [−0.77, +2.89] |
+| DD2D PIGINet | +10.61 \* | s1 +1.04 (ns) | **+40.69 [+26.80, +54.77] \*** |
+| SB2D SPECTRE-adaptive (b5=100) | −0.06 [−0.60, +0.47] | **b3 −0.92 [−1.72, −0.28] \*** | +0.73 [−1.23, +2.63] |
+| SB2D PIGINet (b5=100) | −0.21 [−0.75, +0.25] | b3 −0.31 (ns) | −0.43 [−2.44, +1.27] |
+
+Absolute FP (subset / full), held-out column bold:
+
+| | ALL | s0/b1 | s1/b2 | s2/b3 | **s3/b5** |
+|---|---|---|---|---|---|
+| DD2D SPECTRE sub / full | 5.35 / 5.92 | 0.00 / 0.00 | 1.88 / 4.84 | 9.55 / 10.05 | **9.97 / 8.79** |
+| DD2D PIGINet sub / full | 27.88 / 17.27 | 0.04 / 0.05 | 6.08 / 5.04 | 19.51 / 18.77 | **85.89 / 45.20** |
+| SB2D SPECTRE sub / full | 2.10 / 2.17 | 0.08 / 0.08 | 0.27 / 0.33 | 1.20 / 2.12 | **6.87 / 6.13** |
+| SB2D PIGINet sub / full | 1.68 / 1.89 | 0.07 / 0.08 | 0.32 / 0.41 | 0.99 / 1.29 | **5.36 / 5.79** |
+
+**The anomaly was confound + noise; nothing "helps by holding out data."**
+- **DD2D ALL "subset beats full" is not significant** (SPECTRE Δ −0.57, ns) — it was the frozen-vs-current
+  baseline confound plus reading ALL. The held-out **s3 is coherent** (full better) — decisively for
+  PIGINet (45.20 ≪ 85.89), directionally for SPECTRE. The one significant sub-effect is **s1
+  specialization**: holding out hard s3 makes SPECTRE *better* on trained s1 (1.88 vs 4.84), which
+  is what pulled ALL down.
+- **SB2D flip is gone once b5 is properly sized.** With b5=100 the ALL deltas collapse to noise
+  (SPECTRE −0.06, PIGINet −0.21), held-out **b5 SPECTRE is directionally coherent** (6.13 < 6.87 —
+  a direction the 17-episode full model could not show), **PIGINet shows no effect** (5.79 vs 5.36,
+  ns). Significant effect: **b3 specialization** (1.20 vs 2.12).
+
+**Takeaway-next.** "Superset helps" holds *on the held-out stratum in direction* (3/4 cases),
+reaches significance only where the effect is large (DD2D PIGINet s3), and is otherwise inside the
+~1 FP noise / 25-test-problem resolution. Read the **held-out stratum with a paired CI**, never the
+pooled ALL. The robust cross-environment finding is **trained-strata specialization** (DD2D s1,
+SB2D b3): the hard stratum's training examples measurably *cost* an easy stratum. b5-correct-size
+(`stickbutton2d_v2`, b5 17→100) is the real fix — it removed the 17-episode artifact and made SB2D
+a powered-on-training test; v1 is byte-unchanged. Reproduce: `python experiments/spectre/holdout_vs_full.py`.
+
+---
+
+<a id="2026-08-09-lazy-baseline-results-dd2d-sb2d"></a>
+## 2026-08-09 — LAZY baseline results — DD2D + SB2D
+
+<!--strip-->
+> **id** `2026-08-09-lazy-baseline-results-dd2d-sb2d` · **status** active · **tracks**
+> baselines, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** First results for the newly re-implemented LAZY adaptive baseline (`baselines/lazy/`,
+GAT policy π + online feasibility ϕ, π̄=π·ϕ/Σ; faithful-max prefix-tree realization). 3 seeds
+each, uncensored test n=100. Design + full protocol:
+[decisions/07 2026-08-09](../decisions/07-stickbutton2d.md#2026-08-09-lazy-policy-guided-adaptive-baseline-added-dd2d).
+
+**Result.** Mean failed attempts before first success (± across-seed sd):
+
+| method | DD2D (dd2d_v4) | SB2D (kinder) |
+|---|---|---|
+| LAZY-adaptive | 23.26 ± 0.50 | 1.85 ± 0.02 |
+| SPECTRE-adaptive | 5.92 ± 0.29 | 1.84 ± 0.25 |
+| PIGINet | 17.27 ± 0.19 | 2.28 ± 0.29 |
+| SPECTRE-static | 21.65 ± 1.13 | 1.98 ± 0.28 |
+| astar-dist | 34.52 | 16.29 |
+| VLMPlan-GPT5.6 | 35.23 | 6.42 |
+
+- **DD2D:** LAZY beats the naive order (34.52) and VLMPlan (35.23) and ≈ SPECTRE-static, but
+  both learned rankers beat it — paired vs LAZY: SPECTRE −17.34 CI [−24.0,−11.4], PIGINet
+  −5.99 CI [−9.96,−2.28] (both exclude 0). LAZY's ALL is carried by s3 (58.65 vs astar ~119),
+  worse than astar at s1/s2 — the same s3-carried shape SPECTRE shows.
+- **SB2D:** LAZY ties everything — SPECTRE−LAZY −0.01 CI [−0.72,+0.72]; LAZY−PIGINet −0.44 CI
+  [−1.18,+0.29]. Per stratum LAZY b1 0.08 / b2 0.36 / b3 2.44 / b5 4.56.
+- **Policy is load-bearing (diagnostic astar / ϕ-only / LAZY):** DD2D val LAZY 28.70 < astar
+  35.66 while ϕ-only is *worse* (49.03) → the GAT policy carries DD2D; SB2D test ϕ-only 2.40
+  (feasibility very discriminative there — PickStick/PlaceStick padding), policy sharpens to
+  1.86.
+
+**Takeaway-next.** The adaptive-method bar is now on the record: **on DD2D the learned rankers
+beat the LAZY adaptive method decisively; on SB2D no method separates** (LAZY joins SPECTRE and
+PIGINet in the tie), consistent with the standing SB2D non-separation finding. Caveats: SB2D b5
+rests on the small 17-episode b5 train split (a b5 expansion was in progress — re-measure);
+LAZY seed sd is tiny because seeds share the deterministic canonicalization + fitted ϕ (only
+init varies). BC cross-entropy plateaus at a label-conflict floor (feasible plans diverge at the
+root), so selection is on val rollout-FP, not CE.
+
+---
+
+<a id="2026-08-09-held-out-stratum-comparison-spectre-generalizes-dd2d-s3"></a>
+## 2026-08-09 — Held-out-stratum comparison — SPECTRE generalizes on DD2D s3, PIGINet ties on SB2D b5
+
+<!--strip-->
+> **id** `2026-08-09-held-out-stratum-comparison-spectre-generalizes-dd2d-s3` ·
+> **status** active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** Held out a whole stratum from *training* for the first time: SPECTRE + PIGINet
+trained on s0–s2 (DD2D) / b1/b2/b3 (SB2D) via `--train-strata 0 1 2`, evaluated on all four
+strata of the standard test split, held-out s3 / b5 the headline. astar + the frontier
+VLMPlan-GPT5.6 are training-free and reused verbatim. New notebook entries `dd2d_holdout_s3`
+and `sb2d_holdout_b5`; FP + §2b wall-clock. Protocol ADR:
+[`decisions/07`](../decisions/07-stickbutton2d.md#2026-08-09-held-out-stratum-generalization-train-s0-s2-b1-b3-evaluate).
+3 seeds, uncensored, test n=100 (VLMPlan stratified n=40).
+
+**Result — DD2D (train s0/s1/s2, headline = held-out s3).**
+
+| method | ALL | s0 | s1 | s2 | **s3** |
+|---|---|---|---|---|---|
+| SPECTRE-adaptive | 5.35 ± 0.49 | 0.00 | 1.88 | 9.55 | **9.97 ± 1.59** |
+| SPECTRE-static | 20.01 ± 1.87 | 0.00 | 4.97 | 30.81 | **44.27 ± 4.45** |
+| PIGINet | 27.88 ± 2.51 | 0.04 | 6.08 | 19.51 | **85.89 ± 9.25** |
+| astar-dist | 34.52 | 0.00 | 2.24 | 17.08 | **118.76** |
+| VLMPlan-GPT5.6 | 35.23 | 26.90 | 26.70 | 28.00 | **59.30** |
+
+**SPECTRE-adaptive generalizes to the unseen stratum; PIGINet collapses.** On held-out s3 it
+beats PIGINet ~9× (9.97 vs 85.89) and beats astar/VLMPlan by more. Its ALL (5.35) is ≈ its
+in-distribution 5.78, and its held-out s3 (9.97) is within noise of the in-*distribution* s3
+(9.19) — the abstract ranker barely notices s3 was withheld, while PIGINet's ALL blows out
+17.27 → 27.88. **The representation alone is not enough**: SPECTRE-static s3 = 44.27, adaptive
+= 9.97, the same static-falls-behind / adaptivity-recovers shape as the 2026-08-04 shape
+generalization.
+
+**Result — SB2D (train b1/b2/b3, headline = held-out b5).**
+
+| method | ALL | b1 | b2 | b3 | **b5** |
+|---|---|---|---|---|---|
+| PIGINet | 1.68 ± 0.20 | 0.07 | 0.32 | 0.99 | **5.36 ± 0.66** |
+| SPECTRE-adaptive | 2.10 ± 0.42 | 0.08 | 0.27 | 1.20 | **6.87 ± 1.38** |
+| SPECTRE-static | 2.31 ± 0.31 | 0.08 | 0.32 | 1.45 | **7.37 ± 1.25** |
+| VLMPlan-GPT5.6 | 6.42 | 0.00 | 2.40 | 0.90 | **22.40** |
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | **61.56** |
+
+**The representation advantage does not reproduce on SB2D held-out b5** — PIGINet (5.36) ≈
+SPECTRE-adaptive (6.87), PIGINet marginally ahead but inside the seed spread; ALL PIGINet 1.68 ≈
+adaptive 2.10. Same non-separation as the in-distribution SB2D finding. The adaptive increment is
+still positive (b5 adaptive 6.87 < static 7.37).
+
+**Sanity anchors passed:** astar (DD2D 34.52 ALL, SB2D 61.56 b5) and VLMPlan-GPT5.6 (DD2D 35.23
+ALL, SB2D 22.40 b5) reproduce the deployed numbers exactly — the training-free reuse-by-symlink
+is byte-correct. §2b wall-clock renders for both (caps 2 s / 10 s, all five methods timed).
+
+**Takeaway-next.** Held-out-stratum generalization tells the same cross-environment story as
+in-distribution and shape shift: **abstract representation wins decisively on DD2D, ties/loses
+marginally on SB2D; the failure-conditioned re-ranking is what carries DD2D's OOD win** (static
+alone loses to PIGINet at s3 too). Read the headline stratum (s3 / b5), not the pooled ALL, which
+averages held-out with in-distribution strata. The comparison is honest: the same held-out test
+problems, the only change is which strata the learned rankers saw in training.
+
+---
+
+<a id="2026-08-09-narrowed-input-variance-recovered-select-window-5-fixes-ema"></a>
+## 2026-08-09 — Narrowed-input variance recovered: select-window-5 fixes it, EMA inert
+
+<!--strip-->
+> **id** `2026-08-09-narrowed-input-variance-recovered-select-window-5-fixes-ema` ·
+> **status** active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** The domain-agnostic narrowing regressed the 3-seed mean (DD2D 6.63 vs 5.78, all at s1;
+SB2D 2.10 vs 1.69) as *variance*, not information loss (best seed ≈ baseline; probe Δ0.00; std ~7×
+up). Built two config-gated, off-by-default training-process levers — `--select-window` (ma3→ma5)
+and `--weight-avg ema` (decay 0.999, post-warmup, keep-the-better selection) — and tested them.
+ADR: [decisions/07 2026-08-09](../decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider).
+
+**Result — SB2D triage (cheap env first, 3 seeds).** Both levers reduce variance and reach
+not-significantly-worse than the frozen baseline: sw5 1.84 ± 0.25, ema 1.84 ± 0.20 (narrowed
+2.10 ± 0.43; frozen 1.69). Paired vs frozen: sw5 Δ+0.15 CI [−0.06, +0.38], ema Δ+0.15 CI
+[−0.12, +0.45] — both include 0. But the keep-better logs show **EMA's val_fp is *worse* than
+raw** (decay 0.999 too slow for SB2D's short training; raw picked on 2/3 seeds), and sw5 matched
+it for free — pointing at selector noise.
+
+**Result — DD2D (headline, 3 seeds, uncensored).**
+
+| arm | ALL | s1 | s2 | s3 | best | vs frozen 5.78 | vs narrowed |
+|---|---|---|---|---|---|---|---|
+| narrowed | 6.63 ± 0.68 | 7.41 ± 2.94 | 10.33 | 8.76 | 6.03 | +0.85 | — |
+| **sw5 (ma5)** | **5.92 ± 0.29** | **4.84 ± 1.03** | 10.05 | 8.79 | **5.69** | **+0.14, CI [−0.37, +0.68]** | **−0.71, CI [−1.52, −0.05]** |
+| ema | 6.51 ± 0.60 | 6.65 ± 2.98 | 10.16 | 9.21 | 6.03 | +0.73, CI [−0.03, +1.58] | −0.12, CI [−0.70, +0.40] |
+
+**sw5 ties the frozen baseline and significantly beats the narrowed model**; s1 recovers 7.41 →
+4.84 and its std collapses 2.94 → 1.03. **EMA is inert** — 6.51 ≈ narrowed 6.63, keep-better chose
+raw on 2/3 seeds (EMA val worse), s1 still 6.65 ± 2.98. Promoted **sw5** to the deployed dirs.
+
+**Takeaway-next.** The regression was **selector noise**: the higher-variance narrowed model needs
+a wider selection window to pick reliably; ma5 is the appropriate selection for it, and it costs
+nothing at deploy (a better-selected checkpoint, no EMA machinery). EMA didn't engage because the
+model's endpoint isn't oscillating in a way a slow average captures — kept in-code (tested) for a
+domain that does. **Caveat carried forward:** cross-arm means are confounded by run-to-run GPU
+nondeterminism, so the decision rests on the *within-run* EMA-vs-raw val signal and the variance
+collapse, not any single cross-arm mean delta. Deployed: DD2D 5.92, SB2D 1.84 (both tie the frozen
+baseline).
+
+---
+
+<a id="2026-08-08-terra-gripper-disclosure-halves-vlmplan-fp"></a>
+## 2026-08-08 — terra + gripper disclosure halves VLMPlan FP on DD2D and SB2D
+
+<!--strip-->
+> **id** `2026-08-08-terra-gripper-disclosure-halves-vlmplan-fp` · **status** active ·
+> **tracks** baselines, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** Hardened the headline VLMPlan row against two reviewer criticisms (ADR
+[2026-08-08](../decisions/07-stickbutton2d.md#2026-08-08-vlmplan-headline-swapped-gpt-5-6-terra-gripper-geometry)):
+swapped the model **gpt-5.6-luna → gpt-5.6-terra** (the stronger tier) and **disclosed the
+gripper's real dimensions in the text prompt** (DD2D finger 2.5×2.0 cm / aperture 0.5–12 cm /
+18 approach angles, imported from `grasps.py`; SB2D arm/gripper widths — `PROVENANCE.md`
+deviation 9), since the audit found the VLM was never told the geometry DD2D feasibility hinges
+on. Ran the two-stage protocol native on `dd2d_v4` / `stickbutton2d_v1_kinder`, stratified 40
+(10/stratum), `effort: low`.
+
+**Result — FP roughly halves on both envs (single generation seed).**
+
+| env | luna (old) | **terra + disclosure** | per-stratum (terra) | context |
+|---|---|---|---|---|
+| DD2D | 62.98 | **35.23** (agree 0.983, 1 censored, 35/40 self-solve) | s0 26.9 · s1 26.7 · s2 28.0 · s3 59.3 | astar 34.52 · PIGINet 17.27 · SPECTRE 5.78 |
+| SB2D | 11.85 | **6.42** (agree 1.000, 0 censored, 39/40 self-solve) | b1 0.0 · b2 2.4 · b3 0.9 · b5 22.4 | astar 16.29 · 32B 13.18 · PIGINet 2.02 · SPECTRE 1.69 |
+
+**Result — effort is a wash, settled at full scale.** A 4-problem low-vs-medium pilot could not
+discriminate: `stratified_per_stratum=1` drew only easy-mode DD2D problems (all solved at FP 0
+under both efforts), which also **badly under-estimated FP** (pilot 0 vs the true ~27). So a
+full-scale **medium-effort DD2D arm** was run: 33.5 vs low 35.23, paired 95% CI [−18.6, +15.1]
+(medium better on 16 problems, low on 12, tie 12), medium slightly *more* censored (2 vs 1).
+Low chosen — it also matches luna, keeping the swap a clean model+prompt change. §2b wall-clock
+is generation-dominated: DD2D 78 s (infer 76.3 + refine 1.9), SB2D 40.8 s (infer 32.0 + refine
+8.9).
+
+**Result — DD2D is bimodal.** 14/40 targets are trivially graspable and solved on the first VLM
+attempt (FP 0); the rest flail, flooding 50–200 off-pool proposals that all fail geometric
+refinement (per-problem FP up to the 200 censor). The mean is a mixture, not a typical case.
+
+**Takeaway-next.** The stronger model + full geometry disclosure does **not** overturn the
+qualitative story — it makes it more defensible: DD2D stays a **negative control** (VLM ~parity
+with the naive planner order, far behind the learned rankers; reasoning effort doesn't rescue
+the packing weakness), and SB2D VLMPlan is a **genuine planner** that now beats the naive order
+across the board (b3 0.9 < astar 2.96) yet still trails the learned rankers ~3–4×, so the
+representation ordering is unchanged. Two traps banked: **a 1-per-stratum pilot is
+unrepresentative on a bimodal env** (pilot on the whole stratum before trusting an effort/model
+call), and the Responses API takes no fixed seed so re-runs vary (bare mean like astar; use the
+across-problem bootstrap for a spread).
+
+---
+
+<a id="2026-08-08-narrowing-v3-scene-inputs-domain-agnostic-columns"></a>
+## 2026-08-08 — Narrowing the v3 scene inputs to domain-agnostic columns: probe, gates, retrain
+
+<!--strip-->
+> **id** `2026-08-08-narrowing-v3-scene-inputs-domain-agnostic-columns` · **status**
+> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** Made the v3 scene inputs domain-agnostic (ADR
+[2026-08-08](../decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)):
+`obj_is_target` → `obj_is_goal` (goal-atom derived), `obj_rel` narrowed 8 → 3 to the
+anchor-free `[area, sinθ, cosθ]` (target-anchored offsets + area ratio + the privileged
+`concave` flag cut). Gated the change, retrained both deployed models, re-derived numbers.
+
+**Result — gates (no training).**
+- **Gate 1:** `goal_objects(ep) == {o : o.is_target}` on **720/720** episodes, all four dd2d_v4
+  variants × all splits, 0 mismatches, 0 goal-orphans. The boolean swap is a set-level no-op on
+  DD2D.
+- **Gate 2:** built `obj_is_goal` (from goal atoms) vs `obj_is_target` (from the flag) **under
+  canonicalization** — array-equal on **720/720** episodes. Byte-level no-op, the D-8-style
+  exact-absence check for the boolean.
+
+**Result — Step-0 pricing probe (existing deployed checkpoints, 3 seeds each).** An
+inference-time hook (`zero_scene_cols`, the geometry analogue of `suppress_records`) blanked the
+columns on the *un-narrowed* deployed models and measured FP. Verified the hook actually mutates
+the batch (`is_target` 1.0→0, `rel_anchor` 23.0→0, `area`/`sinθ`/`cosθ` preserved) so an
+identical result is genuine inertness, not an inert switch.
+
+| arm | DD2D ALL | SB2D ALL |
+|---|---|---|
+| baseline | 5.78 ± 0.10 | 1.69 ± 0.26 |
+| zero `is_target` | 5.78 ± 0.10 | 1.69 ± 0.26 |
+| zero anchored `obj_rel` cols | 5.78 ± 0.10 | 1.69 ± 0.26 |
+| zero both | 5.78 ± 0.10 | 1.69 ± 0.26 |
+
+Δ (any arm − baseline) = **+0.00, CI [+0.00, +0.00]** on every stratum, both envs. The deployed
+ranker is completely inert to these columns for ranking — pre-registered gate ("< 1 FP on DD2D")
+passed with room to spare, consistent with the 2026-08-06 geometry-intervention finding.
+
+**Result — asymmetry to quote.** On DD2D the change is provably inert (`is_goal ≡ is_target`,
+probe Δ 0.00), so the retrain *reproduces*. On SB2D the boolean flips from **all-zero to a live
+goal channel** — a b5 scene now marks all 5 buttons where `is_target` marked none — an *addition*
+the removal-only probe cannot price, so SB2D's retrained number is a genuine measurement.
+
+**Result — retrain (3 seeds).** The retrain regressed *on the mean*: DD2D **6.63 ± 0.68** vs
+baseline 5.78 (paired +0.85, CI [−0.05, +1.97] — the whole gap at **s1 7.41 ± 2.94** vs 3.44;
+s2/s3 tied), SB2D **2.10 ± 0.43** vs 1.69 (paired +0.41, CI [+0.11, +0.80], excludes 0). But *not*
+information loss: the **best seed matched/beat the baseline on both** (DD2D 6.03, SB2D 1.62), and
+the across-seed std jumped ~7× (0.10 → 0.68). The removed columns are inference-inert (probe
+Δ0.00), so this is optimization *variance*, diagnosed and fixed the next day — see the
+2026-08-09 entry. Deployed numbers after the fix: DD2D **5.92**, SB2D **1.84** (both tie the
+frozen baseline).
+
+**Takeaway-next.** The scene channel was carrying DD2D-specific semantics for free; removing it
+costs nothing on the deployed models and makes the input surface honest for N-target problems and
+future environments. Deferred, characterized: scale-invariance of `area`/`boundary` (probe kept
+them, so unmeasured), and a proper goal-atom token stream (would subsume `obj_is_goal` and handle
+nullary/relational goals). The next real degeneracy is `manipulated = args \ goal_objects`, which
+makes `jaccard ≈ 1.0` on 98.3% of SB2D candidates — applicable everywhere, so it stays under the
+rule, but it is where the SB2D scene features collapse.
+
+---
+
 <a id="2026-08-06-dd2d-shape-size-sweep-geometry-interventions-size"></a>
 ## 2026-08-06 — DD2D shape-size sweep + geometry interventions: size is not the s2 driver
 

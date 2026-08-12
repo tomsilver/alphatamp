@@ -17,16 +17,24 @@ needs no stored artifact, and cannot silently rot.
 and "per-stratum within noise" is unfalsifiable at n=25 per stratum. Requiring the
 identical attempt sequence is falsifiable and localises a regression to a step.
 
-This oracle is the backbone for the gates that follow: the domain adapter and the record
+This oracle was the backbone for the gates that follow: the domain adapter and the record
 tokens rewrite the data path underneath it, and any change that moves a decision fails
-here loudly instead of drifting a mean. It necessarily retires when the position encoding
-is replaced (``cands.pos_emb`` leaves the state dict), which is why that is scheduled as
-the last architectural change.
+here loudly instead of drifting a mean.
+
+**Rollout bit-identity retired 2026-08-08.** Deployed v3 now narrows the scene relation to
+the anchor-free ``[area, sinθ, cosθ]`` triple (``V3Config.d_rel = 3``) where v2.2 reads a
+width-8 target-anchored vector, so a *deployed* v3 rollout is no longer bit-identical to
+v2.2 by design -- ``build_v3_example`` emits a narrower scene than ``build_v2_example``.
+What survives, because it still can: v2.2 checkpoints load into a **compat-mode**
+``SpectreV3Model`` (``d_rel = 8``, the width v2.2 was trained on), the shared submodule
+structure still matches at that width, and a forward pass over the *same* width-8 batch is
+still bit-identical between the v2.2 classes and compat-v3. That is the plumbing guard the
+data-path rewrites need; only the deployed-width rollout comparison is gone. See
+docs/decisions 2026-08-08.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -37,14 +45,11 @@ _ROOT = Path(__file__).resolve().parents[3]
 _DATA = _ROOT / "data" / "spectre"
 _TEST_SPLIT = _DATA / "raw" / "dd2d_v3" / "test"
 _VOCAB = _DATA / "derived" / "dd2d_v3" / "train_vocab.json"
-_CACHE = (
-    _DATA / "derived" / "dd2d_v3" / "compare_cache" / "spectre2_adaptive" / "seed_0"
-)
 _CKPT = _DATA / "checkpoints_v2_evidence_ov" / "dd2d_v3" / "seed_0" / "best.pt"
 
 pytestmark = pytest.mark.skipif(
-    not (_CACHE.is_dir() and _CKPT.is_file() and _VOCAB.is_file()),
-    reason="dd2d_v3 artifacts absent (gitignored data / compare cache not built)",
+    not (_CKPT.is_file() and _VOCAB.is_file() and _TEST_SPLIT.is_dir()),
+    reason="dd2d_v3 artifacts absent (gitignored data not present)",
 )
 
 
@@ -89,22 +94,43 @@ def test_v2_checkpoint_loads_into_v3_strictly() -> None:
     assert model.cfg.n_prior_feats == 0
 
 
-def test_v3_state_dict_keys_match_v2() -> None:
-    """Tripwire against an accidental submodule rename.
+def test_compat_v3_state_dict_keys_match_v2() -> None:
+    """Tripwire against an accidental submodule rename, at the compat scene width.
 
     Renaming ``scene``/``cands``/``facts``/``scorer``/``aux`` breaks checkpoint loading
     for every stored v2.2 run at once, and the symptom (slightly worse numbers) looks
-    like a modelling result rather than a bug.
+    like a modelling result rather than a bug. The v3 side is built at ``d_rel=8`` -- the
+    width v2.2 was trained on -- because that is the config ``load_v2_checkpoint`` uses to
+    reload a frozen v2.2 checkpoint; the *deployed* v3 (``d_rel=3``) deliberately differs
+    and is checked by :func:`test_deployed_v3_narrows_the_scene`.
     """
-    from alphatamp.approaches.spectre.model_v2 import SpectreV2Model
+    from alphatamp.approaches.spectre.model_v2 import D_REL, SpectreV2Model
     from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
 
     kwargs = dict(n_ops=4, max_arity=1)
     v2 = SpectreV2Model(**kwargs, n_overlap_feats=2, n_prior_feats=0)
-    v3 = SpectreV3Model(**kwargs, cfg=V3Config(n_overlap_feats=2, n_prior_feats=0))
+    v3 = SpectreV3Model(
+        **kwargs, cfg=V3Config(n_overlap_feats=2, n_prior_feats=0, d_rel=D_REL)
+    )
     k2 = {k: tuple(v.shape) for k, v in v2.state_dict().items()}
     k3 = {k: tuple(v.shape) for k, v in v3.state_dict().items()}
     assert k3 == k2
+
+
+def test_deployed_v3_narrows_the_scene() -> None:
+    """The deployed default is the narrowed scene, and it is really narrower than v2.2.
+
+    The narrowing must be the *default* -- v3 should not have to opt in to dropping the
+    target-anchored columns. A regression that reverted ``V3Config.d_rel`` to 8 would
+    silently restore the DD2D-target assumption; this fails if it does.
+    """
+    from alphatamp.approaches.spectre.model_v2 import D_REL_V3
+    from alphatamp.approaches.spectre.model_v3 import SpectreV3Model, V3Config
+
+    assert V3Config().d_rel == D_REL_V3 == 3
+    v3 = SpectreV3Model(n_ops=4, max_arity=1, cfg=V3Config(n_overlap_feats=2))
+    assert v3.scene.d_rel == 3
+    assert v3.scene.rel_proj.in_features == 3
 
 
 def _load_v2_reference(vocab):
@@ -127,110 +153,30 @@ def _load_v2_reference(vocab):
 
 
 @pytest.mark.slow
-def test_v3_rollout_is_bit_identical_to_v2() -> None:
-    """The gate: v3 and v2.2 make the same decisions with the same numbers.
+def test_compat_v3_forward_is_bit_identical_to_v2() -> None:
+    """The surviving plumbing gate: the shared submodules compute the same logits.
 
-    Bit-identical is achievable here because compat mode builds the v2.2 submodules, so
-    any difference means the *plumbing* around them diverged -- which is precisely what
-    the later data-path rewrites could break.
+    The old rollout-equivalence test drove ``deployed_rollout_v3_traced``, which now
+    tensorizes the *narrowed* (width-3) scene and so can no longer reproduce v2.2. This
+    replaces it at the forward-pass level and at the compat width: load the same v2.2
+    checkpoint through the v2.2 classes and through a compat-mode ``SpectreV3Model``
+    (``d_rel=8``), feed both the *same* width-8 ``build_v2_example`` batch, and demand
+    bit-identical logits. Any divergence means the plumbing around the shared submodules
+    drifted -- exactly what the data-path rewrites could break -- without depending on the
+    deployed tensorizer that intentionally diverged.
     """
-    from alphatamp.approaches.spectre.evidence import deployed_rollout_traced
-    from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
+    from alphatamp.approaches.spectre.dataset_v2 import build_v2_example, collate_v2
 
-    v3_model, _, vocab = _load()
+    v3_model, _, vocab = _load()  # compat-mode v3, d_rel=8
     v2_model = _load_v2_reference(vocab)
-    device = "cpu"
 
     episodes = _episodes_across_strata(20)
-    total_steps = 0
-    for episode in episodes:
-        a2, t2 = deployed_rollout_traced(
-            v2_model,
-            episode,
-            vocab,
-            device,
-        )
-        # `permissive` is v2.2's demotion semantics, so this remains an equivalence check
-        # after G5. v3's *default* (`strict`) intentionally demotes less on pre-v3
-        # collections: it requires positive evidence that a query ran to exhaustion, which
-        # backfilled records carry only when the attempt cost exactly its minimum. That
-        # divergence is the point of G5 and is asserted in `test_proof_demotion_v3`;
-        # folding it in here would make a real regression and an intended improvement
-        # look identical.
-        # `apply_demotion=True` is passed explicitly and is NOT the deployed default any
-        # more (demotion was cut from the method on 2026-07-30). It has to be forced here:
-        # `deployed_rollout_traced` is the v2.2 path and v2.2 always demotes, so leaving
-        # v3 on the new default would compare two different *policies* and pass only where
-        # the offset happens not to change an argmax -- an equivalence oracle that quietly
-        # stops testing equivalence.
-        a3, t3 = deployed_rollout_v3_traced(
-            v3_model,
-            episode,
-            vocab,
-            device,
-            mode="permissive",
-            apply_demotion=True,
-        )
-        pid = int(episode.provenance.problem_id)
-        assert t3.order == t2.order, f"pid {pid}: attempt order diverged"
-        assert t3.step_dead == t2.step_dead, f"pid {pid}: demotion diverged"
-        assert a3 == a2, f"pid {pid}: attempts diverged"
-        assert t3.step_scores == t2.step_scores, f"pid {pid}: logits diverged"
-        total_steps += len(t3.order)
-
     assert len(episodes) >= 20, f"only {len(episodes)} episodes replayed"
-    # Guard against the sampling regression this test already had once: if every episode
-    # solves on the first attempt, nothing about the rollout loop was exercised.
-    assert total_steps > 3 * len(episodes), (
-        f"only {total_steps} attempts over {len(episodes)} episodes -- "
-        "the sample is not reaching the hard strata"
-    )
-
-
-@pytest.mark.slow
-def test_stored_compare_cache_is_stale_against_current_code() -> None:
-    """Documents a *pre-existing* v2.2 reproducibility gap, so it cannot be rediscovered
-    as if it were a v3 regression.
-
-    The dd2d_v3 comparison cache -- the source of the published 13.68 -- is not
-    reproducible from the checkpoint and code now on disk. Current code is deterministic
-    (verified across processes under hash randomisation) and v2/v3 agree exactly, so the
-    cache was written by a state that no longer exists. This test asserts the *shape* of
-    the discrepancy rather than a number, so it starts passing for the right reason if the
-    cache is ever rebuilt with ``--force``.
-    """
-    from alphatamp.approaches.spectre.inference_v3 import deployed_rollout_v3_traced
-
-    model, _, vocab = _load()
-    cached = {int(p.stem): json.loads(p.read_text()) for p in _CACHE.glob("*.json")}
-    assert cached, "empty compare cache"
-
-    agree = total = 0
-    for episode in _episodes_across_strata(20):
+    for episode in episodes:
+        ex = build_v2_example(episode, vocab, rng=None, evidence=False)
+        batch = collate_v2([ex], max_arity=vocab.max_operator_arity)
+        with torch.no_grad():
+            l2, _ = v2_model(batch)
+            l3, _ = v3_model(batch)
         pid = int(episode.provenance.problem_id)
-        if pid not in cached:
-            continue
-        # Demotion forced ON: the cache this compares against was written when demotion
-        # was part of the method, so leaving it at the new default would add a second,
-        # unrelated source of divergence and make the "known-stale" branch expected for
-        # the wrong reason. This test is about code-vs-cache staleness, nothing else.
-        _, trace = deployed_rollout_v3_traced(
-            model,
-            episode,
-            vocab,
-            "cpu",
-            apply_demotion=True,
-        )
-        agree += int(trace.order == cached[pid]["order"])
-        total += 1
-
-    # Either the cache matches current code everywhere (it was rebuilt -- good), or it is
-    # the known-stale artifact. A *partial* match with no explanation is the state we
-    # must not silently sit in, so record which it is.
-    assert total > 0
-    if agree != total:
-        pytest.skip(
-            f"known-stale dd2d_v3 compare cache: attempt order matches on "
-            f"{agree}/{total} problems; see notebook.md. Rebuild with "
-            f"`precompute_dd2d_cache.py --env-variant dd2d_v3 --force`."
-        )
+        assert torch.equal(l2, l3), f"pid {pid}: compat-v3 logits diverged from v2.2"

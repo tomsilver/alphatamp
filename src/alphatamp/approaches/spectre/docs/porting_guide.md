@@ -181,13 +181,20 @@ Three things that are easy to get silently wrong:
   base collides with the table, so the base disc is what is stored.
 - **The normalization frame.** `dataset_v3` divides poses by a frame width read from
   `SceneGeometry.frame`. Those keys were DD2D literals (`drawer_w`/`drawer_d`); they now
-  accept generic `frame_w`/`frame_d` as well. Write one spelling or the other — **an
-  absent frame silently means `scale = 1.0`**, i.e. unnormalized coordinates, which is a
-  distribution shift rather than an error.
+  accept generic `frame_w`/`frame_d` as well. Write one spelling or the other — as of
+  2026-08-08 an **absent frame raises** (naming the fix) instead of silently meaning
+  `scale = 1.0` / unnormalized coordinates.
 
-`is_target` has no analogue in every domain. Leaving it `False` everywhere is supported;
-the consequence is that the target-relative feature block degrades to absolute world
-coordinates, which is fine in a fixed world frame and is not fine in a moving one.
+**The goal channel needs nothing per-environment (2026-08-08).** v3 reads `obj_is_goal` —
+1.0 for any object named by the goal atoms, computed by `spec.goal_objects` — not the old
+`obj_is_target`, which presupposed a single distinguished target and was silently all-zero on
+any env whose goal names several objects. A new environment supplies **nothing** here; the
+boolean is derived from the goal it already declares, and is correct for any number of targets.
+`ObjectGeometry.is_target` stays in the schema (stored, unread by the v3 tensorizer). The scene
+relation `obj_rel` is likewise the anchor-free triple `[area, sinθ, cosθ]` — the target-anchored
+offsets and the privileged `concave` flag are gone, so there is no target-relative block to
+degrade. (An inference-time probe priced this removal at **Δ 0.00 FP** on both deployed models;
+`notebook/07` 2026-08-08.)
 
 ## 5. Porting the *comparator*, not just SPECTRE
 

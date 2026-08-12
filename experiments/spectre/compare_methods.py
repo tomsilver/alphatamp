@@ -17,9 +17,10 @@ def _(mo):
 
           Plan-feasibility methods on the held-out **test split**, by **rollout FP**
           (failed refinement attempts before the first success; lower is better). **Pick
-          the environment below** — strata, method list, caveats and the §5 scene all come
-          from its `compare_envs.py` entry.
-          """)
+          the environment below** — strata, method list, caveats and the §5 scene all
+          come from its `compare_envs.py` entry.
+          """
+             )
     return
 
 
@@ -102,6 +103,7 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
         "PIGINet": "#ff7f0e",
         "SPECTRE-adaptive": "#d62728",
         "SPECTRE-static": "#ff9896",
+        "LAZY-adaptive": "#2ca02c",
         "VLMPlan-32B": "#9467bd",
         "VLMPlan-GPT5.6": "#8c564b",
     }
@@ -134,12 +136,15 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## Load
+    mo.md(\
+          r"""## Load
 
-          Reads precomputed per-problem FP from the primary + legacy caches (grafting the
-          methods without a native row). Two frames: **`df_seeds`** (per method/seed/problem
-          — §1/§2's `±` is across seeds) and **`df`** (seed-collapsed; §3/§5/the CSV).
-          """)
+          Reads precomputed per-problem FP from the primary + legacy caches (grafting
+          the methods without a native row). Two frames: **`df_seeds`** (per
+          method/seed/problem — §1/§2's `±` is across seeds) and **`df`** (seed-
+          collapsed; §3/§5/the CSV).
+          """
+             )
     return
 
 
@@ -190,7 +195,8 @@ def _(CACHE_DIR, ENV_VARIANT, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, compare
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## 1 · Summary table — mean FP per stratum
+    mo.md(\
+          r"""## 1 · Summary table — mean FP per stratum
 
           `±` = across-seed spread of the per-stratum mean; `seeds` = how many went into it
           (`-` = a single deterministic run). A one-seed row shows a bare mean, never
@@ -270,7 +276,8 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## 2 · Mean FP per stratum (± across-seed std)
+    mo.md(\
+          r"""## 2 · Mean FP per stratum (± across-seed std)
 
           §1 as a bar chart. Error bars = across-seed std; a bar with **no cap** is a
           single deterministic run (astar, VLMPlan). Hatched = grafted from the legacy
@@ -380,7 +387,8 @@ def _(ENV, mo):
         VLMPlan's plan-gen is 0 (its generation *is* the inference `infer_s`).
         """
         if ENV.has_timing
-        else r"""## 2b · Wall-clock to first success
+        else\
+             r"""## 2b · Wall-clock to first success
 
              _Deferred for this environment: its episodes carry real per-candidate refinement
              times, but filling §2b needs a per-env refinement cap (the DD2D 2 s cap would
@@ -537,7 +545,262 @@ def _(ENV, METHODS, SLAB, STRATA, compare, mo, time_tidy):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## 3 · Survival curves
+    mo.md(\
+          r"""## 2c · Paired head-to-head — any two methods, per problem
+
+          Pick **two methods**, a **stratum** (or ALL) and a **metric**. Each point is one
+          test problem: **x = method A**, **y = method B** — both *lower is better*. The
+          dotted **y = x** is parity, so a point **above** the line means **A won** that
+          problem (its value was lower); **below** means **B won**. The verdict under the
+          plot counts the per-problem wins and gives the paired mean margin (bootstrap CI).
+          A method scored on a stratified subset (VLMPlan) pairs only on the problems both
+          methods cover — the reported `n` reflects that.
+          """)
+    return
+
+
+@app.cell
+def _(ENV, SLAB, STRATA, mo, time_records):
+    # Stratum picker (label -> stratum id, plus ALL) and the metric picker. Wall-clock is
+    # offered only when the environment carries per-candidate timing AND rows are cached.
+    hh_stratum = mo.ui.dropdown(
+        options={"ALL": "ALL", **{SLAB.get(s, str(s)): s for s in STRATA}},
+        value="ALL",
+        label="stratum",
+    )
+    _metrics = ["FP"] + (["wall-clock"] if (ENV.has_timing and time_records) else [])
+    hh_metric = mo.ui.dropdown(options=_metrics, value="FP", label="metric")
+    return hh_metric, hh_stratum
+
+
+@app.cell
+def _(METHODS, compare, hh_metric, mo, time_records):
+    # Method options depend on the metric: every method with a per-problem FP row, or only
+    # the timed methods for wall-clock (VLMPlan-32B has no timing, so it drops out here).
+    # This cell re-runs when the metric flips, rebuilding the two method dropdowns.
+    if hh_metric.value == "wall-clock":
+        _timed = {r["method"] for r in time_records}
+        _avail = [m for m in compare.METHOD_ORDER if m in _timed]
+    else:
+        _avail = list(METHODS)
+
+    def _default(preferred, fallback_idx):
+        # Robust default so the headless (script-mode) render and any env missing a method
+        # still produce a valid pair rather than a None selection.
+        if preferred in _avail:
+            return preferred
+        return _avail[min(fallback_idx, len(_avail) - 1)] if _avail else None
+
+    hh_method_a = mo.ui.dropdown(
+        options=_avail, value=_default("SPECTRE-adaptive", 0), label="method A (x)"
+    )
+    hh_method_b = mo.ui.dropdown(
+        options=_avail, value=_default("PIGINet", 1), label="method B (y)"
+    )
+    return hh_method_a, hh_method_b
+
+
+@app.cell
+def _(hh_method_a, hh_method_b, hh_metric, hh_stratum, mo):
+    mo.hstack(
+        [hh_stratum, hh_metric, hh_method_a, hh_method_b],
+        justify="start",
+        gap=1.0,
+        align="center",
+    )
+    return
+
+
+@app.cell
+def _(ENV, compare, pd, plan_gen_s, time_records):
+    # Per-problem wall-clock-to-first-success (seconds) -- the timing analog of `df`. Uses
+    # the deployed CAPPED total (so it matches the §2b headline) via the shared
+    # `compare.per_problem_time_records`, then collapses seeds to a per-problem mean exactly
+    # as `df` does for FP. Empty (typed) frame when the environment has no timing.
+    if ENV.has_timing and time_records:
+        _wc = pd.DataFrame(
+            compare.per_problem_time_records(time_records, plan_gen_s, use_capped=True)
+        )
+        hh_wc = (
+            _wc.groupby(["method", "problem_id", "stratum"], as_index=False)["total_s"]
+            .mean()
+            .astype({"problem_id": int, "stratum": int})
+        )
+    else:
+        hh_wc = pd.DataFrame(columns=["method", "problem_id", "stratum", "total_s"])
+    return (hh_wc,)
+
+
+@app.cell
+def _(
+    ENV,
+    SLAB,
+    compare,
+    df,
+    hh_method_a,
+    hh_method_b,
+    hh_metric,
+    hh_stratum,
+    hh_wc,
+    mo,
+    np,
+    plt,
+):
+    # Build the paired per-problem series for the two chosen methods and scatter them.
+    # `hh_result` carries the aligned arrays to the verdict cell below; the cell's own
+    # output is the figure (or a guard note).
+    _metric = hh_metric.value
+    _a, _b = hh_method_a.value, hh_method_b.value
+    _unit = "wall-clock (s)" if _metric == "wall-clock" else "rollout FP"
+    _frame, _vcol = (hh_wc, "total_s") if _metric == "wall-clock" else (df, "fp")
+
+    def _by_pid(method):
+        _s = _frame[_frame.method == method]
+        return dict(zip(_s["problem_id"].astype(int), _s[_vcol].astype(float)))
+
+    hh_result = None
+    if _a is None or _b is None:
+        _disp = mo.md("*(no methods available for this metric)*")
+    elif _a == _b:
+        _disp = mo.md("*(pick two different methods to compare)*")
+    else:
+        _amap, _bmap = _by_pid(_a), _by_pid(_b)
+        _pids = sorted(set(_amap) & set(_bmap))
+        if hh_stratum.value != "ALL":
+            _pids = [p for p in _pids if compare.stratum_of(p) == hh_stratum.value]
+        if not _pids:
+            _stq = "" if hh_stratum.value == "ALL" else " in this stratum"
+            _disp = mo.md(
+                f"*(no problems where both **{_a}** and **{_b}** have a "
+                f"{_unit} value{_stq})*"
+            )
+        else:
+            _x = np.array([_amap[p] for p in _pids])
+            _y = np.array([_bmap[p] for p in _pids])
+            _sarr = np.array([compare.stratum_of(p) for p in _pids])
+            _vmax = float(max(_x.max(), _y.max()))
+            _vmax = _vmax * 1.05 if _vmax > 0 else 1.0
+            _fig, _ax = plt.subplots(figsize=(5.6, 5.6))
+            _ax.plot([0, _vmax], [0, _vmax], ls=":", color="#444", lw=1.0, zorder=1)
+            if hh_stratum.value == "ALL":
+                _uniq = sorted(set(_sarr.tolist()))
+                _pal = plt.get_cmap("viridis")(np.linspace(0.15, 0.85, len(_uniq)))
+                for _i, _s in enumerate(_uniq):
+                    _mask = _sarr == _s
+                    _ax.scatter(
+                        _x[_mask],
+                        _y[_mask],
+                        s=26,
+                        alpha=0.55,
+                        edgecolor="white",
+                        linewidth=0.3,
+                        color=_pal[_i],
+                        label=SLAB.get(_s, f"s{_s}"),
+                        zorder=2,
+                    )
+                _ax.legend(title="stratum", fontsize=7, loc="lower right")
+            else:
+                _ax.scatter(
+                    _x,
+                    _y,
+                    s=28,
+                    alpha=0.6,
+                    edgecolor="white",
+                    linewidth=0.3,
+                    color="#d62728",
+                    zorder=2,
+                )
+            _lab = (
+                "ALL"
+                if hh_stratum.value == "ALL"
+                else SLAB.get(hh_stratum.value, str(hh_stratum.value))
+            )
+            _ax.set_xlim(0, _vmax)
+            _ax.set_ylim(0, _vmax)
+            _ax.set_aspect("equal", adjustable="box")
+            _ax.set_xlabel(f"{_a} — {_unit}")
+            _ax.set_ylabel(f"{_b} — {_unit}")
+            _ax.set_title(
+                f"{ENV.env_variant} · {_lab} · n={len(_pids)}\n"
+                f"above y=x: {_a} wins · below: {_b} wins"
+            )
+            _ax.text(
+                0.03,
+                0.97,
+                f"↑ {_a} wins",
+                transform=_ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=8,
+                color="#2e7d32",
+            )
+            _ax.text(
+                0.97,
+                0.03,
+                f"↓ {_b} wins",
+                transform=_ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=8,
+                color="#c62828",
+            )
+            plt.tight_layout()
+            hh_result = {
+                "a": _a,
+                "b": _b,
+                "unit": _unit,
+                "n": len(_pids),
+                "x": _x,
+                "y": _y,
+            }
+            _disp = _fig
+    _disp
+    return (hh_result,)
+
+
+@app.cell
+def _(compare, hh_result, mo):
+    from alphatamp.approaches.spectre import eda as _eda_hh
+
+    if hh_result is None:
+        _v = mo.md("")
+    else:
+        _a, _b = hh_result["a"], hh_result["b"]
+        _x, _y, _n = hh_result["x"], hh_result["y"], hh_result["n"]
+        _unit = hh_result["unit"]
+        _awin = int((_x < _y).sum())
+        _bwin = int((_x > _y).sum())
+        _tie = int((_x == _y).sum())
+        _d = _eda_hh.bootstrap_mean_difference(_x, _y, num_resamples=10_000, seed=0)
+        _winner = _a if _awin > _bwin else (_b if _bwin > _awin else None)
+        _verdict = (
+            f"**{_winner} wins more problems.**"
+            if _winner
+            else "**Dead heat on problem wins.**"
+        )
+        _seq = {_a, _b} & set(compare.SEQUENCE_METHODS)
+        _caveat = (
+            f"\n\n_Paired on the **{_n}** problems both cover — "
+            f"{', '.join(sorted(_seq))} is scored on a stratified subset._"
+            if _seq
+            else ""
+        )
+        _v = mo.md(
+            f"{_verdict} **{_a}** won **{_awin}/{_n}**, "
+            f"**{_b}** won **{_bwin}/{_n}**, {_tie} tie(s).\n\n"
+            f"Mean {_unit}: {_a} **{_x.mean():.3f}** vs {_b} **{_y.mean():.3f}**. "
+            f"Paired mean **A−B = {_d.point:+.3f} "
+            f"[{_d.ci_low:+.3f}, {_d.ci_high:+.3f}]** "
+            f"(negative ⇒ {_a} better; CI excluding 0 ⇒ separates)." + _caveat
+        )
+    _v
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(\
+          r"""## 3 · Survival curves
 
           Fraction of problems solved within ≤ k failed attempts (higher & further-left is
           better). `ALL` = whole split, the rest by stratum. Each curve is the mean of the
@@ -585,7 +848,8 @@ def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (mo.md(r"""## 4 · Ablation — what makes SPECTRE adaptive?
+    (mo.md(\
+           r"""## 4 · Ablation — what makes SPECTRE adaptive?
 
           Two adaptive components (both exactly zero at `F=∅`, accruing as the rollout
           observes failures): the **`coverage`/`waste`** columns and **record tokens** (one
@@ -751,7 +1015,8 @@ def _(ENV, STRATA, abl_df, mo, pd):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (mo.md(r"""### 4.2 · `coverage` vs `waste`, separated
+    (mo.md(\
+           r"""### 4.2 · `coverage` vs `waste`, separated
 
           Each column on alone (record tokens stay on for all three). `coverage` = recall
           over the named-culprit pool; `waste` = precision over unexplained work. `neither`
@@ -932,8 +1197,8 @@ def _(REPO, cache_for, compare, np):
     ] + list(INSPECT_SEQ)
 
     def insp_load(method, pid):
-        """``(static scores | None, AdaptiveTrace | None)`` for one method+problem,
-        read from the method's own cache (primary or legacy)."""
+        """``(static scores | None, AdaptiveTrace | None)`` for one method+problem, read
+        from the method's own cache (primary or legacy)."""
         _kind, sdir, adir = INSPECT_SPEC[method]
         _cache = cache_for(method)
         rec = compare.load_static_scores(_cache, sdir, pid) if sdir else None
@@ -1386,7 +1651,8 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(r"""## 6 · VLMPlan — usable plans generated per problem
+    mo.md(\
+          r"""## 6 · VLMPlan — usable plans generated per problem
 
           `n_proposed` = unique, valid, parseable plans each VLM arm generated itself
           (budget 200) — a capacity measure, not an attempt count. Error bars = ± std

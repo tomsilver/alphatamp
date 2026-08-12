@@ -135,7 +135,7 @@ def _sb2d_scene(episode: EpisodeRecord) -> Image:
 
 
 def _sb2d_kinder_scene(episode: EpisodeRecord) -> Image:
-    """kinder's own env pixels with Set-of-Mark labels overlaid — the SAME render the
+    """Kinder's own env pixels with Set-of-Mark labels overlaid — the SAME render the
     VLMPlan prompt attaches, so the inspector shows exactly what the model saw."""
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre.envs.stickbutton2d.render import (
@@ -208,14 +208,19 @@ DD2D = EnvSpec(
         "`cov+waste, tokens` arm (~7.90) — the gap conflates the definition change with "
         "the aggregate-records/evidence-attn switches. §4 is a self-contained "
         "matched-settings study; read it internally, not against §1.",
-        "**`VLMPlan-GPT5.6` (gpt-5.6-luna, the frontier arm) is the *worst* method here** "
-        "— 62.98 ALL, worse than the naive planner order (34.52) and the local Qwen-32B "
-        "(23.55). It over-stages confidently on the packing negative control (s0 43.2 vs "
-        "astar 0.0) and never stalls, so it accrues many diverse failed off-pool attempts. "
-        "It is scored on a stratified 40 (10/stratum); the per-stratum means are comparable "
-        "to the 100-problem rows, the stratum-weighted ALL is not read against them "
-        "1-for-1. A frontier VLM does not rescue VLMPlan on DD2D — see "
-        "`notebook/07` 2026-08-03.",
+        "**`VLMPlan-GPT5.6` (gpt-5.6-terra, the frontier arm) reaches ~parity with the "
+        "naive planner order here** — 35.23 ALL vs astar 34.52 — but stays far behind the "
+        "learned rankers (SPECTRE 5.78, PIGINet 17.27) on the packing negative control. "
+        "This is the stronger tier *and* the gripper-geometry disclosure (PROVENANCE "
+        "deviation 9): together they nearly halve the earlier gpt-5.6-luna row (62.98, "
+        "which had been the worst method). The behaviour is bimodal — 14/40 targets are "
+        "trivially graspable and solved on the first attempt (FP 0), but when staging is "
+        "needed the model over-stages and floods dozens of off-pool proposals that all "
+        "fail geometric refinement (per-problem FP up to 200). Reasoning effort does not "
+        "rescue it: a full-scale medium-effort arm scored 33.5, tied with low (paired 95% "
+        "CI [-18.6, +15.1]). Stratified 40 (10/stratum), single generation seed (bare "
+        "mean, like astar). A frontier VLM does not close the packing gap — see "
+        "`notebook/07` 2026-08-08.",
     ),
     render_scene=_dd2d_scene,
     plan_label=_dd2d_plan_label,
@@ -357,7 +362,9 @@ SB2D_KINDER = EnvSpec(
     # image-free / already-collected and byte-identical to `stickbutton2d_v1`, so they are
     # grafted from that legacy cache. astar is rebuilt natively (deterministic and cheap).
     legacy_variant="stickbutton2d_v1",
-    legacy_only=("SPECTRE-static", "SPECTRE-adaptive", "VLMPlan-32B"),
+    # LAZY is image-free (like SPECTRE), trained + cached on the base stickbutton2d_v1, so
+    # it is grafted from that legacy cache rather than recomputed on the kinder re-imaging.
+    legacy_only=("SPECTRE-static", "SPECTRE-adaptive", "VLMPlan-32B", "LAZY-adaptive"),
     has_ablations=False,  # v3 ablations are SPECTRE-internal; §4 is hidden here
     has_timing=True,  # §2b enabled 2026-08-03: per-env 10s cap, SPECTRE timing grafted
     caveats=(
@@ -376,10 +383,14 @@ SB2D_KINDER = EnvSpec(
         "**b5's training split is 17 episodes** for every learned method (collection cut "
         "at a wall-clock budget), so the b5 column is substantially a generalisation "
         "result — none should be quoted as trained-on-b5.",
-        "**`VLMPlan-GPT5.6` (gpt-5.6-luna) is a genuine planner** — 11.85 ALL, self-solves "
-        "35/40, beats the naive order (16.29) — but **~6× behind the learned rankers** "
-        "(1.69–2.28) and roughly tied with the local Qwen-32B (13.18); it over-thinks b3 "
-        "and only wins at b5. Stratified 40 (10/stratum). See `notebook/07` 2026-08-03.",
+        "**`VLMPlan-GPT5.6` (gpt-5.6-terra) is a genuine planner** — 6.42 ALL, self-solves "
+        "39/40 with 0 censored, and now beats the naive order across the board (astar "
+        "16.29): b1 0.0, b2 2.4, b3 0.9 (better than astar's 2.96 — the earlier "
+        "gpt-5.6-luna row over-thought b3), only b5 stays hard (22.4). It is the stronger "
+        "tier plus the gripper disclosure (deviation 9), roughly halving luna (11.85) and "
+        "clearing the local Qwen-32B (13.18), though still ~3–4× behind the learned rankers "
+        "(1.69–2.28). Stratified 40 (10/stratum), single generation seed. See "
+        "`notebook/07` 2026-08-08.",
         "**§2b wall-clock is under a 10 s per-candidate refinement cap** (vs DD2D's 2 s): "
         "SB2D feasible refines run to seconds, so the cap clears each problem's *fastest* "
         "feasible (0 censored) but abandons slower candidates. Because SB2D's *failing* "
@@ -399,10 +410,90 @@ SB2D_KINDER = EnvSpec(
     ),
 )
 
+DD2D_HOLDOUT = EnvSpec(
+    key="dd2d_holdout_s3",
+    title=(
+        "DD2D held-out stratum — SPECTRE vs PIGINet, VLMPlan and pure planning "
+        "(train s0–s2, evaluate the never-trained s3)"
+    ),
+    env_variant="dd2d_v4_holdout_s3",
+    stratum_labels={0: "s0", 1: "s1", 2: "s2", 3: "s3"},
+    stratum_meaning=DD2D.stratum_meaning,
+    stratum_axis_label="min-feasible-subset stratum",
+    # astar + PIGINet + SPECTRE are scored natively with the s0–s2-trained checkpoints;
+    # VLMPlan-GPT5.6 is symlinked into this cache from dd2d_v4 (training-free, identical
+    # test problems). Nothing is grafted through the notebook, so no legacy variant.
+    legacy_variant=None,
+    legacy_only=(),
+    has_ablations=False,
+    has_timing=True,
+    caveats=(
+        "**Held-out STRATUM generalization.** SPECTRE and PIGINet are trained on s0–s2 "
+        "only — the s3 training problems are excluded via `--train-strata 0 1 2`, no "
+        "re-collection — then evaluated on all four strata of the standard dd2d_v4 test "
+        "split. **s3 is the never-trained held-out stratum, and it is the headline "
+        "column.** astar and VLMPlan are training-free and unchanged; VLMPlan-GPT5.6 is "
+        "reused verbatim from the deployed dd2d_v4 cache.",
+        "**Do not read the pooled ALL as the result.** It averages held-out s3 with "
+        "s0–s2, which are in-training-distribution strata (held-out *problems*, seen "
+        "*strata*). The s0–s2 columns are the sanity floor; s3 is the generalization "
+        "test.",
+    ),
+    render_scene=_dd2d_scene,
+    plan_label=_dd2d_plan_label,
+    scene_legend=DD2D.scene_legend,
+)
+
+SB2D_KINDER_HOLDOUT = EnvSpec(
+    key="sb2d_holdout_b5",
+    title=(
+        "StickButton2D held-out stratum (kinder-rendered crops) — SPECTRE v3 vs PIGINet, "
+        "VLMPlan and pure planning (train b1/b2/b3, evaluate the never-trained b5)"
+    ),
+    env_variant="stickbutton2d_v1_kinder_holdout_b5",
+    stratum_labels={0: "b1", 1: "b2", 2: "b3", 3: "b5"},
+    stratum_meaning=SB2D.stratum_meaning,
+    stratum_axis_label="button count",
+    # Mirrors SB2D_KINDER: PIGINet (kinder crops) + astar + VLMPlan-GPT5.6 are native to
+    # this cache; SPECTRE is image-free and grafted from the instrumented-refiner
+    # `stickbutton2d_v1_holdout_b5` cache. Every learned row is the b1/b2/b3-trained
+    # checkpoint; VLMPlan-GPT5.6 is reused verbatim (symlinked native).
+    legacy_variant="stickbutton2d_v1_holdout_b5",
+    legacy_only=("SPECTRE-static", "SPECTRE-adaptive"),
+    has_ablations=False,
+    has_timing=True,
+    caveats=(
+        "**Held-out STRATUM generalization.** SPECTRE and PIGINet are trained on b1/b2/b3 "
+        "only — b5 excluded via `--train-strata 0 1 2`, no re-collection — then evaluated "
+        "on all four strata. **b5 is the never-trained held-out stratum, and it is the "
+        "headline column.** astar and VLMPlan are training-free; VLMPlan-GPT5.6 is reused "
+        "verbatim.",
+        "**The existing b5-training caveat compounds here.** In the standard collection "
+        "b5's train split was already only 17 episodes; here b5 is removed from training "
+        "entirely, so b5 is a clean held-out-stratum number for every learned method.",
+        "**Do not read the pooled ALL as the result.** It averages held-out b5 with the "
+        "in-distribution b1/b2/b3 (b1/b2 are anchors every method ties on). Read b5.",
+        "**SPECTRE is grafted from the instrumented `stickbutton2d_v1` refiner cache** "
+        "(image-free, so schematic-vs-kinder is irrelevant to it); PIGINet uses the real "
+        "kinder crops. The contrast that moves is PIGINet vs SPECTRE on b5.",
+    ),
+    render_scene=_sb2d_kinder_scene,
+    plan_label=_sb2d_plan_label,
+    scene_legend=SB2D_KINDER.scene_legend,
+)
+
 #: Registry. Order sets the notebook's default (first entry). Only the kinder-rendered
-#: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03).
+#: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03); the two
+#: `_holdout_` entries are the held-out-stratum generalization sections (2026-08-09).
 ENVS: dict[str, EnvSpec] = {
-    spec.key: spec for spec in (SB2D_KINDER, DD2D, DD2D_GEN_SHAPEONLY)
+    spec.key: spec
+    for spec in (
+        SB2D_KINDER,
+        DD2D,
+        DD2D_GEN_SHAPEONLY,
+        DD2D_HOLDOUT,
+        SB2D_KINDER_HOLDOUT,
+    )
 }
 
 
@@ -434,6 +525,8 @@ __all__ = [
     "DD2D",
     "SB2D",
     "SB2D_KINDER",
+    "DD2D_HOLDOUT",
+    "SB2D_KINDER_HOLDOUT",
     "get",
     "stratum_label",
     "methods_for",

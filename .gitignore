@@ -233,6 +233,11 @@ data/dd2d/
 src/alphatamp/approaches/spectre/envs/dd2d/data/
 src/alphatamp/approaches/spectre/envs/dd2d/out_dd2d/
 
+# Pre-refactor local safety archive (2026-08 publication cleanup). A "just in case"
+# copy of the pre-refactor spectre code + gitignored data blobs, kept on disk only —
+# never committed. See docs/decisions ADR for the refactor.
+/_archive_local/
+
 # Untracked analysis output from analyze_cluttered_storage.ipynb
 experiments/analyze_cluttered_storage.pkl
 
@@ -252,3 +257,8 @@ wandb/
 # from repo-wide CI tooling (autoformat/mypy/pylint/pytest) — see run_autoformat.sh,
 # [tool.mypy]/[tool.isort]/[tool.pytest] in pyproject.toml, and .pylintrc.
 /kb/
+
+# Vendored LAZY reference clone (Khodeir et al drake-tamp, py2-era; has its own .git).
+# Reference only for baselines/lazy/; kept out of git and excluded from CI tooling for
+# the same reasons as /kb/ (its py2 syntax breaks black/mypy/pylint/pytest collection).
+/src/alphatamp/approaches/spectre/baselines/drake-tamp/

@@ -7,6 +7,16 @@ disagree, **this one describes the code** and the proposal describes what was pl
 Numbers cite [`notebook.md`](notebook/README.md); decisions cite [`decisions.md`](decisions/README.md)
 and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
 
+> **⚠️ Update (2026-08-09).** The deployed input surface was made **domain-agnostic** —
+> `obj_is_target`→`obj_is_goal`, `obj_rel` 8→3 (`d_rel=3`), `concave` cut
+> ([`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)).
+> That regressed the mean as optimization *variance* (not information loss), recovered by a
+> training-side lever, **`--select-window 5`**, giving **DD2D 5.92 ± 0.29 (s1 4.84), SB2D
+> 1.84 ± 0.26** — both tie the frozen target-anchored yardstick below (5.78 / 1.69), paired CI
+> includes 0. EMA weight-averaging was built and tested but is inert on both envs
+> ([`decisions/07` 2026-08-09](decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider)).
+> The **5.78** below is the frozen yardstick, not the current deployed number.
+>
 > **Status (2026-07-31).** All three v3 goals are met on DD2D. Performance: over **3 seeds
 > each**, v3 **5.78 ± 0.10** vs deployed v2.2 **17.27 ± 3.02**, winning every stratum — §7.
 > Cleanliness and generality: §1, §3, and [`porting_guide.md`](porting_guide.md).
@@ -62,7 +72,13 @@ Unchanged from v2.2 except where stated; shared primitives (SAB/PMA, tags, PL lo
 *imported*, never copied, because they are survivors rather than v2-specific.
 
 - **`SceneEncoder`** — per-object [tag emb; 32-point boundary descriptor via PMA; pose;
-  relation-to-target; is-target] → SAB×2. Unchanged.
+  `obj_rel`; `obj_is_goal`] → SAB×2. **Narrowed for domain-agnosticism (2026-08-08,
+  [ADR](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)):**
+  `obj_rel` is the width-3 anchor-free triple `[area, sinθ, cosθ]` (`D_REL_V3 = 3`), not v2.2's
+  width-8 target-anchored vector; `obj_is_goal` (any goal-named object) replaces `obj_is_target`
+  (the single DD2D target). The encoder takes `d_rel` per instance, so a compat-mode load of a
+  v2.2 checkpoint still builds the width-8 scene. An inference probe priced the removal at Δ 0.00
+  FP on both deployed models.
 - **`CandidateEncoder`** — per-step [op emb + position + projected arg tags] → PMA.
   `CandidateEncoderV3` optionally replaces the learned absolute position table with a
   sinusoidal encoding (§6).
@@ -105,19 +121,23 @@ on, and it matters for reading §7's ablations:
 | record `state_delta` (§6.1's `s_j`, as a delta from `s_0`) | **yes** — a tie on DD2D; deployed to complete the record schema (§7.1) |
 | **proof-tier demotion** (the external offset) | **no** — cut 2026-07-30 (§4.1); `apply_demotion=False` is the default everywhere |
 | `SceneEncoderV3` (per-object evidence) | **no** — built and tested; hurt s1 badly on its own (20.84) |
-| `CandidateEncoderV3` (sinusoidal positions) | **no** — built and tested; G9 descoped, so the D-8 oracle is still live |
+| `CandidateEncoderV3` (sinusoidal positions) | **no** — built and tested; G9 descoped. The D-8 oracle's *forward*/structure half is live; its *rollout* half retired with the 2026-08-08 scene narrowing |
 | necessity head | **no** — cut; `use_necessity` raises |
 
 **Loss** — listwise Plackett–Luce, global + within-length buckets. No pointwise BCE on the
 ranker. The bucket key is `domain.length_key`, verified to induce the identical partition
 to v2.2's DD2D-specific key on 120000/120000 skeletons.
 
-**D-8, exact absence.** Every v3 feature is config-gated on `V3Config`, and with all flags
+**D-8, exact absence.** Every v3 *feature* is config-gated on `V3Config`, and with all flags
 off the model is built from the *same submodule classes under the same attribute names* as
-v2.2 — so a v2.2 checkpoint loads `strict=True` and `test_v3_equivalence.py` demands
-identical decisions through the v3 code path. That oracle is what made the data-path
-rewrites safe. It retires only when `sinusoidal_pos` is enabled, since `cands.pos_emb`
-then leaves the state dict.
+v2.2 — so a v2.2 checkpoint loads `strict=True` in compat mode. **The rollout-equivalence half
+of the oracle retired 2026-08-08**: deployed v3 narrows the scene (`d_rel = 3`) where v2.2 is
+width-8, so a *deployed* rollout is no longer bit-identical to v2.2 by design. What
+`test_v3_equivalence.py` still enforces, and is what made the data-path rewrites safe: v2.2
+loads into a **compat-mode** (`d_rel = 8`) `SpectreV3Model`, the submodule structure matches at
+that width, and a **forward pass over the same width-8 batch stays bit-identical**. (The
+scene-narrowing is a *removal*, so unlike the config-gated features it is not additive; it is
+the deliberate exception noted in the ADR.)
 
 ---
 

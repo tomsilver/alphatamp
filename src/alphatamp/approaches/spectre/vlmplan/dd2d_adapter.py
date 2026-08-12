@@ -1,18 +1,19 @@
-"""DD2D implementation of :class:`~.adapter.EnvAdapter` — the only env-aware module here.
+"""DD2D implementation of :class:`~.adapter.EnvAdapter` — the only env-aware module
+here.
 
 The problem object is a **canonicalized** ``EpisodeRecord`` (as returned by
-``eda.load_split_episodes``), which is the single source for everything: object names and
-types, the STRIPS initial state and goal, the ground-truth scene geometry, the candidate
-pool (for the published-order fallback and for pool matching), and the stored refinement
-outcomes. Using the canonicalized record — not the raw DD2D JSON — is what keeps object
-names (``item_7``) identical across the prompt, the rendered image labels, the pool
-indices, and every other method's cache record.
+``eda.load_split_episodes``), which is the single source for everything: object names
+and types, the STRIPS initial state and goal, the ground-truth scene geometry, the
+candidate pool (for the published-order fallback and for pool matching), and the stored
+refinement outcomes. Using the canonicalized record — not the raw DD2D JSON — is what
+keeps object names (``item_7``) identical across the prompt, the rendered image labels,
+the pool indices, and every other method's cache record.
 
 **Geometry is disclosed in text.** DD2D's PDDL is deliberately geometry-blind (the
 shortest optimistic plan is literally ``retrieve(target)``), so a prompt carrying only
 literals would describe a problem in which every plan is equally good. Giving the model
-per-item pose/shape/size is the DD2D analogue of KinDER's object-centric state, and it is
-what makes this a fair test of *planning* rather than of clairvoyance.
+per-item pose/shape/size is the DD2D analogue of KinDER's object-centric state, and it
+is what makes this a fair test of *planning* rather than of clairvoyance.
 """
 
 from __future__ import annotations
@@ -22,6 +23,13 @@ from typing import Sequence
 
 from PIL.Image import Image
 
+from alphatamp.approaches.spectre.envs.dd2d.dd2d.grasps import (
+    FINGER_THICK,
+    FINGER_WIDTH,
+    MAX_APERTURE,
+    MIN_APERTURE,
+    N_DIRECTIONS,
+)
 from alphatamp.approaches.spectre.envs.dd2d.spectre_geometry import reconstruct_scene
 from alphatamp.approaches.spectre.envs.dd2d.spectre_operators import OPERATOR_BY_NAME
 from alphatamp.approaches.spectre.envs.dd2d.spectre_render import render_labeled_scene
@@ -196,6 +204,20 @@ class DD2DAdapter(EnvAdapter):
                 f"y in [{y0:.2f}, {y1:.2f}] (area {(x1 - x0) * (y1 - y0):.1f}). Staged "
                 f"items must all fit inside it without overlapping."
             )
+        # Deviation 8 (prompts/PROVENANCE.md). The exact gripper geometry is a fixed
+        # domain constant the trained methods absorb from labels; disclosing it to the
+        # zero-shot VLM closes a fairness gap rather than leaking the answer. Numbers are
+        # imported from the grasp model (grasps.py), so they can never drift from the env.
+        header.append(
+            f"- The two-finger parallel-jaw gripper has fingers {FINGER_WIDTH:.1f} cm "
+            f"wide (along the line it closes on) x {FINGER_THICK:.1f} cm thick, and can "
+            f"open between {MIN_APERTURE:.1f} and {MAX_APERTURE:.1f} cm. To pick an item "
+            "it must close both fingers onto free space on two opposite sides of that "
+            "item (or reach a finger into a concave notch), with no other item in the "
+            f"way; it tries {N_DIRECTIONS} approach angles. An item is ungraspable when "
+            "its neighbours leave no such clear opposing gap on any angle — moving a "
+            "blocking neighbour to the buffer opens one up."
+        )
         header.append(
             "- Each item below is given as: name, shape family, bounding box "
             "(width x height), footprint area, whether its outline is concave, its "

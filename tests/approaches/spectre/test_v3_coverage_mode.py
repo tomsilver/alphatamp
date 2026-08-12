@@ -126,29 +126,66 @@ def test_coverage_mode_default_is_exact_absence() -> None:
     np.testing.assert_array_equal(np.asarray(example.overlap, float), explicit)
 
 
-@pytest.mark.skipif(
-    not (_ROOT / "data" / "spectre" / "checkpoints_v3_v3final_s0").is_dir(),
-    reason="v3 checkpoints absent",
-)
-def test_load_v3_checkpoint_round_trips_the_deploy_kwargs() -> None:
+@pytest.mark.skipif(not _VOCAB.is_file(), reason="dd2d_v4 vocab absent")
+def test_load_v3_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     """The switches that change what the tensorizer emits come back off the checkpoint.
 
     ``load_state_dict(strict=True)`` catches a wrong *architecture*, but ``overlap_mode``
     and ``coverage_mode`` are invisible to it -- deploying under the wrong one feeds the
     model a column it never saw populated. So they are read back, never passed in.
+
+    Self-contained: it saves a checkpoint through the same ``asdict(TrainV3Config)`` path
+    ``train_v3`` uses, rather than reading a disk artifact -- a real deployed checkpoint is
+    the width-3 narrowed model now, and a pre-narrowing artifact no longer loads by design.
     """
+    from dataclasses import asdict
+
+    import torch
+
     from alphatamp.approaches.spectre.inference_v3 import load_v3_checkpoint
+    from alphatamp.approaches.spectre.model_v3 import (
+        N_OVERLAP_V3,
+        SpectreV3Model,
+        V3Config,
+    )
+    from alphatamp.approaches.spectre.train_v3 import TrainV3Config
 
     vocab = Vocab.from_json(_VOCAB)
-    ckpt = (
-        _ROOT
-        / "data"
-        / "spectre"
-        / "checkpoints_v3_v3final_s0"
-        / "dd2d_v4"
-        / "seed_0"
-        / "best.pt"
+    # the deployed arm: jaccard overlap, coverage on both columns, records aggregated,
+    # state-delta off (the v3final flags) -- built and saved exactly as train_v3 does.
+    cfg = TrainV3Config(
+        overlap_mode="jaccard",
+        use_overlap=True,
+        coverage_feats=True,
+        aggregate_records=True,
+        use_records=True,
+        evidence_attn=True,
+        use_state_delta=False,
     )
+    model = SpectreV3Model(
+        n_ops=len(vocab.operators),
+        max_arity=vocab.max_operator_arity,
+        cfg=V3Config(
+            n_overlap_feats=N_OVERLAP_V3,
+            n_prior_feats=0,
+            d_rel=cfg.d_rel,
+            use_records=True,
+            evidence_attn=True,
+            coverage_feats=True,
+            n_predicates=len(vocab.predicates),
+            max_pred_arity=vocab.max_predicate_arity,
+        ),
+    )
+    ckpt = tmp_path / "best.pt"
+    torch.save(
+        {
+            "cfg": asdict(cfg),
+            "n_ops": len(vocab.operators),
+            "state_dict": model.state_dict(),
+        },
+        ckpt,
+    )
+
     _model, deploy = load_v3_checkpoint(ckpt, vocab, "cpu")
     assert set(deploy) == {
         "overlap_mode",
@@ -165,6 +202,5 @@ def test_load_v3_checkpoint_round_trips_the_deploy_kwargs() -> None:
     assert deploy["overlap_mode"] == "jaccard"
     assert deploy["coverage_feats"] is True
     assert deploy["aggregate_records"] is True
-    # checkpoints trained before the flag existed must default, not KeyError
     assert deploy["coverage_mode"] == "both"
     assert deploy["state_delta"] is False

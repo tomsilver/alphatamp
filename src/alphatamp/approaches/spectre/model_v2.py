@@ -48,7 +48,15 @@ D_TAG = 32
 D_POINT = 16
 D_DESCRIPTOR = 32
 D_POSE = 8
-D_REL = 8  # relation-to-target scalars projection
+D_REL = 8  # v2.2 scene relation scalars (frozen; target-anchored, see SceneEncoder)
+# v3 narrows the scene relation to the three *anchor-free* per-object scalars
+# ``[area, sinθ, cosθ]`` -- the target-anchored offsets (dx, dy, dist), the area ratio to
+# a single target, and the privileged ``concave`` flag are all cut, because they either
+# presuppose one distinguished target (meaningless with N goal objects) or are privileged
+# geometry a non-privileged pipeline could not read. v2.2 keeps the width-8 vector so its
+# published numbers are untouched; the two coexist because ``SceneEncoder`` takes the
+# width per instance. See docs/decisions 2026-08-08.
+D_REL_V3 = 3
 MAX_TAGS_DEFAULT = 32
 DROPOUT = 0.1
 
@@ -76,8 +84,8 @@ class SpectreV2Batch:
     obj_tags: Tensor  # (B, N) long — episode-local tag ids (0 = pad)
     obj_boundary: Tensor  # (B, N, P, 2) float — resampled boundary ring, item frame
     obj_pose: Tensor  # (B, N, 3) float — (x, y, theta), normalized
-    obj_rel: Tensor  # (B, N, D_REL) float — relation-to-target scalars
-    obj_is_target: Tensor  # (B, N) float — 1 for the target object
+    obj_rel: Tensor  # (B, N, d_rel) float — per-object scene scalars (v2: 8, v3: 3)
+    obj_is_goal: Tensor  # (B, N) float — 1 for an object named by the goal atoms
     obj_mask: Tensor  # (B, N) bool — real object
     # candidates (skeletons)
     cand_op_ids: Tensor  # (B, K, L) long — operator-schema ids (0 = pad)
@@ -154,14 +162,21 @@ class SceneEncoder(nn.Module):
     """
 
     def __init__(
-        self, max_tags: int = MAX_TAGS_DEFAULT, dropout_p: float = DROPOUT
+        self,
+        max_tags: int = MAX_TAGS_DEFAULT,
+        dropout_p: float = DROPOUT,
+        d_rel: int = D_REL,
     ) -> None:
         super().__init__()
+        # ``d_rel`` is the width of ``obj_rel``: 8 for v2.2 (target-anchored), 3 for v3
+        # (anchor-free ``[area, sinθ, cosθ]``). Carried per instance so the same class
+        # serves both without a fork; a checkpoint is bound to the width it was trained on.
+        self.d_rel = d_rel
         self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
         self.footprint = FootprintEncoder(dropout_p)
         self.pose_proj = nn.Linear(3, D_POSE)
-        self.rel_proj = nn.Linear(D_REL, D_REL)
-        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + D_REL + 1
+        self.rel_proj = nn.Linear(d_rel, d_rel)
+        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + d_rel + 1
         self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
         self.sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
         self.sab2 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
@@ -171,7 +186,7 @@ class SceneEncoder(nn.Module):
         desc = self.footprint(batch.obj_boundary, batch.obj_mask)  # (B, N, D_DESC)
         pose = self.pose_proj(batch.obj_pose)
         rel = self.rel_proj(batch.obj_rel)
-        tgt = batch.obj_is_target.unsqueeze(-1)
+        tgt = batch.obj_is_goal.unsqueeze(-1)
         tok = self.proj(torch.cat([tag, desc, pose, rel, tgt], dim=-1))
         tok = self.sab1(tok, batch.obj_mask)
         tok = self.sab2(tok, batch.obj_mask)
