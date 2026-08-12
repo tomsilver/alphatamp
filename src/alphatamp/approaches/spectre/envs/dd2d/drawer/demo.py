@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         help="render up to N plan clips per problem, ALWAYS including the first feasible plan",
     )
     ap.add_argument("--video-format", choices=["mp4", "gif"], default="mp4")
-    ap.add_argument("--out-dir", default="out_dd2d")
+    ap.add_argument("--out-dir", default="data/dd2d/out_dd2d")
     ap.add_argument(
         "--workers",
         type=int,

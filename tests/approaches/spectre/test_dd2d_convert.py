@@ -26,7 +26,7 @@ from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 from alphatamp.approaches.spectre.vocab import OOV_TOKEN, extract_vocab
 
 _RAW_V2 = (
-    Path(spectre_pkg.__file__).parent / "envs" / "dd2d" / "data" / "dd2d" / "raw_v2"
+    Path(spectre_pkg.__file__).resolve().parents[4] / "data" / "dd2d" / "raw_v2"
 )
 
 

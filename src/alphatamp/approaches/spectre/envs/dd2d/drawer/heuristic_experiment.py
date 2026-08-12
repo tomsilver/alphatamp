@@ -21,7 +21,7 @@ This is the heavy compute layer: it generates problems, enumerates all arms, and
 (the expensive step) with a **lazy per-problem memo** -- each distinct skeleton is refined at
 most once (fixed per-skeleton seed so its feasibility is identical across arms), and only if
 some arm reaches it before that arm's first feasible. It writes one CSV row per (problem, arm)
-to ``out_dd2d/heuristic_experiment/results.csv`` (override with ``--output``) plus a sibling
+to ``data/dd2d/out_dd2d/heuristic_experiment/results.csv`` (override with ``--output``) plus a sibling
 run-meta JSON. The marimo notebook ``heuristic_notebook.py`` reads that CSV and renders the
 charts (it does not compute).
 
@@ -31,7 +31,7 @@ charts (it does not compute).
         --diverse-crowd --min-subset 3 --retry-cap 10 --samples-per-step 15 --time-budget 10 --workers 8
     # custom output path (relative to the envsearch dir); writes results_minsubset2_meta.json alongside:
     python -m blocks_tamp.dd2d.heuristic_experiment --min-subset 2 \\
-        --output out_dd2d/heuristic_experiment/results_minsubset2.csv
+        --output data/dd2d/out_dd2d/heuristic_experiment/results_minsubset2.csv
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass
 
 from .eda import _progress, wilson_ci
 
-OUT_DIR = os.path.join("out_dd2d", "heuristic_experiment")
+OUT_DIR = os.path.join("data", "dd2d", "out_dd2d", "heuristic_experiment")
 RESULTS_CSV = os.path.join(OUT_DIR, "results.csv")
 RUN_META = os.path.join(OUT_DIR, "run_meta.json")
 

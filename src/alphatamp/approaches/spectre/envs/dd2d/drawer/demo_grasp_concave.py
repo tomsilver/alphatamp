@@ -25,7 +25,7 @@ Two clips per sampled item, concatenated into one mp4:
   penetrate a neighbour/wall, until the first collision-free cell, then lift.
 
     python -m alphatamp.approaches.spectre.envs.dd2d.drawer.demo_grasp_concave
-    # -> out_dd2d/grasp_demos/{horseshoe,shoe,dumbbell}_s{seed}.mp4  (+ a printed contact table)
+    # -> data/dd2d/out_dd2d/grasp_demos/{horseshoe,shoe,dumbbell}_s{seed}.mp4  (+ a printed contact table)
 
 Units: centimetres, matching the rest of DD2D.
 """
@@ -697,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--fps", type=int, default=12)
     ap.add_argument("--format", dest="fmt", choices=["mp4", "gif"], default="mp4")
-    ap.add_argument("--out-dir", default="out_dd2d/grasp_demos")
+    ap.add_argument("--out-dir", default="data/dd2d/out_dd2d/grasp_demos")
     args = ap.parse_args(argv)
 
     os.makedirs(args.out_dir, exist_ok=True)

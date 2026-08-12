@@ -224,14 +224,11 @@ data/spectre/logs/
 data/spectre/configs/
 data/spectre/derived/
 
-# DD2D collections at the repo root (raw_v3/raw_v4 datasets; several GB).
+# DD2D collections + PIGINet artifacts at the repo root (raw_v2/raw_v3/raw_v4
+# datasets + out_dd2d/ CLIP caches & PIGINet checkpoints; several GB). The
+# raw_v2 dataset and out_dd2d/ were relocated here from the vendored env tree
+# (envs/dd2d/) in the 2026-08 publication cleanup; the env *source* stays tracked.
 data/dd2d/
-
-# DD2D vendored-env artifacts (large, derived/input data — keep out of git; the
-# vendored env *source* under envs/dd2d/ stays tracked). data/ = raw_v2 dataset
-# (~2GB); out_dd2d/ = CLIP caches + PIGINet checkpoints (~4.7GB).
-src/alphatamp/approaches/spectre/envs/dd2d/data/
-src/alphatamp/approaches/spectre/envs/dd2d/out_dd2d/
 
 # Pre-refactor local safety archive (2026-08 publication cleanup). A "just in case"
 # copy of the pre-refactor spectre code + gitignored data blobs, kept on disk only —

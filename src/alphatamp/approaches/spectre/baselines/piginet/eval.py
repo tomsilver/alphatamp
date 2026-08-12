@@ -84,7 +84,7 @@ def evaluate(
     cache_dir,
     split="test",
     device="cpu",
-    out_dir="out_dd2d/piginet_eval",
+    out_dir="data/dd2d/out_dd2d/piginet_eval",
 ):
     from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -218,12 +218,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--ckpt", default="out_dd2d/piginet_v2/ckpt.pt")
+    ap.add_argument("--ckpt", default="data/dd2d/out_dd2d/piginet_v2/ckpt.pt")
     ap.add_argument("--data-root", default="data/dd2d/raw_v2")
-    ap.add_argument("--cache-dir", default="out_dd2d/clip_cache_v2")
+    ap.add_argument("--cache-dir", default="data/dd2d/out_dd2d/clip_cache_v2")
     ap.add_argument("--split", default="test")
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--out-dir", default="out_dd2d/piginet_eval")
+    ap.add_argument("--out-dir", default="data/dd2d/out_dd2d/piginet_eval")
     args = ap.parse_args(argv)
     evaluate(
         args.ckpt, args.data_root, args.cache_dir, args.split, args.device, args.out_dir

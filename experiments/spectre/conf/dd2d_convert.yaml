@@ -4,7 +4,7 @@ defaults:
 
 # Source: DD2D raw_v2 JSON dataset (per-problem dirs of NNN.json records).
 # Relative to the repo root (hydra.job.chdir is false).
-raw_root: "src/alphatamp/approaches/spectre/envs/dd2d/data/dd2d/raw_v2"
+raw_root: "data/dd2d/raw_v2"
 
 # Destination: standard SPECTRE data layout consumed by build_vocab / train.
 data_root: "data/spectre"

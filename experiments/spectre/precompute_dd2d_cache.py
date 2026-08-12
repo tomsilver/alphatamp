@@ -62,7 +62,7 @@ from alphatamp.approaches.spectre.compare import stratum_of
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
-DD2D = REPO / "src" / "alphatamp" / "approaches" / "spectre" / "envs" / "dd2d"
+DD2D_OUT = REPO / "data" / "dd2d" / "out_dd2d"
 # StickButton2D keeps its PIGINet artifacts beside its other derived data rather than
 # in a vendored env tree, so the paths below need the derived root at module scope.
 DERIVED_ROOT = REPO / "data" / "spectre" / "derived"
@@ -75,23 +75,23 @@ DEFAULT_ENV_VARIANT = "dd2d_v2"
 # are pinned per variant here. Add an entry to onboard a new collection.
 _PIGINET_PATHS = {
     "dd2d_v2": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce" / "ckpt.pt",
-        "data": DD2D / "data" / "dd2d" / "raw_v2",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v2",
+        "ckpt": DD2D_OUT / "piginet_bce" / "ckpt.pt",
+        "data": REPO / "data" / "dd2d" / "raw_v2",
+        "cache": DD2D_OUT / "clip_cache_v2",
     },
     "dd2d_v3": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v3" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v3" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v3",  # the repo-root re-collection
-        "cache": DD2D / "out_dd2d" / "clip_cache_v3",
+        "cache": DD2D_OUT / "clip_cache_v3",
     },
     # dd2d_v4 is the first collection where PIGINet has a real seed axis: `train.py`
     # gained `--seed` on 2026-07-28, so `{seed}` appears in the checkpoint path and the
     # cache is written per seed. Earlier variants have one deterministic run each and
     # keep their flat, seedless cache layout -- the reader detects which it is looking at.
     "dd2d_v4": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4",
+        "cache": DD2D_OUT / "clip_cache_v4",
     },
     # DD2D shape-only generalization set (2026-08-04): scored train-old / test-new via
     # `--test-variant`, so PIGINet's checkpoint comes from the dd2d_v4 (train) entry above
@@ -99,17 +99,17 @@ _PIGINET_PATHS = {
     # (auto-built by `precompute_clip_cache`). `ckpt` here is the same v4 head, so even a
     # standalone `--env-variant dd2d_v4gen_shapeonly` PIGINet run stays train-old.
     "dd2d_v4gen_shapeonly": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly",
     },
     # Shape-SIZE sweep (2026-08-06): the physically-shrunk tee/cross collection (x0.7
     # linear). A real, PIGINet-able variant -- the collector wrote native JSON + crops --
     # scored train-old / test-new like the shape-only set (same v4 head).
     "dd2d_v4gen_shapeonly_sz07": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly_sz07",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly_sz07",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly_sz07",
     },
     # Inference-time geometry interventions (2026-08-06): the shape-only episodes with
     # tee/cross area (hullarea) or boundary (hullshape) rewritten to their convex hull, to
@@ -119,29 +119,29 @@ _PIGINET_PATHS = {
     # shape-only crops only so an accidental PIGINet run does not crash (it would be the
     # unmodified image, hence meaningless -- do not run `--methods piginet` here).
     "dd2d_v4gen_shapeonly_hullarea": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly",
     },
     "dd2d_v4gen_shapeonly_hullshape": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly",
     },
     # scale07: the paired input-only x0.7 shrink (same problems + labels as the shape-only
     # set; only tee/cross boundary+area shrunk in the model input). SPECTRE + astar only,
     # like the other interventions.
     "dd2d_v4gen_shapeonly_scale07": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly",
     },
     # fresh un-shrunk control (band 7): bounds collection variance for the sz07 shrink.
     # A real collection with native crops, so PIGINet-able if wanted; scored SPECTRE+astar.
     "dd2d_v4gen_shapeonly_fresh": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4gen_shapeonly_fresh",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4gen_shapeonly_fresh",
+        "cache": DD2D_OUT / "clip_cache_v4gen_shapeonly_fresh",
     },
     # StickButton2D, 2026-08-01. `data` is the SPECTRE data root rather than a record
     # tree: this collection has no PIGINet JSON on disk, so `SB2DDomain` builds the
@@ -178,9 +178,9 @@ _PIGINET_PATHS = {
     # DD2D single cache: the holdout PIGINet head; data + CLIP cache reuse dd2d_v4's
     # (same test images -- CLIP is checkpoint-independent).
     "dd2d_v4_holdout_s3": {
-        "ckpt": DD2D / "out_dd2d" / "piginet_bce_v4_holdout_s{seed}" / "ckpt.pt",
+        "ckpt": DD2D_OUT / "piginet_bce_v4_holdout_s{seed}" / "ckpt.pt",
         "data": REPO / "data" / "dd2d" / "raw_v4",
-        "cache": DD2D / "out_dd2d" / "clip_cache_v4",
+        "cache": DD2D_OUT / "clip_cache_v4",
     },
     # SB2D SPECTRE-only cache (instrumented v1 refiner). No PIGINet is run here -- SPECTRE
     # is image-free -- but the variant must be a known `--env-variant`, so it mirrors

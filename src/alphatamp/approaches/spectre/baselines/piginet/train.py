@@ -434,8 +434,10 @@ def main(argv=None) -> int:
         default="stickbutton2d_v1",
         help="collection the stickbutton2d domain reads (ignored for dd2d)",
     )
-    ap.add_argument("--cache-dir", default=os.path.join("out_dd2d", "clip_cache"))
-    ap.add_argument("--out", default=os.path.join("out_dd2d", "piginet"))
+    ap.add_argument(
+        "--cache-dir", default=os.path.join("data", "dd2d", "out_dd2d", "clip_cache")
+    )
+    ap.add_argument("--out", default=os.path.join("data", "dd2d", "out_dd2d", "piginet"))
     ap.add_argument("--arm", default="compare", choices=("compare",) + ARMS)
     ap.add_argument(
         "--select",

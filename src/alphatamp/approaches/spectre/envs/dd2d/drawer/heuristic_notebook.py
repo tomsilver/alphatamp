@@ -1,7 +1,7 @@
 """DD2D heuristic-arm comparison -- reactive presentation layer over the experiment
 output.
 
-Loads ``out_dd2d/heuristic_experiment/results.csv`` + ``run_meta.json`` (written by
+Loads ``data/dd2d/out_dd2d/heuristic_experiment/results.csv`` + ``run_meta.json`` (written by
 ``python -m blocks_tamp.dd2d.heuristic_experiment``) and compares the five enumeration arms
 (bfs / astar-hff / gbf-hff / astar-dist / gbf-dist) on first-feasible rank:
 
@@ -63,7 +63,9 @@ def _(mo):
     import os
 
     csv_path = mo.ui.text(
-        value=os.path.join("out_dd2d", "heuristic_experiment", "results.csv"),
+        value=os.path.join(
+            "data", "dd2d", "out_dd2d", "heuristic_experiment", "results.csv"
+        ),
         label="results.csv path",
         full_width=True,
     )
