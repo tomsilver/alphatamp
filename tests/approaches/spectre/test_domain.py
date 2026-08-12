@@ -134,7 +134,7 @@ def test_manipulated_equals_the_place_buffer_literal_on_every_skeleton() -> None
     from alphatamp.approaches.spectre.domain import goal_objects as goal_objs_fn
 
     n = 0
-    for episode in _iter_episodes():
+    for episode in _iter_episodes():  # type: ignore[no-untyped-call]
         goal_objs = goal_objs_fn(episode)
         for skeleton in episode.skeleton_pool:
             assert manipulated(skeleton, goal_objs) == _staged_dd2d(skeleton)
@@ -150,7 +150,7 @@ def test_length_key_induces_the_same_buckets_as_the_v2_prior_column() -> None:
     """``len(operator_seq) == 2*|staged| + 1``, so bucketing on plan length partitions
     the pool exactly as v2.2's normalized removal-count column did."""
     n = 0
-    for episode in _iter_episodes():
+    for episode in _iter_episodes():  # type: ignore[no-untyped-call]
         for skeleton in episode.skeleton_pool:
             assert length_key(skeleton) == 2 * len(_staged_dd2d(skeleton)) + 1
             n += 1
@@ -197,8 +197,9 @@ def test_canonicalize_is_not_idempotent_so_eval_must_load_raw() -> None:
     differently (``item_10`` -> ``item_2``). Scene poses survive, but the object->tag
     binding does not -- and tags are the join key the whole representation runs on. The
     comparison cache used to source already-canonicalized episodes from
-    ``eda.load_split_episodes`` and hand them to ``build_v2_example``, which canonicalizes
-    again, so evaluation ran on a different binding than training (which loads raw).
+    ``eda.load_split_episodes`` and hand them to ``build_v2_example``, which
+    canonicalizes again, so evaluation ran on a different binding than training (which
+    loads raw).
 
     This asserts the *non*-idempotence deliberately: the day it becomes idempotent this
     test fails, and whoever fixed it should then simplify the loaders rather than keep a
@@ -220,8 +221,10 @@ def test_canonicalize_is_not_idempotent_so_eval_must_load_raw() -> None:
         twice = canonicalize_episode(once, rng=None)
         checked += 1
         # poses are stable; only the naming/order moves
-        assert [o.pose for o in once.scene_geometry.objects] == [
-            o.pose for o in twice.scene_geometry.objects
+        assert [
+            o.pose for o in once.scene_geometry.objects  # type: ignore[union-attr]
+        ] == [
+            o.pose for o in twice.scene_geometry.objects  # type: ignore[union-attr]
         ]
         if _names(once) != _names(twice):
             differing += 1

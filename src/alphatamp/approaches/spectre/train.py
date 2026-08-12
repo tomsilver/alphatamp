@@ -118,33 +118,35 @@ class TrainConfig:
     # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
     # evidence from 30% of the rest, so >half of training carries no evidence -- while a
     # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
-    # after it. Over-weighting the static case is the same rollout-alignment error as the
-    # |F| cap, on the other axis.
+    # after it. Over-weighting the static case is the same rollout-alignment error as
+    # the |F| cap, on the other axis.
     p_empty: float = 0.35
     p_drop_facts: float = 0.3
-    # G9: restrict the *training* split to these strata (empty = all). This is experiment
-    # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
-    # this is neither: it decides which episodes exist during training, exactly as the
-    # proposal's "train s0-s2, deploy s3" protocol (§7.4 A4) requires.
+    # G9: restrict the *training* split to these strata (empty = all). This is
+    # experiment design, not a model input -- C2 bans stratum as an input or a
+    # test-time gate, and this is neither: it decides which episodes exist during
+    # training, exactly as the proposal's "train s0-s2, deploy s3" protocol (§7.4 A4)
+    # requires.
     train_strata: tuple[int, ...] = ()
     # Weight averaging for lower-variance deployment. "none" | "ema". This is a training
     # *process* lever, not an input or architecture switch: it changes which weights are
     # saved, never what the model contains or what `build_example` emits. OFF ("none")
     # never constructs the EMA shadow and takes the current code path byte-for-byte (the
     # D-8 exact-absence discipline), so `weight_avg="none"` runs are bit-identical to
-    # pre-change training. Added 2026-08-08 to recover the domain-agnostic (narrowed-input)
-    # model's across-seed variance without touching inputs/architecture -- the removed
-    # scene columns were inference-inert (probe Δ0.00) and the best narrowed seed matches
-    # the baseline, so the gap is optimization variance, which EMA targets directly.
+    # pre-change training. Added 2026-08-08 to recover the domain-agnostic
+    # (narrowed-input) model's across-seed variance without touching inputs/architecture
+    # -- the removed scene columns were inference-inert (probe Δ0.00) and the best
+    # narrowed seed matches the baseline, so the gap is optimization variance, which EMA
+    # targets directly.
     weight_avg: str = "none"
-    # Per-optimizer-step EMA decay; effective averaging window ~ 1/(1-decay) steps. 0.999
-    # over the post-warmup tail is a fine-grained local average in the single basin the
-    # cosine-to-zero LR settles into. On a tiny dataset (few steps/epoch, e.g. SB2D) drop
-    # toward 0.99 if the EMA barely separates from the raw model.
+    # Per-optimizer-step EMA decay; effective averaging window ~ 1/(1-decay) steps.
+    # 0.999 over the post-warmup tail is a fine-grained local average in the single
+    # basin the cosine-to-zero LR settles into. On a tiny dataset (few steps/epoch, e.g.
+    # SB2D) drop toward 0.99 if the EMA barely separates from the raw model.
     ema_decay: float = 0.999
-    # Epoch at which the EMA shadow is (re-)seeded from the live weights and updates begin.
-    # Default = warmup_epochs so the shadow never averages in the random init or the
-    # high-LR warmup iterates.
+    # Epoch at which the EMA shadow is (re-)seeded from the live weights and updates
+    # begin. Default = warmup_epochs so the shadow never averages in the random init or
+    # the high-LR warmup iterates.
     ema_start_epoch: int = 2
 
 
@@ -233,16 +235,16 @@ def _trainable(ep) -> bool:
 def _claim_out_dir(out_dir: Path) -> None:
     """Refuse to start if another live run already owns this checkpoint directory.
 
-    Two runs of the same arm silently interleave their writes to ``best.pt``, so the file
-    ends up from whichever finished last and the checkpoint's provenance is
+    Two runs of the same arm silently interleave their writes to ``best.pt``, so the
+    file ends up from whichever finished last and the checkpoint's provenance is
     unrecoverable.
-    That happened during the 2026-07-27 push: a relaunch after a crash left two processes
-    on one path, and the same config scored 8.57 then 8.39 as the second overwrote the
-    first. The conclusion survived because the config was identical; it would not have if
-    the arms had differed.
+    That happened during the 2026-07-27 push: a relaunch after a crash left two
+    processes on one path, and the same config scored 8.57 then 8.39 as the second
+    overwrote the first. The conclusion survived because the config was identical; it
+    would not have if the arms had differed.
 
-    A stale marker (owner no longer alive) is reclaimed rather than fatal, so a killed run
-    does not block the directory forever.
+    A stale marker (owner no longer alive) is reclaimed rather than fatal, so a killed
+    run does not block the directory forever.
     """
     marker = out_dir / ".owner"
     if marker.is_file():
@@ -253,9 +255,9 @@ def _claim_out_dir(out_dir: Path) -> None:
             pass  # stale or unreadable -> reclaim
         else:
             raise RuntimeError(
-                f"{out_dir} is already being written by pid {owner}. Two runs sharing a "
-                f"checkpoint dir produce a best.pt of unrecoverable provenance. Use a "
-                f"different --out-suffix, or stop that run first."
+                f"{out_dir} is already being written by pid {owner}. Two runs sharing "
+                f"a checkpoint dir produce a best.pt of unrecoverable provenance. "
+                f"Use a different --out-suffix, or stop that run first."
             )
     marker.write_text(str(os.getpid()))
     atexit.register(lambda: marker.unlink(missing_ok=True))
@@ -305,8 +307,8 @@ def deployed_val_fp(
 
     The selector measures exactly what is deployed: a purely learned ranker, with no
     proof-demotion (cut from the method on 2026-07-30). ``budget=None`` runs to the pool
-    cap, i.e. uncensored -- the same convention reporting uses, and the only setting under
-    which this statistic can see the s2/s3 tail where models actually differ.
+    cap, i.e. uncensored -- the same convention reporting uses, and the only setting
+    under which this statistic can see the s2/s3 tail where models actually differ.
     """
     model.eval()
     fps = []
@@ -332,8 +334,8 @@ def deployed_val_fp(
 def _ema_update(ema, model, decay: float) -> None:
     """In-place EMA of ``model``'s weights into ``ema``.
 
-    Float tensors decay toward the live weights; the rare non-float tensor (none exist in
-    this LayerNorm-only model today) is copied verbatim so the shadow stays a valid,
+    Float tensors decay toward the live weights; the rare non-float tensor (none exist
+    in this LayerNorm-only model today) is copied verbatim so the shadow stays a valid,
     loadable state dict. Called only when EMA is enabled; the ``None`` guard in
     :func:`_run_epoch` keeps the OFF path bit-identical to pre-change training.
     """
@@ -447,13 +449,18 @@ def train_v3(
         model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
 
+    ema_note = (
+        f"(decay={cfg.ema_decay},start={cfg.ema_start_epoch})"
+        if cfg.weight_avg == "ema"
+        else ""
+    )
     print(
         f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
         f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
         f"state_delta={cfg.use_state_delta} "
         f"weight_avg={cfg.weight_avg}"
-        f"{f'(decay={cfg.ema_decay},start={cfg.ema_start_epoch})' if cfg.weight_avg == 'ema' else ''} "
+        f"{ema_note} "
         f"selection=deployed-val-FP(ma{cfg.select_window}, "
         f"n={len(val_episodes)}, "
         f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
@@ -493,9 +500,9 @@ def train_v3(
         # it by one -- silently selecting under a different configuration than it
         # trained.
         def _val_fp(m: SpectreModel) -> float:
-            # Closes over the epoch's selector config so the raw and EMA passes are scored
-            # identically (select what you deploy). Kwargs inlined, not splatted, so mypy
-            # checks each against `deployed_val_fp`'s typed signature.
+            # Closes over the epoch's selector config so the raw and EMA passes are
+            # scored identically (select what you deploy). Kwargs inlined, not splatted,
+            # so mypy checks each against `deployed_val_fp`'s typed signature.
             return deployed_val_fp(
                 m,
                 val_episodes,
@@ -512,9 +519,9 @@ def train_v3(
             )
 
         fp = _val_fp(model)
-        # Select what you deploy: when EMA is on, the EMA weights are the ones that would
-        # be shipped, so the selector must score *them* -- not only the raw model. `None`
-        # until the shadow exists (epoch < ema_start_epoch).
+        # Select what you deploy: when EMA is on, the EMA weights are the ones that
+        # would be shipped, so the selector must score *them* -- not only the raw model.
+        # `None` until the shadow exists (epoch < ema_start_epoch).
         fp_ema = _val_fp(ema_model) if ema_model is not None else None
         log.append(
             {
@@ -527,10 +534,11 @@ def train_v3(
         )
         # moving average: a single 100-episode val pass is noisy, and argmin over 30
         # epochs would systematically pick the luckiest one rather than the best model.
-        # Keep-the-better: smooth the raw and (when present) the EMA series separately and
-        # save whichever weights produced the lower smoothed val_fp. Because both are
-        # scored on the same metric, turning EMA on can never select a *worse* checkpoint
-        # than off -- it can only help or be inert (the arm's safety property).
+        # Keep-the-better: smooth the raw and (when present) the EMA series separately
+        # and save whichever weights produced the lower smoothed val_fp. Because both
+        # are scored on the same metric, turning EMA on can never select a *worse*
+        # checkpoint than off -- it can only help or be inert (the arm's safety
+        # property).
         window = [r["val_fp"] for r in log[-cfg.select_window :]]
         smoothed = float(np.mean(window))
         candidates: list[tuple[float, str, SpectreModel]] = [(smoothed, "raw", model)]
@@ -680,7 +688,10 @@ def main(argv=None) -> int:
         "--select-window",
         type=int,
         default=TrainConfig.select_window,
-        help="moving-average window for the val-FP selector; widen for a jitterier model",
+        help=(
+            "moving-average window for the val-FP selector; "
+            "widen for a jitterier model"
+        ),
     )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)

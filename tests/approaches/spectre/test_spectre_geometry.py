@@ -35,7 +35,7 @@ def _scene_geometry_from_live(scene) -> SceneGeometry:
         objs.append(
             ObjectGeometry(
                 name=name,
-                pose=tuple(float(v) for v in st.pose),
+                pose=tuple(float(v) for v in st.pose),  # type: ignore[arg-type]
                 boundary=ring,
                 family=st.shape.family,
                 area=float(st.shape.area),

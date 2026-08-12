@@ -1,14 +1,15 @@
 """EMA weight-averaging in train_v3 (docs/decisions 2026-08-08).
 
-The lever is a training-*process* addition to recover the domain-agnostic (narrowed-input)
-model's across-seed variance without touching inputs or architecture. Two guarantees:
+The lever is a training-*process* addition to recover the domain-agnostic
+(narrowed-input) model's across-seed variance without touching inputs or architecture.
+Two guarantees:
 
-- **Off-by-default is byte-identical.** `weight_avg="none"` never builds the EMA shadow and
-  takes the pre-change path, so training stays deterministic/reproducible (the trainer's
-  D-8 exact-absence discipline).
-- **On is not inert.** `weight_avg="ema"` genuinely tracks a moving average and exposes it
-  to the selector (`val_fp_ema` logged; `selected` recorded), so "averaging silently does
-  nothing" cannot pass.
+- **Off-by-default is byte-identical.** `weight_avg="none"` never builds the EMA shadow
+  and takes the pre-change path, so training stays deterministic/reproducible (the
+  trainer's D-8 exact-absence discipline).
+- **On is not inert.** `weight_avg="ema"` genuinely tracks a moving average and exposes
+  it to the selector (`val_fp_ema` logged; `selected` recorded), so "averaging silently
+  does nothing" cannot pass.
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ def test_ema_update_is_a_decayed_average() -> None:
 def test_ema_update_copies_non_float_tensors() -> None:
     """Non-float buffers are copied verbatim (kept a valid, loadable state dict)."""
 
-    class _M(torch.nn.Module):
+    class _M(torch.nn.Module):  # type: ignore[name-defined]
         def __init__(self, step: int) -> None:
             super().__init__()
             self.lin = torch.nn.Linear(2, 2)
@@ -100,18 +101,18 @@ def test_config_default_is_off() -> None:
 def test_weight_avg_none_never_builds_the_shadow(tmp_path) -> None:
     """Off-by-default takes the raw-only path: no EMA shadow, no EMA in selection.
 
-    The off-by-default guarantee is a *code path*, not bit-identity — GPU training is not
-    bit-deterministic at fixed seed and does not need to be. So this asserts the observable
-    consequences of the `ema is not None` guard: with `weight_avg="none"` the shadow is
-    never constructed (`val_fp_ema` is `None` every epoch) and the selector only ever picks
-    the raw weights (`selected == "raw"`). Runs on the default device.
+    The off-by-default guarantee is a *code path*, not bit-identity — GPU training is
+    not bit-deterministic at fixed seed and does not need to be. So this asserts the
+    observable consequences of the `ema is not None` guard: with `weight_avg="none"` the
+    shadow is never constructed (`val_fp_ema` is `None` every epoch) and the selector
+    only ever picks the raw weights (`selected == "raw"`). Runs on the default device.
     """
     import json
 
     from alphatamp.approaches.spectre.train import train_v3
 
-    vocab = _vocab()
-    cfg = TrainConfig(seed=0, weight_avg="none", **_FAST)
+    vocab = _vocab()  # type: ignore[no-untyped-call]
+    cfg = TrainConfig(seed=0, weight_avg="none", **_FAST)  # type: ignore[arg-type]
     out = tmp_path / "none"
     train_v3(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]
@@ -127,15 +128,17 @@ def test_weight_avg_ema_is_not_inert(tmp_path) -> None:
 
     Guards against "averaging silently does nothing": the shadow must be scored
     (`val_fp_ema` present and finite once it exists) and the saved checkpoint must record
-    which arm won. The EMA shadow provably differs from the live weights (unit test above),
-    so a finite `val_fp_ema` means it was really built and evaluated.
+    which arm won. The EMA shadow provably differs from the live weights (unit test
+    above), so a finite `val_fp_ema` means it was really built and evaluated.
     """
     import json
 
     from alphatamp.approaches.spectre.train import train_v3
 
-    vocab = _vocab()
-    cfg = TrainConfig(seed=0, weight_avg="ema", ema_start_epoch=0, **_FAST)
+    vocab = _vocab()  # type: ignore[no-untyped-call]
+    cfg = TrainConfig(
+        seed=0, weight_avg="ema", ema_start_epoch=0, **_FAST  # type: ignore[arg-type]
+    )
     out = tmp_path / "ema"
     train_v3(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]

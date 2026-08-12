@@ -545,7 +545,7 @@ def test_static_cache_layout_is_detected_not_assumed(tmp_path: Path) -> None:
     assert by_method["astar-dist"][1] == "-"
 
 
-def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
+def test_v3_table_reports_between_seed_spread() -> None:
     """The table's ``±`` is the spread across seeds of the per-stratum mean."""
     # two problems in one stratum; per-seed means are 5, 7, 9 -> mean 7, sample std 2
     records = []

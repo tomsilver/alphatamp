@@ -19,10 +19,10 @@ Three v2.2 features are deliberately *not* carried over:
   It was worth a measured ~14%, but it is the last per-environment geometry routine in
   the deployment story, and the observed signal is what generalizes.
 - The **short-first prior** as a scorer feature (R1). The plan-length column survives
-  only as the within-length loss's bucket key, which is now :func:`domain.length_key`; the
-  model sees no prior (``SpectreConfig.n_prior_feats == 0``). It was a per-dataset hand switch
-  that diverged training on the easier collection, and note it was never a clean feature
-  ablation anyway: enabling it also zero-inits the scorer head.
+  only as the within-length loss's bucket key, which is now :func:`domain.length_key`;
+  the model sees no prior (``SpectreConfig.n_prior_feats == 0``). It was a per-dataset
+  hand switch that diverged training on the easier collection, and note it was never a
+  clean feature ablation anyway: enabling it also zero-inits the scorer head.
 """
 
 from __future__ import annotations
@@ -154,7 +154,8 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     # ``obj_rel`` width comes from the examples, not the ``D_REL`` constant: the
     # target-anchored scene emits 8, the anchor-free deployed scene emits 3, and one
     # collator serves both. All examples in a batch share a builder and therefore a
-    # width; assert it rather than silently truncating a mismatched one to ``examples[0]``.
+    # width; assert it rather than silently truncating a mismatched one to
+    # ``examples[0]``.
     d_rel = examples[0].obj_rel.shape[-1] if examples else D_REL
     assert all(
         e.obj_rel.shape[-1] == d_rel for e in examples
@@ -249,9 +250,9 @@ def sample_context(
 ) -> tuple[frozenset[int], bool]:
     """Sample a failure context ``F`` plus an evidence-dropout flag.
 
-    Mass is heavy at ``|F| = 0`` because that is the deployment start: the static pathway
-    has to stand on its own before any failure has been observed. ``hide_facts`` drops
-    the evidence for an example so the ranker cannot become dependent on it.
+    Mass is heavy at ``|F| = 0`` because that is the deployment start: the static
+    pathway has to stand on its own before any failure has been observed. ``hide_facts``
+    drops the evidence for an example so the ranker cannot become dependent on it.
     """
     if not fail_idx or rng.random() < p_empty:
         return frozenset(), False
@@ -290,10 +291,10 @@ def _aggregate_per_query(records: list) -> list:
     one per failed sample. The instrumented refiner emits one per sample, so a candidate
     whose `place-buffer(o)` was retried across many buffer poses contributes hundreds of
     near-identical tokens (measured: mean 2.2 per candidate but **max 290**, so a single
-    s1 context at |F|=30 reached ~720 tokens against v2.2's ~40 facts). That is not extra
-    information -- the samples are 99.3% distinct only in *which pose* failed, which the
-    token does not even encode -- but it does dilute the scorer's attention and let one
-    unlucky candidate dominate the evidence memory.
+    s1 context at |F|=30 reached ~720 tokens against v2.2's ~40 facts). That is not
+    extra information -- the samples are 99.3% distinct only in *which pose* failed,
+    which the token does not even encode -- but it does dilute the scorer's attention
+    and let one unlucky candidate dominate the evidence memory.
 
     Aggregation keeps the deepest occurrence (the furthest the plan got), sums effort,
     and takes the union of culprits, so nothing the token *encodes* is lost.
@@ -351,11 +352,12 @@ def build_record_arrays(
     """Failure records of the tried candidates, as ``(schema_id, args, culprits,
     scalars)``.
 
-    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts. Their
-    sound consequence is applied outside the net as demotion; feeding them in as tokens
-    invites the scorer to learn the crude correlate instead ("blocked sets are large, so
-    prefer longer plans"), which measurably wrecked the easy strata in v2.2 until the
-    tiers were split. What reaches the net is evidence the deduction could *not* use.
+    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts.
+    Their sound consequence is applied outside the net as demotion; feeding them in as
+    tokens invites the scorer to learn the crude correlate instead ("blocked sets are
+    large, so prefer longer plans"), which measurably wrecked the easy strata in v2.2
+    until the tiers were split. What reaches the net is evidence the deduction could
+    *not* use.
 
     Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
     decoration: backfilled records report whole-attempt effort while instrumented ones
@@ -369,7 +371,8 @@ def build_record_arrays(
     reached* state per query: ``_aggregate_per_query`` keeps the deepest record, and the
     delta rides along on it. Note the delta's **size** is ~fully determined by the
     ``j/L`` scalar already present (measured corr 0.940), so what it adds is object
-    *identity*; no count feature is derived from it, which would just be another length proxy.
+    *identity*; no count feature is derived from it, which would just be another length
+    proxy.
     """
     arity = max(vocab.max_predicate_arity, 1)
     out: list[RecordArray] = []
@@ -388,10 +391,10 @@ def build_record_arrays(
                 int(vocab.operators.get(rec.schema, 0)),
                 [tags[a] for a in rec.args if a in tags][:MAX_RECORD_ARGS],
                 # `dev_blame` is the fallback for environments with no class-1 channel:
-                # objects named by the collateral deviation rather than by a check. Never
-                # both -- `culprits` is empty exactly where `dev_blame` is populated -- so
-                # the slot always carries one provenance, and on DD2D `dev_blame` is
-                # absent and this reduces to the original expression.
+                # objects named by the collateral deviation rather than by a check.
+                # Never both -- `culprits` is empty exactly where `dev_blame` is
+                # populated -- so the slot always carries one provenance, and on DD2D
+                # `dev_blame` is absent and this reduces to the original expression.
                 [tags[c] for c in (rec.culprits or rec.dev_blame) if c in tags][
                     :MAX_RECORD_CULPRITS
                 ],
@@ -452,14 +455,15 @@ def build_example(
 
     # --- scene tokens -------------------------------------------------------
     # Normalisation frame. `drawer_w`/`drawer_d` are DD2D's spelling and are kept as
-    # accepted aliases so every stored DD2D episode tensorizes byte-identically; a second
-    # environment writes the generic `frame_w`/`frame_d` instead. An absent frame still
-    # falls back to `scale = 1.0` -- unnormalised, which is what the older RT2D/kinder
-    # records get and what SB2D would silently get if it wrote neither spelling.
+    # accepted aliases so every stored DD2D episode tensorizes byte-identically; a
+    # second environment writes the generic `frame_w`/`frame_d` instead. An absent frame
+    # still falls back to `scale = 1.0` -- unnormalised, which is what the older
+    # RT2D/kinder records get and what SB2D would silently get if it wrote neither
+    # spelling.
     frame = geo.frame or {}
     # `drawer_w`/`drawer_d` are DD2D's spelling; `frame_w`/`frame_d` the generic one a
-    # second environment writes. Require at least one: an absent frame used to fall back to
-    # scale=1.0 *silently*, leaving obj_pose unnormalized and mixing units across
+    # second environment writes. Require at least one: an absent frame used to fall back
+    # to scale=1.0 *silently*, leaving obj_pose unnormalized and mixing units across
     # environments (cm on DD2D, m on SB2D). Fail loudly and name the fix instead.
     _fw = frame.get("drawer_w", frame.get("frame_w"))
     _fd = frame.get("drawer_d", frame.get("frame_d"))
@@ -470,15 +474,15 @@ def build_example(
             "(scale=1)."
         )
     scale = max(float(_fw or 0.0), float(_fd or 0.0), 1.0)
-    # The goal channel is `is_goal` (any object named by the goal atoms), not `is_target`
-    # (the one object a DD2D JSON flagged). `is_target` presupposes a single distinguished
-    # target and is silently all-zero on an env whose goal names several objects (SB2D);
-    # `is_goal` is well-defined for any goal, including N>1 targets, and is byte-identical
-    # to `is_target` on every DD2D episode (proven 720/720). The target-anchored `obj_rel`
-    # columns (dx, dy, dist to the target, area ratio to the target) and the privileged
-    # `concave` flag are cut for the same reason -- only the three anchor-free per-object
-    # scalars `[area, sinθ, cosθ]` remain. Absolute position is unaffected (it lives in
-    # `obj_pose`). See docs/decisions 2026-08-08.
+    # The goal channel is `is_goal` (any object named by the goal atoms), not
+    # `is_target` (the one object a DD2D JSON flagged). `is_target` presupposes a single
+    # distinguished target and is silently all-zero on an env whose goal names several
+    # objects (SB2D); `is_goal` is well-defined for any goal, including N>1 targets,
+    # and is byte-identical to `is_target` on every DD2D episode (proven 720/720). The
+    # target-anchored `obj_rel` columns (dx, dy, dist to the target, area ratio to the
+    # target) and the privileged `concave` flag are cut for the same reason -- only the
+    # three anchor-free per-object scalars `[area, sinθ, cosθ]` remain. Absolute
+    # position is unaffected (it lives in `obj_pose`). See docs/decisions 2026-08-08.
     goal_objs = spec.goal_objects(canon)
 
     n_obj = len(geo.objects)
@@ -553,16 +557,17 @@ def build_example(
     # (corr −0.284; mean |S| 1.38 dead vs 2.39 alive on dd2d_v4 train), so the net can
     # fit it as "short ⇒ bad". That is sound only where the rule actually fired and is
     # L4's failure mode everywhere else -- which is why s1, the stratum on which short
-    # *is* correct, regressed. The sound consequence still applies outside the net as the
-    # demotion offset, where a wrong weight cannot override it.
+    # *is* correct, regressed. The sound consequence still applies outside the net as
+    # the demotion offset, where a wrong weight cannot override it.
     want_dead = overlap_mode in ("both", "dead")
     want_jac = overlap_mode in ("both", "jaccard")
     want_cov = coverage_feats
     # `coverage_mode` splits the pair the same way, and for the same reason: they answer
-    # different questions -- `coverage` asks "does this candidate remove the objects the
-    # refiner reported as blocking", `waste` asks "does it also remove objects that were
-    # never implicated". They have only ever been measured together, so which one carries
-    # the effect is unknown; zeroing one column isolates it without changing any shape.
+    # different questions -- `coverage` asks "does this candidate remove the objects
+    # the refiner reported as blocking", `waste` asks "does it also remove objects
+    # that were never implicated". They have only ever been measured together, so which
+    # one carries the effect is unknown; zeroing one column isolates it without changing
+    # any shape.
     want_coverage = want_cov and coverage_mode in ("both", "coverage")
     want_waste = want_cov and coverage_mode in ("both", "waste")
     n_ov = N_OVERLAP_V3 if want_cov else 2
@@ -600,8 +605,8 @@ def build_example(
             ]
             if want_cov:
                 # The unified definitions (`unified_evidence.py`). Deployed since
-                # 2026-07-31. Computes discretionary work from the candidate's own causal
-                # structure -- "does this candidate discharge the culprit before
+                # 2026-07-31. Computes discretionary work from the candidate's own
+                # causal structure -- "does this candidate discharge the culprit before
                 # re-entering the situation that named it" -- rather than from a
                 # goal-object subtraction.
                 _cov, _wst = coverage_and_waste(

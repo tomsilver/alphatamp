@@ -84,6 +84,12 @@ exclude = [
     "experiments/spectre/analyze_spectre\\.py$",
     "experiments/spectre/compare_dd2d_methods(_archive)?\\.py$",
     "experiments/spectre/precompute_dd2d_cache\\.py$",
+    # marimo notebook (cell-scoped locals, untyped `scienceplots` import); like
+    # analyze_spectre.py above, not worth annotating notebook cells.
+    "experiments/spectre/compare_methods\\.py$",
+    # Dev diagnostic script (one-off holdout-vs-full comparison); excluded like the
+    # marimo notebooks rather than annotating throwaway analysis code.
+    "experiments/spectre/holdout_vs_full\\.py$",
     # Vendored DD2D environment (migrated from the envsearch repo, see
     # envs/dd2d/MIGRATION_DD2D.md). Excluded from strict mypy like lib/ vendoring;
     # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,

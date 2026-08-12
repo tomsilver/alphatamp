@@ -130,7 +130,7 @@ def test_published_order_is_the_collection_order(adapter, episode) -> None:
 # every one of their proposals. Neither failure is visible in a result: the plans are
 # discarded, VLMPlan falls back to published order, and the row just looks weak.
 # --------------------------------------------------------------------------- #
-def _buttons(adapter, episode):
+def _buttons(adapter, episode) -> list[str]:
     return sorted(n for n, t in adapter.objects(episode).items() if t == "circle")
 
 

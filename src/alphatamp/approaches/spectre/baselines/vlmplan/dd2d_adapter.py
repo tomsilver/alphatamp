@@ -67,7 +67,8 @@ What each skill does (these are the exact rules the low-level executor enforces)
   empty and o to still be in the drawer. The gripper holds at most one item.
 - place-buffer(o): set the held item o down on the buffer. Requires that you are holding
   o. Afterwards the gripper is empty again and o occupies space on the buffer.
-- retrieve(o): take the target item o out of the drawer, completing the task. Requires the
+- retrieve(o): take the target item o out of the drawer, completing the task. \
+Requires the
   gripper to be empty and o to still be in the drawer. This is the ONLY skill that
   achieves the goal.
 
@@ -207,11 +208,13 @@ class DD2DAdapter(EnvAdapter):
         # Deviation 8 (prompts/PROVENANCE.md). The exact gripper geometry is a fixed
         # domain constant the trained methods absorb from labels; disclosing it to the
         # zero-shot VLM closes a fairness gap rather than leaking the answer. Numbers are
-        # imported from the grasp model (grasps.py), so they can never drift from the env.
+        # imported from the grasp model (grasps.py), so they can never drift from the
+        # env.
         header.append(
             f"- The two-finger parallel-jaw gripper has fingers {FINGER_WIDTH:.1f} cm "
             f"wide (along the line it closes on) x {FINGER_THICK:.1f} cm thick, and can "
-            f"open between {MIN_APERTURE:.1f} and {MAX_APERTURE:.1f} cm. To pick an item "
+            f"open between {MIN_APERTURE:.1f} and {MAX_APERTURE:.1f} cm. To pick "
+            "an item "
             "it must close both fingers onto free space on two opposite sides of that "
             "item (or reach a finger into a concave notch), with no other item in the "
             f"way; it tries {N_DIRECTIONS} approach angles. An item is ungraspable when "

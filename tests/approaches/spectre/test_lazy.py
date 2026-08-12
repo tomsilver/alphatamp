@@ -83,8 +83,8 @@ def _load_first_big_episode():
 def test_graph_model_forward_and_phi() -> None:
     pytest.importorskip("torch_geometric")
     import torch
-    from torch_geometric.data import Batch
-    from torch_geometric.utils import scatter
+    from torch_geometric.data import Batch  # type: ignore[import-untyped]
+    from torch_geometric.utils import scatter  # type: ignore[import-untyped]
 
     from alphatamp.approaches.spectre.baselines.lazy.feasibility import (
         fit_phi,
@@ -100,7 +100,7 @@ def test_graph_model_forward_and_phi() -> None:
     from alphatamp.approaches.spectre.baselines.lazy.tree import build_prefix_tree
     from alphatamp.approaches.spectre.vocab import Vocab
 
-    ep = _load_first_big_episode()
+    ep = _load_first_big_episode()  # type: ignore[no-untyped-call]
     if ep is None:
         pytest.skip("no suitable dd2d_v4 episode")
     vocab = Vocab.from_json(DD2D_VOCAB)

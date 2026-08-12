@@ -39,8 +39,8 @@ _TRIED = -1e9
 def _zero_scene_columns(batch, cols: frozenset[str]):
     """Zero a whole scene channel in place -- a deploy-time diagnostic.
 
-    Mirrors ``suppress_records``: it feeds a trained model a *null* version of an input it
-    was trained on, to price how much the deployed model leans on that channel.
+    Mirrors ``suppress_records``: it feeds a trained model a *null* version of an input
+    it was trained on, to price how much the deployed model leans on that channel.
     ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the anchor-free
     ``obj_rel`` triple ``[area, sinθ, cosθ]``. Not a deployment mode: it only measures
     reliance. Batch tensors are rebuilt every step, so mutating them never leaks across
@@ -197,9 +197,9 @@ def deployed_rollout_traced(
     evidence input misleads at deploy" (good with them suppressed). Never report a number
     produced with it as a method result.
 
-    ``zero_scene_cols`` is the geometry analogue of ``suppress_records`` and is likewise a
-    **diagnostic**: it blanks a scene channel at deploy to price how much the model leans
-    on it. ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the
+    ``zero_scene_cols`` is the geometry analogue of ``suppress_records`` and is likewise
+    a **diagnostic**: it blanks a scene channel at deploy to price how much the model
+    leans on it. ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the
     anchor-free ``obj_rel`` triple. A small FP delta means the channel is close to inert
     for ranking; a large one means it is load-bearing. Never a method number.
 

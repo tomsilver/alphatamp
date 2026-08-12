@@ -247,10 +247,11 @@ class AcyclicPlanGenerator(HeuristicSearchAbstractPlanGenerator):
 
     Upstream's search deliberately allows revisiting abstract states -- "that's important
     because we need to generate multiple abstract plans"
-    (``heuristic_search_plan_generator.py``) -- and on StickButton2D that licenses padding
-    any plan with ``PickStickFromNothing`` / ``PlaceStick`` pairs, which return to ``s_0``
-    exactly. The result is pools that look full and are not: at b1 all 200 candidates are
-    the same plan with 0-199 pickup/putdown cycles prepended, running to 400 operators.
+    (``heuristic_search_plan_generator.py``) -- and on StickButton2D that licenses
+    padding any plan with ``PickStickFromNothing`` / ``PlaceStick`` pairs, which
+    return to ``s_0`` exactly. The result is pools that look full and are not: at
+    b1 all 200 candidates are the same plan with 0-199 pickup/putdown cycles
+    prepended, running to 400 operators.
 
     Measured acyclic fraction of a 200-draw pool: b1 **1-2**, b2 6-34, b3 73-101, b5
     193-200. So the filter is near-inert exactly where the ranking problem is real, and
@@ -260,8 +261,8 @@ class AcyclicPlanGenerator(HeuristicSearchAbstractPlanGenerator):
     can be *genuinely* more refinable than its acyclic core, because ``PlaceStick`` puts
     the stick down somewhere new and re-picking it changes the geometry. What is asserted
     here is that a pool of near-duplicates is the wrong ranking problem, not that the
-    dropped plans are infeasible. See
-    ``decisions/07-stickbutton2d.md#2026-08-01-acyclic-pool-filter-pooled-stickbutton2d-v1``.
+    dropped plans are infeasible. See ``decisions/07-stickbutton2d.md``
+    ``#2026-08-01-acyclic-pool-filter-pooled-stickbutton2d-v1``.
     """
 
     def __init__(self, *args: Any, raw_cap: int = _RAW_CAP, **kwargs: Any) -> None:

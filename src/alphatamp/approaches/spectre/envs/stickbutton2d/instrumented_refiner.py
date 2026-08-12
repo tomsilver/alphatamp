@@ -8,22 +8,23 @@ the one the sample actually produced. Upstream's :class:`BacktrackingRefiner` re
 
 **Observation-only is the hard invariant here, as it was for DD2D.** The deviation is not
 recomputed: the acceptance check in
-:class:`~alphatamp.approaches.spectre.envs.stickbutton2d.sampler.AcceptanceTrajectorySampler`
+:class:`AcceptanceTrajectorySampler`
 *already* abstracts the final state to decide accept-or-reject, and already stores both
 sides. This module only keeps what that check threw away — no extra transition calls, no
 extra abstractions, so labels are identical to an uninstrumented run. That is **measured,
-not assumed**: ``tests/approaches/spectre/test_stickbutton2d_observational.py`` refines the
-same pools under the same per-candidate seeds through upstream's sampler and this one and
-requires the same labels back.
+not assumed**: ``tests/approaches/spectre/test_stickbutton2d_observational.py`` refines
+the same pools under the same per-candidate seeds through upstream's sampler and this
+one and requires the same labels back.
 
 **On failure classes.** §2 of the design distinguishes class 1 (a validity check rejects
 the sample before a successor state exists, and names the objects it rejected on) from
-class 2 (the sample executes and the trace check finds a mismatch). StickButton2D produces
-**only class 2**: kinder's motion model rejects a colliding transition by silently
-declining to move (``base_env.py`` integrates, then discards on collision) rather than by
-raising, and its collision check returns a bool without naming anything. There is no
-object-naming check to read, so every SB2D record arrives through the deviation path. That
-is not a gap in the instrumentation — it is what the environment affords.
+class 2 (the sample executes and the trace check finds a mismatch). StickButton2D
+produces **only class 2**: kinder's motion model rejects a colliding transition by
+silently declining to move (``base_env.py`` integrates, then discards on collision)
+rather than by raising, and its collision check returns a bool without naming anything.
+There is no object-naming check to read, so every SB2D record arrives through the
+deviation path. That is not a gap in the instrumentation — it is what the environment
+affords.
 
 The class-1 slot is emitted anyway, empty. Both channels stay wired on every environment,
 so which class exists is a property of the *data* rather than a per-environment branch in
@@ -119,7 +120,7 @@ def _deepest_rejection(
         index = next((j for j, op in enumerate(action_plan) if op == rej.step), None)
         if index is None:
             continue
-        if best is None or index > best[0]:
+        if best is None or index > best[0]:  # pylint: disable=unsubscriptable-object
             best = (index, rej)
     return best
 
@@ -194,8 +195,9 @@ def failure_metadata(
     ``exhausted`` is a genuine observation here, not an assumption: the sampler counted
     the rejections, so reaching ``num_sampling_attempts_per_step`` at the failing step
     means the refiner really did run that query to the end of its own retries.
-    ``budget_exhausted`` is passed in because only the caller knows whether the wall-clock
-    timeout fired, and it is exactly the case where ``exhausted`` proves nothing.
+    ``budget_exhausted`` is passed in because only the caller knows whether the
+    wall-clock timeout fired, and it is exactly the case where ``exhausted`` proves
+    nothing.
     """
     deepest = _deepest_rejection(sampler.rejections, action_plan)
     if deepest is None:
@@ -228,8 +230,8 @@ def failure_metadata(
             # Deliberately a separate key from `culprits`: a culprit was named by a check
             # the environment ran, this is inferred by us from the trace, and the record
             # token stream should not be able to confuse the two. Without it SB2D record
-            # tokens would carry no object identity at all, and A17 measured that identity
-            # at 1.28 FP on DD2D.
+            # tokens would carry no object identity at all, and A17 measured that
+            # identity at 1.28 FP on DD2D.
             "dev_blame": sorted(blame(record)),
         }
     ]

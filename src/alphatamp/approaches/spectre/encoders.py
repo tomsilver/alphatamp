@@ -5,20 +5,21 @@ the static (t=0) architecture conditions on object-centric geometry + episode-lo
 instead of anonymous local ids. Token families (all width ``D_MODEL=64``, built on the
 shared ``SetAttentionBlock``/``PMA`` primitives from ``layers.py``):
 
-- **scene tokens** — per object: ``[tag ; footprint descriptor ; pose ; relation-to-target]``.
+- **scene tokens** — per object:
+  ``[tag ; footprint descriptor ; pose ; relation-to-target]``.
   The footprint descriptor is a *point-set* encoding of the boundary ring (not a radial
   profile — concave-safe). A couple of Set-Attention layers let objects attend to each
   other (the relational join).
-- **candidate tokens** — a skeleton is a *program over the scene*: per operator, its schema
-  embedding + position + argument slots holding the objects' **tags**. Pooled to one
-  ``e(s)`` per candidate.
+- **candidate tokens** — a skeleton is a *program over the scene*: per operator,
+  its schema embedding + position + argument slots holding the objects' **tags**.
+  Pooled to one ``e(s)`` per candidate.
 - **global token** — container/buffer geometry + pool statistics.
-- **fact tokens / overlap features** — empty at static (t=0); wired for the Step-11 typed-
-  evidence pathway. The scorer already accepts them so that step is additive.
+- **fact tokens / overlap features** — empty at static (t=0); wired for the Step-11
+  typed-evidence pathway. The scorer already accepts them so that step is additive.
 
 **Scorer** — per-candidate cross-attention (candidate query over scene + global memory),
-concatenated with computed overlap features → one logit; linear in pool size. **Aux head**
-— per scene token → ``necessary``/``relevant`` logits (proposal §8).
+concatenated with computed overlap features → one logit; linear in pool size.
+**Aux head** — per scene token → ``necessary``/``relevant`` logits (proposal §8).
 
 The forward returns ``(B, K)`` logits with the same contract as v1's ``Scorer`` so the
 rollout / PL-loss machinery is reused unchanged.
@@ -50,12 +51,12 @@ D_DESCRIPTOR = 32
 D_POSE = 8
 D_REL = 8  # v2.2 scene relation scalars (frozen; target-anchored, see SceneEncoder)
 # v3 narrows the scene relation to the three *anchor-free* per-object scalars
-# ``[area, sinθ, cosθ]`` -- the target-anchored offsets (dx, dy, dist), the area ratio to
-# a single target, and the privileged ``concave`` flag are all cut, because they either
-# presuppose one distinguished target (meaningless with N goal objects) or are privileged
-# geometry a non-privileged pipeline could not read. v2.2 keeps the width-8 vector so its
-# published numbers are untouched; the two coexist because ``SceneEncoder`` takes the
-# width per instance. See docs/decisions 2026-08-08.
+# ``[area, sinθ, cosθ]`` -- the target-anchored offsets (dx, dy, dist), the area ratio
+# to a single target, and the privileged ``concave`` flag are all cut, because they
+# either presuppose one distinguished target (meaningless with N goal objects) or are
+# privileged geometry a non-privileged pipeline could not read. v2.2 keeps the width-8
+# vector so its published numbers are untouched; the two coexist because
+# ``SceneEncoder`` takes the width per instance. See docs/decisions 2026-08-08.
 D_REL_V3 = 3
 MAX_TAGS_DEFAULT = 32
 DROPOUT = 0.1
@@ -65,14 +66,16 @@ MAX_FACT_ARGS = 12  # cap on a fact's argument list (mean-pooled); larger sets t
 D_FACT_TIER = 8
 
 # a-priori per-candidate prior features: [−index/K, −len/max_len] (default-order /
-# short-first) — domain-agnostic planner signals available in any TAMP problem. Column 0 is
-# the additive default-order residual anchor the geometry head only has to correct.
+# short-first) — domain-agnostic planner signals available in any TAMP problem.
+# Column 0 is the additive default-order residual anchor the geometry head only has to
+# correct.
 N_PRIOR = 2
 
-# structural evidence features relating each candidate's action-set to the OBSERVED failed
-# sets (Step 11 fix): [subset⊆blocked (sound proof-demotion — provably also-blocked),
-# max-Jaccard-with-failed (hint)]. Domain-agnostic set relations. The unsound "blocked⊊subset
-# ⇒ prefer longer" cue is deliberately excluded — it helps s3 but misleads easy strata.
+# structural evidence features relating each candidate's action-set to the OBSERVED
+# failed sets (Step 11 fix): [subset⊆blocked (sound proof-demotion — provably
+# also-blocked), max-Jaccard-with-failed (hint)]. Domain-agnostic set relations. The
+# unsound "blocked⊊subset ⇒ prefer longer" cue is deliberately excluded — it helps s3
+# but misleads easy strata.
 N_OVERLAP = 2
 
 
@@ -106,11 +109,12 @@ class SpectreV2Batch:
     fact_mask: Optional[Tensor] = None  # (B, F) bool — real fact
     avail_mask: Optional[Tensor] = None  # (B, K) bool — candidate not yet tried (∉ F)
     # a-priori planner prior: [−index/K, −len/max_len] per candidate (default-order /
-    # short-first). Known before any refinement — the scorer treats geometry as a residual
-    # correction on this prior (init-toward-prior); ``None`` disables it.
+    # short-first). Known before any refinement — the scorer treats geometry as a
+    # residual correction on this prior (init-toward-prior); ``None`` disables it.
     cand_prior: Optional[Tensor] = None  # (B, K, N_PRIOR) float
-    # structural evidence features per candidate vs the observed failed sets (Step 11 fix);
-    # 0 when no facts / static path. Lets the ranker use proofs by set-containment.
+    # structural evidence features per candidate vs the observed failed sets
+    # (Step 11 fix); 0 when no facts / static path. Lets the ranker use proofs by
+    # set-containment.
     cand_overlap: Optional[Tensor] = None  # (B, K, N_OVERLAP) float
 
     def to(self, device) -> "SpectreV2Batch":
@@ -170,7 +174,8 @@ class SceneEncoder(nn.Module):
         super().__init__()
         # ``d_rel`` is the width of ``obj_rel``: 8 for v2.2 (target-anchored), 3 for v3
         # (anchor-free ``[area, sinθ, cosθ]``). Carried per instance so the same class
-        # serves both without a fork; a checkpoint is bound to the width it was trained on.
+        # serves both without a fork; a checkpoint is bound to the width it was
+        # trained on.
         self.d_rel = d_rel
         self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
         self.footprint = FootprintEncoder(dropout_p)
@@ -225,11 +230,13 @@ class CandidateEncoder(nn.Module):
 
 
 class FactEncoder(nn.Module):
-    """Typed-fact token = [fact-type emb ; tier emb ; mean-pooled argument-tag emb] → D_MODEL.
+    """Typed-fact token = [fact-type emb ; tier emb ; mean-pooled argument-tag emb] →
+    D_MODEL.
 
-    The fact carries **identity** through its argument tags (the same episode-local tags as
-    the scene/candidate tokens), so scrambling those tags changes the token — the property
-    the live scramble gauge exploits. Empty-arg facts contribute only type/tier.
+    The fact carries **identity** through its argument tags (the same episode-local
+    tags as the scene/candidate tokens), so scrambling those tags changes the token —
+    the property the live scramble gauge exploits. Empty-arg facts contribute only
+    type/tier.
     """
 
     def __init__(self, max_tags: int, dropout_p: float = DROPOUT) -> None:
@@ -282,9 +289,10 @@ class CrossAttentionScorer(nn.Module):
         self.n_overlap_feats = n_overlap_feats
         self.n_prior_feats = n_prior_feats
         if n_prior_feats:
-            # Additive default-order residual: the geometry head is init-to-zero, and the
-            # prior gate is init to trust the default-order column, so an untrained scorer
-            # ranks ≈ default-order and the head only learns the correction (init-toward-prior).
+            # Additive default-order residual: the geometry head is init-to-zero, and
+            # the prior gate is init to trust the default-order column, so an untrained
+            # scorer ranks ≈ default-order and the head only learns the correction
+            # (init-toward-prior).
             self.prior_gate = nn.Linear(n_prior_feats, 1)
             head_out = cast(nn.Linear, self.head[-1])
             nn.init.zeros_(head_out.weight)

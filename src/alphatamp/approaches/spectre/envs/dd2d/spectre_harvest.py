@@ -105,7 +105,8 @@ def harvest_facts_from_geometry(
     if scene is None:
         scene = reconstruct_scene(scene_geometry)
 
-    # blocked-at-contents (proof) + its grasp-witness (hint), both after removing `subset`.
+    # blocked-at-contents (proof) + its grasp-witness (hint), both after removing
+    # `subset`.
     if target_blocked_after_removing(scene_geometry, subset):
         present = [
             o.name

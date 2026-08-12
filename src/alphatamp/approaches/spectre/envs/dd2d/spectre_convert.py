@@ -23,10 +23,11 @@ This module maps a directory to a validated :class:`EpisodeRecord`:
   arrangement-complete negative certificate lands.
 
 The **abstract state** stays x0-free (the ``at-pose`` literals are still dropped). Since
-v2.2.1, ground-truth object-centric geometry (per-object pose + boundary ring + buffer)
-IS carried alongside, on ``EpisodeRecord.scene_geometry`` (see ``_parse_scene_geometry``),
-for the geometry-aware v2 model; a raw dir collected before the ``boundary`` field
-existed yields ``scene_geometry=None`` and converts abstract-only as before.
+v2.2.1, ground-truth object-centric geometry (per-object pose + boundary ring +
+buffer) IS carried alongside, on ``EpisodeRecord.scene_geometry`` (see
+``_parse_scene_geometry``), for the geometry-aware v2 model; a raw dir collected
+before the ``boundary`` field existed yields ``scene_geometry=None`` and converts
+abstract-only as before.
 """
 
 from __future__ import annotations
@@ -59,8 +60,8 @@ from alphatamp.approaches.spectre.schema import (
 )
 from alphatamp.approaches.spectre.trajectory import reconstruct_trajectory
 
-# v2: also carries ground-truth SceneGeometry (per-object pose + boundary ring + buffer),
-# so the config_hash changes and vocab/train re-read cleanly.
+# v2: also carries ground-truth SceneGeometry (per-object pose + boundary ring +
+# buffer), so the config_hash changes and vocab/train re-read cleanly.
 # v3: carries the refiner's typed failure observations (culprits / per-step effort /
 # exhausted-vs-budget), per-candidate wall-clock, backjump count and generation params.
 # The extra keys ride inside ``refiner_metadata`` (a free-form dict on OutcomeRecord),
@@ -150,9 +151,10 @@ def _parse_scene_geometry(first: dict[str, Any]) -> SceneGeometry | None:
     """Build ground-truth ``SceneGeometry`` from a DD2D record's per-object geometry.
 
     Requires the ``boundary`` ring (written by ``record_ext.build_dd2d_example``); a raw
-    dir collected before that field existed yields ``None`` (episode stays abstract-only,
-    ``scene_geometry=None``). The buffer is stored as an exact-bounds container; the
-    drawer dimensions go in ``frame`` (its world origin is not in the record).
+    dir collected before that field existed yields ``None`` (episode stays
+    abstract-only, ``scene_geometry=None``). The buffer is stored as an exact-bounds
+    container; the drawer dimensions go in ``frame`` (its world origin is not in the
+    record).
     """
     objs: list[ObjectGeometry] = []
     for o in first["objects"]:
@@ -177,7 +179,10 @@ def _parse_scene_geometry(first: dict[str, Any]) -> SceneGeometry | None:
     bb = prov.get("buffer_bounds")
     if bb is not None:
         containers.append(
-            ContainerGeometry(kind="buffer", bounds=tuple(float(v) for v in bb))  # type: ignore[arg-type]
+            ContainerGeometry(
+                kind="buffer",
+                bounds=tuple(float(v) for v in bb),  # type: ignore[arg-type]
+            )
         )
     dw = prov.get("drawer_wh")
     frame = {"drawer_w": float(dw[0]), "drawer_d": float(dw[1])} if dw else None

@@ -1,10 +1,10 @@
 """Tests for the StickButton2D PIGINet adapter.
 
 The failure modes guarded here are all silent: a unit mismatch that collapses a feature
-channel toward zero, a gloss table with a hole in it that degrades a word to its raw token,
-a crop map missing an object so CLIP reads zeros, and a problem-id that does not survive
-the round trip the comparison cache does on it. None of them raise; each would just make
-the low-level baseline look worse than it is.
+channel toward zero, a gloss table with a hole in it that degrades a word to its raw
+token, a crop map missing an object so CLIP reads zeros, and a problem-id that does not
+survive the round trip the comparison cache does on it. None of them raise; each would
+just make the low-level baseline look worse than it is.
 """
 
 from __future__ import annotations
@@ -66,9 +66,9 @@ def test_sb2d_shape_features_do_not_underflow(domain, sample) -> None:
     """The highest-risk trap in the port, pinned as a test.
 
     DD2D's divisors are centimetres over a ~50x40 drawer; StickButton2D is metres over
-    3.5x2.5 with objects two orders of magnitude smaller. Against the DD2D constants every
-    shape feature collapses toward 0 and PIGINet reads as hopeless -- a unit bug that would
-    be published as "the low-level predictor loses on this environment".
+    3.5x2.5 with objects two orders of magnitude smaller. Against the DD2D constants
+    every shape feature collapses toward 0 and PIGINet reads as hopeless -- a unit bug
+    that would be published as "the low-level predictor loses on this environment".
     """
     _, examples, _ = sample
     shapes = np.array(
@@ -114,9 +114,10 @@ def test_task_plan_mirrors_the_operator_sequence(sample) -> None:
 def test_pose_literals_are_synthesised_for_every_object(sample) -> None:
     """Without them PIGINet sees a two-atom abstract state and no positions at all.
 
-    StickButton2D's initial abstract state is `{HandEmpty, AboveNoButton}`. A *low-level*
-    predictor that never receives a coordinate is not a low-level predictor, so the adapter
-    emits an `at-pose` literal per object exactly as DD2D's records carry one.
+    StickButton2D's initial abstract state is `{HandEmpty, AboveNoButton}`. A
+    *low-level* predictor that never receives a coordinate is not a low-level predictor,
+    so the adapter emits an `at-pose` literal per object exactly as DD2D's records carry
+    one.
     """
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre.baselines.piginet.dataset import POSE_PREDICATE
@@ -137,7 +138,8 @@ def test_problem_id_round_trips_through_the_cache_convention(sample) -> None:
 # vocabulary and crops
 # --------------------------------------------------------------------------- #
 def test_every_word_in_the_data_is_glossed(domain) -> None:
-    """An unglossed word silently falls back to its raw token, losing §IV-A's rephrasing."""
+    """An unglossed word silently falls back to its raw token, losing §IV-A's
+    rephrasing."""
     seen: set[str] = set()
     for n, (_pid, examples) in enumerate(domain.problems("test")):
         for ex in examples[:5]:
@@ -162,10 +164,10 @@ def test_crops_cover_every_object(domain, sample) -> None:
 def test_crops_preserve_relative_scale(domain, sample) -> None:
     """The stick must not render like a button.
 
-    Crops share one fixed world window rather than being individually framed, so relative
-    size survives. It is the only visual difference this environment affords -- every
-    unpressed button is the same red disc -- and rendering each object to fill its own
-    frame would erase it.
+    Crops share one fixed world window rather than being individually framed, so
+    relative size survives. It is the only visual difference this environment affords
+    -- every unpressed button is the same red disc -- and rendering each object to fill
+    its own frame would erase it.
     """
     pid, _, _ = sample
     crops = domain.crops("test", pid)

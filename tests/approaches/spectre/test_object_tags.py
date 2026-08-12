@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from alphatamp.approaches.spectre.tags import PAD_TAG, assign_tags, tag_seed
@@ -41,8 +40,8 @@ def test_same_seed_episode_epoch_is_reproducible():
 
 
 def test_same_tag_everywhere_within_episode():
-    # one mapping is applied to every mention of an object (scene/skeleton/fact); an object
-    # in a "skeleton arg" and in a "fact arg" must resolve to the SAME tag.
+    # one mapping is applied to every mention of an object (scene/skeleton/fact);
+    # an object in a "skeleton arg" and in a "fact arg" must resolve to the SAME tag.
     names = ["item_0", "item_1", "item_2"]
     tags = assign_tags(names, rng=tag_seed(1, 1, 0), max_tags=8)
     skeleton_args = ["item_0", "item_2"]
@@ -53,7 +52,8 @@ def test_same_tag_everywhere_within_episode():
 
 
 def test_anti_collapse_different_objects_get_different_tags():
-    # the v1 collapse: same-length skeletons over DIFFERENT objects became identical inputs.
+    # the v1 collapse: same-length skeletons over DIFFERENT objects became identical
+    # inputs.
     # With tags, different objects → different tags → distinguishable arg sequences.
     names = ["item_0", "item_1", "item_2", "item_3"]
     tags = assign_tags(names)

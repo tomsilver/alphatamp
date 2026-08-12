@@ -99,8 +99,8 @@ def test_i6_post_mortem_on_success_raises():
 
 def test_canonicalize_renames_geometry_consistently():
     """canonicalize must rename scene_geometry/aux_labels to the canonical ids so the
-    canonicalized episode still satisfies I5 (regression: it previously left geometry with
-    pre-canonical names → I5 violation in the v1 dataset path)."""
+    canonicalized episode still satisfies I5 (regression: it previously left geometry
+    with pre-canonical names → I5 violation in the v1 dataset path)."""
     import numpy as np
 
     from alphatamp.approaches.spectre.canonicalize import canonicalize_episode

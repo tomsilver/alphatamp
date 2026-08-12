@@ -17,6 +17,7 @@ a silently-wrong ablation:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -46,7 +47,7 @@ def _overlap(episode, vocab, ctx, mode: str) -> np.ndarray:
     return np.asarray(example.overlap, dtype=float)
 
 
-def _episode_with_evidence():
+def _episode_with_evidence() -> Any:
     """First test episode that has failures to build a non-empty context from.
 
     Strided rather than truncated: episodes are stored in seed order and the collector
@@ -109,8 +110,9 @@ def test_coverage_mode_is_inert_at_empty_context() -> None:
 def test_coverage_mode_default_is_exact_absence() -> None:
     """Omitting the flag reproduces the pre-flag behaviour byte for byte.
 
-    Every v3 feature is config-gated so that *off* is exactly the older model (D-8); a new
-    knob that perturbed the default would retire the equivalence oracle by accident.
+    Every v3 feature is config-gated so that *off* is exactly the older model (D-8);
+    a new knob that perturbed the default would retire the equivalence oracle by
+    accident.
     """
     episode, vocab, ctx = _episode_with_evidence()
     explicit = _overlap(episode, vocab, ctx, "both")
@@ -135,8 +137,9 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     model a column it never saw populated. So they are read back, never passed in.
 
     Self-contained: it saves a checkpoint through the same ``asdict(TrainConfig)`` path
-    ``train_v3`` uses, rather than reading a disk artifact -- a real deployed checkpoint is
-    the width-3 narrowed model now, and a pre-narrowing artifact no longer loads by design.
+    ``train_v3`` uses, rather than reading a disk artifact -- a real deployed
+    checkpoint is the width-3 narrowed model now, and a pre-narrowing artifact no
+    longer loads by design.
     """
     from dataclasses import asdict
 

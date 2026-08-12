@@ -406,7 +406,8 @@ def collect_episode(
 
         # Ground-truth geometry. Required by v3 (`train_v3._trainable` drops episodes
         # without it, silently) and by the later PIGINet / VLMPlan comparators. Only
-        # StickButton2D has a builder; the other kinder envs stay abstract-only as before.
+        # StickButton2D has a builder; the other kinder envs stay abstract-only
+        # as before.
         scene_geometry = None
         if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
             # pylint: disable=import-outside-toplevel

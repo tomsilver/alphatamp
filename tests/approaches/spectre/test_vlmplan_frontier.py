@@ -28,7 +28,7 @@ def test_sb2d_plan_label_is_not_retrieve_question_mark() -> None:
         ("PlaceStick", ["crv_robot_0", "rectangle_0"]),
         ("RobotPressButtonFromNothing", ["crv_robot_0", "circle_1"]),
     ]
-    label = compare_envs.SB2D.plan_label(steps)
+    label = compare_envs.SB2D.plan_label(steps)  # type: ignore[misc]
     assert "retrieve ?" not in label
     assert "pick stick" in label
     assert "circle_3 (stick)" in label
@@ -43,9 +43,15 @@ def test_dd2d_plan_label() -> None:
         ("place-buffer", ["item_5"]),
         ("retrieve", ["item_10"]),
     ]
-    assert compare_envs.DD2D.plan_label(steps) == "stage {5} → retrieve 10"
+    assert (
+        compare_envs.DD2D.plan_label(steps)  # type: ignore[misc]
+        == "stage {5} → retrieve 10"
+    )
     # No staging -> bare retrieve.
-    assert compare_envs.DD2D.plan_label([("retrieve", ["item_3"])]) == "retrieve 3"
+    assert (
+        compare_envs.DD2D.plan_label([("retrieve", ["item_3"])])  # type: ignore[misc]
+        == "retrieve 3"
+    )
 
 
 def test_every_env_has_a_plan_label() -> None:
@@ -67,7 +73,11 @@ def test_stratified_selection_balances_and_strides() -> None:
         for s in range(4)
         for i in range(25)
     ]
-    chosen = _stratified(eps, per_stratum=10, stratum_of=compare.stratum_of)
+    chosen = _stratified(
+        eps,  # type: ignore[arg-type]
+        per_stratum=10,
+        stratum_of=compare.stratum_of,
+    )
     assert len(chosen) == 40
     by_stratum: dict[int, int] = {}
     for ep in chosen:

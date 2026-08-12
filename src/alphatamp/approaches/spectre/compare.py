@@ -52,21 +52,23 @@ from typing import Mapping, Sequence
 import numpy as np
 from numpy.typing import ArrayLike
 
-# Display method name -> cache sub-directory. Both are deterministic single runs (astar
-# is a planner order, PIGINet a fixed BCE head); the SPECTRE family has a per-seed layer.
+# Display method name -> cache sub-directory. Both are deterministic single runs
+# (astar is a planner order, PIGINet a fixed BCE head); the SPECTRE family has a
+# per-seed layer.
 STATIC_METHODS: dict[str, str] = {
     "astar-dist": "astar",
     "PIGINet": "piginet",
 }
 # SPECTRE (FailureRecord + observed coverage/waste). Only the deployed model is in the
-# comparison, so it is displayed without a version number; the cache dirs stay `spectre3_*`.
+# comparison, so it is displayed without a version number; the cache dirs stay
+# `spectre3_*`.
 SPECTRE_STATIC_METHOD = "SPECTRE-static"
 SPECTRE_ADAPTIVE_METHOD = "SPECTRE-adaptive"
 SPECTRE_STATIC_DIR = "spectre3_static"
 SPECTRE_ADAPTIVE_DIR = "spectre3_adaptive"
 
-# Seeded SPECTRE family: (static_method, static_dir, adaptive_method, adaptive_dir). Both
-# modes are two deployment settings of one checkpoint.
+# Seeded SPECTRE family: (static_method, static_dir, adaptive_method, adaptive_dir).
+# Both modes are two deployment settings of one checkpoint.
 SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
     (
         SPECTRE_STATIC_METHOD,
@@ -82,9 +84,9 @@ SPECTRE_FAMILIES: list[tuple[str, str, str, str]] = [
 # verbatim -- same record shape as an adaptive trace (`fp` + `order`), so the seed-
 # averaging reader handles it unchanged, and ``order`` carries ``-1`` for an off-pool
 # attempt. `VLMPlan-32B` is the local Qwen arm; `VLMPlan-GPT5.6` the frontier arm
-# (gpt-5.6-terra, replacing the weaker gpt-5.6-luna and generated with the gripper-geometry
-# disclosure -- prompts/PROVENANCE.md deviation 9). One subdir per model -- a cache dir is
-# one method row.
+# (gpt-5.6-terra, replacing the weaker gpt-5.6-luna and generated with the
+# gripper-geometry disclosure -- prompts/PROVENANCE.md deviation 9). One subdir per
+# model -- a cache dir is one method row.
 SEQUENCE_METHODS: dict[str, str] = {
     "VLMPlan-32B": "vlmplan_qwen32b",
     "VLMPlan-GPT5.6": "vlmplan_terra",
@@ -265,8 +267,8 @@ def load_fp_records_per_seed(cache_dir: Path | str) -> list[dict]:
         # retrained PIGINet (which trains on the native JSON with its own CLIP cache),
         # and
         # the yardstick row does not depend on it. Absent arms are *reported*, never
-        # silently dropped -- a comparison table quietly missing a baseline is worse than
-        # one that says so.
+        # silently dropped -- a comparison table quietly missing a baseline is worse
+        # than one that says so.
         parent = cache_dir / subdir
         if not parent.is_dir():
             missing.append(method)
@@ -657,8 +659,8 @@ def load_vlmplan_diagnostics(
         loop = rec.get("loop") or {}
         row["plans_per_round"] = loop.get("plans_per_round")
         attempts = rec.get("attempts") or []
-        # Rounds actually used, recovered from the attempts' round tags (the fill entries
-        # carry None). Reported as the exhaustion-depth distribution.
+        # Rounds actually used, recovered from the attempts' round tags (the fill
+        # entries carry None). Reported as the exhaustion-depth distribution.
         used_rounds = [a["round"] for a in attempts if a.get("round") is not None]
         row["n_rounds_used"] = (max(used_rounds) + 1) if used_rounds else 0
         row["n_vlm_attempts"] = sum(1 for a in attempts if a.get("source") == "vlm")
@@ -1140,8 +1142,9 @@ def render_markdown(header: list[str], rows: list[list[str]]) -> str:
 # --------------------------------------------------------------------------- #
 # Pool-ranking methods that carry a per-candidate timing breakdown, written by
 # precompute_dd2d_cache. The v1/v2 rows are intentionally absent. VLMPlan-GPT5.6 is a
-# *sequence* method, not a pool ranker, but it now carries its own timing (VLM generation
-# `infer_s` + measured off-pool refinement) written by vlmplan_score, so it is included --
+# *sequence* method, not a pool ranker, but it now carries its own timing (VLM
+# generation `infer_s` + measured off-pool refinement) written by vlmplan_score,
+# so it is included --
 # `build_time_table` zeroes its pool `plan_gen_s`, because the VLM's generation *is* its
 # plan-gen. The Qwen VLMPlan arms have no timing (produced before it existed) and are
 # skipped automatically (`_timing_rows` drops records without `refine_s`).
@@ -1317,10 +1320,11 @@ def build_time_table(
     notebook can price the cap's (small) FP cost.
     """
     refine_key = "refine_s_capped" if use_capped else "refine_s"
-    # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already IS
-    # its plan generation; adding the pool `plan_gen_s` constant would double-count. Pool
-    # rankers pay plan_gen (enumerate) + infer (score) + refine. `total_s` comes from the
-    # shared `_record_total_s`, so this table and the per-problem scatter cannot drift.
+    # A sequence method (VLMPlan) has no pool to enumerate, so its `infer_s` already
+    # IS its plan generation; adding the pool `plan_gen_s` constant would double-count.
+    # Pool rankers pay plan_gen (enumerate) + infer (score) + refine. `total_s` comes
+    # from the shared `_record_total_s`, so this table and the per-problem scatter
+    # cannot drift.
     aug = [
         {
             **r,
@@ -1350,9 +1354,10 @@ def build_time_table(
             row.append(_fmt(mean, std))
             fp_sel = [r for r in sel if r.get("fp_capped") is not None]
             # Per-seed component means, kept so the notebook's §2b breakdown table can
-            # report each component's own across-seed std, not just the total's. Plan-gen
-            # has no std: it is a per-stratum constant applied to every seed, so its
-            # across-seed spread is identically 0/NaN and is deliberately not shown.
+            # report each component's own across-seed std, not just the total's.
+            # Plan-gen has no std: it is a per-stratum constant applied to every seed,
+            # so its across-seed spread is identically 0/NaN and is deliberately not
+            # shown.
             _pg = _per_seed_means(sel, seeds, "plan_gen_s")
             _if = _per_seed_means(sel, seeds, "infer_s")
             _rf = _per_seed_means(sel, seeds, "refine_used_s")

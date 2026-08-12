@@ -1,8 +1,9 @@
 """Run several SPECTRE v3 training configurations concurrently on one GPU.
 
-Training here is **CPU-bound, not GPU-bound**: measured on dd2d_v4, tensorization is ~79%
-of a step and the model needs 173 MB of the card's 32 GB. Running arms one after another
-therefore leaves both the GPU and 30-odd CPU threads idle. This launches them together.
+Training here is **CPU-bound, not GPU-bound**: measured on dd2d_v4, tensorization is
+~79% of a step and the model needs 173 MB of the card's 32 GB. Running arms one after
+another therefore leaves both the GPU and 30-odd CPU threads idle. This launches them
+together.
 
 Two knobs matter and they interact:
 
@@ -36,8 +37,9 @@ REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
 
 #: Named sweeps. Each entry is ``name -> extra CLI args for train_v3``.
-#: G6 holds ``cand_overlap`` out of *both* the record and no-record arms, so the evidence
-#: increment is not measured against a bar contaminated by the same set-overlap signal.
+#: G6 holds ``cand_overlap`` out of *both* the record and no-record arms, so the
+#: evidence increment is not measured against a bar contaminated by the same
+#: set-overlap signal.
 PRESETS: dict[str, dict[str, str]] = {
     "g6": {
         "g6_recON_ovOFF": "--no-overlap",
@@ -46,9 +48,10 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # G6b re-runs G6 with the *only* change being an uncensored, whole-split selector
     # (now the `train_v3` default, hence no extra args). G6's censored-at-30 selector
-    # scored v2.2 and v3 within 0.3 FP of each other while they were 4+ FP apart on test,
-    # so it was ranking epochs by noise. Separate output dirs: G6's checkpoints are kept
-    # so the two selectors can be compared rather than one quietly overwriting the other.
+    # scored v2.2 and v3 within 0.3 FP of each other while they were 4+ FP apart on
+    # test, so it was ranking epochs by noise. Separate output dirs: G6's checkpoints
+    # are kept so the two selectors can be compared rather than one quietly overwriting
+    # the other.
     "g6b": {
         "g6b_recON_ovOFF": "--no-overlap",
         "g6b_recOFF_ovOFF": "--no-overlap --no-records",
@@ -62,8 +65,8 @@ PRESETS: dict[str, dict[str, str]] = {
         "g7_ovOFF": "--no-overlap",
     },
     # G8 (performance push): close the s1 and s3 gaps to v2.2 without giving up s2.
-    # `jac` drops the `dead` column, which is a disguised shortness cue and the suspected
-    # cause of the s1 regression.
+    # `jac` drops the `dead` column, which is a disguised shortness cue and the
+    # suspected cause of the s1 regression.
     "g8": {
         "g8_jac": "--overlap-mode jaccard",
     },
@@ -88,8 +91,8 @@ PRESETS: dict[str, dict[str, str]] = {
     # Rather than tune the proxy, state the thing it proxies for: at s3 three objects
     # block and the right candidate removes all three. `coverage`/`waste` say that
     # directly, from culprits the refiner REPORTED (so no predicted necessity head, and
-    # no geometry routine of ours). Measured separation feasible-vs-infeasible grows with
-    # stratum: coverage 0.139/0.160 at s0 -> 0.412/0.168 at s3.
+    # no geometry routine of ours). Measured separation feasible-vs-infeasible grows
+    # with stratum: coverage 0.139/0.160 at s0 -> 0.412/0.168 at s3.
     "p5": {
         "p5_jac_cov": "--overlap-mode jaccard --coverage-feats",
         "p5_cov": "--coverage-feats",
@@ -109,12 +112,12 @@ PRESETS: dict[str, dict[str, str]] = {
     # 2026-07-31: coverage/waste now use the **unified** definitions by default
     # (`TrainConfig.unified_coverage=True`), so this preset needs no extra flag and a
     # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above.
-    # `--select-window 5` added 2026-08-08: the domain-agnostic (narrowed-input) model is
-    # higher-variance, and the default ma3 selection window locked onto unlucky val epochs
-    # (the s1 regression). Widening to ma5 recovers parity with the frozen baseline (5.92
-    # vs 5.78, CI includes 0) and collapses the variance -- see docs/decisions 2026-08-08.
-    # The `TrainConfig` default stays 3 so the frozen baseline's provenance is untouched;
-    # the deployed recipe opts in here.
+    # `--select-window 5` added 2026-08-08: the domain-agnostic (narrowed-input) model
+    # is higher-variance, and the default ma3 selection window locked onto unlucky val
+    # epochs (the s1 regression). Widening to ma5 recovers parity with the frozen
+    # baseline (5.92 vs 5.78, CI includes 0) and collapses the variance -- see
+    # docs/decisions 2026-08-08. The `TrainConfig` default stays 3 so the frozen
+    # baseline's provenance is untouched; the deployed recipe opts in here.
     "v3final": {
         "v3final": (
             "--overlap-mode jaccard --coverage-feats "
@@ -127,7 +130,8 @@ PRESETS: dict[str, dict[str, str]] = {
     # `--weight-avg ema`; writes `checkpoints_v3_v3ema_s{seed}` (a NEW location, so the
     # deployed `checkpoints_v3_unified` is never touched until an arm is verified and
     # promoted). `sb2dema` is the StickButton2D twin for the cheap variance-attribution
-    # triage. `--select-window 5` can be appended ad-hoc via `--arm` for the selector probe.
+    # triage. `--select-window 5` can be appended ad-hoc via `--arm` for the selector
+    # probe.
     "v3ema": {
         "v3ema": (
             "--overlap-mode jaccard --coverage-feats --aggregate-records "
@@ -157,10 +161,11 @@ PRESETS: dict[str, dict[str, str]] = {
     #     python experiments/spectre/spectre_sweep.py --preset sb2dabl \
     #         --env stickbutton2d_v1 --seeds 0 1 2
     #
-    # The **demotion arms are deliberately absent.** Proof-tier demotion was cut from the
-    # method on 2026-07-30, and StickButton2D resolves to `EMPTY_SPEC`, so
-    # `licenses_demotion` is always False there and a demotion arm would be bit-identical
-    # to its base. Omitted because it is vacuous on this environment, not overlooked.
+    # The **demotion arms are deliberately absent.** Proof-tier demotion was cut
+    # from the method on 2026-07-30, and StickButton2D resolves to `EMPTY_SPEC`, so
+    # `licenses_demotion` is always False there and a demotion arm would be
+    # bit-identical to its base. Omitted because it is vacuous on this environment,
+    # not overlooked.
     "sb2dabl": {
         # coverage x records, 2x2. `abl_cov_rec` is the deployed config itself; it is
         # trained under its own name so section 4's grid has all four cells from one

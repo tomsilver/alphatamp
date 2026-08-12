@@ -2,13 +2,14 @@
 
 Resolves the "held-out beats full" anomaly by comparing the subset-trained (held-out
 stratum) and full-strata models on the SAME test problems, **per stratum with a paired
-bootstrap** over problems -- not the pooled ALL, which averages the held-out stratum with
-the trained strata and is dominated by their run-to-run variance.
+bootstrap** over problems -- not the pooled ALL, which averages the held-out stratum
+with the trained strata and is dominated by their run-to-run variance.
 
-For each (env, method): Δ = subset − full per stratum. **Positive Δ ⇒ subset worse (full
-better).** The held-out stratum (DD2D s3 / SB2D b5) is the column where "more training data
-helps" is actually testable; a CI that excludes 0 there settles it. The trained strata show
-whether holding out the hard stratum *specialized* the model on the easy ones.
+For each (env, method): Δ = subset − full per stratum. **Positive Δ ⇒ subset worse
+(full better).** The held-out stratum (DD2D s3 / SB2D b5) is the column where "more
+training data helps" is actually testable; a CI that excludes 0 there settles it. The
+trained strata show whether holding out the hard stratum *specialized* the model on
+the easy ones.
 
 Read-only: consumes the compare caches only. Run after the full-control arms are scored:
     python experiments/spectre/holdout_vs_full.py            # all envs present
@@ -27,21 +28,24 @@ from alphatamp.approaches.spectre import compare, eda
 REPO = Path(__file__).resolve().parents[2]
 DERIVED = REPO / "data" / "spectre" / "derived"
 
-# (env key, stratum labels, held-out stratum index, and per-method (subset, full) sources).
+# (env key, stratum labels, held-out stratum index, and per-method (subset, full)
+# sources).
 # A source is (cache_variant, kind, subdir): kind "named" reads an adaptive `_adaptive`
 # subdir via load_named_fp_records (fp field); kind "piginet" reads the static `piginet`
-# dir via load_fp_records + rollout_fp. Full SPECTRE = the `spectre3_full_adaptive` arm in
-# the held-out cache; full PIGINet = the deployed/v2 cache's `piginet` on the same pids.
+# dir via load_fp_records + rollout_fp. Full SPECTRE = the `spectre3_full_adaptive` arm
+# in the held-out cache; full PIGINet = the deployed/v2 cache's `piginet` on the same
+# pids.
 SPECS = {
     "dd2d": {
         "labels": {0: "s0", 1: "s1", 2: "s2", 3: "s3"},
         "held_out": 3,
         "methods": {
-            # DD2D full control = the deployed dd2d_v4 cache: the correct all-strata full
-            # (100/stratum, current code, same recipe, same test problems). A fresh
-            # seed-matched arm was attempted but trained pathologically slowly (~700 s/ep
-            # vs ~6 s/ep, cause undiagnosed) and was abandoned rather than block for hours;
-            # the deployed cache differs only in the training draw. See the 2026-08-10 ADR.
+            # DD2D full control = the deployed dd2d_v4 cache: the correct all-strata
+            # full (100/stratum, current code, same recipe, same test problems). A fresh
+            # seed-matched arm was attempted but trained pathologically slowly (~700
+            # s/ep vs ~6 s/ep, cause undiagnosed) and was abandoned rather than block
+            # for hours; the deployed cache differs only in the training draw. See the
+            # 2026-08-10 ADR.
             "SPECTRE-adaptive": {
                 "subset": ("dd2d_v4_holdout_s3", "named", "spectre3_adaptive"),
                 "full": ("dd2d_v4", "named", "spectre3_adaptive"),

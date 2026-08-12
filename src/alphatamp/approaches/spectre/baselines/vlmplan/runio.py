@@ -85,8 +85,8 @@ def _stratified(
     """``per_stratum`` episodes from each stratum, evenly strided within the stratum.
 
     Striding (rather than taking the first ``per_stratum``) samples across the whole band
-    so a stratum's own internal ordering does not bias the subset, and it is deterministic
-    so generation and scoring pick the identical set.
+    so a stratum's own internal ordering does not bias the subset, and it is
+    deterministic so generation and scoring pick the identical set.
     """
     by_stratum: dict[int, list[EpisodeRecord]] = {}
     for ep in episodes:

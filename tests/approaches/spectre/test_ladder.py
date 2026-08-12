@@ -21,7 +21,8 @@ def test_variance_ladder_pure_length():
 
 
 def test_variance_ladder_residual_when_beyond_cheap_stats():
-    # scores driven by an "identity" signal orthogonal to length/slack/proximity → residual high.
+    # scores driven by an "identity" signal orthogonal to length/slack/proximity →
+    # residual high.
     rng = np.random.default_rng(1)
     n = 400
     length = rng.integers(1, 5, size=n).astype(float)

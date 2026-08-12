@@ -318,8 +318,9 @@ class SB2DAdapter(EnvAdapter):
         # load-bearing number. Pulled from the env config so they can never drift.
         cfg = StickButton2DEnvConfig()
         header.append(
-            f"- The robot arm extends up to {float(cfg.robot_arm_length):.2f} m from its "
-            f"base and its gripper jaw is {float(cfg.robot_gripper_width):.2f} m wide; the "
+            f"- The robot arm extends up to {float(cfg.robot_arm_length):.2f} m from "
+            "its base and its gripper jaw is "
+            f"{float(cfg.robot_gripper_width):.2f} m wide; the "
             "stick it can pick up and wield (listed below) is far longer, which is why "
             "the stick reaches buttons beyond the arm's reach limit."
         )

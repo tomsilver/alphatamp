@@ -10,12 +10,12 @@ identically 1 for every stick-using plan — including the plan that responds pe
 the evidence. Blind and anti-signed respectively.
 
 The replacements here derive everything from the **operator schemas**: which objects a
-failure's own explanation names, and which of a candidate's steps the abstraction's causal
-chain cannot account for. Nothing below names a drawer, a button or a stick.
+failure's own explanation names, and which of a candidate's steps the abstraction's
+causal chain cannot account for. Nothing below names a drawer, a button or a stick.
 
 **Status: deployed.** These are the coverage/waste definitions ``dataset`` emits (the
-deployed definition since 2026-07-31; the earlier ``S(c) = args \\ goal_objects`` formula
-has been removed). The module still
+deployed definition since 2026-07-31; the earlier ``S(c) = args \\ goal_objects``
+formula has been removed). The module still
 carries its own lightweight :class:`UnifiedRecord` rather than extending
 :class:`failure_record.FailureRecord`, which is now a deliberate boundary rather than a
 staging area: ``FailureRecord`` is what a collection *stored*, this is what the features
@@ -108,9 +108,9 @@ def _rebuild_atoms(pairs, predicates: dict, objects: dict) -> frozenset[GroundAt
     """Serialized ``[[predicate, [arg, ...]], ...]`` back into ground atoms.
 
     A pair naming an unknown predicate or object is **dropped**, not guessed. That can
-    only happen if a record outlived the vocabulary it was written against, and a silently
-    mis-bound atom would corrupt the coverage test far more expensively than a missing
-    one.
+    only happen if a record outlived the vocabulary it was written against, and a
+    silently mis-bound atom would corrupt the coverage test far more expensively than
+    a missing one.
     """
     out = set()
     for pair in pairs or ():
@@ -137,12 +137,12 @@ def records_from_failure_records(episode, context, spec) -> list[UnifiedRecord]:
     (kinder's collision check returns a bool without naming anything).
 
     **Blameless records are kept.** A failure that names nobody is still an observation
-    that this step failed, and the record-token stream reads it. It is provably inert for
-    ``coverage``/``waste``: it contributes nothing to ``K``, :func:`covered` skips it for
-    every object, and :func:`_justified` never consults it — with :func:`waste` abstaining
-    on an empty pool so the one arithmetic edge case cannot leak. Which class an
-    environment produces is therefore a property of its data, never a branch a consumer
-    has to take.
+    that this step failed, and the record-token stream reads it. It is provably inert
+    for ``coverage``/``waste``: it contributes nothing to ``K``, :func:`covered` skips
+    it for every object, and :func:`_justified` never consults it — with :func:`waste`
+    abstaining on an empty pool so the one arithmetic edge case cannot leak. Which class
+    an environment produces is therefore a property of its data, never a branch a
+    consumer has to take.
     """
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre.failure_record import records_for_candidate
@@ -161,10 +161,11 @@ def records_from_failure_records(episode, context, spec) -> list[UnifiedRecord]:
             continue
         meta = episode.outcomes[idx].refiner_metadata or {}
         raw = meta.get("failures")
-        # Pair positionally with the records `records_for_candidate` actually built, which
-        # means applying **its** validity filter here too. Without that, one malformed
-        # entry shifts the alignment and every later deviation is attached to the wrong
-        # record -- a corruption with no symptom, since both sides stay well-formed.
+        # Pair positionally with the records `records_for_candidate` actually built,
+        # which means applying **its** validity filter here too. Without that, one
+        # malformed entry shifts the alignment and every later deviation is attached
+        # to the wrong record -- a corruption with no symptom, since both sides stay
+        # well-formed.
         raw = (
             [
                 o
@@ -237,7 +238,8 @@ def anchored(
     Nullary atoms are excluded.     Without this filter, bookkeeping atoms thread
     everything together: ``handempty``     chains every DD2D staging pair into the
     causal spine (destroying waste's backward     compatibility), and
-    ``AboveNoButton``/``HandEmpty`` make unrelated steps match each     other's contexts.
+    ``AboveNoButton``/``HandEmpty`` make unrelated steps match each     other's
+    contexts.
     """
     return frozenset(a for a in atoms if _names(a) - universal)
 
@@ -319,11 +321,10 @@ def culprit_pool(
     """``K = (Actionable \\ Universal) ∩ ⋃ blame(r)`` (§2).
 
     Universal objects are excluded from ``K`` **itself**, not merely from anchoring. The
-    ranking-inertness lemma would tolerate a uniformly-covered object inside coverage, but
-    it does not extend to waste, whose ``justified`` is a per-step existential over ``K``
-    —
-    one universal object there spuriously justifies every superfluous step that touches it,
-    and every step touches the robot.
+    ranking-inertness lemma would tolerate a uniformly-covered object inside coverage,
+    but it does not extend to waste, whose ``justified`` is a per-step existential over
+    ``K`` — one universal object there spuriously justifies every superfluous step that
+    touches it, and every step touches the robot.
     """
     ops = list(ground_ops)
     blamed: set[str] = set()
@@ -342,11 +343,12 @@ def matched_steps(
 ) -> frozenset[int]:
     """Indices of steps that re-enter the record's situation (§3).
 
-    A step matches iff it accomplishes some anchored effect the failed step was trying to
-    accomplish, **matched by what the step does rather than what it is called** — so a
-    stick-press of ``b2`` re-enters the context of a failed robot-press of ``b2``. Sign is
-    respected: adds match adds and deletes match deletes, because a step that adds what the
-    failed step deleted is the opposite of a re-attempt, not an instance of one.
+    A step matches iff it accomplishes some anchored effect the failed step was trying
+    to accomplish, **matched by what the step does rather than what it is called** — so
+    a stick-press of ``b2`` re-enters the context of a failed robot-press of ``b2``.
+    Sign is respected: adds match adds and deletes match deletes, because a step that
+    adds what the failed step deleted is the opposite of a re-attempt, not an instance
+    of one.
     """
     sig_add = anchored(record.failed_step.add_effects, universal)
     sig_del = anchored(record.failed_step.delete_effects, universal)
@@ -392,10 +394,10 @@ class _Memo:
     """Per-(candidate, context) precomputation.
 
     Every scalar below was previously recomputed inside the innermost loops:
-    ``matched_steps`` once per (culprit × record), ``touch`` once per (culprit × record ×
-    superfluous step), and ``blame``/``collateral`` on every one of those. All are pure
-    functions of things that do not vary across those loops, so hoisting them is a pure
-    speedup with byte-identical output — pinned by
+    ``matched_steps`` once per (culprit × record), ``touch`` once per (culprit × record
+    × superfluous step), and ``blame``/``collateral`` on every one of those. All are
+    pure functions of things that do not vary across those loops, so hoisting them is a
+    pure speedup with byte-identical output — pinned by
     ``test_memoized_matches_naive_recomputation``.
     """
 
@@ -434,8 +436,8 @@ def covered(
     ones: blockedness is not a predicate, so collisions get an index-precedence proxy,
     while an unpredicted atom *is* a predicate and gets an exact state test.
 
-    ``memo`` is an optimisation only; omitting it recomputes everything in place and must
-    give the same answer.
+    ``memo`` is an optimisation only; omitting it recomputes everything in place and
+    must give the same answer.
     """
     for idx, record in enumerate(records):
         record_blame = memo.blames[idx] if memo else blame(record)
@@ -454,7 +456,8 @@ def covered(
                 if not any(j < min(matched) for j in touched):
                     return False
             elif not touched:
-                # No recurrence recognized: bare membership, the deployed DD2D semantics.
+                # No recurrence recognized: bare membership, the deployed DD2D
+                # semantics.
                 return False
             continue
 
@@ -563,13 +566,13 @@ def waste(
     included — never enter the denominator. That is what dissolves the SB2D anti-signal
     by definition rather than by a per-environment switch.
 
-    **Abstains on an empty culprit pool.** With no named culprits nothing can justify any
-    idle step, so the arithmetic would return 1.0 for every candidate -- a maximally
+    **Abstains on an empty culprit pool.** With no named culprits nothing can justify
+    any idle step, so the arithmetic would return 1.0 for every candidate -- a maximally
     confident verdict derived from zero evidence. It is also what makes it safe to keep
-    blameless records (:func:`records_from_failure_records` no longer filters them): every
-    other consumer already skips a record that blames nobody, so without this guard the
-    single observable effect of including them would be waste flipping 0.0 to 1.0 on
-    contexts that named no one.
+    blameless records (:func:`records_from_failure_records` no longer filters them):
+    every other consumer already skips a record that blames nobody, so without this
+    guard the single observable effect of including them would be waste flipping 0.0 to
+    1.0 on contexts that named no one.
     """
     if not records or not pool:
         return 0.0

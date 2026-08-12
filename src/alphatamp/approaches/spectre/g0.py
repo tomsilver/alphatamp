@@ -46,7 +46,8 @@ FEATURE_NAMES = (
     "mean_caliper",  # max bbox side
     "max_caliper",
     "mean_aspect",  # max_side / min_side
-    "pair_area_complementarity",  # Σ_{i<j} area_i·area_j / buffer_area²  (packing pressure)
+    # Σ_{i<j} area_i·area_j / buffer_area²  (packing pressure)
+    "pair_area_complementarity",
 )
 
 
@@ -122,9 +123,9 @@ class LabeledCandidates:
     """Per-candidate feature matrix + labels for one split at one λ.
 
     ``X``/``y``/``slack`` cover only the **confidently-labeled** candidates (feasible ∪
-    infeasible); ``y`` is 1 for feasible, 0 for infeasible. Marginal candidates are counted
-    (``n_marginal``) but excluded from the AUROC. ``n_oracle_solved`` is the number of
-    scenes with ≥ 1 feasible candidate (the oracle solve numerator)."""
+    infeasible); ``y`` is 1 for feasible, 0 for infeasible. Marginal candidates are
+    counted (``n_marginal``) but excluded from the AUROC. ``n_oracle_solved`` is the
+    number of scenes with ≥ 1 feasible candidate (the oracle solve numerator)."""
 
     X: np.ndarray  # confidently-labeled rows only (feasible ∪ infeasible)
     y: np.ndarray  # 1 feasible / 0 infeasible
@@ -149,10 +150,12 @@ class LabeledCandidates:
 
 
 def collect_labeled_candidates(scenes_and_candidates) -> LabeledCandidates:
-    """Build a ``LabeledCandidates`` from an iterable of ``(scene, labeled_candidates)``.
+    """Build a ``LabeledCandidates`` from an iterable of
+    ``(scene, labeled_candidates)``.
 
-    Each ``labeled_candidates`` is a list of DD2D ``Candidate`` with ``meta["label"]`` in
-    {feasible, infeasible, marginal} (from ``label_all(..., use_certificate=True)``)."""
+    Each ``labeled_candidates`` is a list of DD2D ``Candidate`` with ``meta["label"]``
+    in {feasible, infeasible, marginal} (from
+    ``label_all(..., use_certificate=True)``)."""
     rows, ys, slacks, sizes = [], [], [], []
     n_scenes = n_solved = n_marginal = n_total = 0
     for scene, cands in scenes_and_candidates:
@@ -197,8 +200,8 @@ class G0Point:
     length/count-dominated, and the features include ``n_items``/``sum_area``), so the
     thesis-relevant signal is the **within-length** AUROC — the size-conditional AUROC,
     controlling for |S|. Cheap stats "degrade" for G0 when even the GBDT cannot beat
-    chance *within* a subset size, i.e. it fails to capture the subset-identity residual a
-    rich representation would target."""
+    chance *within* a subset size, i.e. it fails to capture the subset-identity
+    residual a rich representation would target."""
 
     lam: float
     n_scenes: int
@@ -213,7 +216,8 @@ class G0Point:
     top_features: tuple[tuple[str, float], ...] = ()  # GBDT permutation importances
 
     def cheap_degraded(self, thresh: float = 0.65) -> bool:
-        """Cheap statistics fail to capture the *within-length* subset-identity residual."""
+        """Cheap statistics fail to capture the *within-length* subset-identity
+        residual."""
         return self.gbdt_within_auroc < thresh
 
 
@@ -246,7 +250,8 @@ def within_length_auroc(y: np.ndarray, score: np.ndarray, sizes: np.ndarray) -> 
 def evaluate_g0_point(
     lam: float, train: LabeledCandidates, val: LabeledCandidates
 ) -> G0Point:
-    """Fit the GBDT on ``train``, score both probes on ``val`` (overall + within-length)."""
+    """Fit the GBDT on ``train``, score both probes on ``val`` (overall +
+    within-length)."""
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.inspection import permutation_importance
 
@@ -293,12 +298,12 @@ def choose_lambda_star(
     operating_range: tuple[float, float] = (0.7, 0.95),
 ) -> Optional[float]:
     """λ* = the λ that best exhibits "subset-coupled feasibility binds" — cheap stats
-    degrade *within-length* (GBDT within-length AUROC < ``degrade_thresh``) yet the oracle
-    still solves (solve rate ≥ ``oracle_thresh``) — chosen to **maximize the
+    degrade *within-length* (GBDT within-length AUROC < ``degrade_thresh``) yet the
+    oracle still solves (solve rate ≥ ``oracle_thresh``) — chosen to **maximize the
     oracle−GBDT_wl gap**. λ* is **constrained to DD2D's designed operating range**
     (``operating_range``, default 0.7–0.95, the naturalistic/loose regime); tighter λ is
-    off-design (3-subsets stop packing, so stratum-3 becomes ungenerable) and must not be
-    selected even if it maximizes the gap. ``None`` triggers the G0 off-ramp."""
+    off-design (3-subsets stop packing, so stratum-3 becomes ungenerable) and must not
+    be selected even if it maximizes the gap. ``None`` triggers the G0 off-ramp."""
     lo, hi = operating_range
     candidates = [
         p

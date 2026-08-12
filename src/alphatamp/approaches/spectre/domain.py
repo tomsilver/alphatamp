@@ -229,13 +229,13 @@ class DomainSpec:
 #:
 #: ``retrieve`` is monotone (a target ungraspable amid some drawer contents stays
 #: ungraspable amid a superset), local (staged objects are physically out of the drawer,
-#: so they cannot affect the grasp), and exact (``has_grasp`` enumerates every grasp cell
-#: rather than sampling). ``pick`` and ``place-buffer`` are sampled, so a failure is
-#: evidence, not proof -- they stay hint-tier and flow through the learned pathway.
+#: so they cannot affect the grasp), and exact (``has_grasp`` enumerates every grasp
+#: cell rather than sampling). ``pick`` and ``place-buffer`` are sampled, so a failure
+#: is evidence, not proof -- they stay hint-tier and flow through the learned pathway.
 #: ``min_calls_per_schema`` reads off the refiner's own loop: ``pick`` and ``retrieve``
-#: each run one grasp test; ``place-buffer`` costs one pose sample plus one accessibility
-#: test. So a straight-through grounding of ``[pick, place-buffer] * n ++ retrieve``
-#: costs
+#: each run one grasp test; ``place-buffer`` costs one pose sample plus one
+#: accessibility test. So a straight-through grounding of ``[pick, place-buffer] * n
+#: ++ retrieve`` costs
 #: exactly ``3n + 1`` calls -- measured to hold for 85.76% of dd2d_v3 retrieve failures,
 #: which are therefore provably un-resampled.
 _DD2D = DomainSpec(
@@ -261,8 +261,8 @@ DOMAINS: dict[str, DomainSpec] = {
     # not a new schema).
     "dd2d_v4gen_count": _DD2D,
     "dd2d_v4gen_shape": _DD2D,
-    # Shape-only generalization set (docs/decisions 2026-08-04): new tee/cross figures at
-    # the TRAINED 9-12 blocker count, isolating the shape variable from count.
+    # Shape-only generalization set (docs/decisions 2026-08-04): new tee/cross figures
+    # at the TRAINED 9-12 blocker count, isolating the shape variable from count.
     "dd2d_v4gen_shapeonly": _DD2D,
     # Shape-size sweep + inference-time geometry interventions (docs/decisions
     # 2026-08-06): the physically-shrunk tee/cross collection, and the input-rewrites of
@@ -272,8 +272,10 @@ DOMAINS: dict[str, DomainSpec] = {
     "dd2d_v4gen_shapeonly_sz07": _DD2D,
     "dd2d_v4gen_shapeonly_hullarea": _DD2D,
     "dd2d_v4gen_shapeonly_hullshape": _DD2D,
-    "dd2d_v4gen_shapeonly_scale07": _DD2D,  # x0.7 boundary shrink, input-only (fixed labels)
-    "dd2d_v4gen_shapeonly_fresh": _DD2D,  # fresh un-shrunk control (collection-variance bound)
+    # x0.7 boundary shrink, input-only (fixed labels)
+    "dd2d_v4gen_shapeonly_scale07": _DD2D,
+    # fresh un-shrunk control (collection-variance bound)
+    "dd2d_v4gen_shapeonly_fresh": _DD2D,
 }
 
 

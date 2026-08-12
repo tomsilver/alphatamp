@@ -8,8 +8,9 @@ not a reimplementation. This is that runner.
 Two settings are deliberate and differ from ``eda.py``'s defaults:
 
 **Uncensored.** ``attempt_budget`` is the pool cap (200), not 20. SPECTRE reports
-uncensored so the budget never binds (``decisions.md`` 2026-06-07), and on StickButton2D a
-20-attempt censor would clip exactly the b5 tail where the methods separate.
+uncensored so the budget never binds (``decisions.md`` 2026-06-07), and on
+StickButton2D a 20-attempt censor would clip exactly the b5 tail where the methods
+separate.
 
 **Per stratum.** The pooled variant's strata are button counts, and they differ by two
 orders of magnitude in pool size (b1 ≈ 2 candidates, b5 = 200). A single pooled mean is
@@ -31,10 +32,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-from alphatamp.approaches.spectre import (  # noqa: E402  pylint: disable=wrong-import-position
+from alphatamp.approaches.spectre import (  # noqa: E402  pylint: disable=wrong-import-position,line-too-long
     eda,
 )
-from alphatamp.approaches.spectre.envs.stickbutton2d.strata import (  # noqa: E402  pylint: disable=wrong-import-position
+from alphatamp.approaches.spectre.envs.stickbutton2d.strata import (  # noqa: E402  pylint: disable=wrong-import-position,line-too-long
     BUTTON_COUNTS,
     ENV_VARIANT,
 )

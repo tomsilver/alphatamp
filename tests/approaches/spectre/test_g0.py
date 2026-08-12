@@ -45,7 +45,8 @@ def _scene(polys, buffer, margin=1.0) -> DrawerScene:
 
 
 def test_buffer_slack():
-    # two side-2 squares (area 4 each) deflated by 0.5 -> side-1 (area 1 each); buffer 20.
+    # two side-2 squares (area 4 each) deflated by 0.5 -> side-1 (area 1 each);
+    # buffer 20.
     sc = _scene([_sq(2), _sq(2)], box(0, 0, 5, 4), margin=1.0)
     slack = buffer_slack(sc, ["o0", "o1"])
     assert slack == 20.0 - 2.0  # buffer_area 20 minus 2*1
@@ -103,8 +104,8 @@ def test_choose_lambda_star_maximizes_gap_within_operating_range():
 
 
 def test_choose_lambda_star_rejects_out_of_range_even_if_best():
-    # a tighter λ maximizes the gap but is off-design (3-subsets stop packing) → excluded;
-    # the in-range λ=0.8 is chosen instead.
+    # a tighter λ maximizes the gap but is off-design (3-subsets stop packing)
+    # → excluded; the in-range λ=0.8 is chosen instead.
     points = [
         _pt(0.80, 0.588, 0.97),  # in range, degraded  <- selected
         _pt(0.50, 0.578, 1.00),  # bigger gap but OUT of range -> rejected
@@ -126,6 +127,7 @@ def test_choose_lambda_star_offramp_when_oracle_fails():
 
 
 def test_choose_lambda_star_offramp_when_never_degrades():
-    # the real DD2D fingerprint: cheap GBDT captures within-length feasibility everywhere.
+    # the real DD2D fingerprint: cheap GBDT captures within-length feasibility
+    # everywhere.
     points = [_pt(0.8, 0.9, 1.0), _pt(0.4, 0.88, 0.7)]
     assert choose_lambda_star(points) is None

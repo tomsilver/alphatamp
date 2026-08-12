@@ -1,22 +1,21 @@
 """Pin `unified_evidence` against the worked examples of the design document.
 
-Both tables in ``docs/unified_culprits_coverage_waste.md`` §7 (DD2D) and §8 (SB2D) are
-reproduced number-for-number. They are the spec's own statement of intent, so a divergence
-here means either the implementation or the document is wrong — which is exactly what these
-probes exist to catch before a collection is built on the definitions.
+Both tables in ``docs/unified_culprits_coverage_waste.md`` §7 (DD2D) and §8 (SB2D)
+are reproduced number-for-number. They are the spec's own statement of intent, so a
+divergence here means either the implementation or the document is wrong — which is
+exactly what these probes exist to catch before a collection is built on the
+definitions.
 
-The SB2D case uses the **real** kinder operator schemas rather than a transcription, since
-the whole construction is derived from preconditions and effects; a hand-copied operator
-would test the transcription instead of the design.
+The SB2D case uses the **real** kinder operator schemas rather than a transcription,
+since the whole construction is derived from preconditions and effects; a hand-copied
+operator would test the transcription instead of the design.
 """
 
 from __future__ import annotations
 
 import pytest
-from relational_structs import GroundAtom, Object, Predicate, Type
+from relational_structs import GroundAtom, Object
 
-from alphatamp.approaches.spectre.envs.dd2d.spectre_operators import (
-    ALL_OPERATORS as DD2D_OPERATORS,)
 from alphatamp.approaches.spectre.envs.dd2d.spectre_operators import (
     OPERATOR_BY_NAME,
     Extracted,
@@ -49,7 +48,7 @@ _O3 = Object("o3", ItemType)
 _DD2D_OBJECTS = [_T, _O1, _O2, _O3]
 
 
-def _dd2d_ground_ops():
+def _dd2d_ground_ops() -> list:
     return [
         OPERATOR_BY_NAME[name].ground((o,))
         for name in ("pick", "place-buffer", "retrieve")
@@ -57,7 +56,7 @@ def _dd2d_ground_ops():
     ]
 
 
-def _stage(*blockers):
+def _stage(*blockers) -> list:
     """``[pick(o), place-buffer(o) …] ++ retrieve(t)`` — DD2D's staging skeleton."""
     steps = []
     for o in blockers:
@@ -76,9 +75,9 @@ _DD2D_GOAL = frozenset({GroundAtom(Extracted, [_T])})
 def test_dd2d_has_no_universal_object() -> None:
     """`Universal = ∅` on DD2D by construction — `pick(o1)` does not mention `o2`.
 
-    This is why excluding universal objects from `K` is provably a no-op on DD2D rather
-    than an empirical one, and it is worth a test because the whole backward-compatibility
-    argument rests on it.
+    This is why excluding universal objects from `K` is provably a no-op on DD2D
+    rather than an empirical one, and it is worth a test because the whole
+    backward-compatibility argument rests on it.
     """
     assert universal_objects(_dd2d_ground_ops()) == frozenset()
     assert actionable_objects(_dd2d_ground_ops()) == {"t", "o1", "o2", "o3"}
@@ -111,7 +110,8 @@ def test_dd2d_worked_example_table() -> None:
 
 
 def test_dd2d_second_attempt_escalates() -> None:
-    """§7 attempt 2: once `o2` is also blamed, `c3` becomes the fully-covered candidate."""
+    """§7 attempt 2: once `o2` is also blamed, `c3` becomes the fully-covered
+    candidate."""
     ops = _dd2d_ground_ops()
     universal = universal_objects(ops)
     retrieve_t = OPERATOR_BY_NAME["retrieve"].ground((_T,))
@@ -130,7 +130,8 @@ def test_dd2d_second_attempt_escalates() -> None:
 
 
 def test_dd2d_waste_denominator_is_the_staging_steps() -> None:
-    """§5's DD2D compat argument: `handempty` is filtered, so each staging pair dead-ends.
+    """§5's DD2D compat argument: `handempty` is filtered, so each staging pair
+    dead-ends.
 
     If `handempty` were anchored it would chain every pair into the causal spine and the
     denominator would collapse to zero, silently breaking waste on the deployed
@@ -148,12 +149,16 @@ def test_dd2d_waste_denominator_is_the_staging_steps() -> None:
 def sb2d():
     """Real SB2D lifted operators, grounded over the §8 example's four buttons."""
     import kinder  # pylint: disable=import-outside-toplevel
-    from kinder.envs.kinematic2d.object_types import (  # pylint: disable=import-outside-toplevel
+
+    # pylint: disable-next=import-outside-toplevel
+    from kinder.envs.kinematic2d.object_types import (
         CircleType,
         CRVRobotType,
         RectangleType,
     )
-    from kinder_bilevel_planning.env_models import (  # pylint: disable=import-outside-toplevel
+
+    # pylint: disable-next=import-outside-toplevel
+    from kinder_bilevel_planning.env_models import (
         create_bilevel_planning_models,
     )
 
@@ -200,7 +205,7 @@ def sb2d():
     place = lifted["PlaceStick"].ground((robot, stick))
 
     ground_ops = []
-    for name, op in lifted.items():
+    for _name, op in lifted.items():
         types = [p.type.name for p in op.parameters]
         pools = {
             "crv_robot": [robot],
@@ -243,7 +248,8 @@ def sb2d():
 
 
 def test_sb2d_filters(sb2d) -> None:
-    """§1: the robot is universal, the stick is not (absent from robot-press operators)."""
+    """§1: the robot is universal, the stick is not (absent from robot-press
+    operators)."""
     universal = universal_objects(sb2d["ground_ops"])
     assert universal == {"robot"}
     # The stick must stay a possible culprit — §4 relies on a knocked-loose `Grasped`.
@@ -312,10 +318,11 @@ def test_sb2d_worked_example_table(sb2d) -> None:
 
 
 def test_sb2d_waste_dissolves_the_stick_anti_signal(sb2d) -> None:
-    """§8: `c_B` is all-live (waste 0), `c_E`'s place-repick cycle is unexplained (waste 1).
+    """§8: `c_B` is all-live (waste 0), `c_E`'s place-repick cycle is unexplained
+    (waste 1).
 
-    The deployed object-level feature gave both candidates `S(c) = {stick}` and therefore
-    waste 1.0 — it could not see the difference at all.
+    The deployed object-level feature gave both candidates `S(c) = {stick}` and
+    therefore waste 1.0 — it could not see the difference at all.
     """
     rp, sp, pick, place = sb2d["rp"], sb2d["sp"], sb2d["pick"], sb2d["place"]
     universal = universal_objects(sb2d["ground_ops"])
@@ -350,10 +357,11 @@ def test_leakage_invariant_no_records_means_zero(sb2d) -> None:
 def test_memoized_matches_naive_recomputation() -> None:
     """The `_Memo` hoist is a pure speedup: identical output, on real dd2d_v4 data.
 
-    `matched_steps`, `touch`, `blame` and `collateral` were previously recomputed inside
-    the innermost loops. Hoisting them cut 283 s/epoch to a fraction of that, and the only
-    thing that makes the optimisation safe is that it changes nothing — so this compares
-    the memoized path against a from-scratch recomputation, candidate by candidate.
+    `matched_steps`, `touch`, `blame` and `collateral` were previously recomputed
+    inside the innermost loops. Hoisting them cut 283 s/epoch to a fraction of that,
+    and the only thing that makes the optimisation safe is that it changes nothing — so
+    this compares the memoized path against a from-scratch recomputation, candidate by
+    candidate.
     """
     from pathlib import Path
 
@@ -415,11 +423,12 @@ def test_memoized_matches_naive_recomputation() -> None:
 def test_blameless_records_do_not_change_coverage_or_waste() -> None:
     """Records that name nobody are kept, and must not move either feature.
 
-    `records_from_failure_records` no longer filters them: an environment with no class-1
-    channel produces nothing else, and whether a record blames anyone should be data
-    rather than a reason to drop it. That is only safe because every consumer already
-    skips a blameless record -- it adds nothing to `K`, `covered` skips it per object and
-    `_justified` never consults it -- so this pins the claim rather than assuming it.
+    `records_from_failure_records` no longer filters them: an environment with no
+    class-1 channel produces nothing else, and whether a record blames anyone should be
+    data rather than a reason to drop it. That is only safe because every consumer
+    already skips a blameless record -- it adds nothing to `K`, `covered` skips it per
+    object and `_justified` never consults it -- so this pins the claim rather than
+    assuming it.
     """
     ops = _dd2d_ground_ops()
     universal = universal_objects(ops)
@@ -446,9 +455,9 @@ def test_waste_abstains_when_no_culprit_is_named() -> None:
     """The one arithmetic edge case keeping blameless records would otherwise expose.
 
     With an empty `K` nothing can justify any idle step, so the ratio would be a
-    maximally confident 1.0 derived from zero evidence -- and, worse, it would appear only
-    on contexts whose records happened to blame nobody, i.e. as noise correlated with
-    having no information.
+    maximally confident 1.0 derived from zero evidence -- and, worse, it would appear
+    only on contexts whose records happened to blame nobody, i.e. as noise correlated
+    with having no information.
     """
     ops = _dd2d_ground_ops()
     universal = universal_objects(ops)
@@ -474,10 +483,13 @@ def test_malformed_failure_entry_does_not_shift_deviation_alignment() -> None:
     """
     from _fixtures import build_toy_episode  # pylint: disable=import-outside-toplevel
 
-    from alphatamp.approaches.spectre.domain import (  # pylint: disable=import-outside-toplevel
+    # pylint: disable-next=import-outside-toplevel
+    from alphatamp.approaches.spectre.domain import (
         EMPTY_SPEC,
     )
-    from alphatamp.approaches.spectre.unified_evidence import (  # pylint: disable=import-outside-toplevel
+
+    # pylint: disable-next=import-outside-toplevel
+    from alphatamp.approaches.spectre.unified_evidence import (
         records_from_failure_records,
     )
 

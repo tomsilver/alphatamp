@@ -95,12 +95,14 @@ class RoundLog:
     # surfaced. The 2026-07-24 smoke run truncated 16/104 responses at max_tokens=4096
     # and nothing said so; hence recorded, not inferred from response length.
     #
-    # ``prompt_tokens`` / ``completion_tokens`` are normalised names: the chat-completions
-    # backend reports them under those keys, but the Responses API (the GPT-5 arm) reports
-    # ``input_tokens`` / ``output_tokens``. ``_record_usage`` maps both, so token
-    # accounting, truncation detection and $-cost tracking work on either backend.
-    # ``completion_tokens`` includes ``reasoning_tokens`` for a reasoning model — which is
-    # correct, because reasoning tokens are billed as output and count against the cap.
+    # ``prompt_tokens`` / ``completion_tokens`` are normalised names: the
+    # chat-completions backend reports them under those keys, but the Responses API (the
+    # GPT-5 arm) reports ``input_tokens`` / ``output_tokens``. ``_record_usage`` maps
+    # both, so token accounting, truncation detection and $-cost tracking work on either
+    # backend.
+    # ``completion_tokens`` includes ``reasoning_tokens`` for a reasoning model — which
+    # is correct, because reasoning tokens are billed as output and count against the
+    # cap.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     reasoning_tokens: int | None = None
@@ -332,10 +334,10 @@ def _record_usage(log: RoundLog, usage: dict[str, Any], decode: dict[str, Any]) 
 
     The two backends name the fields differently — chat completions returns
     ``prompt_tokens`` / ``completion_tokens``; the Responses API returns ``input_tokens``
-    / ``output_tokens`` with reasoning tokens nested under ``output_tokens_details``. Both
-    are accepted so the GPT-5 (Responses) arm records usage exactly as the local
-    chat-completions arm does. ``output_tokens`` already includes reasoning tokens, which
-    is the number billed and the number that hits the cap, so it maps to
+    / ``output_tokens`` with reasoning tokens nested under ``output_tokens_details``.
+    Both are accepted so the GPT-5 (Responses) arm records usage exactly as the local
+    chat-completions arm does. ``output_tokens`` already includes reasoning tokens,
+    which is the number billed and the number that hits the cap, so it maps to
     ``completion_tokens`` unchanged.
     """
     prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
@@ -351,8 +353,9 @@ def _record_usage(log: RoundLog, usage: dict[str, Any], decode: dict[str, Any]) 
     log.reasoning_tokens = (
         int(reasoning_tokens) if reasoning_tokens is not None else None
     )
-    # The Responses API remaps ``max_tokens`` -> ``max_output_tokens`` inside the backend,
-    # but ``decode`` still carries ``max_tokens``, so the cap comparison holds for both.
+    # The Responses API remaps ``max_tokens`` -> ``max_output_tokens`` inside the
+    # backend, but ``decode`` still carries ``max_tokens``, so the cap comparison holds
+    # for both.
     max_tokens = decode.get("max_tokens") or decode.get("max_output_tokens")
     log.truncated = bool(
         log.completion_tokens is not None

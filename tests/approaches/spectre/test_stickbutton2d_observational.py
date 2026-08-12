@@ -1,10 +1,11 @@
 """The StickButton2D instrumentation changed no label.
 
-``AcceptanceTrajectorySampler`` does not subclass a hook — it **re-implements** upstream's
-``ParameterizedControllerTrajectorySampler.__call__`` loop, because upstream computes the
-achieved abstract state to decide accept-or-reject and then discards it behind a
-payload-free ``TrajectorySamplingFailure``. Without that state there is no class-2
-evidence and ``coverage``/``waste`` are identically zero on this environment.
+``AcceptanceTrajectorySampler`` does not subclass a hook — it **re-implements**
+upstream's ``ParameterizedControllerTrajectorySampler.__call__`` loop, because
+upstream computes the achieved abstract state to decide accept-or-reject and then
+discards it behind a payload-free ``TrajectorySamplingFailure``. Without that state
+there is no class-2 evidence and ``coverage``/``waste`` are identically zero on this
+environment.
 
 Re-implementing the loop is the risk that buys it, and the whole collection runs through
 it, so "faithful" has to be a measurement rather than a claim. This is the differential
@@ -32,7 +33,8 @@ _MAX_TRAJECTORY_STEPS = 200
 
 
 def _refine_pool(num_buttons: int, problem_id: int, instrumented: bool) -> list[bool]:
-    """Labels for the first ``_CANDIDATES`` skeletons, under one sampler implementation."""
+    """Labels for the first ``_CANDIDATES`` skeletons, under one sampler
+    implementation."""
     # pylint: disable=import-outside-toplevel
     import kinder
     from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
@@ -64,7 +66,7 @@ def _refine_pool(num_buttons: int, problem_id: int, instrumented: bool) -> list[
         x0 = models.observation_to_state(obs)
         s0 = models.state_abstractor(x0)
         goal = models.goal_deriver(x0)
-        bpg = BilevelPlanningGraph()
+        bpg = BilevelPlanningGraph()  # type: ignore[var-annotated]
         bpg.add_abstract_state_node(s0)
         bpg.add_state_node(x0)
         bpg.add_state_abstractor_edge(x0, s0)
@@ -81,13 +83,15 @@ def _refine_pool(num_buttons: int, problem_id: int, instrumented: bool) -> list[
         sampler = (
             RecordingSampler(**kwargs)
             if instrumented
-            else ParameterizedControllerTrajectorySampler(**kwargs)
+            else ParameterizedControllerTrajectorySampler(
+                **kwargs  # type: ignore[arg-type]
+            )
         )
 
         labels = []
         for idx, (state_plan, action_plan) in enumerate(pool):
             if instrumented:
-                sampler.clear()
+                sampler.clear()  # type: ignore[attr-defined]
             refiner = BacktrackingRefiner(
                 trajectory_sampler=sampler,
                 num_sampling_attempts_per_step=_SAMPLES_PER_STEP,
@@ -121,9 +125,9 @@ def test_recording_sampler_reproduces_upstream_labels(num_buttons: int) -> None:
 def test_recording_sampler_actually_recorded_something() -> None:
     """Guard against the test above passing because nothing was instrumented at all.
 
-    If ``RecordingSampler`` silently stopped capturing rejections, every label would still
-    match and the differential above would be vacuous — while the collection quietly
-    produced episodes with no evidence in them.
+    If ``RecordingSampler`` silently stopped capturing rejections, every label would
+    still match and the differential above would be vacuous — while the collection
+    quietly produced episodes with no evidence in them.
     """
     # pylint: disable=import-outside-toplevel
     import kinder
@@ -151,7 +155,7 @@ def test_recording_sampler_actually_recorded_something() -> None:
         x0 = models.observation_to_state(obs)
         s0 = models.state_abstractor(x0)
         goal = models.goal_deriver(x0)
-        bpg = BilevelPlanningGraph()
+        bpg = BilevelPlanningGraph()  # type: ignore[var-annotated]
         bpg.add_abstract_state_node(s0)
         bpg.add_state_node(x0)
         bpg.add_state_abstractor_edge(x0, s0)

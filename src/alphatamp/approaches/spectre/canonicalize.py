@@ -182,13 +182,14 @@ def _remap_post_mortem(
 def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
     """Rename the object names inside v3 failure observations.
 
-    ``refiner_metadata`` is a free-form dict, and its v3 ``failures`` entries carry object
-    names in five roles: three flat lists (``args``, ``culprits``, ``unmoved``) and, for
-    class-2 deviations, the argument lists *inside* ``dev_added`` / ``dev_deleted``. All of
-    them must land in the same namespace as the scene and candidate tokens or the record
-    tokens silently lose all object identity -- the tags simply fail to resolve and every
-    record degenerates to "some failure of some schema". This is the same trap
-    ``_remap_post_mortem`` exists for, and the nested case is the easier one to miss.
+    ``refiner_metadata`` is a free-form dict, and its v3 ``failures`` entries carry
+    object names in five roles: three flat lists (``args``, ``culprits``, ``unmoved``)
+    and, for class-2 deviations, the argument lists *inside* ``dev_added`` /
+    ``dev_deleted``. All of them must land in the same namespace as the scene and
+    candidate tokens or the record tokens silently lose all object identity -- the tags
+    simply fail to resolve and every record degenerates to "some failure of some
+    schema". This is the same trap ``_remap_post_mortem`` exists for, and the nested
+    case is the easier one to miss.
 
     Anything not a known object name (e.g. the ``__wall__`` sentinel, which is not an
     item) is passed through unchanged rather than dropped, so a non-object culprit stays

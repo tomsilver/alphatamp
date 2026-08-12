@@ -1,8 +1,9 @@
 """SPECTRE v3 ranker -- the same job as v2.2, re-derived from three ideas.
 
 v3 keeps v2.2's contribution (a relational, tag-joined, object-centric geometric encoder
-scored listwise) and removes the accretions around it: the data-dependent prior knob, the
-five bespoke fact types, the inert packing certificate, the part-zeroed global token.
+scored listwise) and removes the accretions around it: the data-dependent prior knob,
+the five bespoke fact types, the inert packing certificate, the part-zeroed global
+token.
 See ``docs/SPECTRE_v3_proposal.md``.
 
 **The exact-absence invariant (D-8).** Every v3 feature is behind a flag on
@@ -56,10 +57,10 @@ MAX_RECORD_CULPRITS = 8
 D_SCHEMA = 32
 N_RECORD_SCALARS = 4  # [depth j/L, effort (log1p, scaled), exhausted, effort_is_total]
 
-# State-delta dims (`s_j` relative to `s_0`, §6.1). `MAX_DELTA_ATOMS` caps how many atoms
-# one role contributes; measured on dd2d_v4 the maxima are |added| = 4 and |deleted| = 5,
-# so 8 is slack and truncation never fires. It is a pooled sequence axis, so it appears
-# in no parameter shape and can be raised for another domain for free.
+# State-delta dims (`s_j` relative to `s_0`, §6.1). `MAX_DELTA_ATOMS` caps how many
+# atoms one role contributes; measured on dd2d_v4 the maxima are |added| = 4 and
+# |deleted| = 5, so 8 is slack and truncation never fires. It is a pooled sequence axis,
+# so it appears in no parameter shape and can be raised for another domain for free.
 MAX_DELTA_ATOMS = 8
 D_PRED = 32
 D_DELTA = 32
@@ -224,13 +225,14 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
     memory and runs a single cross-attention over it. That is the architectural reason
     the record tokens end up inert, and it is a competition the evidence cannot win:
 
-    - **One softmax must split its mass.** With ~10 scene tokens against up to 2045 record
-      tokens, the geometry that actually determines feasibility is outnumbered ~200:1;
-      with aggregation it is still ~3:1 and grows with |F|.
-    - **Geometry is reliably useful, evidence is noisy.** The loss-minimizing policy for a
-      *shared* attention budget is therefore to spend it on geometry and ignore evidence
-      -- exactly what the ``suppress_records`` diagnostic measured (16.17 -> 16.40, i.e.
-      the trained model had already learned to discard its own records).
+    - **One softmax must split its mass.** With ~10 scene tokens against up to 2045
+      record tokens, the geometry that actually determines feasibility is outnumbered
+      ~200:1; with aggregation it is still ~3:1 and grows with |F|.
+    - **Geometry is reliably useful, evidence is noisy.** The loss-minimizing policy for
+      a *shared* attention budget is therefore to spend it on geometry and ignore
+      evidence -- exactly what the ``suppress_records`` diagnostic measured
+      (16.17 -> 16.40, i.e. the trained model had already learned to discard its own
+      records).
 
     Two channels remove the competition: the candidate attends over ``[scene ; global]``
     and, independently, over the evidence memory, and the head sees both. Evidence can
@@ -282,9 +284,9 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
         ev = cand_emb.new_zeros(b, k, D_MODEL)
         if fact_tok is not None and fact_tok.shape[1] > 0 and fact_mask is not None:
             # A batch row with no records would be an all-True key-padding mask, which
-            # makes MultiheadAttention emit NaN rather than an empty result. Attend under
-            # a mask that always leaves one key live, then zero those rows afterwards --
-            # the same guard the v1 encoder uses.
+            # makes MultiheadAttention emit NaN rather than an empty result. Attend
+            # under a mask that always leaves one key live, then zero those rows
+            # afterwards -- the same guard the v1 encoder uses.
             has = fact_mask.any(dim=1)
             safe = fact_mask.clone()
             safe[~has, 0] = True
@@ -312,9 +314,10 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
 N_OVERLAP_V3 = 4
 """``[dead, jaccard, coverage, waste]``.
 
-The last two are §5.1's necessity features computed from **observed** culprits rather than
-a predicted per-object head: ``coverage`` = the fraction of objects seen blocking that this
-candidate removes, ``waste`` = the fraction of what it removes that was never seen blocking.
+The last two are §5.1's necessity features computed from **observed** culprits rather
+than a predicted per-object head: ``coverage`` = the fraction of objects seen blocking
+that this candidate removes, ``waste`` = the fraction of what it removes that was never
+seen blocking.
 Necessity conditioning was cut because its head would have had to *predict* p_i from
 geometry (`decisions.md` 2026-07-26); once the refiner reports culprits, the same two
 features are available by observation and need no head at all.
@@ -326,13 +329,13 @@ class SpectreConfig:
     """Architecture switches. Every v3 feature defaults **off**, so the default config
     reproduces deployed v2.2 exactly (D-8).
 
-    ``n_prior_feats`` is retained only so a pre-v3 checkpoint that *was* trained with the
-    short-first prior still loads for comparison. The deployed dd2d_v3 model has it off,
-    and v3 does not reintroduce it: the prior was a per-dataset hand switch that
+    ``n_prior_feats`` is retained only so a pre-v3 checkpoint that *was* trained with
+    the short-first prior still loads for comparison. The deployed dd2d_v3 model has it
+    off, and v3 does not reintroduce it: the prior was a per-dataset hand switch that
     diverged training on the easier collection (``decisions.md`` 2026-07-25). Note the
-    v2 scorer couples ``n_prior_feats > 0`` to a zero-init of the head's output layer, so
-    prior-on and prior-off differ in initialization as well as in features -- a confound
-    to remember when reading any historical prior on/off delta.
+    v2 scorer couples ``n_prior_feats > 0`` to a zero-init of the head's output layer,
+    so prior-on and prior-off differ in initialization as well as in features -- a
+    confound to remember when reading any historical prior on/off delta.
     """
 
     n_overlap_feats: int = 0
@@ -343,10 +346,10 @@ class SpectreConfig:
     # triple; the target-anchored offsets, target area ratio and privileged ``concave``
     # flag are cut -- see model_v2.D_REL_V3), 8 only in compat mode where the goal is to
     # reload a frozen v2.2 checkpoint byte-for-byte. Unlike the feature switches above,
-    # narrowing is the *default*: v3 should not have to opt in to dropping inputs that do
-    # not generalize. It is persisted (it changes ``scene.rel_proj``'s shape), and it
-    # RETIRES the v2.2 rollout-equivalence oracle -- a deployed v3 no longer reads the same
-    # scene columns v2.2 did, by design (docs/decisions 2026-08-08).
+    # narrowing is the *default*: v3 should not have to opt in to dropping inputs that
+    # do not generalize. It is persisted (it changes ``scene.rel_proj``'s shape), and it
+    # RETIRES the v2.2 rollout-equivalence oracle -- a deployed v3 no longer reads the
+    # same scene columns v2.2 did, by design (docs/decisions 2026-08-08).
     d_rel: int = D_REL_V3
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
@@ -413,8 +416,8 @@ class SpectreModel(nn.Module):
         self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
         self.aux = AuxHead()
         # Additive by construction: the record encoder only exists when asked for, so a
-        # default-config state dict is byte-identical to v2.2's (D-8) and the equivalence
-        # oracle keeps loading.
+        # default-config state dict is byte-identical to v2.2's (D-8) and the
+        # equivalence oracle keeps loading.
         self.records = (
             RecordEncoder(
                 n_ops,

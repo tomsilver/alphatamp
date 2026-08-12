@@ -861,7 +861,7 @@ def test_stop_check_is_consulted_and_halts_generation() -> None:
 
     calls: list[int] = []
 
-    def _always_stop(proposals):
+    def _always_stop(proposals) -> bool:
         calls.append(len(proposals))
         return True
 

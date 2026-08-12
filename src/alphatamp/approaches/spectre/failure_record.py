@@ -21,20 +21,21 @@ continuous query. Instrumenting the computations that already ran yields exactly
 ``budget_exhausted`` the refiner stopped on time/call budget: **this proves nothing**
 ===================  ====================================================================
 
-Every v2.2 fact type is a projection of this record (proposal §6.2): ``extraction-failed``
-is (schema=pick, args=the blocker); ``pack-exhausted`` is (schema=place, exhausted);
-``blocked-at-contents`` in its *observed* mode is (schema=retrieve, U=all∖staged);
-``grasp-witness`` is the culprit slot. The two that are not projections --
-``blocked-at-contents`` in *computed* mode and ``pack-impossible`` -- are counterfactual
-analytic claims about attempts that never ran, and are deliberately dropped (R2, R3), not
-casualties of the unification.
+Every v2.2 fact type is a projection of this record (proposal §6.2):
+``extraction-failed`` is (schema=pick, args=the blocker); ``pack-exhausted`` is
+(schema=place, exhausted); ``blocked-at-contents`` in its *observed* mode is
+(schema=retrieve, U=all∖staged); ``grasp-witness`` is the culprit slot. The two that
+are not projections -- ``blocked-at-contents`` in *computed* mode and
+``pack-impossible`` -- are counterfactual analytic claims about attempts that never
+ran, and are deliberately dropped (R2, R3), not casualties of the unification.
 
-**Two provenances, one schema.** ``dd2d_v4`` carries instrumented records directly. Older
-collections are **backfilled** from stored metadata, which recovers *j*, the query, the
-args and *U* exactly, but cannot recover culprits or per-step effort -- so those fields are
-absent rather than guessed, and ``effort_is_total`` marks that ``n_step`` is really the
-whole-attempt stream count. A model trained on backfilled records has never seen the rich
-fields populated, so the two must not be mixed within one checkpoint.
+**Two provenances, one schema.** ``dd2d_v4`` carries instrumented records directly.
+Older collections are **backfilled** from stored metadata, which recovers *j*, the
+query, the args and *U* exactly, but cannot recover culprits or per-step effort --
+so those fields are absent rather than guessed, and ``effort_is_total`` marks that
+``n_step`` is really the whole-attempt stream count. A model trained on backfilled
+records has never seen the rich fields populated, so the two must not be mixed within
+one checkpoint.
 """
 
 from __future__ import annotations
@@ -132,17 +133,18 @@ class FailureRecord:
     """
 
     instrumented: bool = False
-    """True when the refiner emitted this directly; False when backfilled from metadata."""
+    """True when the refiner emitted this directly; False when backfilled from
+    metadata."""
 
     dev_blame: tuple[str, ...] = ()
     """Objects the *collateral deviation* names, on environments with no class-1 channel.
 
-    Separate from :attr:`culprits` on purpose. A culprit was named by a validity check the
-    environment itself ran; this is inferred from the observed-vs-predicted trace, which is
-    all StickButton2D affords (kinder's collision check returns a bool). Keeping them in
-    one field would let a model trained where the signal is observed be deployed where it
-    is inferred without anything saying so. Absent on every DD2D record, so the token path
-    that falls back to it is unreachable there.
+    Separate from :attr:`culprits` on purpose. A culprit was named by a validity check
+    the environment itself ran; this is inferred from the observed-vs-predicted trace,
+    which is all StickButton2D affords (kinder's collision check returns a bool).
+    Keeping them in one field would let a model trained where the signal is observed be
+    deployed where it is inferred without anything saying so. Absent on every DD2D
+    record, so the token path that falls back to it is unreachable there.
     """
 
     state_delta: Optional[StateDelta] = None

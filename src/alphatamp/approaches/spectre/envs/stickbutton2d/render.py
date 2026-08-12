@@ -198,8 +198,8 @@ def _annotate_scene(ax, geometry: SceneGeometry, label_fontsize: float) -> None:
     """Overlay Set-of-Mark object labels on an axes kinder drew on.
 
     The label strings are the canonicalized object names (``circle_0``…), identical to
-    the prompt's object list and the parser vocabulary — that identity is the whole point,
-    it is what lets the model name a disc it can see.
+    the prompt's object list and the parser vocabulary — that identity is the whole
+    point, it is what lets the model name a disc it can see.
 
     Placement is edge-aware: a label for an object near the top of the frame is dropped
     *below* it (and vice versa), and every label is clamped inside the frame, so a label
@@ -208,8 +208,8 @@ def _annotate_scene(ax, geometry: SceneGeometry, label_fontsize: float) -> None:
 
     ``label_fontsize`` is small on purpose (the button markers are tiny discs, so a large
     label reads as bigger than the thing it names). No reach line is drawn — the table
-    band already shows the base-exclusion zone and the exact numeric reach limit is stated
-    in the text prompt, so the render stays uncluttered.
+    band already shows the base-exclusion zone and the exact numeric reach limit is
+    stated in the text prompt, so the render stays uncluttered.
     """
     world = next((c for c in geometry.containers if c.kind == "world"), None)
     x0, y0, x1, y1 = world.bounds if world else (0.0, 0.0, 3.5, 2.5)
@@ -265,8 +265,8 @@ def render_kinder_labeled_scene(
     environment render (identical to what PIGINet's crops are sourced from), so the
     representation contrast is measured on the same pixels — but kinder draws every
     unpressed button as an identical unlabeled red disc, which a VLM cannot ground. The
-    labels are drawn in **data coordinates via kinder's own ``ax_callback``**, so they sit
-    exactly on the objects with no pixel-transform guesswork.
+    labels are drawn in **data coordinates via kinder's own ``ax_callback``**, so
+    they sit exactly on the objects with no pixel-transform guesswork.
 
     Reconstructs the env from the stored seed (``env.reset(seed=problem_id)``), the one
     sanctioned exception to *reconstruct, never regenerate*, exactly as

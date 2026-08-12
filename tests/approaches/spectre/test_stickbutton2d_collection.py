@@ -32,11 +32,13 @@ class _FakeState:
 
 
 def test_acyclic_rejects_a_returning_plan() -> None:
-    """PickStick then PlaceStick returns to s_0 exactly — the padding this filter kills."""
+    """PickStick then PlaceStick returns to s_0 exactly — the padding this filter
+    kills."""
     s0 = _FakeState("HandEmpty", "AboveNoButton")
     held = _FakeState("Grasped", "AboveNoButton")
-    assert _is_acyclic([s0, held]) is True
-    assert _is_acyclic([s0, held, _FakeState("HandEmpty", "AboveNoButton")]) is False
+    returns_to_s0 = [s0, held, _FakeState("HandEmpty", "AboveNoButton")]
+    assert _is_acyclic([s0, held]) is True  # type: ignore[list-item]
+    assert _is_acyclic(returns_to_s0) is False  # type: ignore[arg-type]
 
 
 def test_acyclic_accepts_a_progressing_plan() -> None:
@@ -46,7 +48,7 @@ def test_acyclic_accepts_a_progressing_plan() -> None:
         _FakeState("Grasped", "Pressed(b0)"),
         _FakeState("Grasped", "Pressed(b0)", "Pressed(b1)"),
     ]
-    assert _is_acyclic(plan) is True
+    assert _is_acyclic(plan) is True  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("split", ["train", "val", "test"])
@@ -122,7 +124,8 @@ def _sb2d_state(num_buttons: int = 3, seed: int = 0):
 
 
 def test_scene_geometry_covers_every_abstract_object() -> None:
-    """Invariant I5: every ``object_registry`` key needs geometry, or ``validate`` raises."""
+    """Invariant I5: every ``object_registry`` key needs geometry, or ``validate``
+    raises."""
     # pylint: disable=import-outside-toplevel
     from alphatamp.approaches.spectre.envs.stickbutton2d.scene_geometry import (
         build_scene_geometry,

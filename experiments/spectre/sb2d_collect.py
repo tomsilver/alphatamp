@@ -15,10 +15,10 @@ recorded per variant in the census this prints, so the rejection rate is visible
 than implicit.
 
 Problems are independent, so they run concurrently (spectre ``CLAUDE.md``, "Use the
-hardware"); ``spawn`` is required because pyperplan and bilevel_planning keep module-level
-caches that do not survive a concurrent ``fork``. Progress, per-variant keep rate and an
-ETA are printed on a heartbeat so a run that has gone wrong can be stopped early rather
-than discovered at the end.
+hardware"); ``spawn`` is required because pyperplan and bilevel_planning keep
+module-level caches that do not survive a concurrent ``fork``. Progress,
+per-variant keep rate and an ETA are printed on a heartbeat so a run that has gone
+wrong can be stopped early rather than discovered at the end.
 
 Usage::
 
@@ -39,10 +39,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
 
-from alphatamp.approaches.spectre.config import (  # noqa: E402  pylint: disable=wrong-import-position
+from alphatamp.approaches.spectre.config import (  # noqa: E402  pylint: disable=wrong-import-position,line-too-long
     CollectionConfig,
 )
-from alphatamp.approaches.spectre.envs.stickbutton2d.strata import (  # noqa: E402  pylint: disable=wrong-import-position
+from alphatamp.approaches.spectre.envs.stickbutton2d.strata import (  # noqa: E402  pylint: disable=wrong-import-position,line-too-long
     BUTTON_COUNTS,
     ENV_VARIANT,
     SPLIT_SIZES,

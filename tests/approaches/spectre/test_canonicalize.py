@@ -85,7 +85,7 @@ def test_class2_deviation_object_names_are_renamed() -> None:
 
     # A permutation makes the mapping non-trivial, so a pass-through would be visible.
     canon = canonicalize_episode(ep, rng=np.random.default_rng(3))
-    entry = canon.outcomes[0].refiner_metadata["failures"][0]
+    entry = canon.outcomes[0].refiner_metadata["failures"][0]  # type: ignore[index]
     canonical = entry["args"][0]
     assert canonical in canon.object_registry
     # The deviation must follow the *same* mapping as the flat `args` list; any other
@@ -102,7 +102,9 @@ def test_metadata_without_deviation_keys_is_untouched() -> None:
         {"step_index": 0, "schema": "retrieve", "args": [], "culprits": ["__wall__"]}
     ]
     entry = (
-        canonicalize_episode(ep, rng=None).outcomes[0].refiner_metadata["failures"][0]
+        canonicalize_episode(ep, rng=None)
+        .outcomes[0]
+        .refiner_metadata["failures"][0]  # type: ignore[index]
     )
     assert "dev_added" not in entry and "dev_blame" not in entry
     # A non-object sentinel stays visible as itself rather than being dropped.

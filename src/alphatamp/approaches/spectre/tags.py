@@ -1,21 +1,24 @@
 """Episode-local object tags — the P-A binding (proposal §7).
 
-Each object in an episode gets a **tag** (an integer id); the *same* tag is used wherever
-that object appears — scene tokens, skeleton argument slots, fact arguments — so the model
-can look up an object's content (geometry, role) from its tag. Tags are:
+Each object in an episode gets a **tag** (an integer id); the *same* tag is used
+wherever that object appears — scene tokens, skeleton argument slots, fact arguments
+— so the model can look up an object's content (geometry, role) from its tag. Tags
+are:
 
 - **episode-local**: assigned per episode, independent across episodes;
-- **deterministic at eval** (``rng=None``): sorted-name order, so inference is reproducible;
-- **permuted per epoch in training** (``rng`` seeded from ``(seed, episode_idx, epoch)``):
-  a random injection into ``[1, max_tags]`` so no tag id accumulates global meaning — the
-  network must use the *content* a tag points at, never the id.
+- **deterministic at eval** (``rng=None``): sorted-name order, so inference is
+  reproducible;
+- **permuted per epoch in training** (``rng`` seeded from
+  ``(seed, episode_idx, epoch)``):
+  a random injection into ``[1, max_tags]`` so no tag id accumulates global meaning
+  — the network must use the *content* a tag points at, never the id.
 
 Tag ``0`` is reserved for pad / OOV (mirroring the vocab's local-id-0 convention). This
 supersedes v1's typed-local-ids *inside the v2 tensorizer* (``canonicalize`` still runs
-first for structure/type names); binding args to tags — and thus to per-object geometry in
-the scene tokens — is what provably removes v1's length-only collapse (two same-length
-skeletons over different objects now differ, because their tags point at different
-geometry).
+first for structure/type names); binding args to tags — and thus to per-object
+geometry in the scene tokens — is what provably removes v1's length-only collapse
+(two same-length skeletons over different objects now differ, because their tags point
+at different geometry).
 """
 
 from __future__ import annotations
@@ -34,9 +37,11 @@ def assign_tags(
 ) -> dict[str, int]:
     """Map each object name to a distinct tag id in ``[1, max_tags]`` (``0`` = pad/OOV).
 
-    ``rng=None`` → deterministic (sorted-name order → tags ``1..n``), for eval/inference.
-    ``rng`` set → a random injection of the ``n`` objects into ``[1, max_tags]``, redrawn
-    per epoch at training time so no id is stable. ``max_tags`` defaults to ``n``.
+    ``rng=None`` → deterministic (sorted-name order → tags ``1..n``),
+    for eval/inference.
+    ``rng`` set → a random injection of the ``n`` objects into ``[1, max_tags]``,
+    redrawn per epoch at training time so no id is stable. ``max_tags`` defaults
+    to ``n``.
     """
     names = sorted(object_names)
     n = len(names)
@@ -53,6 +58,6 @@ def assign_tags(
 
 
 def tag_seed(seed: int, episode_idx: int, epoch: int) -> np.random.Generator:
-    """Reproducible per-(seed, episode, epoch) generator for training-time tag permutation
-    (mirrors the F-sampling seeding discipline in ``dataset.py``)."""
+    """Reproducible per-(seed, episode, epoch) generator for training-time tag
+    permutation (mirrors the F-sampling seeding discipline in ``dataset.py``)."""
     return np.random.default_rng((int(seed), int(episode_idx), int(epoch)))

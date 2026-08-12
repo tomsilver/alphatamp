@@ -2,21 +2,21 @@
 
 Long SPECTRE jobs (collections, training sweeps, cache builds) are launched in the
 background, so their stdout lands somewhere ephemeral and checking on them means
-remembering a path. This reads a canonical log directory plus the process table and prints
-a compact status with ETAs.
+remembering a path. This reads a canonical log directory plus the process table and
+prints a compact status with ETAs.
 
-It deliberately *reads* rather than *instruments*: ``train_v2`` and the DD2D collector are
-frozen under the v3 migration's D-7 rule, and both already emit periodic heartbeats with an
-ETA. So this parses what they print instead of adding calls inside them, which also means it
-works for jobs that were already running when it was written.
+It deliberately *reads* rather than *instruments*: ``train_v2`` and the DD2D collector
+are frozen under the v3 migration's D-7 rule, and both already emit periodic heartbeats
+with an ETA. So this parses what they print instead of adding calls inside them, which
+also means it works for jobs that were already running when it was written.
 
 Usage::
 
     python experiments/spectre/spectre_status.py          # snapshot
     python experiments/spectre/spectre_status.py --watch  # refresh every 20 s
 
-Launch long jobs with ``experiments/spectre/spectre_run.sh <name> <cmd...>`` so their output
-lands in ``data/spectre/logs/<name>.log`` where this can find it.
+Launch long jobs with ``experiments/spectre/spectre_run.sh <name> <cmd...>`` so their
+output lands in ``data/spectre/logs/<name>.log`` where this can find it.
 """
 
 from __future__ import annotations
@@ -41,7 +41,8 @@ _TRAIN = re.compile(
     r"\[(?P<who>train_v[23])\]\s+seed=(?P<seed>\d+)\s+epoch\s+(?P<ep>\d+)/(?P<tot>\d+)"
     r".*?(?:best=(?P<best>[\d.]+))?.*?(?:ETA\s+(?P<eta>[\d.]+)m)?$"
 )
-# collector heartbeat, e.g. "  [train] 12m30s | kept 204/400  (s0 100/100, ...) | ETA 33m"
+# collector heartbeat, e.g.
+#   "  [train] 12m30s | kept 204/400  (s0 100/100, ...) | ETA 33m"
 _COLLECT = re.compile(
     r"\[(?P<split>train|val|test)\]\s+(?P<elapsed>[\dhms]+)\s+\|\s+kept\s+"
     r"(?P<kept>\d+)/(?P<target>\d+)"

@@ -478,7 +478,8 @@ def _lazy_rollout(
     failed: list[set] = []
     attempts = 0
     while remaining and attempts < attempt_budget:
-        # higher score first: prior favors low index (−i); penalize overlap with failures.
+        # higher score first: prior favors low index (−i); penalize overlap with
+        # failures.
         def score(i: int) -> float:
             overlap = max((len(action_sets[i] & f) for f in failed), default=0)
             return -float(i) - beta * float(overlap)
@@ -501,8 +502,8 @@ def lazy_baseline(
 ) -> BaselineResult:
     """LAZY-style **untyped adaptive** baseline (proposal §9): static prior − β·action-
     overlap with failed skeletons, β tuned on train. This is exactly the untyped
-    failure-conditioning the *typed* evidence pathway (Step 11) must beat — without it the
-    adaptive comparison would be a strawman against v1.
+    failure-conditioning the *typed* evidence pathway (Step 11) must beat — without it
+    the adaptive comparison would be a strawman against v1.
 
     Action-overlap is the count of shared ground actions (the canonical skeleton key), a
     representation-free "these plans are similar" signal; no geometry, no typed facts.

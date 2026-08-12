@@ -29,6 +29,7 @@ Five distinct ways this goes silently wrong, one test each:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -116,7 +117,7 @@ def _records(episode, vocab, ctx, state_delta: bool):
     )
 
 
-def _batch(example, records, vocab):
+def _batch(example, records, vocab) -> Any:
     return collate(
         [example],
         max_arity=vocab.max_operator_arity,
@@ -288,19 +289,19 @@ def test_delta_is_the_strips_progression_delta() -> None:
 
     a, b = ItemType("a"), ItemType("b")
     s0 = RelationalAbstractState(
-        atoms=frozenset(
+        atoms=frozenset(  # type: ignore[arg-type]
             {
-                GroundAtom(InDrawer, [a]),
-                GroundAtom(InDrawer, [b]),
+                GroundAtom(InDrawer, [a]),  # type: ignore[list-item]
+                GroundAtom(InDrawer, [b]),  # type: ignore[list-item]
                 GroundAtom(HandEmpty, []),
             }
         ),
-        objects=frozenset({a, b}),
+        objects=frozenset({a, b}),  # type: ignore[arg-type]
     )
     plan = [Pick.ground((a,)), PlaceBuffer.ground((a,))]
     traj = reconstruct_trajectory(s0, plan, verify_preconditions=True)
 
-    def names(state):
+    def names(state) -> set:
         return {
             (x.predicate.name, tuple(e.name for e in x.entities)) for x in state.atoms
         }

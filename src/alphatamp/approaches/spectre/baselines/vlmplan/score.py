@@ -126,12 +126,13 @@ class Attempt:
     label: str
     source: str  # "vlm" | "fill"
     round_index: int | None = None
-    # Refinement wall-clock for this attempt: the stored per-candidate time for an in-pool
-    # plan, the run-captured live-refine time for an off-pool one, ``None`` if unknown.
+    # Refinement wall-clock for this attempt: the stored per-candidate time for an
+    # in-pool plan, the run-captured live-refine time for an off-pool one, ``None`` if
+    # unknown.
     refine_s: float | None = None
-    # The full canonical step sequence, ``[[name, [args...]], ...]``. Kept so the planner
-    # inspector can render VLMPlan's actual ordered plans (its attempts are off the shared
-    # pool, so there is no skeleton to index) via the env's plan formatter.
+    # The full canonical step sequence, ``[[name, [args...]], ...]``. Kept so the
+    # planner inspector can render VLMPlan's actual ordered plans (its attempts are off
+    # the shared pool, so there is no skeleton to index) via the env's plan formatter.
     steps: list = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -161,12 +162,12 @@ class ScoreResult:
     n_fill_used: int = 0
     first_success_source: str | None = None
     n_live_refines: int = 0
-    # Wall-clock to first success (the VLMPlan row of the comparison's §2b). ``infer_s`` is
-    # the VLM generation cost (summed round api_s; set by the caller from the sequences
-    # file). ``refine_s`` sums the per-attempt refinement up to and including first
-    # success. The ``_capped`` pair re-walks that order under the deployed per-candidate
-    # refinement cap (a slow near-feasible candidate is abandoned at the cap), mirroring
-    # the pool methods so the two are comparable.
+    # Wall-clock to first success (the VLMPlan row of the comparison's §2b).
+    # ``infer_s`` is the VLM generation cost (summed round api_s; set by the caller from
+    # the sequences file). ``refine_s`` sums the per-attempt refinement up to and
+    # including first success. The ``_capped`` pair re-walks that order under the
+    # deployed per-candidate refinement cap (a slow near-feasible candidate is abandoned
+    # at the cap), mirroring the pool methods so the two are comparable.
     infer_s: float = 0.0
     refine_s: float = 0.0
     refine_s_capped: float = 0.0
@@ -338,9 +339,9 @@ def label_step_sequence(
 def _stored_refine_seconds(episode: EpisodeRecord, pool_idx: int) -> float | None:
     """The collection's stored per-candidate refine wall-clock for pool skeleton j.
 
-    The same number every pool method replays (DD2D v3/v4 instrumented collections). SB2D
-    outcomes carry it too, but it is not the deployed-cap-instrumented figure, so the SB2D
-    wall-clock is reported for completeness only.
+    The same number every pool method replays (DD2D v3/v4 instrumented collections).
+    SB2D outcomes carry it too, but it is not the deployed-cap-instrumented figure, so
+    the SB2D wall-clock is reported for completeness only.
     """
     if 0 <= pool_idx < len(episode.outcomes):
         value = getattr(episode.outcomes[pool_idx], "refinement_wall_clock_s", None)
@@ -353,11 +354,11 @@ def _fp_refine_capped(attempts: Sequence[Attempt], cap: float) -> tuple[float, f
 
     Charges ``min(t, cap)`` per attempt and stops at the first success reached *within*
     the cap; a feasible-but-slow candidate (``t > cap``) is abandoned and counts against
-    FP, exactly the deployed-cap semantics the pool methods use. Because the uncapped walk
-    already stopped at the first success, the recorded attempts end there — on DD2D the
-    feasible p95 (0.44 s) is far below the 2 s cap, so the success is essentially never the
-    abandoned-slow case and this is exact; in the rare case it is, ``fp_capped`` is
-    conservatively the censored count.
+    FP, exactly the deployed-cap semantics the pool methods use. Because the uncapped
+    walk already stopped at the first success, the recorded attempts end there — on DD2D
+    the feasible p95 (0.44 s) is far below the 2 s cap, so the success is essentially
+    never the abandoned-slow case and this is exact; in the rare case it is,
+    ``fp_capped`` is conservatively the censored count.
     """
     total = 0.0
     for i, attempt in enumerate(attempts):
@@ -383,10 +384,10 @@ def score_sequence(
 
     ``proposals`` is ``[(steps, round_index), ...]`` in the order the model produced
     them. Returns the FP the comparison table reports, and the per-attempt / total
-    refinement wall-clock the §2b wall-clock section reports (``infer_s`` is filled by the
-    caller from the sequences file). In-pool attempts take the collection's stored
-    per-candidate time; off-pool attempts take the time the run captured when it refined
-    them (see ``MemoizingLabeler``).
+    refinement wall-clock the §2b wall-clock section reports (``infer_s`` is filled
+    by the caller from the sequences file). In-pool attempts take the collection's
+    stored per-candidate time; off-pool attempts take the time the run captured when it
+    refined them (see ``MemoizingLabeler``).
     """
     pool = adapter.pool_index(episode)
     stored = [o.outcome for o in episode.outcomes]
