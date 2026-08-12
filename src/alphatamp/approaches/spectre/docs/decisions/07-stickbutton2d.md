@@ -79,6 +79,14 @@ the why" rule.)*
   pre-refactor deployed checkpoint loads `strict=True` at exactly **324311 params** and its
   `deployed_rollout` FP is byte-identical to the pre-refactor cache under the refactored code — so
   the small retrain delta is fresh-run GPU non-determinism, not a refactor artifact.
+- **CI:** post-refactor `./run_ci_checks.sh` passes fully green (autoformat + strict mypy + pylint +
+  pytest). Reaching green required excluding the gitignored `_archive_local/` backup from CI tooling
+  (it is on the filesystem, which mypy/pytest walk regardless of git), fixing a stale piginet
+  mypy-exclude path (piginet moved to `baselines/`), and clearing pre-existing style debt (line-length
+  reflows + test-code type annotations — cosmetic, no behavior change). The CI pass also surfaced one
+  genuine v1 relic: `spectre_train.py` (the v1-era Hydra training wrapper) imported the removed v1
+  `TrainingConfig`/`train` API and would fail at runtime — it was archived with its `.slurm`/`.yaml`,
+  and the live pipeline docs were repointed to the deployed argparse `train` module + `spectre_sweep.py`.
 
 ---
 
