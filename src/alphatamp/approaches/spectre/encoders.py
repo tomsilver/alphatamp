@@ -1,9 +1,9 @@
-"""SPECTRE v2.2 geometry-aware model (proposal §7).
+"""SPECTRE geometry/evidence encoders (proposal §7).
 
-Additive to v1 (`model.py`).
-The static (t=0) architecture that conditions on object-centric geometry + episode-local
-tags instead of anonymous local ids — the fix for v1's length-only collapse. Token
-families (all width ``D_MODEL=64``, reusing v1's ``SetAttentionBlock``/``PMA``):
+The object-centric geometric encoders the SPECTRE ranker (``model.py``) is built from:
+the static (t=0) architecture conditions on object-centric geometry + episode-local tags
+instead of anonymous local ids. Token families (all width ``D_MODEL=64``, built on the
+shared ``SetAttentionBlock``/``PMA`` primitives from ``layers.py``):
 
 - **scene tokens** — per object: ``[tag ; footprint descriptor ; pose ; relation-to-target]``.
   The footprint descriptor is a *point-set* encoding of the boundary ring (not a radial
@@ -33,7 +33,7 @@ import torch
 from torch import Tensor, nn
 
 from alphatamp.approaches.spectre.facts import N_FACT_TYPES
-from alphatamp.approaches.spectre.model import (
+from alphatamp.approaches.spectre.layers import (
     D_MODEL,
     FFN_DIM,
     N_HEADS,
@@ -346,54 +346,3 @@ class AuxHead(nn.Module):
 
     def forward(self, scene_tok: Tensor) -> Tensor:
         return self.head(scene_tok)  # (B, N, 2)
-
-
-class SpectreV2Model(nn.Module):
-    """The v2.2-static geometry-aware ranker."""
-
-    def __init__(
-        self,
-        n_ops: int,
-        max_arity: int,
-        max_tags: int = MAX_TAGS_DEFAULT,
-        n_overlap_feats: int = 0,
-        n_prior_feats: int = 0,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.scene = SceneEncoder(max_tags, dropout_p)
-        self.cands = CandidateEncoder(n_ops, max_tags, max_arity, dropout_p)
-        self.facts = FactEncoder(max_tags, dropout_p)
-        self.scorer = CrossAttentionScorer(n_overlap_feats, n_prior_feats, dropout_p)
-        self.aux = AuxHead()
-        self.n_prior_feats = n_prior_feats
-        self.n_overlap_feats = n_overlap_feats
-
-    def forward(self, batch: SpectreV2Batch, overlap: Tensor | None = None):
-        scene_tok = self.scene(batch)  # (B, N, D)
-        cand_emb = self.cands(batch)  # (B, K, D)
-        fact_tok = None
-        if batch.fact_type_ids is not None and batch.fact_type_ids.shape[1] > 0:
-            fact_tok = self.facts(
-                batch.fact_type_ids,
-                batch.fact_tier_ids,
-                batch.fact_arg_tags,
-                batch.fact_mask,
-            )  # (B, F, D)
-        prior = batch.cand_prior if self.n_prior_feats else None
-        if overlap is None and self.n_overlap_feats:
-            overlap = batch.cand_overlap
-        logits = self.scorer(
-            cand_emb,
-            scene_tok,
-            batch.obj_mask,
-            batch.glob_feats,
-            overlap,
-            fact_tok,
-            batch.fact_mask,
-            prior,
-        )  # (B, K)
-        avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
-        logits = logits.masked_fill(~avail, float("-inf"))
-        aux = self.aux(scene_tok)  # (B, N, 2)
-        return logits, aux
