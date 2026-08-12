@@ -28,14 +28,19 @@ and the ablation flags one flag away. Docs were cleaned in the same pass (supers
 (removed-feature tests dropped) — the drops are archived tests, not regressions.
 Deployed-path equivalence held throughout: `checkpoints_v3_unified` loads `strict=True` at
 **324311 params** and `deployed_rollout_traced` reproduces the cached `spectre3_adaptive` FP
-on sampled episodes. Retrain-verification of the headline numbers: [pending retrain
-verification — to be filled].
+on sampled episodes. Retrain-verification of the headline numbers (refactored code, 3 seeds/env,
+deployed recipe): **DD2D SPECTRE-adaptive 6.29 ± 0.31** vs frozen 5.92 ± 0.29 (val-selection
+`best_val_fp` 7.78/7.93/7.80 vs the original's ~7.76); **SB2D 1.75 ± 0.19** vs ~1.84 (SPECTRE ≈
+LAZY 1.85 non-separation holds). Ordering preserved (DD2D ≪ PIGINet 17.27 ≪ LAZY 23.26); PIGINet/
+LAZY not retrained (only relocated). Both within seed variance — the retrain delta is fresh-run
+GPU non-determinism, not a refactor artifact.
 
 **Takeaway.** A behaviour-preserving structural cleanup for external readers; the "v3" naming
 that persists across the older docs and append-only logs is now historical and denotes the
-current SPECTRE. Next: land the retrain-verification number, then the deferred cosmetic
-follow-ups (the `train_v3()` / `SpectreV3Dataset` names, blob relocation) if a retrain is ever
-scheduled for another reason.
+current SPECTRE. Retrain-verification landed (above; reproduces within seed variance). Remaining
+are cosmetic follow-ups only: the internal `train_v3()` / `SpectreV3Dataset` names and `AuxHead`
+(constructed unconditionally → in the deployed state_dict, so it cannot be dropped without a
+retrain).
 
 ---
 

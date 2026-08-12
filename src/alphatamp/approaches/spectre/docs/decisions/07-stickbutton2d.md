@@ -68,7 +68,17 @@ the why" rule.)*
 - **Test-suite trajectory** (context, not a result): 558 (pre) → 490 (after v1/v2 tests
   archived) → 371 (after RT2D/TTD archived) → 362 (after removed-feature tests dropped); zero
   failures at every gate — the drops are archived tests, not regressions.
-- **Verification result:** [pending retrain verification — to be filled].
+- **Verification result:** Retrained SPECTRE with the refactored code (3 seeds/env, deployed
+  recipe) reproduces the published results within seed variance, ordering preserved: **DD2D
+  SPECTRE-adaptive 6.29 ± 0.31** vs the frozen 5.92 ± 0.29 (val-selection `best_val_fp`
+  7.78/7.93/7.80 vs the original's ~7.76 — the training loop reproduces tightly; the test-FP
+  delta is within ~1.3 seed-sd); **SB2D 1.75 ± 0.19** vs ~1.84 (SPECTRE ≈ LAZY 1.85 — the
+  non-separation finding holds). PIGINet (17.27) and LAZY (23.26) were **not** retrained — only
+  relocated under `baselines/`, logic unchanged, so their caches stay valid. The *definitive*
+  behavior-preservation evidence is the **same-checkpoint rollout-equivalence oracle**: the
+  pre-refactor deployed checkpoint loads `strict=True` at exactly **324311 params** and its
+  `deployed_rollout` FP is byte-identical to the pre-refactor cache under the refactored code — so
+  the small retrain delta is fresh-run GPU non-determinism, not a refactor artifact.
 
 ---
 
