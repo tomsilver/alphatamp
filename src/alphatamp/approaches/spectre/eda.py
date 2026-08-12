@@ -89,24 +89,6 @@ def _skeleton_key(skel) -> SkeletonKey:
     )
 
 
-def _reduced_skeleton_key(skel) -> SkeletonKey:
-    """Canonical key with ``TraverseEmpty`` operators stripped.
-
-    RT2D's refiner only gates on ``TraverseLoadedColor*`` and ``Pick/Place``
-    operators; ``TraverseEmpty`` passage choice has no effect on the
-    success/fail outcome (spec §2.4 / refiner.py:ThreeGateRefiner). Two
-    skeletons that differ only in their empty-traversal passages share an
-    outcome and can be treated as equivalent for ranking purposes. Used by
-    :func:`heuristic_search_baseline` to map heuristic-search yields onto
-    the closed-form pool's specific empty-traversal choices.
-    """
-    return tuple(
-        (op.name, tuple(arg.name for arg in op.parameters))
-        for op in skel.operator_seq
-        if not op.name.startswith("TraverseEmpty")
-    )
-
-
 def load_split_episodes(split_dir: Path) -> LoadedSplit:
     """Load every episode under ``<split_dir>/episodes/``, canonicalize, key.
 
@@ -474,99 +456,6 @@ def default_order_baseline(
         problem_ids[out_idx] = ep.provenance.problem_id
     return BaselineResult(
         name="B2_default_order",
-        attempts=attempts,
-        wall_clock=wall_clock,
-        censored=censored,
-        problem_ids=problem_ids,
-    )
-
-
-def heuristic_search_baseline(
-    test: LoadedSplit,
-    attempt_budget: int = 20,
-    heuristic_name: str = "hff",
-    seed: int = 0,
-    name: str = "B2_heuristic_search",
-    # Kept for backwards-compatibility; ignored by the per-skeleton scorer.
-    abstract_plan_timeout_s: float | None = None,
-) -> BaselineResult:
-    """Re-rank each episode's stored pool by FF-heuristic trajectory cost.
-
-    The replacement for ``default_order_baseline`` (B2). The closed-form
-    enumerator that produced the stored pool ignores the problem instance,
-    so its canonical order is artificially weak as a baseline. Here we ask
-    what order a heuristic-aware planner would emit *on the same problem*,
-    then walk the already-collected per-skeleton outcomes in that order.
-
-    **Why not run A* directly?** A naive `RelationalHeuristicSearchAbstractPlanGenerator`
-    invocation matches poorly on RT2D because the closed-form pool commits
-    to one specific BFS empty-traversal path per skeleton, while A* yields
-    every empty-traversal variant before exhausting the (item-order,
-    color-pair, grasp) combinations the closed-form pool actually contains.
-    Empirically this means even a 5-second A* timeout matches only 18/30
-    stored skeletons on a typical RT2D-n3 episode. We sidestep the matching
-    problem by scoring each stored skeleton directly with the same FF
-    heuristic A* would consult — a faithful "heuristic-aware order" without
-    the search-yield redundancy.
-
-    **Scoring rule.** For each stored skeleton, reconstruct its STRIPS
-    trajectory ``[s_0, s_1, …, s_L]``, evaluate the pyperplan FF heuristic
-    at every state, and rank by ``Σᵢ h(sᵢ)`` ascending. Skeletons whose
-    trajectory hugs a low-h ridge (early progress, no detours) rank first;
-    the closed-form skeletons that postpone progress rank later. Ties
-    broken by original pool index (canonical lex order).
-
-    Pool contents are unchanged — this is a re-rank only, never a re-collect.
-    All other baselines (B1/B3/B4/B5) and SPECTRE remain comparable; only
-    the order in which skeletons are tried differs.
-
-    The function is RT2D-specific because it imports the env's lifted
-    operators / predicates / types directly. Generalizing to other envs
-    would mean threading a ``CollectionConfig`` through to recover the
-    factory; not needed today.
-
-    ``abstract_plan_timeout_s`` is accepted but unused. The previous
-    implementation ran A* with a wall-clock budget; the scorer is
-    deterministic and orders of magnitude faster, so the parameter is now a
-    no-op kept only so existing call-sites do not break.
-    """
-    del abstract_plan_timeout_s, seed  # see docstring
-    # pylint: disable=import-outside-toplevel
-    from alphatamp.approaches.spectre.priors import (
-        _build_rt2d_domain_gen,
-        ff_trajectory_scores,
-    )
-
-    # The PDDLDomain inside the generator only depends on (types, predicates,
-    # operators), all of which are RT2D-fixed. Build it once and reuse the
-    # heuristic factory across every episode — building the domain is the
-    # expensive part of construction.
-    domain_gen = _build_rt2d_domain_gen(heuristic_name)
-
-    trainable = _trainable_episodes(test)
-    attempts = np.zeros(len(trainable), dtype=float)
-    wall_clock = np.zeros(len(trainable), dtype=float)
-    censored = np.zeros(len(trainable), dtype=bool)
-    problem_ids = np.zeros(len(trainable), dtype=np.int64)
-
-    for out_idx, ep_idx in enumerate(trainable):
-        ep = test.episodes[ep_idx]
-
-        # Score = Σ h(sᵢ) over the reconstructed STRIPS trajectory; lower is
-        # better for ranking. sorted() is stable, so ties keep their original
-        # pool-index order — the spec's tiebreak — without an explicit (s, i)
-        # key (whose loop-closing lambda pylint/mypy both object to).
-        raw_scores = ff_trajectory_scores(domain_gen, ep)
-        order = sorted(range(len(raw_scores)), key=raw_scores.__getitem__)
-
-        a, w, c = _simulate_traversal(ep, order, attempt_budget)
-        attempts[out_idx] = a
-        wall_clock[out_idx] = w
-        censored[out_idx] = c
-        problem_ids[out_idx] = ep.provenance.problem_id
-
-    return BaselineResult(
-        name=name,
         attempts=attempts,
         wall_clock=wall_clock,
         censored=censored,

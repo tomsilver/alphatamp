@@ -29,11 +29,11 @@ frozen-SPECTRE row for the B1–B5 comparison table can be rebuilt in
 Usage::
 
     python experiments/spectre/spectre_ablate_context.py \
-        env=routedtransport2d_n3_v1
+        env=dd2d_v4
 
     # explicit checkpoint list (e.g. a future multi-seed rerun):
     python experiments/spectre/spectre_ablate_context.py \
-        env=routedtransport2d_n3_v1 \
+        env=dd2d_v4 \
         '+ckpts=[data/spectre/checkpoints/<run>/<env>/seed_0/best.pt]'
 """
 
@@ -62,7 +62,7 @@ DEFAULT_ATTEMPT_BUDGET = 20
 # The checkpoint behind the headline notebook results. Override with
 # ``+ckpts=[...]`` for multi-checkpoint / multi-seed runs.
 DEFAULT_CKPTS = [
-    "data/spectre/checkpoints/r3_visit_rate/routedtransport2d_n3_v1/seed_0/best.pt",
+    "data/spectre/checkpoints/r3_visit_rate/dd2d_v4/seed_0/best.pt",
 ]
 
 

@@ -2,8 +2,8 @@
 
 Usage::
 
-    python experiments/spectre/spectre_train.py env=routedtransport2d_n3_v1 seed=0
-    python experiments/spectre/spectre_train.py -m env=routedtransport2d_n3_v1 seed=0,1,2
+    python experiments/spectre/spectre_train.py env=dd2d_v4 seed=0
+    python experiments/spectre/spectre_train.py -m env=dd2d_v4 seed=0,1,2
 
 Reads ``data/spectre/raw/<env_variant>/{train,val}/episodes/`` (collected by
 ``experiments/spectre/spectre_collect.py``) and ``data/spectre/derived/<env_variant>/

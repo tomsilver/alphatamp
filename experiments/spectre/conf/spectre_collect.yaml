@@ -1,5 +1,5 @@
 defaults:
-  - env: clutteredstorage2d_b5
+  - env: dd2d_v4
   - _self_
 
 # Which split + how many problems.

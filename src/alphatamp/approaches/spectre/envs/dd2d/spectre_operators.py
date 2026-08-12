@@ -3,9 +3,7 @@
 This is the ``relational_structs`` / ``bilevel_planning`` view of
 ``domain/drawer_declutter.pddl``, built so the SPECTRE pipeline (vocab
 extraction, STRIPS reconstruction, canonicalization, training) can consume
-DD2D episodes. It mirrors the pattern in
-``envs/routedtransport2d/operators.py`` but for the much smaller,
-geometry-blind drawer STRIPS domain.
+DD2D episodes, for the small, geometry-blind drawer STRIPS domain.
 
 The domain has a single object type (``item``), six predicates, and three
 operators. The collision / packing structure that actually determines

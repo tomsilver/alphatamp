@@ -61,7 +61,7 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="top-m lookahead pruning width; omit for exact. Use ~6-12 for h>=5.",
     )
-    ap.add_argument("--env", default="routedtransport2d_n3_v1", help="env variant")
+    ap.add_argument("--env", default="dd2d_v4", help="env variant")
     ap.add_argument("--split", default="test", help="eval split (train/val/test)")
     ap.add_argument(
         "--budget", type=int, default=30, help="attempt budget (= pool cap)"

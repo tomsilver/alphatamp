@@ -44,7 +44,6 @@ from alphatamp.approaches.spectre.schema import (
     SummaryBlock,
 )
 
-_ROUTED_TRANSPORT_MODEL_NAME = "routedtransport2d"
 _STICK_BUTTON_MODEL_NAME = "stickbutton2d"
 
 
@@ -63,21 +62,9 @@ def _make_env_models(
 ) -> SesameModels:
     """Dispatch on ``cfg.model_name`` to build the SesameModels for this env.
 
-    RoutedTransport2D uses a local factory; everything else falls through to the kinder
-    factory. The kinder import is deferred so the RT2D-only path (e.g. unit tests in CI
-    without kinder_bilevel_planning installed) does not pay the import cost.
+    All supported envs fall through to the kinder factory. The kinder import is
+    deferred so callers that never build env models do not pay the import cost.
     """
-    if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
-        # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.env_models import (
-            create_routedtransport_models,
-        )
-
-        return create_routedtransport_models(
-            observation_space,
-            action_space,
-            **cfg.model_kwargs,  # type: ignore[arg-type]
-        )
     # pylint: disable=import-outside-toplevel
     from kinder_bilevel_planning.env_models import (
         create_bilevel_planning_models,
@@ -100,12 +87,8 @@ def _make_plan_generator(
 ):  # pragma: no cover — return type union widens to whatever the impl supports
     """Build the abstract plan generator.
 
-    Four-way dispatch:
+    Two-way dispatch:
 
-    - RT2D + ``plan_generator="closed_form"`` (default) → deterministic
-      enumeration via :class:`ClosedFormSkeletonGenerator`.
-    - RT2D + ``plan_generator="heuristic_search"`` → the same A*+FF generator
-      the kinder envs use; ordering becomes problem-instance-aware.
     - StickButton2D → A* over a **geometry-aware** heuristic. Required, not an
       optimization: kinder's symbolic model lets ``RobotPressButton*`` apply to any
       button, including ones past the robot's reach, so hff ranks physically
@@ -114,27 +97,6 @@ def _make_plan_generator(
     - Any other kinder env → A*+FF (the ``plan_generator`` field is ignored; those
       envs have no closed-form option).
     """
-    if (
-        cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME
-        and cfg.plan_generator == "closed_form"
-    ):
-        # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.plan_generator import (  # pylint: disable=line-too-long
-            ClosedFormSkeletonGenerator,
-        )
-        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (  # pylint: disable=line-too-long
-            ProblemInstance,
-        )
-
-        assert isinstance(obs, dict) and "_problem" in obs, (
-            "RT2D obs missing '_problem' key — RoutedTransport2DEnv contract"
-            " requires reset() to attach a ProblemInstance"
-        )
-        problem = obs["_problem"]
-        assert isinstance(problem, ProblemInstance)
-        return ClosedFormSkeletonGenerator(
-            problem=problem, seed=problem_id, k_cap=cfg.K_max
-        )
     if (
         cfg.model_name == _STICK_BUTTON_MODEL_NAME
         and cfg.plan_generator != "heuristic_search"
@@ -170,11 +132,7 @@ def time_pool_generation(cfg: CollectionConfig, problem_id: int) -> float:
     register_extra_envs()
     env = kinder.make(cfg.env_id)
     try:
-        obs, info = env.reset(seed=problem_id)
-        if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME and "_problem" in info:
-            merged: dict[str, object] = dict(obs) if isinstance(obs, dict) else {}
-            merged["_problem"] = info["_problem"]
-            obs = merged
+        obs, _ = env.reset(seed=problem_id)
         env_models = _make_env_models(cfg, env.observation_space, env.action_space)
         x0 = env_models.observation_to_state(obs)
         s0 = env_models.state_abstractor(x0)
@@ -201,8 +159,6 @@ def _make_trajectory_sampler(
 ) -> ParameterizedControllerTrajectorySampler | None:
     """Build the trajectory sampler for this env, or ``None`` where one is not used.
 
-    RT2D bypasses gym stepping entirely, so its sentinel ``transition_fn`` would raise.
-
     StickButton2D gets :class:`RecordingSampler` instead of the stock sampler. That is a
     deliberate exception to "wrap kinder, do not reimplement it": upstream's sampler
     computes the achieved abstract state in order to decide accept-or-reject and then
@@ -213,8 +169,6 @@ def _make_trajectory_sampler(
     is a same-seed differential measurement, in
     ``tests/approaches/spectre/test_stickbutton2d_observational.py``.
     """
-    if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
-        return None
     kwargs: dict[str, object] = {
         "controller_generator": RelationalControllerGenerator(env_models.skills),
         "transition_function": env_models.transition_fn,
@@ -239,23 +193,9 @@ def _make_refiner(
 ):  # pragma: no cover — return type union widens to whatever the impl supports
     """Build a per-skeleton refiner.
 
-    RT2D uses three-gate; kinder uses backtracking.
+    All supported envs use kinder's backtracking refiner.
     """
-    if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME:
-        # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.problem_generator import (  # pylint: disable=line-too-long
-            ProblemInstance,
-        )
-        from alphatamp.approaches.spectre.envs.routedtransport2d.refiner import (
-            ThreeGateRefiner,
-        )
-
-        assert (
-            isinstance(obs, dict) and "_problem" in obs
-        ), "RT2D obs missing '_problem' key for refiner construction"
-        problem = obs["_problem"]
-        assert isinstance(problem, ProblemInstance)
-        return ThreeGateRefiner(problem=problem, seed=seed)
+    del obs  # kept for signature stability; no env-specific refiner needs it
     assert (
         trajectory_sampler is not None
     ), "kinder envs require a non-None trajectory_sampler"
@@ -317,14 +257,7 @@ def collect_episode(
     register_extra_envs()
     env = kinder.make(cfg.env_id)
     try:
-        obs, info = env.reset(seed=problem_id)
-        # RT2D ships its ProblemInstance through ``info`` (free-form) to keep
-        # the obs space gym-checker-clean. Merge it back into obs locally so
-        # the dispatchers can pull it from a single place.
-        if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME and "_problem" in info:
-            merged: dict[str, object] = dict(obs) if isinstance(obs, dict) else {}
-            merged["_problem"] = info["_problem"]
-            obs = merged
+        obs, _ = env.reset(seed=problem_id)
         env_models = _make_env_models(cfg, env.observation_space, env.action_space)
 
         x0 = env_models.observation_to_state(obs)
@@ -402,21 +335,7 @@ def collect_episode(
                     refiner_metadata["failures"] = failures
                     stuck_step_index = int(failures[0]["step_index"])
 
-            # RT2D-specific: pull structured failure cause from the refiner.
-            # ThreeGateRefiner exposes ``last_outcome`` after each call.
-            if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME and outcome != "error":
-                last = getattr(refiner, "last_outcome", None)
-                if last is not None:
-                    refiner_metadata["stuck_cause"] = last.stuck_cause
-                    refiner_metadata["stuck_op_name"] = last.stuck_op_name
-                    stuck_step_index = last.stuck_step_index
-                    # Use the refiner's modeled wall-clock instead of perf_counter
-                    # so EDA's wall-clock metrics are reproducible from seeds.
-                    wall_clock = float(last.wall_clock_s)
-                else:
-                    wall_clock = time.perf_counter() - start
-            else:
-                wall_clock = time.perf_counter() - start
+            wall_clock = time.perf_counter() - start
             total_wall_clock += wall_clock
 
             if outcome == "success" and first_success_idx is None:
@@ -444,13 +363,8 @@ def collect_episode(
             pool_truncated=len(skeleton_records) >= cfg.K_max,
         )
 
-        # Pull RT2D's per-episode latent into provenance so EDA can read it
-        # without re-running the env. Stays None for kinder collections.
+        # Kinder collections have no per-episode scene latent.
         scene_latent: dict[str, str] | None = None
-        if cfg.model_name == _ROUTED_TRANSPORT_MODEL_NAME and isinstance(obs, dict):
-            problem = obs.get("_problem")
-            if problem is not None:
-                scene_latent = problem.scene_latent
 
         # Audit trail for the pooled StickButton2D collection, where the stratum is the
         # button count and is otherwise recoverable only by decoding the problem id

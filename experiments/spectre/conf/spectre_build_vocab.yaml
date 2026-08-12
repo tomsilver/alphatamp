@@ -1,5 +1,5 @@
 defaults:
-  - env: clutteredstorage2d_b5
+  - env: dd2d_v4
   - _self_
 
 split: train          # vocab is *always* extracted from train per method spec §7.2

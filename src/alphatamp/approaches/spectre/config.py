@@ -79,10 +79,10 @@ class CollectionConfig:
     # Seeding / provenance.
     heuristic_name: str = "hff"
     # ``plan_generator`` selects how the per-episode skeleton pool is drawn.
-    # ``"closed_form"`` is the deterministic enumerator currently used only by
-    # routedtransport2d (kinder envs ignore this field); ``"heuristic_search"``
-    # routes routedtransport2d through the same A*+FF generator the kinder
-    # envs already use, so future collections can adopt a problem-aware order.
+    # ``"closed_form"`` (the default; the name is kept for config compatibility)
+    # uses each env's default generator -- the geometry-aware A* on
+    # StickButton2D and plain A*+FF on the other kinder envs;
+    # ``"heuristic_search"`` forces the stock A*+FF ordering on every env.
     plan_generator: Literal["closed_form", "heuristic_search"] = "closed_form"
     refinement_seed_rule: str = "v1_blake2b_problem_skeleton"
     collect_instrumentation: bool = False

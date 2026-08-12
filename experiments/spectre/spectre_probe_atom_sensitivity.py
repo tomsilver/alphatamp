@@ -20,7 +20,7 @@ is in Φ's representation itself (architectural failure).
 Usage::
 
     python experiments/spectre/spectre_probe_atom_sensitivity.py \
-        env=routedtransport2d_n3_v1 seed=0
+        env=dd2d_v4 seed=0
 """
 
 from __future__ import annotations

@@ -57,7 +57,7 @@ def _(mo):
         if _nb_dir is not None
         else Path("../data/spectre")
     )
-    ENV_VARIANT = "routedtransport2d_n3_v1"
+    ENV_VARIANT = "dd2d_v4"
     ATTEMPT_BUDGET = 30
 
     train_dir = DATA_ROOT / "raw" / ENV_VARIANT / "train"
@@ -283,7 +283,6 @@ def _(ATTEMPT_BUDGET, eda, pd, test, train):
     b1 = eda.random_floor_baseline(
         test, attempt_budget=ATTEMPT_BUDGET, mc_permutations=100, seed=0
     )
-    b2 = eda.heuristic_search_baseline(test, attempt_budget=ATTEMPT_BUDGET, seed=0)
     b2_lex = eda.default_order_baseline(test, attempt_budget=ATTEMPT_BUDGET)
     b3 = eda.static_historical_baseline(train, test, attempt_budget=ATTEMPT_BUDGET)
     b4 = eda.adaptive_historical_baseline(train, test, attempt_budget=ATTEMPT_BUDGET)
@@ -298,13 +297,12 @@ def _(ATTEMPT_BUDGET, eda, pd, test, train):
                 "censoring_rate": float(_r.censored.mean()),
                 "n_episodes": len(_r.attempts),
             }
-            for _r in (b1, b2, b2_lex, b3, b4, b5)
+            for _r in (b1, b2_lex, b3, b4, b5)
         ]
     ).set_index("baseline")
-    # B2 is the FF-heuristic-trajectory-score reorder; B2_default_order_lex is
-    # shown for transparency only (the artificially weak closed-form lex order).
+    # B2_default_order (lex) is the deployment baseline order.
     summary
-    return b2, b2_lex, b3, b4, b5, summary
+    return b2_lex, b3, b4, b5, summary
 
 
 @app.cell
@@ -1104,15 +1102,19 @@ def _(mo):
 
 
 @app.cell
-def _(b2, b3, b4, b5, eda, pd):
+def _(b2_lex, b3, b4, b5, eda, pd):
     delta_attempts = eda.adaptive_premium(
         b3, b4, metric="attempts", num_resamples=10_000, seed=0
     )
     delta_walls = eda.adaptive_premium(
         b3, b4, metric="wall_clock", num_resamples=10_000, seed=0
     )
-    h_attempts = eda.headroom(b2, b5, metric="attempts", num_resamples=10_000, seed=0)
-    h_walls = eda.headroom(b2, b5, metric="wall_clock", num_resamples=10_000, seed=0)
+    h_attempts = eda.headroom(
+        b2_lex, b5, metric="attempts", num_resamples=10_000, seed=0
+    )
+    h_walls = eda.headroom(
+        b2_lex, b5, metric="wall_clock", num_resamples=10_000, seed=0
+    )
 
     table = pd.DataFrame(
         [

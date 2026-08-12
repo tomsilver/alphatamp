@@ -42,22 +42,6 @@ _STICK_BUTTON_ENTRY_POINT = "kinder.envs.kinematic2d.stickbutton2d:StickButton2D
 # Per-type augmentation policy tables for SPECTRE Φ training-time
 # object-renumbering augmentation (spec §4.6 / §10.1). Missing keys default to
 # ``augmentable=True`` so kinder vocabs round-trip unchanged.
-#
-# RT2D needs width_level / size_level / passage subtypes pinned to deterministic
-# local ids: width and size are totally ordered, and the static Connects
-# topology over zones / passages is fixed across all problems. Permuting any of
-# those types destroys the relational signal RT2D is engineered to test.
-_RT2D_TYPE_AUG_POLICY: dict[str, bool] = {
-    "robot": True,
-    "item": True,
-    "zone": False,
-    "passage": False,
-    "passage_color_a": False,
-    "passage_color_b": False,
-    "passage_color_c": False,
-    "width_level": False,
-    "size_level": False,
-}
 
 # DD2D has a single, fully-interchangeable object type (`item`): the target is
 # marked by the `target` predicate, not by identity, so within-type permutation
@@ -79,9 +63,6 @@ _STICKBUTTON2D_TYPE_AUG_POLICY: dict[str, bool] = {
 }
 
 _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
-    "routedtransport2d_n2_v1": _RT2D_TYPE_AUG_POLICY,
-    "routedtransport2d_n3_v1": _RT2D_TYPE_AUG_POLICY,
-    "routedtransport2d_n4_v1": _RT2D_TYPE_AUG_POLICY,
     "dd2d_v2": _DD2D_TYPE_AUG_POLICY,
     # dd2d_v3: same domain and policy, re-collected after the 2026-07-24 grasp-model
     # changes (contact-run fix + internal grasps) invalidated v2's labels. A separate
@@ -121,32 +102,8 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
 # whose predicate-name is in this list are routed to a dedicated SAB+PMA
 # stream so they don't compete for attention with the larger fluent atom
 # population. Empty / missing entries leave the legacy single-pool path.
-#
-# RT2D rationale: PassageWidth (9 atoms) and ItemSize (3 atoms) are the
-# load-bearing static tags whose values determine refinement-time
-# feasibility.
-#
-# F3-B-(1ʹ) update: Connects (18 atoms) was originally included on the
-# theory that the static stream should see "the shape of the world".
-# Empirical result (run f3b_static_pool, log
-# experiments/slurm_outputs/spectre_train_7349651_0.out): Connects is
-# *identical across every RT2D problem* (the K₃,₃ topology never changes),
-# so 60% of the static stream's input carries zero discriminative gradient.
-# The model learned the static stream is mostly noise and pushed its
-# contribution toward a constant — leaving Φ functionally blind to s_0
-# (D.1 PassageWidth Δ collapsed from 0.115 to 0.0004). With Connects
-# excluded, the static stream pools 12 informative atoms only; Connects
-# is still routed to the fluent stream so the topology remains visible.
-_RT2D_STATIC_TAG_PREDICATES: list[str] = [
-    "PassageWidth",
-    "ItemSize",
-]
-
-_STATIC_TAG_PREDICATES: dict[str, list[str]] = {
-    "routedtransport2d_n2_v1": _RT2D_STATIC_TAG_PREDICATES,
-    "routedtransport2d_n3_v1": _RT2D_STATIC_TAG_PREDICATES,
-    "routedtransport2d_n4_v1": _RT2D_STATIC_TAG_PREDICATES,
-}
+# No currently-registered environment declares static-tag predicates.
+_STATIC_TAG_PREDICATES: dict[str, list[str]] = {}
 
 
 def get_type_aug_policy(env_variant: str) -> dict[str, bool]:
@@ -223,24 +180,12 @@ def register_extra_envs(
 ) -> None:
     """Register kinder variants that are not registered by default.
 
-    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``
-    plus ``RoutedTransport2D-n{2,3,4}``. RoutedTransport2D is wired through
-    the same registry but lives under
-    ``alphatamp.approaches.spectre.envs.routedtransport2d`` (the import is
-    deferred so consumers that never collect RT2D don't pay the import cost).
+    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``.
     """
     kinder.register_all_environments()
 
     if variants is None:
-        # Local import — keeps RT2D module out of import-time hot path for
-        # callers who only touch kinder envs.
-        # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre.envs.routedtransport2d.gym_env import (
-            routed_transport_variants,
-        )
-
         variants = list(cluttered_storage_variants(range(1, 16)))
-        variants.extend(routed_transport_variants([2, 3, 4]))
 
     for v in variants:
         if v.gym_id in gymnasium.registry:
