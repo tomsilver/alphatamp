@@ -13,7 +13,7 @@ used.
 
 Usage::
 
-    python experiments/spectre/spectre_score_v3.py \\
+    python experiments/spectre/spectre_score.py \\
         --arm "records+overlap:checkpoints_v3_g6_recON_ovON" \\
         --arm "records only:checkpoints_v3_noov_g6_recON_ovOFF" \\
         --baseline "no records:checkpoints_v3_norec_noov_g6_recOFF_ovOFF"

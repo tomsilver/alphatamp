@@ -63,12 +63,9 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # G8 (performance push): close the s1 and s3 gaps to v2.2 without giving up s2.
     # `jac` drops the `dead` column, which is a disguised shortness cue and the suspected
-    # cause of the s1 regression; `tailF` shows training the |F| ~ 20-40 regime an s3
-    # rollout actually visits; `both` combines them.
+    # cause of the s1 regression.
     "g8": {
         "g8_jac": "--overlap-mode jaccard",
-        "g8_tailF": "--tail-max-f 40",
-        "g8_jac_tailF": "--overlap-mode jaccard --tail-max-f 40",
     },
     # P2: the missing cell of the G6 ablation, plus record aggregation.
     # G6's "no records" bar also had overlap off, so it conflated two removals; `norec`
@@ -79,16 +76,6 @@ PRESETS: dict[str, dict[str, str]] = {
     "p2": {
         "p2_norec": "--no-records",
         "p2_agg": "--aggregate-records",
-        "p2_agg_tailF": "--aggregate-records --tail-max-f 40",
-        "p2_agg_jac_tailF": "--aggregate-records --overlap-mode jaccard --tail-max-f 40",
-    },
-    # P3: the same record content, routed through the tag join instead of as free tokens
-    # -- `obj_evidence` is computed purely from FailureRecord fields, so it is a record
-    # *consumption* mechanism, not a replacement. `objev_norec` is its cleanest form.
-    "p3": {
-        "p3_objev": "--obj-evidence",
-        "p3_objev_norec": "--obj-evidence --no-records",
-        "p3_objev_tailF": "--obj-evidence --tail-max-f 40",
     },
     # P4: the records-first fix, and the one that targets the cause directly.
     # `suppress_records` showed the trained model discards its own record tokens;
@@ -121,9 +108,7 @@ PRESETS: dict[str, dict[str, str]] = {
     # `--out-suffix` if you need both on disk at once.
     # 2026-07-31: coverage/waste now use the **unified** definitions by default
     # (`TrainConfig.unified_coverage=True`), so this preset needs no extra flag and a
-    # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above. Pass
-    # `--legacy-coverage` to train the older definition; it lands in a `_legacycov`
-    # directory so the two can never overwrite each other.
+    # fresh run of it reproduces 5.78 +/- 0.10, not the 7.44 above.
     # `--select-window 5` added 2026-08-08: the domain-agnostic (narrowed-input) model is
     # higher-variance, and the default ma3 selection window locked onto unlucky val epochs
     # (the s1 regression). Widening to ma5 recovers parity with the frozen baseline (5.92
@@ -158,7 +143,6 @@ PRESETS: dict[str, dict[str, str]] = {
     "p4": {
         "p4_evattn": "--evidence-attn",
         "p4_evattn_agg": "--evidence-attn --aggregate-records",
-        "p4_evattn_agg_tailF": "--evidence-attn --aggregate-records --tail-max-f 40",
     },
     # `v3delta` is FOLDED INTO `v3final` above -- it is the same flag set, and keeping a
     # second name for the deployed config is how two "current" arms end up on disk. Its

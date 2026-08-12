@@ -373,7 +373,7 @@ def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
     data + CLIP cache, the output ``compare_cache``, ``N_PROBLEMS`` and the refine cap.
     ``ckpt_variant`` (default ``env_variant``) is the TRAIN collection whose vocab and
     checkpoints are loaded. They differ only for a train-old / test-new generalization
-    run (``--test-variant``), splitting exactly the way ``spectre_score_v3.py`` does:
+    run (``--test-variant``), splitting exactly the way ``spectre_score.py`` does:
     model + vocab from ``--env-variant``, episodes from ``--test-variant``.
     """
     global ENV_VARIANT, CKPT_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
@@ -821,7 +821,7 @@ def _v3_ckpt(ckpt_subdir: str, seed: int) -> Path:
     v3 multi-seed arms write **one top-level directory per seed**
     (``checkpoints_v3_v3final_s3/dd2d_v4/seed_3/best.pt``), which the v1/v2
     ``<dir>/<env>/seed_<n>`` pattern cannot express -- so ``{seed}`` in the sub-dir is
-    substituted as well as the path component, exactly as ``spectre_score_v3.py`` does.
+    substituted as well as the path component, exactly as ``spectre_score.py`` does.
     The env component is ``CKPT_VARIANT`` (the TRAIN collection), so a train-old /
     test-new run loads the dd2d_v4 checkpoint while scoring the gen episodes.
     """
@@ -1237,7 +1237,7 @@ def main() -> None:
         "eval (e.g. --env-variant dd2d_v4 --test-variant dd2d_v4gen_shapeonly). The "
         "compare_cache, N_PROBLEMS, refine cap and PIGINet data/CLIP-cache come from here; "
         "the SPECTRE + PIGINet checkpoints stay on --env-variant. Mirrors "
-        "spectre_score_v3.py's --test-variant.",
+        "spectre_score.py's --test-variant.",
     )
     parser.add_argument(
         "--seeds",

@@ -52,6 +52,6 @@ for v in dd2d_v4gen_count dd2d_v4gen_shape; do
 done
 
 echo "# done. Score with:"
-echo "#   python experiments/spectre/spectre_score_v3.py --env-variant dd2d_v4 \\"
+echo "#   python experiments/spectre/spectre_score.py --env-variant dd2d_v4 \\"
 echo "#       --test-variant dd2d_v4gen_count --arm 'v3:checkpoints_v3_unified' \\"
 echo "#       --astar-baseline --seeds 0 1 2"

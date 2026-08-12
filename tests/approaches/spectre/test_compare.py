@@ -547,19 +547,6 @@ def test_static_cache_layout_is_detected_not_assumed(tmp_path: Path) -> None:
 
 def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
     """The table's ``±`` is the spread across seeds of the per-stratum mean."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "spectre_v3_table",
-        Path(__file__).resolve().parents[3]
-        / "experiments"
-        / "spectre"
-        / "spectre_v3_table.py",
-    )
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
     # two problems in one stratum; per-seed means are 5, 7, 9 -> mean 7, sample std 2
     records = []
     for seed, fps in ((0, (4.0, 6.0)), (1, (6.0, 8.0)), (2, (8.0, 10.0))):
@@ -583,7 +570,7 @@ def test_v3_table_reports_between_seed_spread(tmp_path: Path) -> None:
         }
     )
 
-    header, rows, tidy = mod.build_table(records)
+    header, rows, tidy = compare.build_table(records)
     assert header[:3] == ["method", "seeds", "ALL"]
     by_method = {r[0]: r for r in rows}
     assert by_method["SPECTRE-adaptive"][1] == "3"

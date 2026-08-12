@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPECTRE model training on the RT2D-n3-v1 500/100/100 dataset.
+# SPECTRE model training on the dd2d_v4 500/100/100 dataset.
 #
 # Default: array of 3 jobs, one per seed, 20-epoch training each
 # (spec §8.4 + §8.7 — multi-seed protocol).
@@ -13,7 +13,7 @@
 #     sbatch --array=0-4 experiments/spectre/spectre_train.slurm
 #
 # Different env / hyperparams (forwarded to Hydra after `--`):
-#     sbatch experiments/spectre/spectre_train.slurm env=routedtransport2d_n4_v1
+#     sbatch experiments/spectre/spectre_train.slurm env=stickbutton2d_v1
 #     sbatch experiments/spectre/spectre_train.slurm train.num_f_samples_per_epoch=4
 #
 # Reads:    data/spectre/raw/<env_variant>/{train,val}/episodes/

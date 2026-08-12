@@ -12,7 +12,7 @@ The encoding is arithmetic on purpose::
 with ``SPLIT_BAND = 1_000_000`` and ``STRATUM_BAND = 250_000`` taken from
 ``dd2d_compare``, so ``compare.stratum_of(pid)`` — ``min(3, (pid % SPLIT_BAND) //
 STRATUM_BAND)`` — returns the slot **exactly**. That is what lets fifteen existing call
-sites (``train_v3._keep``, ``spectre_score_v3``'s per-stratum table, the compare cache)
+sites (``train_v3._keep``, ``spectre_score``'s per-stratum table, the compare cache)
 work on this collection with no change, instead of growing a per-environment branch each.
 
 Two things it also buys:

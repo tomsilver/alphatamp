@@ -207,8 +207,8 @@ def _(mo):
 
 @app.cell
 def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
-    # `build_table` is the shared implementation (also behind `spectre_v3_table.py`), so
-    # this table and the CLI reporter cannot drift apart. It takes the PER-SEED records
+    # `build_table` is the shared implementation in `compare.py`, so this table and the
+    # CLI reporter cannot drift apart. It takes the PER-SEED records
     # -- feeding it the collapsed frame would silently give the across-problem spread of
     # a seed-mean, which is the bug this section previously had.
     summary_header, summary_rows, summary_tidy = compare.build_table(merged)
