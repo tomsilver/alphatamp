@@ -66,7 +66,7 @@ target-version = ["py311"]
 py_version = 311
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*", "kb/*", "**/baselines/drake-tamp/*"]
+skip_glob = ["venv/*", ".venv/*", "kb/*", "**/baselines/drake-tamp/*", "_archive_local/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -94,7 +94,7 @@ exclude = [
     # it is carried here rather than newly type-checked -- moving a file is not the
     # moment to impose strict typing on it. `domain.py`, `record.py` and the per-env
     # adapters are ours and stay checked.
-    "src/alphatamp/approaches/spectre/piginet/(?!domain|record|.*_adapter)",
+    "src/alphatamp/approaches/spectre/baselines/piginet/(?!domain|record|.*_adapter)",
     # The LAZY baseline's torch_geometric GAT stack, same treatment as PIGINet's ML
     # modules: the env-agnostic contract files (domain, tree, feasibility) stay checked;
     # the graph/model/dataset/rollout/train/eval modules (torch_geometric, untyped) are
@@ -105,6 +105,9 @@ exclude = [
     "^kb/",
     # Vendored LAZY reference clone (py2-era; see .gitignore). Reference only.
     "src/alphatamp/approaches/spectre/baselines/drake-tamp/",
+    # Pre-refactor local safety archive (gitignored copies of pre-refactor code that
+    # import removed symbols). Never type-checked. See docs/decisions 2026-08-12 ADR.
+    "^_archive_local/",
 ]
 
 [tool.pytest.ini_options]
@@ -114,7 +117,7 @@ markers = [
 # `kb` = untracked sibling reference checkout (see .gitignore /kb/); `drake-tamp` = the
 # vendored LAZY reference clone (py2-era). Both are kept out so `pytest . --pylint` never
 # collects/lints them.
-norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb", "drake-tamp"]
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb", "drake-tamp", "_archive_local"]
 
 [tool.uv.sources]
 kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }
