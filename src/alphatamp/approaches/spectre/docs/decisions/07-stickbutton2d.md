@@ -4,6 +4,74 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-12-publication-de-versioning-one-unified-spectre"></a>
+## 2026-08-12 — Publication de-versioning: one unified SPECTRE
+
+<!--strip-->
+> **id** `2026-08-12-publication-de-versioning-one-unified-spectre` · **status**
+> active · **tracks** process, method, evaluation
+<!--/strip-->
+
+**Context.** SPECTRE was built iteratively (v1 → v2/v2.2 → v3). The deployed method ("v3")
+was buried under version-suffixed modules (`model_v3.py`/`dataset_v3.py`/`train_v3.py`/
+`inference_v3.py`), three live generations sharing symbols, dev/one-off scripts, superseded
+docs, and features that were built and then disabled. Preparing the codebase for
+publication — external researchers reading and reusing it — required collapsing to one
+unversioned "SPECTRE". This was done as gated workstreams on branch `spectre-refactor`, each
+verified against the shrinking test suite *and* the deployed-path equivalence oracles, behind
+a pre-refactor `git tag pre-refactor-snapshot` and a gitignored `_archive_local/` backup.
+
+**Decision.**
+
+- **One unified SPECTRE; no v1/v2/v3.** Modules renamed to unversioned (`model.py`,
+  `dataset.py`, `train.py`, `inference.py`); the shared substrate is lifted to `layers.py`
+  (attention primitives) + `encoders.py` (geometry/evidence encoders). The v1/v2 stacks were
+  removed entirely, including the selectable `spectre1`/`spectre2` comparison arms, the v1
+  rollout simulators in `eda.py`, and the legacy eval scripts.
+- **Cut features removed** — all were OFF in the deployed recipe, so removal is
+  behaviour-preserving: proof-tier demotion (`proof_demotion*.py`), legacy-coverage (the
+  `unified_coverage` flag; unified is now the only path), obj-evidence, sinusoidal positions,
+  `tail_max_f`, and the unwired necessity head. `HeuristicPrior` (`priors.py`) went with them
+  — RT2D-coupled FF machinery consumed only by removed code; the deployed model uses no prior
+  (`n_prior_feats=0`). **Kept one-flag-away:** EMA weight-averaging, and the ablation flags
+  that generate the paper's §4 grid (`--no-records` / `--overlap-mode` / `--coverage-mode` / …)
+  plus `train_strata` (the held-out-stratum experiments).
+- **Structure:** baselines unified under `baselines/{vlmplan,piginet,lazy,drake-tamp}/`; the
+  nested `envs/dd2d/dd2d/` stutter flattened to `envs/dd2d/drawer/`; `spectre_score_v3.py` →
+  `spectre_score.py`. **RT2D + TTD fully archived** (envs, tests, configs, docs) with Hydra
+  defaults retargeted to `dd2d_v4`. Superseded living docs moved to `docs/archive/`, and
+  `as_built_v3.md` → `as_built.md` (de-versioned in place).
+
+**Consequences.** *(Judgment calls made in an unsupervised run, recorded here per the "record
+the why" rule.)*
+
+- **Committed on branch `spectre-refactor`, not pushed.** A hundreds-of-file refactor done
+  unsupervised needs rollback checkpoints and a reviewable branch; a dedicated non-pushed
+  branch is fully reversible and does not touch `spectre`/`main`. The push is left to the user.
+- **Deployed-path equivalence is the safety net, not just the tests:** each core change
+  re-checked that `checkpoints_v3_unified` loads `strict=True` at exactly **324311 params**
+  and that `deployed_rollout_traced` reproduces the cached `spectre3_adaptive` FP exactly on
+  sampled episodes.
+- **PIGINet / LAZY were not retrained** — only relocated (logic unchanged, tests pass), so
+  their caches stay valid; only SPECTRE, whose code changed, was retrained.
+- **Blob relocation deferred to post-verification** (`envs/dd2d/data` raw_v2 ≈ 4.4 G,
+  `out_dd2d` ≈ 379 M): they are gitignored (already invisible to GitHub), so relocating is
+  local tidiness and was deferred to avoid perturbing PIGINet paths mid-verification.
+- **`step_dead` trace field kept but emptied** (the proof machinery is gone) to preserve the
+  cache JSON schema so the comparison notebook stays functional.
+- **Cosmetic follow-ups left non-blocking:** the encoder subclasses `SceneEncoderV3` /
+  `CandidateEncoderV3` were removed with their features, but the `train_v3()` function name
+  and the `SpectreV3Dataset` class inside `train.py`, and `AuxHead` (constructed
+  unconditionally and present in the deployed state_dict — cannot be removed without a retrain
+  + arch change), remain named. The `notebook` / `decisions` chapter filenames still encode
+  `v2.2` / `v3` because the logs are append-only history, so they were not renamed.
+- **Test-suite trajectory** (context, not a result): 558 (pre) → 490 (after v1/v2 tests
+  archived) → 371 (after RT2D/TTD archived) → 362 (after removed-feature tests dropped); zero
+  failures at every gate — the drops are archived tests, not regressions.
+- **Verification result:** [pending retrain verification — to be filled].
+
+---
+
 <a id="2026-08-10-held-out-stratum-anomalies-resolved-matched-controls-per-stratum"></a>
 ## 2026-08-10 — Held-out-stratum anomalies resolved: matched controls, per-stratum paired bootstrap, correct-size b5
 

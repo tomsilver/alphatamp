@@ -62,3 +62,26 @@ frozen here byte-for-byte:
 These are not merely historical: `experiments/spectre/decisions_index.py check` compares every
 live entry against them on every run, which is what makes the split non-lossy as an enforced
 property. Do not edit them — that would weaken the check to a tautology.
+
+## Superseded living docs (moved here 2026-08-12, publication de-versioning refactor)
+
+The 2026-08-12 refactor unified v1/v2/v3 into one SPECTRE (see the
+`Publication de-versioning: one unified SPECTRE` ADR). These per-version specs, as-built
+docs, and one-off plans described superseded generations or completed one-off work; they are
+moved here **byte-unchanged** as historical snapshots. The living docs —
+[`../proposal.md`](../proposal.md), [`../as_built.md`](../as_built.md), and the chaptered
+`decisions/` / `notebook/` logs — are the source of truth and win on any disagreement.
+(The two autonomous-session narratives, `../autorun_decisions.md` and
+`../autonomous_stickbutton_session.md`, were **not** moved: append-only entries in the
+`decisions/` / `notebook/` logs link to them at their `docs/` path, and the doclog
+link-integrity `check` requires them to stay there.)
+
+| File | One-line historical note |
+|---|---|
+| `SPECTRE_v2.2.md` | v2.2 method/design spec — superseded by the unified method (as-built in `../as_built.md`). |
+| `as_built_v2.2.md` | v2.2 as-built companion — the v2.2→v3 evolution it records is preserved in `../as_built.md`. |
+| `SPECTRE_v3_proposal.md` | The v3 migration proposal (design intent); the migration is complete and consolidated into the unified SPECTRE. |
+| `SPECTRE_snapshot-07-16.md` | Dated 2026-07-16 paper-style project-state snapshot (pre-v3 performance push). |
+| `spectre_audits_07-14.md` | 2026-07-14 code/data audit notes, since resolved. |
+| `consolidation_2026-07-19.md` | 2026-07-19 consolidation working notes for the DD2D/v2.2 integration. |
+| `vlmplan_dd2d_implementation_plan.md` | Completed implementation plan for the VLMPlan DD2D baseline (now built under `../../baselines/vlmplan/`). |

@@ -4,6 +4,41 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-12-publication-de-versioning-refactor"></a>
+## 2026-08-12 — Publication de-versioning refactor
+
+<!--strip-->
+> **id** `2026-08-12-publication-de-versioning-refactor` · **status** active ·
+> **tracks** process, method, evaluation
+<!--/strip-->
+
+**What.** The publication de-versioning refactor (branch `spectre-refactor`): collapsed
+v1/v2/v2.2/v3 into one unversioned SPECTRE (`model.py`/`dataset.py`/`train.py`/`inference.py`
++ shared `layers.py`/`encoders.py`), moved the baselines under
+`baselines/{vlmplan,piginet,lazy,drake-tamp}/`, flattened `envs/dd2d/dd2d/` →
+`envs/dd2d/drawer/`, archived RT2D + TTD, and removed the built-then-disabled features
+(proof-demotion, legacy-coverage, obj-evidence, sinusoidal positions, `tail_max_f`,
+necessity — all OFF in the deployed recipe, so removal is behaviour-preserving), keeping EMA
+and the ablation flags one flag away. Docs were cleaned in the same pass (superseded specs →
+`docs/archive/`, `as_built_v3.md` → `as_built.md`). Full decision + judgment calls:
+[`decisions/07` 2026-08-12](../decisions/07-stickbutton2d.md#2026-08-12-publication-de-versioning-one-unified-spectre).
+
+**Result.** The test suite shrank as archived-only, with **zero failures at every gate**:
+**558 (pre) → 490** (v1/v2 tests archived) **→ 371** (RT2D/TTD archived) **→ 362**
+(removed-feature tests dropped) — the drops are archived tests, not regressions.
+Deployed-path equivalence held throughout: `checkpoints_v3_unified` loads `strict=True` at
+**324311 params** and `deployed_rollout_traced` reproduces the cached `spectre3_adaptive` FP
+on sampled episodes. Retrain-verification of the headline numbers: [pending retrain
+verification — to be filled].
+
+**Takeaway.** A behaviour-preserving structural cleanup for external readers; the "v3" naming
+that persists across the older docs and append-only logs is now historical and denotes the
+current SPECTRE. Next: land the retrain-verification number, then the deferred cosmetic
+follow-ups (the `train_v3()` / `SpectreV3Dataset` names, blob relocation) if a retrain is ever
+scheduled for another reason.
+
+---
+
 <a id="2026-08-10-held-out-vs-matched-full-controls-anomaly-confound"></a>
 ## 2026-08-10 — Held-out vs matched-full controls: the anomaly is confound+noise; b5 expanded to 100
 

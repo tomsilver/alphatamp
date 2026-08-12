@@ -44,24 +44,25 @@ scope. ClutteredStorage2D-b5/b7 and StickButton2D-b5 collections are historical.
 | Piece | Path |
 |---|---|
 | Package (model, dataset, collection, EDA) | `src/alphatamp/approaches/spectre/` — do not move; it IS `alphatamp.approaches.spectre` |
-| RT2D environment | `src/alphatamp/approaches/spectre/envs/routedtransport2d/`, registered via `env_registry.py` |
-| DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (env + raw_v2 dataset + `MIGRATION_DD2D.md`); `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter). Wired as env_variants `dd2d_v2` and `dd2d_v3` (the re-collection after the 2026-07-24 grasp changes), **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
-| **StickButton2D** — the second evaluation environment | `src/alphatamp/approaches/spectre/envs/stickbutton2d/` — thin adapters over kinder's own env and refiner: `heuristic.py` (geometry-aware A* + the acyclic pool filter), `scene_geometry.py`, `sampler.py`/`instrumented_refiner.py` (class-2 evidence), `strata.py` (pooled-variant problem ids), `geometry.py`, `diagnostics.py`. Collected as env_variant **`stickbutton2d_v1`** (b1/b2/b3/b5 pooled, button count = stratum; b10 dropped). Entry points `experiments/spectre/sb2d_{collect,baselines,rerank_gate}.py` + `sb2d_finalize.sh` |
-| VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/vlmplan/` — env-agnostic core; per-env `{dd2d,sb2d}_adapter.py` (prompt + grounding) and `sb2d_label.py` (off-pool labeler), dispatched by `registry.py`; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `decisions/04` 2026-07-24; env-agnostic refactor: `decisions/07` 2026-08-01; prompt deviations: `vlmplan/prompts/PROVENANCE.md` |
-| PIGINet baseline (low-level predictor) | `src/alphatamp/approaches/spectre/piginet/` — env-agnostic core behind a `PIGINetDomain` protocol; per-env `{dd2d,sb2d}_adapter.py`. `decisions/07` 2026-08-01 |
-| LAZY baseline (learned adaptive re-ranker) | `src/alphatamp/approaches/spectre/baselines/lazy/` — Khodeir et al re-implemented over the fixed pool: prefix-tree GAT policy (`torch_geometric` GATv2Conv) + online feasibility ϕ. Trained via `experiments/spectre/lazy_train.py`; cached by `cache_lazy` in `precompute_dd2d_cache.py`; registered as `LAZY_FAMILIES` in `compare.py`. `decisions/07` 2026-08-09; `baselines/lazy/PROVENANCE.md`. (PIGINet will move under `baselines/` too.) |
+| RT2D environment (archived 2026-08-12) | RoutedTransport2D and its re-ranker results are historical; the `envs/routedtransport2d/` env, tests and configs were removed from the tree in the publication refactor (kept only in the local pre-refactor snapshot). Design specs remain in `docs/archive/` |
+| DD2D environment (migrated) + JSON→EpisodeRecord converter | `src/alphatamp/approaches/spectre/envs/dd2d/` (raw_v2 dataset + `MIGRATION_DD2D.md`); the migrated drawer env is `envs/dd2d/drawer/` (flattened from the confusingly-nested `envs/dd2d/dd2d/` in the 2026-08-12 refactor), with `spectre_operators.py` (drawer substrate) + `spectre_convert.py` (converter) at `envs/dd2d/`. Wired as env_variants `dd2d_v2`/`dd2d_v3`/`dd2d_v4` (re-collections after the grasp/instrumentation changes), **not** a native SesameModels env — see `docs/decisions.md` 2026-07-12 |
+| **StickButton2D** — the second evaluation environment | `src/alphatamp/approaches/spectre/envs/stickbutton2d/` — thin adapters over kinder's own env and refiner: `heuristic.py` (geometry-aware A* + the acyclic pool filter), `scene_geometry.py`, `sampler.py`/`instrumented_refiner.py` (class-2 evidence), `strata.py` (pooled-variant problem ids), `geometry.py`, `diagnostics.py`. Collected as env_variant **`stickbutton2d_v1`** (b1/b2/b3/b5 pooled, button count = stratum; b10 dropped). Entry points `experiments/spectre/sb2d_{collect,baselines}.py` + `sb2d_finalize.sh` |
+| VLMPlan baseline (zero-shot VLM planner) | `src/alphatamp/approaches/spectre/baselines/vlmplan/` — env-agnostic core; per-env `{dd2d,sb2d}_adapter.py` (prompt + grounding) and `sb2d_label.py` (off-pool labeler), dispatched by `registry.py`; entry points `experiments/spectre/vlmplan_{run,score}.py`. Protocol: `decisions/04` 2026-07-24; env-agnostic refactor: `decisions/07` 2026-08-01; prompt deviations: `baselines/vlmplan/prompts/PROVENANCE.md` |
+| PIGINet baseline (low-level predictor) | `src/alphatamp/approaches/spectre/baselines/piginet/` — env-agnostic core behind a `PIGINetDomain` protocol; per-env `{dd2d,sb2d}_adapter.py`. `decisions/07` 2026-08-01 |
+| LAZY baseline (learned adaptive re-ranker) | `src/alphatamp/approaches/spectre/baselines/lazy/` — Khodeir et al re-implemented over the fixed pool: prefix-tree GAT policy (`torch_geometric` GATv2Conv) + online feasibility ϕ. Trained via `experiments/spectre/lazy_train.py`; cached by `cache_lazy` in `precompute_dd2d_cache.py`; registered as `LAZY_FAMILIES` in `compare.py`. `decisions/07` 2026-08-09; `baselines/lazy/PROVENANCE.md` |
 | **Method comparison** — one notebook, N environments | `experiments/spectre/compare_methods.py` (marimo) over `compare.py` (loaders, rollout sim, bootstrap) and `compare_envs.py` (**the env registry — a new environment is one `EnvSpec`**). `decisions/07` 2026-08-01 |
 | Docs (living proposal, lit review, archived specs + dated writeup snapshots) | `src/alphatamp/approaches/spectre/docs/` |
 | **ADR log** and **lab notebook** — chaptered by era, newest first | `docs/decisions/` and `docs/notebook/`, each with a **generated `README.md`** (chapter list, full entry ledger, by-track index, ID-resolution table, do-not-quote ledger, legacy date→entry map). Pre-split monoliths frozen in `docs/archive/*_monolithic.md`; `docs/decisions.md` / `docs/notebook.md` are stubs. Tooling: `doclog.py` + `experiments/spectre/decisions_index.py` |
 | Hydra entry points + configs + SLURM launchers + analysis notebook | `experiments/spectre/` (configs under `experiments/spectre/conf/`) |
-| Tests | `tests/approaches/spectre/` (RT2D env tests under `envs/routedtransport2d/`) |
+| Tests | `tests/approaches/spectre/` |
 | Data (gitignored) | `data/spectre/{raw,derived,checkpoints,configs}/` — the `data_root: "data/spectre"` convention is relative to the repo root |
 | SLURM logs | `experiments/slurm_outputs/` (shared scratch, gitignored) |
 
 Spectre's Hydra configs are self-contained: `experiments/spectre/conf/`
 holds `spectre_collect.yaml`, `spectre_build_vocab.yaml`, `spectre_train.yaml`,
 `dd2d_convert.yaml`, the spectre-only env group
-(`env/{clutteredstorage2d_b5,routedtransport2d_n3_v1,stickbutton2d_b5,dd2d_v2}.yaml`),
+(`env/{dd2d_v2,dd2d_v3,dd2d_v4,stickbutton2d_v1,stickbutton2d_b1..b5}.yaml`; the
+RT2D/ClutteredStorage2D env configs were archived in the 2026-08-12 refactor),
 and spectre's own `hydra/launcher/slurm.yaml` (8 cpus / 32 GB). The shared
 `experiments/conf/` tree belongs to other projects — never put spectre configs
 there.
@@ -100,6 +101,15 @@ MPS setup; the SLURM launchers below remain for cluster runs):
 Always `source .venv/bin/activate` first; run from the repo root. Stages in
 order (details in @docs/proposal.md §4–5; respect the de-risking gates):
 
+> **2026-08-12 refactor note.** RT2D and ClutteredStorage2D were archived and their env
+> configs/scripts removed; the live env_variants are `dd2d_v4` and `stickbutton2d_v1`. The
+> `env=routedtransport2d_n3_v1` examples below illustrate the *stage flow* — substitute a
+> live variant (`env=dd2d_v4`, or the SB2D flow via `sb2d_finalize.sh`). Renamed/archived
+> since: `spectre_score_v3.py`→`spectre_score.py`; the sanity-check
+> (`spectre_check_pipeline.py`), the atom-sensitivity probe, the RT2D collect wrapper, and
+> the `analyze_spectre.py` marimo notebook were archived — the analysis notebook is now
+> `compare_methods.py` (stage 7).
+
 1. **Collect** (500 train / 100 val / 100 test per env):
    `python experiments/spectre/spectre_collect.py env=routedtransport2d_n3_v1 split=train problem_seed_start=0 problem_seed_end=500`
    — or `bash experiments/spectre/collect_routedtransport2d_n3_v1.sh` (all
@@ -109,22 +119,23 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    `python experiments/spectre/dd2d_convert.py` instead to convert the migrated
    `envs/dd2d/data/dd2d/raw_v2` JSON dataset into `data/spectre/raw/dd2d_v2/…`
    episodes. To generate *fresh* DD2D data, run DD2D's own collector
-   (`python -m alphatamp.approaches.spectre.envs.dd2d.dd2d.collect --out-root …`,
+   (`python -m alphatamp.approaches.spectre.envs.dd2d.drawer.collect --out-root …`,
    needs shapely + the planners) and re-run the converter pointed at its output.
    Stages 2–4 below then work unchanged with `env=dd2d_v2`.
 2. **Vocab** (train split only, OOV-checks val/test):
    `python experiments/spectre/spectre_build_vocab.py env=routedtransport2d_n3_v1`
-3. **Sanity-check** the collection + one collated batch:
-   `python experiments/spectre/spectre_check_pipeline.py env=routedtransport2d_n3_v1`
+3. **Sanity-check** the collection + one collated batch — the `spectre_check_pipeline.py`
+   script was archived in the 2026-08-12 refactor; the SB2D flow folds its checks into
+   `sb2d_finalize.sh`.
 4. **Train** (multi-seed):
    `python experiments/spectre/spectre_train.py env=routedtransport2d_n3_v1 seed=0`
    — or `sbatch --array=0-2 experiments/spectre/spectre_train.slurm` (one seed
    per array task; extra Hydra overrides forwarded).
-5. **Analyze / experiments:** `experiments/spectre/analyze_spectre.py`
-   (a marimo notebook — run with `marimo edit experiments/spectre/analyze_spectre.py`;
-   drives `eda.py`: EDA gates, B1–B5 brackets, rollout simulation, comparison
-   table). Diagnostics:
-   `python experiments/spectre/spectre_probe_atom_sensitivity.py env=routedtransport2d_n3_v1 seed=0`.
+5. **Analyze / experiments:** the analysis notebook is
+   `experiments/spectre/compare_methods.py` (marimo — see stage 7); it drives `eda.py`
+   (EDA gates, B1–B5 brackets, rollout simulation) and `compare.py`/`compare_envs.py`
+   (the method-comparison table). The `analyze_spectre.py` notebook and the
+   `spectre_probe_atom_sensitivity.py` diagnostic were archived in the 2026-08-12 refactor.
 6. **VLMPlan baseline** (zero-shot VLM comparison row; two stages, only the first needs a
    model, so a re-collection re-runs just the second):
    ```bash
@@ -162,7 +173,7 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    ```
    The score record now carries wall-clock (`infer_s` VLM generation + `refine_s`), so
    VLMPlan appears in §2b; `VLMPlan-GPT5.6` is a `SEQUENCE_METHOD` in `compare.py`.
-   Adapter *and* off-pool labeler are dispatched on `env_variant` by `vlmplan/registry.py`;
+   Adapter *and* off-pool labeler are dispatched on `env_variant` by `baselines/vlmplan/registry.py`;
    a new environment is an `EnvAdapter` + a `Labeler`, both registered there.
    One `cache_subdir` is one method row — give a different `run` its own `cache_subdir`
    or the rows get averaged together (guarded, not silent). Check the printed
@@ -210,10 +221,18 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    / [`decisions/07`](docs/decisions/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d)
    2026-08-03).
 
-## SPECTRE v3 (in progress, 2026-07-26)
+## SPECTRE — the unified method (was "v3")
 
-Migration from v2.2 to v3 per [`docs/SPECTRE_v3_proposal.md`](docs/SPECTRE_v3_proposal.md),
-run as gated increments. **Current substrate is `dd2d_v4`** (grasp-fixed *and*
+The 2026-08-12 publication refactor unified v1/v2/v2.2/v3 into one SPECTRE and removed the
+built-then-disabled features (proof-tier demotion, legacy-coverage, obj-evidence, sinusoidal
+positions, `tail_max_f`, the unwired necessity head); EMA weight-averaging and the ablation
+flags are kept, one flag away. The "v3" naming throughout the rest of this section is
+historical — v3 *is* the current SPECTRE; the modules are now unsuffixed
+(`model.py`/`dataset.py`/`train.py`/`inference.py`, shared primitives in
+`layers.py`/`encoders.py`) and the as-built lives in [`docs/as_built.md`](docs/as_built.md).
+The migration design intent is the archived
+[`docs/archive/SPECTRE_v3_proposal.md`](docs/archive/SPECTRE_v3_proposal.md); it ran as gated
+increments (G0–G11). **Current substrate is `dd2d_v4`** (grasp-fixed *and*
 refiner-instrumented); dd2d_v2/v3 numbers predate the double-canonicalization fix and must
 not be quoted without regenerating.
 
@@ -248,7 +267,7 @@ weight-averaging (`--weight-avg ema`) was built and tested but is **inert on bot
 flag away).
 [`decisions/07` 2026-08-09](docs/decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider).
 
-**≈ −11.5 FP vs v2.2** (the paired CI for that pair is not computed — `spectre_score_v3`
+**≈ −11.5 FP vs v2.2** (the paired CI for that pair is not computed — `spectre_score.py`
 cannot take a v2 arm as `--baseline`). Against the *previous* v3 deployed definition the
 paired margin is **−1.66 FP, CI [−2.71, −0.71]**, every seed beating every baseline seed
 ([`decisions.md`](docs/decisions/06-v3-performance.md) 2026-07-31). Reproduce:
@@ -258,7 +277,7 @@ python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
 # demotion is OFF by default; `--with-demotion` is the ablation. The flag is GLOBAL, so
 # `--v2-arm` would also lose its demotion -- the 17.27 yardstick comes from the compare
 # cache, whose v2 path always demotes.
-python experiments/spectre/spectre_score_v3.py --env-variant dd2d_v4 \
+python experiments/spectre/spectre_score.py --env-variant dd2d_v4 \
     --arm "v3 deployed:checkpoints_v3_unified" --seeds 0 1 2
 ```
 
@@ -273,7 +292,7 @@ directory. The pre-memoization replicate of the unified arm is
 **v3 is a purely learned ranker as of 2026-07-30** (`decisions.md`). Proof-tier demotion
 was **cut from the method**: nothing outside the network touches the ordering, and
 `apply_demotion=False` is the default in `deployed_rollout_v3_traced`, `cache_spectre3`,
-`train_v3.deployed_val_fp` and `spectre_score_v3.py`. It cost **0.23 FP** (7.20 → 7.44);
+`train_v3.deployed_val_fp` and `spectre_score.py`. It cost **0.23 FP** (7.20 → 7.44);
 it fired on only **6%** of deployed rollouts against **55%** on the stripped floor arm, and
 the learned features absorbed ~79% of its value. The machinery is **kept and one flag away**
 (`apply_demotion=True`) because the deduction is sound — on a domain whose proofs fire more
@@ -353,7 +372,7 @@ env_variants (each 40 problems, stratified s0–s3, seed bands disjoint from tra
 
 ```bash
 bash experiments/spectre/collect_dd2d_genset.sh 12   # collect A+B, convert, reuse dd2d_v4 vocab
-python experiments/spectre/spectre_score_v3.py --env-variant dd2d_v4 \
+python experiments/spectre/spectre_score.py --env-variant dd2d_v4 \
     --test-variant dd2d_v4gen_count --arm "v3:checkpoints_v3_unified" --astar-baseline --seeds 0 1 2
 # then --test-variant dd2d_v4gen_shape
 ```
@@ -418,7 +437,7 @@ domain-agnostic narrowed inputs + `--select-window 5`, which ties it at **1.84 �
 | B1 random | 21.04 | 0.24 | 5.22 | 47.79 | 30.90 |
 
 **The comparison row, and the result that matters most.** PIGINet is env-agnostic since
-2026-08-01 (`piginet/` + per-env adapters), so SB2D has the representation contrast:
+2026-08-01 (`baselines/piginet/` + per-env adapters), so SB2D has the representation contrast:
 
 | method | ALL | b1 | b2 | b3 | b5 |
 |---|---|---|---|---|---|
@@ -507,8 +526,8 @@ real env too, so it is net-neutral-to-mild-distractor. See
 **`spectre_collect.py` is not the collector here** — `experiments/spectre/sb2d_collect.py`
 is, because the collection pools four kinder env ids into one variant and **rejects and
 resamples** problems with no feasible skeleton. Post-collection, `sb2d_finalize.sh` runs
-vocab → check → re-ranking gate → B1–B5 bracket → training → scoring in the order the
-gates require.
+vocab → B1–B5 bracket → training → scoring in the order the gates require (the standalone
+sanity-check and re-ranking-gate stages were dropped in the 2026-08-12 refactor).
 
 ## Conventions and invariants
 
@@ -527,7 +546,7 @@ gates require.
 - **Reporting:** paper numbers are mean ± std over ≥ 3 seeds. **Development runs
   1 seed** (2026-07-26 directive) — with 1 seed "within seed noise" is not
   measurable, so a gate is accepted by a **paired bootstrap over problems**
-  (`spectre_score_v3.py`, the instrument the P1/P4/P5 gates used); pairing removes
+  (`spectre_score.py`, the instrument the P1/P4/P5 gates used); pairing removes
   the between-problem variance that dominates here.
 - **Doc updates are part of development** — see "Documentation discipline"
   below. Archived specs and snapshots in `docs/archive/` are frozen — never

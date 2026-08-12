@@ -1,11 +1,26 @@
-# SPECTRE v3 — As Built
+# SPECTRE — As Built
 
-Companion to [`as_built_v2.2.md`](as_built_v2.2.md): what v3 *is*, as implemented, with
-the evidence for each choice. The design intent lives in
-[`SPECTRE_v3_proposal.md`](SPECTRE_v3_proposal.md); where this document and the proposal
+Companion to the archived [`as_built_v2.2.md`](archive/as_built_v2.2.md): what SPECTRE *is*,
+as implemented, with the evidence for each choice. The design intent lived in the archived
+[`SPECTRE_v3_proposal.md`](archive/SPECTRE_v3_proposal.md); where this document and the proposal
 disagree, **this one describes the code** and the proposal describes what was planned.
 Numbers cite [`notebook.md`](notebook/README.md); decisions cite [`decisions.md`](decisions/README.md)
 and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
+
+> **Publication refactor (2026-08-12).** SPECTRE was de-versioned to one unified method — the
+> "v3" this document describes *is* SPECTRE. The modules lost their `_v3` suffixes
+> (`model_v3.py`→`model.py`, `dataset_v3.py`→`dataset.py`, `inference_v3.py`→`inference.py`,
+> `train_v3.py`→`train.py`; shared primitives in `layers.py` / `encoders.py`), the baselines
+> moved under `baselines/` (`baselines/{vlmplan,piginet,lazy,drake-tamp}/`), and the nested
+> `envs/dd2d/dd2d/` flattened to `envs/dd2d/drawer/`. The built-then-disabled features named
+> below — **proof-tier demotion, legacy-coverage, per-object (obj-)evidence, sinusoidal
+> positions, `tail_max_f`, and the unwired necessity head** — were **removed** in that refactor
+> (all were OFF in the deployed recipe, so removal is behaviour-preserving). **EMA
+> weight-averaging and the ablation flags are kept**, one flag away. The sections below still
+> name and reason about the removed features because that reasoning is the record of *why*
+> they are gone; where the older text says a removed component is "kept / one flag away",
+> read it as **removed in the 2026-08-12 refactor** unless the sentence is about EMA or an
+> ablation flag.
 
 > **⚠️ Update (2026-08-09).** The deployed input surface was made **domain-agnostic** —
 > `obj_is_target`→`obj_is_goal`, `obj_rel` 8→3 (`d_rel=3`), `concave` cut
@@ -47,7 +62,7 @@ and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_deci
 
 ---
 
-## 1. What v3 changed, in one table
+## 1. What changed from v2.2, in one table
 
 | | v2.2 | v3 |
 |---|---|---|
@@ -300,7 +315,7 @@ Deployed feature flags (the `v3final` sweep preset): `--overlap-mode jaccard
 **Selection is uncensored deployed-val-FP** over the whole 100-episode val split, on a
 3-epoch moving average, with the demotion rule pinned to `permissive` so a change to the
 rule cannot move the selector underneath a comparison. Three guards, each from a specific
-failure — see `train_v3.py`'s module docstring. The censoring lesson generalizes and is
+failure — see `train.py`'s module docstring. The censoring lesson generalizes and is
 worth restating: **a selection statistic must never be censored below the region where the
 candidates differ**, and *stable curves are not evidence of a good selector* — the censored
 selector's curves were stable and picked sensible mid-training epochs while spanning ≈6 FP
@@ -379,7 +394,7 @@ python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
 # NOTE the `--v2-arm` yardstick is scored through the same switch, so this command
 # reports v2.2 WITHOUT its demotion; the 17.27 above is v2.2 as published, read from
 # the compare cache, whose `cache_spectre2` uses v2's own always-demoting rollout.
-python experiments/spectre/spectre_score_v3.py --env-variant dd2d_v4 \
+python experiments/spectre/spectre_score.py --env-variant dd2d_v4 \
     --arm "v3 deployed:checkpoints_v3_v3delta_s{seed}" --seeds 0 1 2
 ```
 
