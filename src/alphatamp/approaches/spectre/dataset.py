@@ -1,614 +1,895 @@
-"""PyTorch Dataset + collate for SPECTRE.
+"""V3 tensorizer: ``EpisodeRecord`` -> ``SpectreBatch``, via the domain contract.
 
-Online F-subset sampling (pipeline spec §11): ``__getitem__`` loads an episode,
-samples ``F ⊆ FAIL_e``, and returns a structured training example. Tensorization
-happens in ``collate_spectre_batch`` so the Dataset output stays inspectable.
+Structurally this is v2.2's tensorizer with the DD2D literals removed. Two things it no
+longer knows:
 
-Per ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` this module now exposes:
+- **which objects a candidate manipulates** -- was ``op.name == "place-buffer"``, now
+  :func:`domain.DomainSpec.manipulated`, verified identical on 120000/120000 skeletons;
+- **which failures license demotion** -- was ``failure_action.startswith("retrieve")``,
+  now the per-query axiom declaration plus the observation's own budget flag.
 
-- :class:`FSamplingConfig` — four sampling modes per §8.2 (fix #4). Default
-  ``rollout_aligned_mix`` weights ``(0.25, 0.25, 0.5)`` on
-  ``(uniform_subsets, uniform_size, log_normal)``.
-- ``num_f_samples_per_epoch`` — F-subsample multiplier per §8.1 (fix #5).
-  ``__len__`` becomes ``num_episodes * num_f_samples_per_epoch``; each
-  ``__getitem__`` decomposes the linear index into ``(episode_idx,
-  f_sample_idx)`` and seeds its RNG from ``(seed, episode_idx,
-  f_sample_idx, epoch)`` so that successive epochs see different ``(F, aug)``
-  pairs for the same episode.
-- ``type_aug_policy`` — per-type augmentation policy per §4.6 (fix #2),
-  threaded through to :func:`canonicalize_episode`.
-- Per-skeleton ``s_L`` atom tensors — the spec §4.1 ``SkeletonInput`` carries
-  both ``s_0`` and ``s_L`` atom token sequences so Φ encodes the start- and
-  end-state of the skeleton.
+Three v2.2 features are deliberately *not* carried over:
 
-**Critical invariant** (pipeline spec §11.6; violated in prior Attempt 2): F
-must contain only failed skeletons, never successes. We assert this inside
-``__getitem__`` so a regression fails loudly rather than silently corrupting
-training.
+- ``exclude_marginal`` was inert twice over (the DD2D refiner only writes ``status`` in
+  ``{feasible, infeasible}``, and even when it fired ``collate`` folded the resulting
+  ``None`` back to ``False`` because the batch has no per-candidate ignore mask). v3
+  declines to carry a flag that silently does nothing; reinstating the behaviour needs a
+  real label mask, not a flag.
+- ``demotion_source="computed"`` -- the geometry-reconstruction path -- is dropped (R2).
+  It was worth a measured ~14%, but it is the last per-environment geometry routine in
+  the deployment story, and the observed signal is what generalizes.
+- The **short-first prior** as a scorer feature (R1). The plan-length column survives
+  only as the within-length loss's bucket key, which is now :func:`domain.length_key`; the
+  model sees no prior (``SpectreConfig.n_prior_feats == 0``). It was a per-dataset hand switch
+  that diverged training on the easier collection, and note it was never a clean feature
+  ablation anyway: enabling it also zero-inits the scorer head.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
-from functools import lru_cache
-from pathlib import Path
-from typing import Union
+import dataclasses
+import math
+from typing import Optional
 
 import numpy as np
 import torch
-from bilevel_planning.structs import RelationalAbstractState
-from relational_structs import GroundAtom
-from torch.utils.data import Dataset
 
 from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
-from alphatamp.approaches.spectre.io import list_episodes, load_episode
-from alphatamp.approaches.spectre.priors import BasePrior
-from alphatamp.approaches.spectre.schema import EpisodeRecord, SkeletonRecord
+from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.encoders import (
+    D_GLOBAL_IN,
+    D_REL,
+    D_REL_V3,
+    MAX_FACT_ARGS,
+    N_BOUNDARY_POINTS,
+    SpectreV2Batch,
+)
+from alphatamp.approaches.spectre.facts import TIER_IDS, gather_context_facts
+from alphatamp.approaches.spectre.failure_record import records_for_candidate
+from alphatamp.approaches.spectre.model import (
+    MAX_DELTA_ATOMS,
+    MAX_RECORD_ARGS,
+    MAX_RECORD_CULPRITS,
+    N_OBJ_EVIDENCE,
+    N_OVERLAP_V3,
+    N_RECORD_SCALARS,
+    SpectreBatch,
+)
+from alphatamp.approaches.spectre.schema import EpisodeRecord
+from alphatamp.approaches.spectre.tags import assign_tags
+from alphatamp.approaches.spectre.unified_evidence import blame as _unified_blame
+from alphatamp.approaches.spectre.unified_evidence import (
+    coverage_and_waste,
+    records_from_failure_records,
+    scene_filters,
+)
 from alphatamp.approaches.spectre.vocab import Vocab
 
-_F_SAMPLING_MODES = (
-    "uniform_subsets",
-    "uniform_size",
-    "log_normal",
-    "rollout_aligned_mix",
-)
+__all__ = [
+    "build_example",
+    "collate",
+    "sample_context",
+    "build_record_arrays",
+]
+
+#: One atom of a state delta, as ``(predicate id, argument tags)``.
+DeltaAtomArray = tuple[int, list[int]]
+#: One record's ``s_j - s_0``, as ``(added atoms, deleted atoms)``.
+DeltaArrays = tuple[list[DeltaAtomArray], list[DeltaAtomArray]]
+# : One record token: ``(schema id, arg tags, culprit tags, scalars)``, optionally
+# followed : by the state delta. The trailing element is present iff the delta was
+# requested -- the : model reads it by position, and a 4-tuple stream is byte-for-byte
+# the pre-delta one.
+RecordArray = tuple  # (int, list[int], list[int], list[float][, DeltaArrays])
 
 
-@dataclass(frozen=True)
-class FSamplingConfig:
-    """Configuration for F-subset sampling modes (spec §8.2)."""
-
-    mode: str = "rollout_aligned_mix"
-    # Mixture weights for ``rollout_aligned_mix``: (uniform_subsets,
-    # uniform_size, log_normal). Default puts log_normal in the lead because
-    # it is the only component matched to the test-time visit shape.
-    mix_weights: tuple[float, float, float] = (0.25, 0.25, 0.5)
-    log_normal_mu: float = 0.0
-    log_normal_sigma: float = 1.0
-
-    def __post_init__(self) -> None:
-        if self.mode not in _F_SAMPLING_MODES:
-            raise ValueError(
-                f"FSamplingConfig.mode={self.mode!r} not in {_F_SAMPLING_MODES}"
-            )
-        weight_sum = sum(self.mix_weights)
-        if not np.isclose(weight_sum, 1.0):
-            raise ValueError(
-                f"FSamplingConfig.mix_weights must sum to 1.0; got {weight_sum}"
-            )
-        if any(w < 0 for w in self.mix_weights):
-            raise ValueError(
-                "FSamplingConfig.mix_weights must be non-negative;"
-                f" got {self.mix_weights}"
-            )
+def resample_ring(
+    points: list[tuple[float, float]], p: int = N_BOUNDARY_POINTS
+) -> np.ndarray:
+    """Arc-length-uniform resample of a closed boundary ring to ``p`` points (P, 2)."""
+    pts = np.asarray(points, dtype=np.float64)
+    if len(pts) < 2:
+        return np.zeros((p, 2), dtype=np.float32)
+    closed = np.vstack([pts, pts[:1]])
+    seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = cum[-1]
+    if total <= 1e-9:
+        return np.tile(pts[0], (p, 1)).astype(np.float32)
+    targets = np.linspace(0.0, total, p, endpoint=False)
+    out = np.empty((p, 2), dtype=np.float64)
+    j = 0
+    for i, t in enumerate(targets):
+        while j < len(seg) and cum[j + 1] < t:
+            j += 1
+        span = seg[j] if seg[j] > 1e-12 else 1.0
+        frac = (t - cum[j]) / span
+        out[i] = closed[j] * (1 - frac) + closed[j + 1] * frac
+    return out.astype(np.float32)
 
 
-FSampling = Union[FSamplingConfig, str]
+@dataclasses.dataclass
+class _V2Example:
+    """Per-episode numpy/py arrays before collation."""
+
+    obj_tags: np.ndarray
+    obj_boundary: np.ndarray
+    obj_pose: np.ndarray
+    obj_rel: np.ndarray
+    obj_is_goal: np.ndarray
+    op_ids: list  # list[list[int]] per candidate
+    arg_tags: list  # list[list[list[int]]]
+    success: list
+    aux_necessary: np.ndarray
+    aux_relevant: np.ndarray
+    # Step-11 typed evidence (empty in the static path).
+    avail: list  # bool per candidate: not in the failed context F
+    fact_type_ids: list  # int per fact
+    fact_tier_ids: list  # int per fact
+    fact_arg_tags: list  # list[list[int]] per fact (object tags, capped)
+    prior: list  # [−index/K, −len/max_len] per candidate (a-priori default-order prior)
+    overlap: (
+        list  # [subset⊆blocked (sound demotion), jaccard-with-failed] per candidate
+    )
 
 
-def _sample_f_subset(
-    fail_indices: list[int],
+def _glob_feats(ex: _V2Example) -> np.ndarray:
+    n_obj = len(ex.obj_tags)
+    k = len(ex.op_ids)
+    mean_len = float(np.mean([len(o) for o in ex.op_ids])) if ex.op_ids else 0.0
+    return np.array(
+        [float(n_obj), float(k), mean_len, 0.0, 0.0, 0.0], dtype=np.float32
+    )[:D_GLOBAL_IN]
+
+
+def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
+    """Pad + stack per-episode examples into a ``SpectreV2Batch``."""
+    b = len(examples)
+    n = max(len(e.obj_tags) for e in examples)
+    k = max(len(e.op_ids) for e in examples)
+    ell = max((len(o) for e in examples for o in e.op_ids), default=1)
+    p = N_BOUNDARY_POINTS
+
+    fmax = max((len(e.fact_type_ids) for e in examples), default=0)
+
+    # ``obj_rel`` width comes from the examples, not the ``D_REL`` constant: the
+    # target-anchored scene emits 8, the anchor-free deployed scene emits 3, and one
+    # collator serves both. All examples in a batch share a builder and therefore a
+    # width; assert it rather than silently truncating a mismatched one to ``examples[0]``.
+    d_rel = examples[0].obj_rel.shape[-1] if examples else D_REL
+    assert all(
+        e.obj_rel.shape[-1] == d_rel for e in examples
+    ), "obj_rel width differs within a batch"
+    obj_tags = np.zeros((b, n), np.int64)
+    obj_boundary = np.zeros((b, n, p, 2), np.float32)
+    obj_pose = np.zeros((b, n, 3), np.float32)
+    obj_rel = np.zeros((b, n, d_rel), np.float32)
+    obj_is_goal = np.zeros((b, n), np.float32)
+    obj_mask = np.zeros((b, n), bool)
+    cand_op_ids = np.zeros((b, k, ell), np.int64)
+    cand_arg_tags = np.zeros((b, k, ell, max_arity), np.int64)
+    cand_pos = np.zeros((b, k, ell), np.int64)
+    cand_step_mask = np.zeros((b, k, ell), bool)
+    pool_mask = np.zeros((b, k), bool)
+    avail = np.zeros((b, k), bool)
+    cand_prior = np.zeros((b, k, 2), np.float32)
+    cand_overlap = np.zeros((b, k, 2), np.float32)
+    success = np.zeros((b, k), bool)
+    aux_nec = np.full((b, n), -1.0, np.float32)
+    aux_rel = np.full((b, n), -1.0, np.float32)
+    glob = np.zeros((b, D_GLOBAL_IN), np.float32)
+    fa = max(MAX_FACT_ARGS, 1)
+    fact_type = np.zeros((b, fmax), np.int64)
+    fact_tier = np.zeros((b, fmax), np.int64)
+    fact_arg = np.zeros((b, fmax, fa), np.int64)
+    fact_mask = np.zeros((b, fmax), bool)
+
+    for bi, e in enumerate(examples):
+        no = len(e.obj_tags)
+        obj_tags[bi, :no] = e.obj_tags
+        obj_boundary[bi, :no] = e.obj_boundary
+        obj_pose[bi, :no] = e.obj_pose
+        obj_rel[bi, :no] = e.obj_rel
+        obj_is_goal[bi, :no] = e.obj_is_goal
+        obj_mask[bi, :no] = True
+        aux_nec[bi, :no] = e.aux_necessary
+        aux_rel[bi, :no] = e.aux_relevant
+        glob[bi] = _glob_feats(e)
+        for ki, (ops, ats, s) in enumerate(zip(e.op_ids, e.arg_tags, e.success)):
+            pool_mask[bi, ki] = True
+            avail[bi, ki] = bool(e.avail[ki]) if ki < len(e.avail) else True
+            cand_prior[bi, ki] = e.prior[ki]
+            cand_overlap[bi, ki] = e.overlap[ki]
+            success[bi, ki] = bool(s) if s is not None else False
+            for li, (oid, at) in enumerate(zip(ops, ats)):
+                cand_op_ids[bi, ki, li] = oid
+                cand_pos[bi, ki, li] = li
+                cand_step_mask[bi, ki, li] = True
+                cand_arg_tags[bi, ki, li, : len(at)] = at[:max_arity]
+        for fi, (ty, ti, ar) in enumerate(
+            zip(e.fact_type_ids, e.fact_tier_ids, e.fact_arg_tags)
+        ):
+            fact_type[bi, fi] = ty
+            fact_tier[bi, fi] = ti
+            fact_mask[bi, fi] = True
+            fact_arg[bi, fi, : len(ar)] = ar[:fa]
+
+    t = torch.as_tensor
+    return SpectreV2Batch(
+        obj_tags=t(obj_tags),
+        obj_boundary=t(obj_boundary),
+        obj_pose=t(obj_pose),
+        obj_rel=t(obj_rel),
+        obj_is_goal=t(obj_is_goal),
+        obj_mask=t(obj_mask),
+        cand_op_ids=t(cand_op_ids),
+        cand_arg_tags=t(cand_arg_tags),
+        cand_pos=t(cand_pos),
+        cand_step_mask=t(cand_step_mask),
+        pool_mask=t(pool_mask),
+        glob_feats=t(glob),
+        success_mask=t(success),
+        aux_necessary=t(aux_nec),
+        aux_relevant=t(aux_rel),
+        avail_mask=t(avail),
+        cand_prior=t(cand_prior),
+        cand_overlap=t(cand_overlap),
+        fact_type_ids=t(fact_type) if fmax else None,
+        fact_tier_ids=t(fact_tier) if fmax else None,
+        fact_arg_tags=t(fact_arg) if fmax else None,
+        fact_mask=t(fact_mask) if fmax else None,
+    )
+
+
+@dataclasses.dataclass
+class _V3Example(_V2Example):
+    """``_V2Example`` plus the per-object evidence summary.
+
+    A subclass rather than a third return value: ``collate_v2`` reads attributes, so a
+    ``_V3Example`` flows through the v2 collation untouched, and every existing caller of
+    ``build_example`` keeps its two-tuple. The field defaults to ``None``, so the
+    compat path is byte-identical (D-8).
+    """
+
+    obj_evidence: Optional[np.ndarray] = None
+
+
+def records_for_evidence(
+    episode: EpisodeRecord, ctx: frozenset, spec: DomainSpec
+) -> tuple[list, list]:
+    """Split the context's records into ``(hint_tier, proof_tier)``.
+
+    The token path consumes only the hint tier, exactly as v2.2 did. The object summary
+    consumes both, but keeps them in **separate columns** -- see
+    :func:`_object_evidence` for why that is not a violation of the tier split.
+    """
+    hint, proof = [], []
+    for idx in sorted(ctx):
+        for rec in records_for_candidate(episode, idx, spec):
+            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+                proof.append(rec)
+            else:
+                hint.append(rec)
+    return hint, proof
+
+
+def _object_evidence(
+    ctx: frozenset,
+    subsets: list,
+    objects: list,
+    hint_records: list,
+    proof_records: list,
+    max_len: int = 8,
+) -> np.ndarray:
+    """Summarise the observed failures onto the objects they name.
+
+    See SceneEncoderV3.
+        Five columns per object, all fractions in [0, 1], all zero before any failure:
+
+        0. fraction of failed candidates that manipulate ``o``
+        1. fraction of hint records naming ``o`` as an argument
+        2. fraction of hint records naming ``o`` as a culprit
+        3. mean normalized depth of the records naming ``o``
+        4. fraction of **proof-tier** records naming ``o`` as a culprit
+
+        **Column 4 needs its own justification, because it looks like a tier violation and is
+        not.** Proof-tier records are kept out of the *token* path because what a token
+        exposes there is the failed **set**, and the net learns the crude size correlate from
+        it ("blocked sets are large, so prefer longer") -- L4, which cost +13.5 FP on s1.
+        Column 4 exposes something categorically different: the **identity of an object the
+        refiner's own collision check reported as blocking**. That is an *observation* (C2's
+        legal source), not the *deduction*; the deduction still acts only outside the net as
+        demotion (C5), and no weight can override it.
+
+        It is also the honest, observed version of the `clears` predicate that L2 rejected.
+        `clears` was rejected for being a hand-coded per-environment geometric routine we ran
+        ourselves. This is the refiner reporting what it already computed -- the same
+        legality class as `failure_action`, and exactly what §6.1 lists ``culprits`` for. On
+        dd2d_v4 `retrieve` records carry culprits 100% of the time, so this column is where
+        "which object is actually blocking the target" enters the model at all.
+    """
+    ev = np.zeros((len(objects), N_OBJ_EVIDENCE), dtype=np.float32)
+    if not ctx:
+        return ev
+    index = {o: i for i, o in enumerate(objects)}
+    n_ctx = float(len(ctx))
+    for f in ctx:
+        for o in subsets[f]:
+            if o in index:
+                ev[index[o], 0] += 1.0 / n_ctx
+    n_hint = float(len(hint_records)) or 1.0
+    depth_sum = np.zeros(len(objects), dtype=np.float32)
+    depth_cnt = np.zeros(len(objects), dtype=np.float32)
+    for rec in hint_records:
+        for o in rec.args:
+            if o in index:
+                ev[index[o], 1] += 1.0 / n_hint
+                depth_sum[index[o]] += rec.step_index
+                depth_cnt[index[o]] += 1.0
+        # `culprits or dev_blame`: class-1 envs (DD2D) report `culprits`; class-2 envs
+        # (SB2D, and any future kinder env) report `dev_blame` instead. The token path
+        # (build_record_arrays) already falls back this way; without it here, this column
+        # is identically zero on every class-2 environment -- the same silent per-env
+        # degradation the goal-channel fix removed. See docs/decisions 2026-08-08.
+        for o in rec.culprits or rec.dev_blame:
+            if o in index:
+                ev[index[o], 2] += 1.0 / n_hint
+    # Normalise depth by the episode's own longest plan, not a hard-coded DD2D constant of
+    # 8. `step_index` ranges over plan positions, so the right scale is the deepest plan in
+    # this problem's pool; `/ 8.0` under-normalised SB2D (plans length 6) and would
+    # mis-scale any env whose plans are longer.
+    ev[:, 3] = depth_sum / np.maximum(depth_cnt, 1.0) / float(max(max_len, 1))
+    n_proof = float(len(proof_records)) or 1.0
+    for rec in proof_records:
+        for o in rec.culprits:
+            if o in index:
+                ev[index[o], 4] += 1.0 / n_proof
+    return np.clip(ev, 0.0, 1.0)
+
+
+def sample_context(
+    fail_idx: list[int],
     rng: np.random.Generator,
-    config: FSamplingConfig,
-) -> frozenset[int]:
-    """Draw ``F ⊆ FAIL_e`` per ``config`` (spec §8.2)."""
-    n = len(fail_indices)
-    if n == 0:
-        return frozenset()
-    if config.mode == "rollout_aligned_mix":
-        sub_mode = str(
-            rng.choice(
-                ["uniform_subsets", "uniform_size", "log_normal"],
-                p=list(config.mix_weights),
-            )
+    p_empty: float = 0.35,
+    p_drop_facts: float = 0.3,
+    max_f: int = 8,
+    tail_max_f: int = 0,
+) -> tuple[frozenset[int], bool]:
+    """Sample a failure context ``F`` plus an evidence-dropout flag.
+
+    Mass is heavy at ``|F| = 0`` because that is the deployment start: the static pathway
+    has to stand on its own before any failure has been observed. ``hide_facts`` drops
+    the evidence for an example so the ranker cannot become dependent on it.
+
+    ``tail_max_f > 0`` switches on **rollout-aligned** sampling: half the non-empty mass
+    stays uniform on ``1..max_f`` (the easy strata, where rollouts end after a few
+    attempts) and half spreads uniformly out to ``tail_max_f``. The default ``max_f=8``
+    inherited from v2.2 is a genuine train/deploy mismatch at the hard strata -- an s3
+    rollout is queried at ``|F|`` up to ~40, a regime training never showed it -- and
+    this is the knob that closes it. Named for the original RT2D
+    ``rollout_aligned_mix``, whose purpose was the same: make training mass match the
+    test-time visit distribution.
+    """
+    if not fail_idx or rng.random() < p_empty:
+        return frozenset(), False
+    hi = max_f if (tail_max_f <= 0 or rng.random() < 0.5) else tail_max_f
+    size = int(rng.integers(1, min(hi, len(fail_idx)) + 1))
+    chosen = rng.choice(np.asarray(fail_idx), size=size, replace=False)
+    return frozenset(int(i) for i in chosen), bool(rng.random() < p_drop_facts)
+
+
+def _hint_fact_arrays(
+    episode: EpisodeRecord, context_f: frozenset[int], tags: dict[str, int]
+) -> tuple[list[int], list[int], list[list[int]]]:
+    """Hint-tier facts of the failed candidates, bound to episode-local tags.
+
+    Proof-tier facts are excluded on purpose. Their sound consequence is applied outside
+    the network as demotion; handing them to the scorer as *tokens* invites it to learn
+    the crude correlate instead ("blocked sets are large, so prefer longer plans"),
+    which measurably harmed the easy strata in v2.2 until the tiers were split.
+    """
+    hint = TIER_IDS["hint"]
+    type_ids: list[int] = []
+    tier_ids: list[int] = []
+    arg_tags: list[list[int]] = []
+    for fact in gather_context_facts(episode, sorted(context_f)):
+        if fact.tier_id != hint:
+            continue
+        type_ids.append(fact.type_id)
+        tier_ids.append(fact.tier_id)
+        arg_tags.append([tags[a] for a in fact.args if a in tags][:MAX_FACT_ARGS])
+    return type_ids, tier_ids, arg_tags
+
+
+def _aggregate_per_query(records: list) -> list:
+    """Collapse a candidate's failures to one record per distinct ``(schema, args)``.
+
+    §6.1 defines a record as *the failing query and its arguments* -- one per query, not
+    one per failed sample. The instrumented refiner emits one per sample, so a candidate
+    whose `place-buffer(o)` was retried across many buffer poses contributes hundreds of
+    near-identical tokens (measured: mean 2.2 per candidate but **max 290**, so a single
+    s1 context at |F|=30 reached ~720 tokens against v2.2's ~40 facts). That is not extra
+    information -- the samples are 99.3% distinct only in *which pose* failed, which the
+    token does not even encode -- but it does dilute the scorer's attention and let one
+    unlucky candidate dominate the evidence memory.
+
+    Aggregation keeps the deepest occurrence (the furthest the plan got), sums effort,
+    and takes the union of culprits, so nothing the token *encodes* is lost.
+    """
+    best: dict[tuple, list] = {}
+    for rec in records:
+        key = (rec.schema, rec.args)
+        cur = best.get(key)
+        if cur is None:
+            best[key] = [rec, rec.n_step, set(rec.culprits)]
+            continue
+        cur[1] += rec.n_step
+        cur[2].update(rec.culprits)
+        if rec.step_index > cur[0].step_index:
+            cur[0] = rec
+    out = []
+    for rec, effort, culprits in best.values():
+        out.append(
+            dataclasses.replace(rec, n_step=effort, culprits=tuple(sorted(culprits)))
         )
+    return out
+
+
+def _delta_arrays(delta, tags: dict[str, int], vocab: Vocab, arity: int) -> DeltaArrays:
+    """One record's state delta as ``(added, deleted)`` lists of ``(pred id, arg
+    tags)``.
+
+    Predicate ids are shifted by **+1**: the vocab reserves index 0 for ``<OOV>`` while
+    the embedding reserves it for padding, so without the shift an unknown predicate
+    would be indistinguishable from an empty slot. ``Vocab.pred_idx`` raises on OOV,
+    hence the ``.get`` -- the same idiom the schema lookup below uses.
+    """
+
+    def _role(atoms) -> list[DeltaAtomArray]:
+        out = []
+        for pred, args in atoms[:MAX_DELTA_ATOMS]:
+            pid = int(vocab.predicates.get(pred, {"idx": 0})["idx"]) + 1
+            out.append((pid, [tags[a] for a in args if a in tags][:arity]))
+        return out
+
+    if delta is None:
+        return ([], [])
+    return (_role(delta.added), _role(delta.deleted))
+
+
+def build_record_arrays(
+    episode: EpisodeRecord,
+    context_f: frozenset[int],
+    tags: dict[str, int],
+    vocab: Vocab,
+    spec: DomainSpec,
+    aggregate: bool = False,
+    state_delta: bool = False,
+) -> list[RecordArray]:
+    """Failure records of the tried candidates, as ``(schema_id, args, culprits,
+    scalars)``.
+
+    **Proof-tier records are excluded**, exactly as v2.2 excluded proof-tier facts. Their
+    sound consequence is applied outside the net as demotion; feeding them in as tokens
+    invites the scorer to learn the crude correlate instead ("blocked sets are large, so
+    prefer longer plans"), which measurably wrecked the easy strata in v2.2 until the
+    tiers were split. What reaches the net is evidence the deduction could *not* use.
+
+    Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
+    decoration: backfilled records report whole-attempt effort while instrumented ones
+    report per-step, so the flag tells the net which quantity it is reading instead of
+    letting a re-collection silently redefine the column.
+
+    ``state_delta`` appends §6.1's ``s_j`` as a fifth element, the delta from ``s_0``.
+    It is computed here, on ``episode`` -- which ``build_example`` has already
+    canonicalized -- so its object names land in the same ``tags`` namespace as the args
+    and culprits. Computing it *after* aggregation is what makes it the *furthest
+    reached* state per query: ``_aggregate_per_query`` keeps the deepest record, and the
+    delta rides along on it. Note the delta's **size** is ~fully determined by the
+    ``j/L`` scalar already present (measured corr 0.940), so what it adds is object
+    *identity*; no count feature is derived from it, which would just be another length proxy.
+    """
+    arity = max(vocab.max_predicate_arity, 1)
+    out: list[RecordArray] = []
+    for idx in sorted(context_f):
+        skeleton = episode.skeleton_pool[idx]
+        plan_len = max(len(skeleton.operator_seq), 1)
+        cand_records = records_for_candidate(
+            episode, idx, spec, with_state_delta=state_delta
+        )
+        if aggregate:
+            cand_records = _aggregate_per_query(cand_records)
+        for rec in cand_records:
+            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+                continue  # handled structurally by demotion, not learned
+            row: RecordArray = (
+                int(vocab.operators.get(rec.schema, 0)),
+                [tags[a] for a in rec.args if a in tags][:MAX_RECORD_ARGS],
+                # `dev_blame` is the fallback for environments with no class-1 channel:
+                # objects named by the collateral deviation rather than by a check. Never
+                # both -- `culprits` is empty exactly where `dev_blame` is populated -- so
+                # the slot always carries one provenance, and on DD2D `dev_blame` is
+                # absent and this reduces to the original expression.
+                [tags[c] for c in (rec.culprits or rec.dev_blame) if c in tags][
+                    :MAX_RECORD_CULPRITS
+                ],
+                [
+                    rec.step_index / plan_len,
+                    math.log1p(max(rec.n_step, 0)) / 10.0,
+                    1.0 if rec.exhausted else 0.0,
+                    1.0 if rec.effort_is_total else 0.0,
+                ],
+            )
+            if state_delta:
+                row = row + (_delta_arrays(rec.state_delta, tags, vocab, arity),)
+            out.append(row)
+    return out
+
+
+def build_example(
+    episode: EpisodeRecord,
+    vocab: Vocab,
+    rng: Optional[np.random.Generator] = None,
+    max_tags: int = 32,
+    evidence: bool = False,
+    context_f: Optional[frozenset[int]] = None,
+    hide_facts: bool = False,
+    augment_tags: bool = True,
+    spec: Optional[DomainSpec] = None,
+    overlap_mode: str = "both",
+    aggregate_records: bool = False,
+    coverage_feats: bool = False,
+    coverage_mode: str = "both",
+    # Deliberately **False** here even though unified is the deployed default since
+    # 2026-07-31. This is the primitive; policy lives one level up, in
+    # ``TrainConfig`` (what a new run trains with) and in the checkpoint cfg (what a
+    # trained model is scored with, via ``inference_v3._emit_kwargs``). Flipping it here
+    # would silently change definition for any caller that does not pass it -- e.g.
+    # ``spectre_d2_s2.py``, a frozen diagnostic that must keep reproducing its
+    # deployed-definition numbers.
+    unified_coverage: bool = False,
+    state_delta: bool = False,
+) -> tuple[_V2Example, list[RecordArray]]:
+    """Tensorize one geometry-carrying episode for the v3 model.
+
+    Returns ``(example, record_arrays)``. The records come back from *here* rather than
+    from a separate call because they must use the same canonicalization and the same
+    tag assignment as the example -- computing them separately would both double the
+    canonicalization cost and risk binding record tags to a different permutation than
+    the scene tags, which is exactly the identity bug that made record tokens carry no
+    object information at all. A caller whose model has no record encoder simply ignores
+    the second element; it costs nothing to produce when the context is empty.
+
+    ``spec`` defaults to the contract registered for the episode's own ``env_variant``,
+    so a caller cannot accidentally tensorize DD2D under another domain's axioms.
+    """
+    if episode.scene_geometry is None:
+        raise ValueError("build_example requires scene_geometry")
+    spec = spec or spec_for(episode.provenance.env_variant)
+
+    canon = canonicalize_episode(episode, rng=None)
+    geo = canon.scene_geometry
+    assert geo is not None
+    tags = assign_tags(
+        [o.name for o in geo.objects],
+        rng=(rng if augment_tags else None),
+        max_tags=max_tags,
+    )
+
+    # --- scene tokens -------------------------------------------------------
+    # Normalisation frame. `drawer_w`/`drawer_d` are DD2D's spelling and are kept as
+    # accepted aliases so every stored DD2D episode tensorizes byte-identically; a second
+    # environment writes the generic `frame_w`/`frame_d` instead. An absent frame still
+    # falls back to `scale = 1.0` -- unnormalised, which is what the older RT2D/kinder
+    # records get and what SB2D would silently get if it wrote neither spelling.
+    frame = geo.frame or {}
+    # `drawer_w`/`drawer_d` are DD2D's spelling; `frame_w`/`frame_d` the generic one a
+    # second environment writes. Require at least one: an absent frame used to fall back to
+    # scale=1.0 *silently*, leaving obj_pose unnormalized and mixing units across
+    # environments (cm on DD2D, m on SB2D). Fail loudly and name the fix instead.
+    _fw = frame.get("drawer_w", frame.get("frame_w"))
+    _fd = frame.get("drawer_d", frame.get("frame_d"))
+    if _fw is None and _fd is None:
+        raise ValueError(
+            "scene_geometry.frame lacks a normalization extent: write frame_w/frame_d "
+            "(DD2D uses drawer_w/drawer_d). Without it obj_pose is unnormalized "
+            "(scale=1)."
+        )
+    scale = max(float(_fw or 0.0), float(_fd or 0.0), 1.0)
+    # The goal channel is `is_goal` (any object named by the goal atoms), not `is_target`
+    # (the one object a DD2D JSON flagged). `is_target` presupposes a single distinguished
+    # target and is silently all-zero on an env whose goal names several objects (SB2D);
+    # `is_goal` is well-defined for any goal, including N>1 targets, and is byte-identical
+    # to `is_target` on every DD2D episode (proven 720/720). The target-anchored `obj_rel`
+    # columns (dx, dy, dist to the target, area ratio to the target) and the privileged
+    # `concave` flag are cut for the same reason -- only the three anchor-free per-object
+    # scalars `[area, sinθ, cosθ]` remain. Absolute position is unaffected (it lives in
+    # `obj_pose`). See docs/decisions 2026-08-08.
+    goal_objs = spec.goal_objects(canon)
+
+    n_obj = len(geo.objects)
+    obj_tags = np.array([tags[o.name] for o in geo.objects], dtype=np.int64)
+    obj_boundary = np.stack([resample_ring(list(o.boundary)) for o in geo.objects])
+    obj_pose = np.array(
+        [[o.pose[0] / scale, o.pose[1] / scale, o.pose[2]] for o in geo.objects],
+        dtype=np.float32,
+    )
+    obj_is_goal = np.array(
+        [1.0 if o.name in goal_objs else 0.0 for o in geo.objects], dtype=np.float32
+    )
+    rel = np.zeros((n_obj, D_REL_V3), dtype=np.float32)
+    for i, o in enumerate(geo.objects):
+        rel[i] = [o.area, *_sin_cos(o.pose[2])]
+
+    # --- candidate tokens ---------------------------------------------------
+    op_ids: list[list[int]] = []
+    arg_tags: list[list[list[int]]] = []
+    success: list[Optional[bool]] = []
+    subsets: list[frozenset[str]] = []
+    lengths: list[int] = []
+    for skel, out in zip(canon.skeleton_pool, canon.outcomes):
+        op_ids.append(
+            [int(vocab.operators.get(op.name, 0)) for op in skel.operator_seq]
+        )
+        arg_tags.append(
+            [[tags.get(a.name, 0) for a in op.parameters] for op in skel.operator_seq]
+        )
+        subsets.append(spec.manipulated(skel, goal_objs))
+        lengths.append(spec.length_key(skel))
+        success.append(out.outcome == "success")
+
+    # Aux targets stay -1 (= ignore) until the necessity labeller lands: no collection
+    # has ever populated `aux_labels`, so v2.2's aux head was masked out entirely and
+    # never received a gradient. Pretending otherwise here would silently train it.
+    aux = np.full(n_obj, -1.0, dtype=np.float32)
+
+    # --- failure context ----------------------------------------------------
+    k = len(op_ids)
+    fail_idx = [i for i, out in enumerate(canon.outcomes) if out.outcome == "fail"]
+    hide = hide_facts
+    if context_f is not None:
+        ctx: frozenset[int] = frozenset(int(i) for i in context_f)
+    elif evidence and rng is not None:
+        ctx, hide = sample_context(fail_idx, rng)
     else:
-        sub_mode = config.mode
-    if sub_mode == "uniform_subsets":
-        keep = rng.random(size=n) < 0.5
-        return frozenset(int(idx) for idx, k in zip(fail_indices, keep) if k)
-    if sub_mode == "uniform_size":
-        size = int(rng.integers(0, n + 1))
-    elif sub_mode == "log_normal":
-        raw = float(
-            rng.lognormal(mean=config.log_normal_mu, sigma=config.log_normal_sigma)
-        )
-        size = max(0, min(int(round(raw)), n))
-    else:  # pragma: no cover — exhaustiveness guard
-        raise NotImplementedError(sub_mode)
-    chosen = rng.choice(
-        np.asarray(fail_indices, dtype=np.int64), size=size, replace=False
-    )
-    return frozenset(int(c) for c in chosen.tolist())
-
-
-@dataclass
-class SpectreTrainingExample:
-    """One ``(R, SUCC ∩ R, F)`` triple plus everything the collate needs.
-
-    Kept as a plain Python dataclass, not tensors, so ``__getitem__`` output is
-    easy to pretty-print and unit-test.
-    """
-
-    problem_id: int
-    initial_abstract_state: RelationalAbstractState  # post-canonicalization
-    goal_atoms: frozenset[GroundAtom]
-    object_registry: dict[str, str]
-    r_skeletons: tuple[SkeletonRecord, ...]
-    r_priors: tuple[float, ...]
-    r_success_mask: tuple[bool, ...]  # True where the skeleton actually succeeded
-    f_skeletons: tuple[SkeletonRecord, ...]
-
-
-class SpectreDataset(Dataset[SpectreTrainingExample]):
-    """Torch Dataset over a split's raw episode files.
-
-    Filters out non-trainable episodes at init per pipeline spec §11.5:
-    - ``num_skeletons < 2`` (nothing to rank)
-    - ``num_success == 0`` (PL loss undefined)
-
-    Error-outcome skeletons are excluded from both ``R`` and ``F`` at sample
-    time (pipeline spec §5.6).
-
-    Each episode contributes ``num_f_samples_per_epoch`` distinct training
-    examples per epoch (spec §8.1 fix #5). The trainer should call
-    :meth:`set_epoch` once per epoch so the per-call RNG produces fresh
-    ``(F, augmentation)`` pairs.
-    """
-
-    def __init__(
-        self,
-        split_dir: Path,
-        prior: BasePrior,
-        seed: int,
-        f_sampling: FSampling = "rollout_aligned_mix",
-        augment: bool = True,
-        type_aug_policy: dict[str, bool] | None = None,
-        num_f_samples_per_epoch: int = 1,
-        episode_cache_size: int = 64,
-    ) -> None:
-        self._split_dir = split_dir
-        self._prior = prior
-        self._seed = seed
-        if isinstance(f_sampling, str):
-            f_sampling = FSamplingConfig(mode=f_sampling)
-        self._f_sampling = f_sampling
-        self._augment = augment
-        self._type_aug_policy = dict(type_aug_policy) if type_aug_policy else {}
-        if num_f_samples_per_epoch < 1:
-            raise ValueError("num_f_samples_per_epoch must be >= 1")
-        self._num_f_samples_per_epoch = num_f_samples_per_epoch
-        self._epoch = 0
-
-        all_paths = list_episodes(split_dir)
-        self._episode_paths: list[Path] = []
-        self._filtered: list[tuple[int, str]] = []
-
-        for p in all_paths:
-            ep = load_episode(p)
-            summary = ep.summary
-            if summary.num_skeletons < 2:
-                self._filtered.append((ep.provenance.problem_id, "num_skeletons<2"))
-                continue
-            if summary.num_success == 0:
-                self._filtered.append((ep.provenance.problem_id, "num_success==0"))
-                continue
-            self._episode_paths.append(p)
-
-        # LRU-cache the episode loader so repeated __getitem__ calls on the
-        # same episode (across epochs / workers) skip gzip+pickle work.
-        @lru_cache(maxsize=episode_cache_size)
-        def _cached(path_str: str) -> EpisodeRecord:
-            return load_episode(Path(path_str))
-
-        self._load_cached = _cached
-
-    def __len__(self) -> int:
-        return len(self._episode_paths) * self._num_f_samples_per_epoch
-
-    @property
-    def num_episodes(self) -> int:
-        """Number of distinct episodes (before the F-sample multiplier)."""
-        return len(self._episode_paths)
-
-    @property
-    def num_f_samples_per_epoch(self) -> int:
-        """Distinct ``(R, F)`` examples drawn per episode per epoch (spec §8.1)."""
-        return self._num_f_samples_per_epoch
-
-    @property
-    def filtered_problem_ids(self) -> list[tuple[int, str]]:
-        """``(problem_id, reason)`` tuples for episodes excluded at init."""
-        return list(self._filtered)
-
-    def set_epoch(self, epoch: int) -> None:
-        """Advance the per-call RNG seed so each epoch sees fresh ``(F, aug)``."""
-        self._epoch = int(epoch)
-
-    def _decompose_index(self, index: int) -> tuple[int, int]:
-        if not 0 <= index < len(self):
-            raise IndexError(index)
-        return divmod(index, self._num_f_samples_per_epoch)
-
-    def _rng_for(self, episode_idx: int, f_sample_idx: int) -> np.random.Generator:
-        """Deterministic per-(seed, episode, f-sample, epoch) RNG.
-
-        The epoch term ensures successive epochs draw fresh F-subsets and
-        augmentation permutations, even though the linear ``__getitem__``
-        index is identical (the DataLoader's shuffling does not change the
-        seed itself, only the order of indices visited).
-        """
-        return np.random.default_rng(
-            (self._seed, episode_idx, f_sample_idx, self._epoch)
-        )
-
-    def __getitem__(self, index: int) -> SpectreTrainingExample:
-        episode_idx, f_sample_idx = self._decompose_index(index)
-        ep = self._load_cached(str(self._episode_paths[episode_idx]))
-        rng = self._rng_for(episode_idx, f_sample_idx)
-
-        succ = set(ep.success_indices())
-        fail = set(ep.fail_indices())
-        errs = set(ep.error_indices())
-
-        f_indices = _sample_f_subset(sorted(fail), rng, self._f_sampling)
-        r_indices = succ | (fail - f_indices)
-
-        # Invariants (I8–I11, pipeline spec §11.6).
-        assert f_indices.issubset(
-            fail
-        ), "I8 violated: F must contain only failed skeletons"
-        assert r_indices.issuperset(succ), "I9 violated: R must include all successes"
-        assert r_indices.isdisjoint(f_indices), "I10 violated: R and F must be disjoint"
-        assert len(r_indices) + len(f_indices) + len(errs) == len(
-            ep.skeleton_pool
-        ), "I11 violated: R ∪ F ∪ ERRS must partition the full pool"
-
-        # Canonicalize; augmentation applies a random within-type permutation
-        # gated by ``type_aug_policy`` (RT2D pins width/size/zone/passage).
-        ep_view = canonicalize_episode(
-            ep,
-            rng=rng if self._augment else None,
-            type_aug_policy=self._type_aug_policy if self._augment else None,
-        )
-
-        r_sorted = sorted(r_indices)
-        f_sorted = sorted(f_indices)
-
-        r_skeletons = tuple(ep_view.skeleton_pool[i] for i in r_sorted)
-        r_priors = tuple(
-            float(self._prior.score(ep.provenance.problem_id, i, r_skeletons[j], ep))
-            for j, i in enumerate(r_sorted)
-        )
-        r_success_mask = tuple(i in succ for i in r_sorted)
-        f_skeletons = tuple(ep_view.skeleton_pool[i] for i in f_sorted)
-
-        return SpectreTrainingExample(
-            problem_id=ep.provenance.problem_id,
-            initial_abstract_state=ep_view.initial_abstract_state,
-            goal_atoms=ep_view.goal_atoms,
-            object_registry=ep_view.object_registry,
-            r_skeletons=r_skeletons,
-            r_priors=r_priors,
-            r_success_mask=r_success_mask,
-            f_skeletons=f_skeletons,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Collate: structured examples → padded tensors
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class SpectreBatch:
-    """One collated training batch.
-
-    Shapes follow ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §10.2. All
-    integer id tensors
-    use 0 = ``<OOV>`` / padding; the mask tensors distinguish real tokens
-    from pads. Per spec §10.2 footnote and AS-BUILT §3.7, ``s_0`` is stored
-    once per example and replicated per-skeleton at model-input time;
-    ``s_L`` is stored per-skeleton because it varies across the pool.
-    """
-
-    # R-pool operator tokens
-    r_op_ids: torch.Tensor  # (B, R, L)              long
-    r_op_arg_type_ids: torch.Tensor  # (B, R, L, A)           long
-    r_op_arg_local_ids: torch.Tensor  # (B, R, L, A)           long
-    r_op_mask: torch.Tensor  # (B, R, L)              bool
-    r_mask: torch.Tensor  # (B, R)                 bool
-    r_priors: torch.Tensor  # (B, R)                 float
-    r_success_mask: torch.Tensor  # (B, R)                 bool
-
-    # R-pool s_L atom tokens (per-skeleton)
-    r_sL_pred_ids: torch.Tensor  # (B, R, ML)             long
-    r_sL_arg_type_ids: torch.Tensor  # (B, R, ML, P)          long
-    r_sL_arg_local_ids: torch.Tensor  # (B, R, ML, P)          long
-    r_sL_atom_mask: torch.Tensor  # (B, R, ML)             bool
-
-    # F-pool operator tokens (same schema as R, minus priors/success)
-    f_op_ids: torch.Tensor  # (B, F, L)              long
-    f_op_arg_type_ids: torch.Tensor  # (B, F, L, A)           long
-    f_op_arg_local_ids: torch.Tensor  # (B, F, L, A)           long
-    f_op_mask: torch.Tensor  # (B, F, L)              bool
-    f_mask: torch.Tensor  # (B, F)                 bool
-
-    # F-pool s_L atom tokens (per-skeleton)
-    f_sL_pred_ids: torch.Tensor  # (B, F, ML)             long
-    f_sL_arg_type_ids: torch.Tensor  # (B, F, ML, P)          long
-    f_sL_arg_local_ids: torch.Tensor  # (B, F, ML, P)          long
-    f_sL_atom_mask: torch.Tensor  # (B, F, ML)             bool
-
-    # s_0: per-example, replicated per-skeleton at model-input time
-    s0_pred_ids: torch.Tensor  # (B, M0)                long
-    s0_arg_type_ids: torch.Tensor  # (B, M0, P)             long
-    s0_arg_local_ids: torch.Tensor  # (B, M0, P)             long
-    s0_atom_mask: torch.Tensor  # (B, M0)                bool
-    s0_type_histogram: torch.Tensor  # (B, T)                 long
-
-    problem_ids: torch.Tensor  # (B,)                   long
-
-    metadata: dict = field(default_factory=dict)
-
-
-def _local_id(obj_name: str) -> int:
-    """Parse ``"{type}_{idx}"`` back into its within-type index."""
-    return int(obj_name.rsplit("_", 1)[1])
-
-
-def _encode_operator(
-    op, vocab: Vocab, max_arity: int
-) -> tuple[int, list[int], list[int]]:
-    """Return ``(op_idx, arg_type_ids, arg_local_ids)``, padded to ``max_arity``."""
-    op_idx = vocab.op_idx(op.name)
-    type_ids = [vocab.type_idx(p.type.name) for p in op.parameters]
-    local_ids = [_local_id(p.name) + 1 for p in op.parameters]  # +1 so 0 = pad
-    pad = max_arity - len(op.parameters)
-    if pad > 0:
-        type_ids = type_ids + [0] * pad
-        local_ids = local_ids + [0] * pad
-    return op_idx, type_ids, local_ids
-
-
-def _encode_atom(
-    atom, vocab: Vocab, max_arity: int
-) -> tuple[int, list[int], list[int]]:
-    pred_idx = vocab.pred_idx(atom.predicate.name)
-    type_ids = [vocab.type_idx(e.type.name) for e in atom.entities]
-    local_ids = [_local_id(e.name) + 1 for e in atom.entities]
-    pad = max_arity - len(atom.entities)
-    if pad > 0:
-        type_ids = type_ids + [0] * pad
-        local_ids = local_ids + [0] * pad
-    return pred_idx, type_ids, local_ids
-
-
-def _encode_skeleton(
-    skel: SkeletonRecord,
-    vocab: Vocab,
-    max_skel_len: int,
-    max_op_arity: int,
-) -> tuple[list[int], list[list[int]], list[list[int]], list[bool]]:
-    op_ids: list[int] = []
-    arg_types: list[list[int]] = []
-    arg_locals: list[list[int]] = []
-    mask: list[bool] = []
-    for op in skel.operator_seq:
-        oi, ti, li = _encode_operator(op, vocab, max_op_arity)
-        op_ids.append(oi)
-        arg_types.append(ti)
-        arg_locals.append(li)
-        mask.append(True)
-    while len(op_ids) < max_skel_len:
-        op_ids.append(0)
-        arg_types.append([0] * max_op_arity)
-        arg_locals.append([0] * max_op_arity)
-        mask.append(False)
-    return op_ids, arg_types, arg_locals, mask
-
-
-def _encode_atom_set(
-    atoms: Iterable[GroundAtom],
-    vocab: Vocab,
-    max_atoms: int,
-    max_pred_arity: int,
-) -> tuple[list[int], list[list[int]], list[list[int]], list[bool]]:
-    pred_ids: list[int] = []
-    type_ids: list[list[int]] = []
-    local_ids: list[list[int]] = []
-    mask: list[bool] = []
-    for atom in atoms:
-        pi, ti, li = _encode_atom(atom, vocab, max_pred_arity)
-        pred_ids.append(pi)
-        type_ids.append(ti)
-        local_ids.append(li)
-        mask.append(True)
-    while len(pred_ids) < max_atoms:
-        pred_ids.append(0)
-        type_ids.append([0] * max_pred_arity)
-        local_ids.append([0] * max_pred_arity)
-        mask.append(False)
-    return pred_ids, type_ids, local_ids, mask
-
-
-def collate_spectre_batch(
-    batch: list[SpectreTrainingExample],
-    vocab: Vocab,
-) -> SpectreBatch:
-    """Pad a list of examples to tensors keyed to the Φ input spec."""
-    b = len(batch)
-    if b == 0:
-        raise ValueError("collate_spectre_batch requires a non-empty batch")
-
-    max_r = max(len(ex.r_skeletons) for ex in batch)
-    max_f = max(len(ex.f_skeletons) for ex in batch) or 1  # Ψ wants at least width 1
-    max_op_arity = max(vocab.max_operator_arity, 1)
-    max_pred_arity = max(vocab.max_predicate_arity, 1)
-    max_skel_len = max(
-        (
-            len(skel.operator_seq)
-            for ex in batch
-            for skel in (*ex.r_skeletons, *ex.f_skeletons)
-        ),
-        default=1,
-    )
-    num_types = len(vocab.types)
-
-    # Sum up s0 atom max across the batch.
-    max_s0_atoms = max(len(ex.initial_abstract_state.atoms) for ex in batch) or 1
-    # s_L atom max across all R and F skeletons in the batch.
-    max_sL_atoms = (
-        max(
-            (
-                len(skel.final_abstract_state.atoms)
-                for ex in batch
-                for skel in (*ex.r_skeletons, *ex.f_skeletons)
-            ),
-            default=1,
-        )
-        or 1
-    )
-
-    def _blank_op_tokens(
-        w: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        return (
-            torch.zeros((b, w, max_skel_len), dtype=torch.long),
-            torch.zeros((b, w, max_skel_len, max_op_arity), dtype=torch.long),
-            torch.zeros((b, w, max_skel_len, max_op_arity), dtype=torch.long),
-            torch.zeros((b, w, max_skel_len), dtype=torch.bool),
-        )
-
-    def _blank_sL_tokens(
-        w: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        return (
-            torch.zeros((b, w, max_sL_atoms), dtype=torch.long),
-            torch.zeros((b, w, max_sL_atoms, max_pred_arity), dtype=torch.long),
-            torch.zeros((b, w, max_sL_atoms, max_pred_arity), dtype=torch.long),
-            torch.zeros((b, w, max_sL_atoms), dtype=torch.bool),
-        )
-
-    r_op_ids, r_arg_types, r_arg_locals, r_op_mask = _blank_op_tokens(max_r)
-    f_op_ids, f_arg_types, f_arg_locals, f_op_mask = _blank_op_tokens(max_f)
-    r_sL_pred, r_sL_at, r_sL_al, r_sL_mask = _blank_sL_tokens(max_r)
-    f_sL_pred, f_sL_at, f_sL_al, f_sL_mask = _blank_sL_tokens(max_f)
-
-    r_mask = torch.zeros((b, max_r), dtype=torch.bool)
-    f_mask = torch.zeros((b, max_f), dtype=torch.bool)
-    r_priors = torch.zeros((b, max_r), dtype=torch.float32)
-    r_success_mask = torch.zeros((b, max_r), dtype=torch.bool)
-
-    s0_pred_ids = torch.zeros((b, max_s0_atoms), dtype=torch.long)
-    s0_arg_type_ids = torch.zeros((b, max_s0_atoms, max_pred_arity), dtype=torch.long)
-    s0_arg_local_ids = torch.zeros((b, max_s0_atoms, max_pred_arity), dtype=torch.long)
-    s0_atom_mask = torch.zeros((b, max_s0_atoms), dtype=torch.bool)
-    s0_type_hist = torch.zeros((b, num_types), dtype=torch.long)
-
-    problem_ids = torch.zeros(b, dtype=torch.long)
-
-    def _fill_skels(
-        skels: tuple[SkeletonRecord, ...],
-        op_ids_t: torch.Tensor,
-        arg_types_t: torch.Tensor,
-        arg_locals_t: torch.Tensor,
-        op_mask_t: torch.Tensor,
-        sL_pred_t: torch.Tensor,
-        sL_at_t: torch.Tensor,
-        sL_al_t: torch.Tensor,
-        sL_mask_t: torch.Tensor,
-        example_i: int,
-    ) -> None:
-        for j, skel in enumerate(skels):
-            oi, ti, li, msk = _encode_skeleton(skel, vocab, max_skel_len, max_op_arity)
-            op_ids_t[example_i, j] = torch.tensor(oi, dtype=torch.long)
-            arg_types_t[example_i, j] = torch.tensor(ti, dtype=torch.long)
-            arg_locals_t[example_i, j] = torch.tensor(li, dtype=torch.long)
-            op_mask_t[example_i, j] = torch.tensor(msk, dtype=torch.bool)
-
-            sL_atoms = list(skel.final_abstract_state.atoms)
-            sp, st, sl, sm = _encode_atom_set(
-                sL_atoms, vocab, max_sL_atoms, max_pred_arity
+        ctx = frozenset()
+    avail = [i not in ctx for i in range(k)]
+
+    if hide or not ctx:
+        ftype: list[int] = []
+        ftier: list[int] = []
+        farg: list[list[int]] = []
+    else:
+        ftype, ftier, farg = _hint_fact_arrays(canon, ctx, tags)
+
+    # --- planner signals + structural evidence ------------------------------
+    # Column 0 (enumeration order) is inert: the v3 scorer takes no prior features.
+    # Column 1 carries the normalized plan length, kept only because the within-length
+    # PL loss buckets on it; it is `domain.length_key` rescaled, so the partition is the
+    # domain's.
+    max_len = max(lengths) if lengths else 1
+    prior = [[-(i / max(k - 1, 1)), -(lengths[i] / max(max_len, 1))] for i in range(k)]
+
+    # `overlap_mode` zeroes a column rather than narrowing the tensor, so the state dict
+    # shape is untouched and the D-8 exact-absence oracle keeps loading. A zeroed column
+    # *is* the feature's absence: its weight receives no gradient signal from it.
+    #
+    # Dropping `dead` is a C5 argument, not a tuning knob. `dead` is the proof rule fed
+    # to the net as a feature, and it is strongly anti-correlated with subset size
+    # (corr −0.284; mean |S| 1.38 dead vs 2.39 alive on dd2d_v4 train), so the net can
+    # fit it as "short ⇒ bad". That is sound only where the rule actually fired and is
+    # L4's failure mode everywhere else -- which is why s1, the stratum on which short
+    # *is* correct, regressed. The sound consequence still applies outside the net as the
+    # demotion offset, where a wrong weight cannot override it.
+    want_dead = overlap_mode in ("both", "dead")
+    want_jac = overlap_mode in ("both", "jaccard")
+    want_cov = coverage_feats
+    # `coverage_mode` splits the pair the same way, and for the same reason: they answer
+    # different questions -- `coverage` asks "does this candidate remove the objects the
+    # refiner reported as blocking", `waste` asks "does it also remove objects that were
+    # never implicated". They have only ever been measured together, so which one carries
+    # the effect is unknown; zeroing one column isolates it without changing any shape.
+    want_coverage = want_cov and coverage_mode in ("both", "coverage")
+    want_waste = want_cov and coverage_mode in ("both", "waste")
+    n_ov = N_OVERLAP_V3 if want_cov else 2
+    overlap = [[0.0] * n_ov for _ in range(k)]
+    culprits: frozenset = frozenset()
+    _uni_records: list = []
+    _uni_pool: frozenset = frozenset()
+    _uni_universal: frozenset = frozenset()
+    if ctx and not hide:
+        blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
+        failed = [subsets[f] for f in ctx]
+        if want_cov and unified_coverage:
+            # Lifted operators come from the pool's own `GroundOperator.parent`, so the
+            # filters stay env-agnostic -- nothing here needs to know the domain.
+            lifted = frozenset(
+                op.parent for skel in canon.skeleton_pool for op in skel.operator_seq
             )
-            sL_pred_t[example_i, j] = torch.tensor(sp, dtype=torch.long)
-            sL_at_t[example_i, j] = torch.tensor(st, dtype=torch.long)
-            sL_al_t[example_i, j] = torch.tensor(sl, dtype=torch.long)
-            sL_mask_t[example_i, j] = torch.tensor(sm, dtype=torch.bool)
+            _uni_universal, actionable = scene_filters(
+                lifted, frozenset(canon.initial_abstract_state.objects)
+            )
+            _uni_records = records_from_failure_records(canon, ctx, spec)
+            _uni_pool = frozenset(
+                n
+                for r in _uni_records
+                for n in _unified_blame(r)
+                if n in actionable and n not in _uni_universal
+            )
+        elif want_cov:
+            _h, _p = records_for_evidence(canon, ctx, spec)
+            culprits = frozenset(o for r in (_h + _p) for o in r.culprits)
+        for i, si in enumerate(subsets):
+            dead = 1.0 if any(si <= b for b in blocked) else 0.0
+            jaccard = max(
+                (len(si & f) / max(len(si | f), 1) for f in failed), default=0.0
+            )
+            row = [
+                dead if want_dead else 0.0,
+                float(jaccard) if want_jac else 0.0,
+            ]
+            if want_cov and unified_coverage:
+                # The unified definitions (`unified_evidence.py`). Same two columns and
+                # the same tensor shape, so the state dict is untouched -- what changes
+                # is only how each scalar is computed. Deployed asks "is this culprit in
+                # `args \ goal_objects`"; unified asks "does this candidate discharge the
+                # culprit before re-entering the situation that named it", and computes
+                # discretionary work from the candidate's own causal structure rather
+                # than from a goal-object subtraction.
+                _cov, _wst = coverage_and_waste(
+                    list(canon.skeleton_pool[i].operator_seq),
+                    _uni_records,
+                    _uni_pool,
+                    canon.initial_abstract_state.atoms,
+                    canon.goal_atoms,
+                    _uni_universal,
+                )
+                row += [
+                    _cov if want_coverage else 0.0,
+                    _wst if want_waste else 0.0,
+                ]
+            elif want_cov:
+                # §5.1's `coverage` / `waste`, but grounded in **observed** culprits
+                # instead of a predicted necessity head -- which makes them more
+                # C2-legal, not less: nothing is inferred by us, the refiner reported
+                # which objects blocked. This is the signal `dead` was crudely proxying
+                # for. At s3 three distinct objects block, and the right candidate is
+                # the one that removes all three; a length bias can only ever
+                # approximate that.
+                row += [
+                    (
+                        len(si & culprits) / max(len(culprits), 1)
+                        if want_coverage
+                        else 0.0
+                    ),
+                    (len(si - culprits) / max(len(si), 1) if want_waste else 0.0),
+                ]
+            overlap[i] = row
 
-    for i, ex in enumerate(batch):
-        problem_ids[i] = ex.problem_id
-
-        _fill_skels(
-            ex.r_skeletons,
-            r_op_ids,
-            r_arg_types,
-            r_arg_locals,
-            r_op_mask,
-            r_sL_pred,
-            r_sL_at,
-            r_sL_al,
-            r_sL_mask,
-            i,
+    records = (
+        build_record_arrays(
+            canon, ctx, tags, vocab, spec, aggregate_records, state_delta
         )
-        _fill_skels(
-            ex.f_skeletons,
-            f_op_ids,
-            f_arg_types,
-            f_arg_locals,
-            f_op_mask,
-            f_sL_pred,
-            f_sL_at,
-            f_sL_al,
-            f_sL_mask,
-            i,
-        )
-
-        r_mask[i, : len(ex.r_skeletons)] = True
-        f_mask[i, : len(ex.f_skeletons)] = True
-        for j, p in enumerate(ex.r_priors):
-            r_priors[i, j] = p
-        for j, s in enumerate(ex.r_success_mask):
-            r_success_mask[i, j] = s
-
-        atoms = list(ex.initial_abstract_state.atoms)
-        sp, st, sl, sm = _encode_atom_set(atoms, vocab, max_s0_atoms, max_pred_arity)
-        s0_pred_ids[i] = torch.tensor(sp, dtype=torch.long)
-        s0_arg_type_ids[i] = torch.tensor(st, dtype=torch.long)
-        s0_arg_local_ids[i] = torch.tensor(sl, dtype=torch.long)
-        s0_atom_mask[i] = torch.tensor(sm, dtype=torch.bool)
-
-        for obj_name, type_name in ex.object_registry.items():
-            del obj_name
-            if type_name in vocab.types:
-                s0_type_hist[i, vocab.type_idx(type_name)] += 1
-
-    return SpectreBatch(
-        r_op_ids=r_op_ids,
-        r_op_arg_type_ids=r_arg_types,
-        r_op_arg_local_ids=r_arg_locals,
-        r_op_mask=r_op_mask,
-        r_mask=r_mask,
-        r_priors=r_priors,
-        r_success_mask=r_success_mask,
-        r_sL_pred_ids=r_sL_pred,
-        r_sL_arg_type_ids=r_sL_at,
-        r_sL_arg_local_ids=r_sL_al,
-        r_sL_atom_mask=r_sL_mask,
-        f_op_ids=f_op_ids,
-        f_op_arg_type_ids=f_arg_types,
-        f_op_arg_local_ids=f_arg_locals,
-        f_op_mask=f_op_mask,
-        f_mask=f_mask,
-        f_sL_pred_ids=f_sL_pred,
-        f_sL_arg_type_ids=f_sL_at,
-        f_sL_arg_local_ids=f_sL_al,
-        f_sL_atom_mask=f_sL_mask,
-        s0_pred_ids=s0_pred_ids,
-        s0_arg_type_ids=s0_arg_type_ids,
-        s0_arg_local_ids=s0_arg_local_ids,
-        s0_atom_mask=s0_atom_mask,
-        s0_type_histogram=s0_type_hist,
-        problem_ids=problem_ids,
+        if (ctx and not hide)
+        else []
     )
+
+    obj_evidence = None
+    if ctx and not hide:
+        _hint, _proof = records_for_evidence(canon, ctx, spec)
+        obj_evidence = _object_evidence(
+            ctx, subsets, [o.name for o in geo.objects], _hint, _proof, max_len=max_len
+        )
+
+    return (
+        _V3Example(
+            obj_tags,
+            obj_boundary,
+            obj_pose,
+            rel,
+            obj_is_goal,
+            op_ids,
+            arg_tags,
+            success,
+            aux,
+            aux.copy(),
+            avail,
+            ftype,
+            ftier,
+            farg,
+            prior,
+            overlap,
+            obj_evidence,
+        ),
+        records,
+    )
+
+
+def _sin_cos(theta: float) -> tuple[float, float]:
+    return math.sin(theta), math.cos(theta)
+
+
+def collate(
+    examples: list[_V2Example],
+    max_arity: int,
+    records: Optional[list[list[RecordArray]]] = None,
+    max_pred_arity: int = 1,
+) -> SpectreBatch:
+    """Pad + stack examples into a batch the v3 model consumes.
+
+    ``records`` is per-example and optional; without it the result is exactly a v2.2
+    batch, which is what keeps the compat path (and the equivalence oracle) intact.
+    """
+    # `collate_v2` hard-codes a width-2 `cand_overlap` and D-7 freezes it, so a wider
+    # example is stacked here instead. Narrow *copies* go to the v2 collator -- mutating
+    # the caller's examples in place and restoring them afterwards would work today and
+    # break the moment anything holds a reference.
+    wide = max((len(e.overlap[0]) if e.overlap else 2) for e in examples)
+    narrow = (
+        [
+            dataclasses.replace(e, overlap=[row[:2] for row in e.overlap])
+            for e in examples
+        ]
+        if wide > 2
+        else examples
+    )
+    base = collate_v2(narrow, max_arity=max_arity)
+    batch = SpectreBatch(**base.__dict__)
+    if wide > 2:
+        b_, k_ = batch.pool_mask.shape
+        ov_arr = np.zeros((b_, k_, wide), np.float32)
+        for bi, e in enumerate(examples):
+            for ki, row in enumerate(e.overlap[:k_]):
+                ov_arr[bi, ki] = row
+        batch.cand_overlap = torch.as_tensor(ov_arr)
+    evs = [getattr(e, "obj_evidence", None) for e in examples]
+    if any(e is not None for e in evs):
+        n_obj = int(batch.obj_tags.shape[1])
+        stacked = np.zeros((len(examples), n_obj, N_OBJ_EVIDENCE), np.float32)
+        for bi, ev in enumerate(evs):
+            if ev is not None:
+                stacked[bi, : ev.shape[0]] = ev[:n_obj]
+        batch.obj_evidence = torch.as_tensor(stacked)
+    if not records or not any(records):
+        return batch
+
+    b = len(examples)
+    r = max(len(rs) for rs in records)
+    schema = np.zeros((b, r), np.int64)
+    args = np.zeros((b, r, MAX_RECORD_ARGS), np.int64)
+    culprits = np.zeros((b, r, MAX_RECORD_CULPRITS), np.int64)
+    scalars = np.zeros((b, r, N_RECORD_SCALARS), np.float32)
+    mask = np.zeros((b, r), bool)
+    # Emitted on the *presence of the delta element*, never on whether any delta is
+    # non-empty. Gating on non-emptiness would encode a j=0 record one way beside a
+    # batch-mate that has a delta and another way alone -- and deploy collates a single
+    # example per step, so both cases are routine (~48% of aggregated tokens are empty).
+    wants_delta = any(len(row) > 4 for rs in records for row in rs)
+    a = max(max_pred_arity, 1)
+    d_pred = np.zeros((b, r, 2, MAX_DELTA_ATOMS), np.int64)
+    d_args = np.zeros((b, r, 2, MAX_DELTA_ATOMS, a), np.int64)
+    for bi, rs in enumerate(records):
+        for ri, row in enumerate(rs):
+            sid, ar, cu, sc = row[:4]
+            schema[bi, ri] = sid
+            args[bi, ri, : len(ar)] = ar
+            culprits[bi, ri, : len(cu)] = cu
+            scalars[bi, ri] = sc
+            mask[bi, ri] = True
+            if not wants_delta or len(row) <= 4:
+                continue
+            for role, atoms in enumerate(row[4]):
+                for ai, (pid, atags) in enumerate(atoms[:MAX_DELTA_ATOMS]):
+                    d_pred[bi, ri, role, ai] = pid
+                    d_args[bi, ri, role, ai, : len(atags)] = atags[:a]
+
+    t = torch.as_tensor
+    batch.rec_schema_ids = t(schema)
+    batch.rec_arg_tags = t(args)
+    batch.rec_culprit_tags = t(culprits)
+    batch.rec_scalars = t(scalars)
+    batch.rec_mask = t(mask)
+    if wants_delta:
+        batch.rec_delta_pred_ids = t(d_pred)
+        batch.rec_delta_arg_tags = t(d_args)
+    return batch

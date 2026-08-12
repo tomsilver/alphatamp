@@ -1,797 +1,616 @@
-"""SPECTRE model: Φ skeleton encoder, Ψ context encoder, σ scorer.
+"""SPECTRE v3 ranker -- the same job as v2.2, re-derived from three ideas.
 
-Implements ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §3–§6 with the four mandatory
-fixes from §9 already wired in:
+v3 keeps v2.2's contribution (a relational, tag-joined, object-centric geometric encoder
+scored listwise) and removes the accretions around it: the data-dependent prior knob, the
+five bespoke fact types, the inert packing certificate, the part-zeroed global token.
+See ``docs/SPECTRE_v3_proposal.md``.
 
-- **Fix #1 (Set-Transformer atom pool).** :class:`SkeletonEncoder` pools
-  per-state atom tokens via a single SAB followed by ``PMA_{k=1}``, not the
-  Deep-Sets mean of the original spec. The relational join over shared
-  arguments (``PassageWidth(p, w)`` ↔ ``TraverseLoadedColor⟨X⟩(…, p, …)``)
-  is representable in a single SAB layer.
-- **Fix #3 (vocab-driven dynamic MLP sizing).** ``D_in`` for the operator
-  MLP is ``32 + A*16 + 16`` and for the atom Linear is ``32 + P*24``, with
-  ``A = vocab.max_operator_arity`` and ``P = vocab.max_predicate_arity``
-  read from the vocab at construction time.
+**The exact-absence invariant (D-8).** Every v3 feature is behind a flag on
+:class:`SpectreConfig`, and with every flag off this model *is* deployed v2.2 -- not
+"equivalent to" it but literally built from the same submodule classes under the same
+attribute names. Two consequences, both load-bearing:
 
-Hidden size is ``d = 64`` throughout. Multi-head attention uses 4 heads;
-the sequence transformer uses 2 layers, the atom-pool 1 SAB + 1 PMA, the
-context encoder 2 SAB + 1 PMA. Total trainable ≈ 185k.
+1. A v2.2 checkpoint loads with ``strict=True``, so
+   ``tests/approaches/spectre/test_v3_equivalence.py`` can replay the frozen dd2d_v3
+   comparison cache through the v3 code path and demand *identical decisions*. That
+   oracle is what makes the later data-path rewrites (the domain adapter, the record
+   tokens) safe to do at all.
+2. The oracle stays alive until the position encoding is replaced, because no gate
+   before that changes what compat mode constructs.
+
+So new capability arrives as *additional* config-selected submodules; it never mutates
+the compat path. When a flag is on, the state dict legitimately differs and the
+equivalence test is expected to be run in compat mode only.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Callable
+from typing import Optional
 
 import torch
 from torch import Tensor, nn
 
-from alphatamp.approaches.spectre.dataset import SpectreBatch
-from alphatamp.approaches.spectre.vocab import Vocab
-
-D_MODEL = 64
-N_HEADS = 4
-DROPOUT = 0.1  # default; per-instance ``dropout_p`` overrides
-FFN_DIM = 256
-
-D_OP_NAME = 32
-D_PRED_NAME = 32
-D_TYPE = 8
-D_LOCAL = 16
-D_ARG_SLOT_OUT = 16
-D_OP_POS = 16
-D_TYPE_HIST = 16
-
-# Token-type ids inside the sequence transformer.
-TOKEN_TYPE_S0 = 0
-TOKEN_TYPE_OP = 1
-TOKEN_TYPE_SL = 2
-
-# Hard ceiling on local ids — vocab.max_objects_per_type may be empty for
-# legacy vocabs, so we default to a generous bound. Real RT2D values are
-# ≤ 6 (zones); kinder envs ≤ 25 obstructions.
-_DEFAULT_MAX_LOCAL_ID = 64
-
-
-def _max_local_id(vocab: Vocab) -> int:
-    """Upper bound on local-id values; sized for the largest type bucket."""
-    if not vocab.max_objects_per_type:
-        return _DEFAULT_MAX_LOCAL_ID
-    return max(_DEFAULT_MAX_LOCAL_ID, *vocab.max_objects_per_type.values())
-
-
-# ---------------------------------------------------------------------------
-# Set-Transformer building blocks
-# ---------------------------------------------------------------------------
-
-
-class SetAttentionBlock(nn.Module):
-    """One SAB: multihead self-attention + LN + FFN + LN, mask-aware.
-
-    Post-norm layout per the original Set Transformer paper. No positional
-    embeddings — used over true sets of atoms / failure embeddings.
-    """
-
-    def __init__(
-        self,
-        dim: int = D_MODEL,
-        n_heads: int = N_HEADS,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.attn = nn.MultiheadAttention(
-            embed_dim=dim,
-            num_heads=n_heads,
-            dropout=dropout_p,
-            batch_first=True,
-        )
-        self.ln1 = nn.LayerNorm(dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(dim, FFN_DIM),
-            nn.GELU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(FFN_DIM, dim),
-            nn.Dropout(dropout_p),
-        )
-        self.ln2 = nn.LayerNorm(dim)
-
-    def forward(self, x: Tensor, mask: Tensor) -> Tensor:
-        """``x``: (..., N, D); ``mask``: (..., N) bool, True = real token."""
-        flat_x, flat_mask, restore = _flatten_set_dims(x, mask)
-        # Rows where every entry is masked produce NaN attention weights;
-        # MultiheadAttention's `key_padding_mask` blocks attending TO pads,
-        # but if every key is a pad, the softmax is over -inf only.
-        # We unmask one slot in those rows — its output is then re-masked
-        # by the caller via ``flat_mask``-based pooling.
-        all_pad = ~flat_mask.any(dim=-1)
-        safe_mask = flat_mask.clone()
-        safe_mask[all_pad, 0] = True
-        kpm = ~safe_mask  # MHA expects True = ignore
-        attn_out, _ = self.attn(flat_x, flat_x, flat_x, key_padding_mask=kpm)
-        h = self.ln1(flat_x + attn_out)
-        h = self.ln2(h + self.ffn(h))
-        # Re-mask outputs at fully-padded positions; downstream pools
-        # treat masked entries via the mask itself, but zeroing here keeps
-        # numerics clean.
-        h = h * flat_mask.unsqueeze(-1)
-        return restore(h)
-
-
-class PoolingByMultiheadAttention(nn.Module):
-    """``PMA_{k=1}``: one learned seed attends over a masked token set."""
-
-    def __init__(
-        self,
-        dim: int = D_MODEL,
-        n_heads: int = N_HEADS,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.seed = nn.Parameter(torch.zeros(1, 1, dim))
-        nn.init.normal_(self.seed, std=0.02)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=dim,
-            num_heads=n_heads,
-            dropout=dropout_p,
-            batch_first=True,
-        )
-        self.ln = nn.LayerNorm(dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(dim, FFN_DIM),
-            nn.GELU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(FFN_DIM, dim),
-            nn.Dropout(dropout_p),
-        )
-        self.ln2 = nn.LayerNorm(dim)
-
-    def forward(self, x: Tensor, mask: Tensor) -> Tensor:
-        """Returns (..., D); ``x``: (..., N, D); ``mask``: (..., N) bool."""
-        flat_x, flat_mask, _ = _flatten_set_dims(x, mask)
-        bsz = flat_x.size(0)
-        seed = self.seed.expand(bsz, 1, -1)
-        # Empty-set guard — see SAB.forward note.
-        all_pad = ~flat_mask.any(dim=-1)
-        safe_mask = flat_mask.clone()
-        safe_mask[all_pad, 0] = True
-        kpm = ~safe_mask
-        attn_out, _ = self.attn(seed, flat_x, flat_x, key_padding_mask=kpm)
-        h = self.ln(seed + attn_out)
-        h = self.ln2(h + self.ffn(h))
-        h = h.squeeze(1)  # (B, D)
-        # If the original set was fully-padded, return zero to remove
-        # the synthetic-unmask leak.
-        h = torch.where(all_pad.unsqueeze(-1), torch.zeros_like(h), h)
-        # Restore leading dims.
-        leading = x.shape[:-2]
-        return h.view(*leading, h.size(-1))
-
-
-def _flatten_set_dims(
-    x: Tensor, mask: Tensor
-) -> tuple[Tensor, Tensor, Callable[[Tensor], Tensor]]:
-    """Flatten leading dims so MHA sees ``(B*, N, D)``.
-
-    Returns ``(flat_x, flat_mask, restore)`` where ``restore`` reshapes back
-    to the input's leading dims.
-    """
-    n = x.size(-2)
-    d = x.size(-1)
-    flat_x = x.reshape(-1, n, d)
-    flat_mask = mask.reshape(-1, n)
-    leading = x.shape[:-2]
-
-    def restore(h: Tensor) -> Tensor:
-        return h.view(*leading, n, d)
-
-    return flat_x, flat_mask, restore
-
-
-# ---------------------------------------------------------------------------
-# Φ — skeleton encoder
-# ---------------------------------------------------------------------------
-
-
-class _OperatorTokenEncoder(nn.Module):
-    """Operator-token sub-encoder per spec §4.2."""
-
-    def __init__(self, vocab: Vocab, dropout_p: float = DROPOUT) -> None:
-        super().__init__()
-        self.max_op_arity = max(int(vocab.max_operator_arity), 1)
-        self.op_name_emb = nn.Embedding(
-            num_embeddings=len(vocab.operators), embedding_dim=D_OP_NAME, padding_idx=0
-        )
-        self.arg_type_emb = nn.Embedding(
-            num_embeddings=len(vocab.types), embedding_dim=D_TYPE, padding_idx=0
-        )
-        self.arg_local_emb = nn.Embedding(
-            num_embeddings=_max_local_id(vocab) + 1,
-            embedding_dim=D_LOCAL,
-            padding_idx=0,
-        )
-        # Slot-specific projection: separate Linear per arg slot.
-        self.arg_slot_proj = nn.ModuleList(
-            [
-                nn.Linear(D_TYPE + D_LOCAL, D_ARG_SLOT_OUT)
-                for _ in range(self.max_op_arity)
-            ]
-        )
-        self.op_pos_emb = nn.Embedding(
-            num_embeddings=int(vocab.max_skeleton_length) + 2,
-            embedding_dim=D_OP_POS,
-        )
-        d_in = D_OP_NAME + self.max_op_arity * D_ARG_SLOT_OUT + D_OP_POS
-        self.mlp = nn.Sequential(
-            nn.Linear(d_in, 128),
-            nn.GELU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(128, D_MODEL),
-        )
-        self._d_in = d_in
-
-    @property
-    def in_features(self) -> int:
-        """Operator-token MLP input dim ``32 + A*16 + 16`` (spec §4.2)."""
-        return self._d_in
-
-    def forward(
-        self,
-        op_ids: Tensor,  # (..., L)
-        arg_type_ids: Tensor,  # (..., L, A)
-        arg_local_ids: Tensor,  # (..., L, A)
-        op_position: Tensor,  # (..., L)
-    ) -> Tensor:  # (..., L, D_MODEL)
-        """Encode operator tokens to ``D_MODEL``-dim per spec §4.2."""
-        name_emb = self.op_name_emb(op_ids)
-        type_emb = self.arg_type_emb(arg_type_ids)
-        local_emb = self.arg_local_emb(arg_local_ids)
-        # (..., L, A, D_TYPE + D_LOCAL)
-        slot_in = torch.cat([type_emb, local_emb], dim=-1)
-        # Apply per-slot Linear: split along arg dim.
-        slot_outs = []
-        for slot_idx, proj in enumerate(self.arg_slot_proj):
-            slot_outs.append(proj(slot_in[..., slot_idx, :]))
-        # (..., L, A, D_ARG_SLOT_OUT)
-        arg_token = torch.stack(slot_outs, dim=-2)
-        # Flatten the (A, D_ARG_SLOT_OUT) axes into one feature dim.
-        arg_token = arg_token.flatten(start_dim=-2)
-        pos_emb = self.op_pos_emb(op_position)
-        op_in = torch.cat([name_emb, arg_token, pos_emb], dim=-1)
-        return self.mlp(op_in)
-
-
-class _StateTokenEncoder(nn.Module):
-    """Per-state atom-pool sub-encoder Φ_s per spec §4.3 (Set Transformer pool).
-
-    Single-pool by default. When constructed with a non-empty
-    ``static_tag_predicate_ids`` buffer, atoms whose predicate id is in
-    that set are routed to a separate SAB+PMA stream (F3-B-(1)
-    "predicate-type-conditioned pooling"). The two stream outputs and the
-    type-histogram are concatenated and projected back to ``D_MODEL``.
-    """
-
-    def __init__(
-        self,
-        vocab: Vocab,
-        use_atom_sab2: bool = True,
-        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.max_pred_arity = max(int(vocab.max_predicate_arity), 1)
-        self.pred_emb = nn.Embedding(
-            num_embeddings=len(vocab.predicates),
-            embedding_dim=D_PRED_NAME,
-            padding_idx=0,
-        )
-        self.arg_type_emb = nn.Embedding(
-            num_embeddings=len(vocab.types), embedding_dim=D_TYPE, padding_idx=0
-        )
-        self.arg_local_emb = nn.Embedding(
-            num_embeddings=_max_local_id(vocab) + 1,
-            embedding_dim=D_LOCAL,
-            padding_idx=0,
-        )
-        atom_in = D_PRED_NAME + self.max_pred_arity * (D_TYPE + D_LOCAL)
-        self.atom_proj = nn.Linear(atom_in, D_MODEL)
-        self.atom_ln = nn.LayerNorm(D_MODEL)
-        # Primary (legacy) atom pool. With ``use_static_tag_pool`` enabled
-        # this becomes the "fluent" stream; otherwise it pools all atoms.
-        self.atom_sab1 = SetAttentionBlock(
-            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
-        )
-        self.atom_sab2: SetAttentionBlock | None = (
-            SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
-            if use_atom_sab2
-            else None
-        )
-        self.atom_pma = PoolingByMultiheadAttention(
-            dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
-        )
-
-        # F3-B-(1) static-tag stream. Built only when caller supplies a
-        # non-empty predicate-name list AND at least one of those names
-        # exists in the vocab. Stored as a buffer of vocab pred-ids so a
-        # checkpoint round-trips cleanly across vocab order changes.
-        resolved_ids: list[int] = []
-        if static_tag_predicates:
-            for name in static_tag_predicates:
-                if name in vocab.predicates:
-                    pid = vocab.pred_idx(name)
-                    if pid > 0:  # exclude <OOV>/pad
-                        resolved_ids.append(pid)
-        resolved_ids = sorted(set(resolved_ids))
-        self.use_static_tag_pool = len(resolved_ids) > 0
-        # Non-persistent: the buffer is always rebuilt from the constructor
-        # ``static_tag_predicates`` argument, so we don't write it into
-        # ``state_dict`` (would break legacy checkpoints that pre-date
-        # F3-B-(1) with a "missing key" error). The cfg dict + env_registry
-        # already let ``inference.load_checkpoint`` recover the list.
-        self.register_buffer(
-            "static_tag_predicate_ids",
-            torch.tensor(resolved_ids, dtype=torch.long),
-            persistent=False,
-        )
-        if self.use_static_tag_pool:
-            self.atom_sab1_static = SetAttentionBlock(
-                dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
-            )
-            self.atom_sab2_static: SetAttentionBlock | None = (
-                SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
-                if use_atom_sab2
-                else None
-            )
-            self.atom_pma_static = PoolingByMultiheadAttention(
-                dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p
-            )
-
-        # Type-histogram path
-        self.type_hist_proj = nn.Linear(len(vocab.types), D_TYPE_HIST)
-        # state_proj input grows by one D_MODEL when the static stream is on.
-        state_proj_in = (
-            D_MODEL + D_TYPE_HIST + (D_MODEL if self.use_static_tag_pool else 0)
-        )
-        self.state_proj = nn.Linear(state_proj_in, D_MODEL)
-        self.state_ln = nn.LayerNorm(D_MODEL)
-        self._atom_in = atom_in
-
-    @property
-    def atom_in_features(self) -> int:
-        """Atom-token Linear input dim ``32 + P*24`` (spec §4.3)."""
-        return self._atom_in
-
-    def _pool_one_stream(
-        self,
-        atom_tok: Tensor,
-        mask: Tensor,
-        sab1: SetAttentionBlock,
-        sab2: SetAttentionBlock | None,
-        pma: PoolingByMultiheadAttention,
-    ) -> Tensor:
-        """Run a single SAB(+SAB)+PMA pool stream over the masked atoms."""
-        h = sab1(atom_tok, mask)
-        if sab2 is not None:
-            h = sab2(h, mask)
-        return pma(h, mask)
-
-    def forward(
-        self,
-        pred_ids: Tensor,  # (..., M)
-        arg_type_ids: Tensor,  # (..., M, P)
-        arg_local_ids: Tensor,  # (..., M, P)
-        atom_mask: Tensor,  # (..., M) bool
-        type_histogram: Tensor,  # (..., T) long
-    ) -> Tensor:  # (..., D_MODEL)
-        """Pool atom tokens via SAB+PMA (single or dual stream), then concat type-
-        histogram."""
-        pe = self.pred_emb(pred_ids)
-        te = self.arg_type_emb(arg_type_ids)
-        le = self.arg_local_emb(arg_local_ids)
-        # Concat type/local along feature dim, then flatten the P axis.
-        arg_tok = torch.cat([te, le], dim=-1).flatten(start_dim=-2)
-        atom_in = torch.cat([pe, arg_tok], dim=-1)
-        atom_tok = self.atom_proj(atom_in)
-        atom_tok = self.atom_ln(atom_tok)
-
-        thist = self.type_hist_proj(type_histogram.float())
-
-        if self.use_static_tag_pool:
-            # Build static-vs-fluent partition from atom_mask AND predicate.
-            # ``isin`` over a buffer of allowed pred-ids works on any
-            # leading-dim shape so this handles (M,), (B, M), (B, K, M).
-            # Cast: ``register_buffer`` annotation returns ``Tensor | Module``
-            # per nn.Module typing; the buffer we registered is a Tensor.
-            static_ids = self.static_tag_predicate_ids
-            assert isinstance(static_ids, Tensor)
-            is_static_pred = torch.isin(pred_ids, static_ids)
-            static_mask = atom_mask & is_static_pred
-            fluent_mask = atom_mask & (~is_static_pred)
-            static_pool = self._pool_one_stream(
-                atom_tok,
-                static_mask,
-                self.atom_sab1_static,
-                self.atom_sab2_static,
-                self.atom_pma_static,
-            )
-            fluent_pool = self._pool_one_stream(
-                atom_tok, fluent_mask, self.atom_sab1, self.atom_sab2, self.atom_pma
-            )
-            state_in = torch.cat([static_pool, fluent_pool, thist], dim=-1)
-        else:
-            atom_pool = self._pool_one_stream(
-                atom_tok, atom_mask, self.atom_sab1, self.atom_sab2, self.atom_pma
-            )
-            # Empty-state edge case: PMA returns zero vector when atom_mask is
-            # all-False. type-histogram path still carries a signal.
-            state_in = torch.cat([atom_pool, thist], dim=-1)
-
-        out = self.state_ln(self.state_proj(state_in))
-        return torch.nn.functional.gelu(out)
-
-
-class SkeletonEncoder(nn.Module):
-    """Φ: skeleton → 64-dim embedding (spec §4)."""
-
-    def __init__(
-        self,
-        vocab: Vocab,
-        use_atom_sab2: bool = True,
-        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.op_enc = _OperatorTokenEncoder(vocab, dropout_p=dropout_p)
-        self.state_enc = _StateTokenEncoder(
-            vocab,
-            use_atom_sab2=use_atom_sab2,
-            static_tag_predicates=static_tag_predicates,
-            dropout_p=dropout_p,
-        )
-        self.token_type_emb = nn.Embedding(num_embeddings=3, embedding_dim=D_MODEL)
-        # +2 to accommodate (s_0, ..., s_L) sequence; +4 of slack.
-        self.seq_pos_emb = nn.Embedding(
-            num_embeddings=int(vocab.max_skeleton_length) + 4,
-            embedding_dim=D_MODEL,
-        )
-        self.seq_ln = nn.LayerNorm(D_MODEL)
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=D_MODEL,
-            nhead=N_HEADS,
-            dim_feedforward=FFN_DIM,
-            dropout=dropout_p,
-            activation="gelu",
-            batch_first=True,
-            norm_first=False,
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
-
-    def forward(  # pylint: disable=too-many-arguments,too-many-locals
-        self,
-        op_ids: Tensor,  # (B, K, L)
-        op_arg_type_ids: Tensor,  # (B, K, L, A)
-        op_arg_local_ids: Tensor,  # (B, K, L, A)
-        op_mask: Tensor,  # (B, K, L)
-        s0_pred_ids: Tensor,  # (B, M0)
-        s0_arg_type_ids: Tensor,  # (B, M0, P)
-        s0_arg_local_ids: Tensor,  # (B, M0, P)
-        s0_atom_mask: Tensor,  # (B, M0)
-        s0_type_histogram: Tensor,  # (B, T)
-        sL_pred_ids: Tensor,  # (B, K, ML)
-        sL_arg_type_ids: Tensor,  # (B, K, ML, P)
-        sL_arg_local_ids: Tensor,  # (B, K, ML, P)
-        sL_atom_mask: Tensor,  # (B, K, ML)
-        sL_type_histogram: Tensor,  # (B, K, T)
-    ) -> Tensor:  # (B, K, D_MODEL)
-        """Encode every skeleton in the (B, K) pool to a 64-dim e(s) (spec §4)."""
-        bsz, k, l_max = op_ids.shape
-        device = op_ids.device
-
-        # ------- s_0 token (per-example, broadcast to per-skeleton) -------
-        s0_tok = self.state_enc(
-            s0_pred_ids,
-            s0_arg_type_ids,
-            s0_arg_local_ids,
-            s0_atom_mask,
-            s0_type_histogram,
-        )  # (B, D)
-        s0_tok = s0_tok.unsqueeze(1).expand(bsz, k, D_MODEL)  # (B, K, D)
-
-        # ------- s_L token (per-skeleton) -------
-        sL_tok = self.state_enc(
-            sL_pred_ids,
-            sL_arg_type_ids,
-            sL_arg_local_ids,
-            sL_atom_mask,
-            sL_type_histogram,
-        )  # (B, K, D)
-
-        # ------- Operator tokens -------
-        positions = (
-            torch.arange(l_max, device=device).view(1, 1, l_max).expand(bsz, k, l_max)
-        )
-        op_tok = self.op_enc(
-            op_ids, op_arg_type_ids, op_arg_local_ids, positions
-        )  # (B, K, L, D)
-
-        # ------- Stitch sequence: [STATE_0, OP_1, ..., OP_L, STATE_L] -------
-        seq_len = l_max + 2
-        seq = torch.zeros(bsz, k, seq_len, D_MODEL, device=device, dtype=op_tok.dtype)
-        seq[:, :, 0, :] = s0_tok
-        seq[:, :, 1 : 1 + l_max, :] = op_tok
-        seq[:, :, 1 + l_max, :] = sL_tok
-        seq_mask = torch.zeros(bsz, k, seq_len, dtype=torch.bool, device=device)
-        seq_mask[:, :, 0] = True
-        seq_mask[:, :, 1 : 1 + l_max] = op_mask
-        seq_mask[:, :, 1 + l_max] = True
-
-        # Token-type embeddings
-        type_ids = torch.full(
-            (seq_len,), TOKEN_TYPE_OP, dtype=torch.long, device=device
-        )
-        type_ids[0] = TOKEN_TYPE_S0
-        type_ids[seq_len - 1] = TOKEN_TYPE_SL
-        type_emb = self.token_type_emb(type_ids)  # (seq_len, D)
-
-        pos_ids = torch.arange(seq_len, device=device)
-        pos_emb = self.seq_pos_emb(pos_ids)  # (seq_len, D)
-
-        seq = (
-            seq
-            + type_emb.view(1, 1, seq_len, D_MODEL)
-            + pos_emb.view(1, 1, seq_len, D_MODEL)
-        )
-        seq = self.seq_ln(seq)
-
-        # Flatten (B, K) into batch dim for the TransformerEncoder.
-        flat = seq.reshape(bsz * k, seq_len, D_MODEL)
-        flat_mask = seq_mask.reshape(bsz * k, seq_len)
-        # `key_padding_mask` expects True = ignore.
-        # Sequences where every position is padded shouldn't occur (s_0 and
-        # s_L are always present), but we guard anyway.
-        all_pad = ~flat_mask.any(dim=-1)
-        safe_mask = flat_mask.clone()
-        safe_mask[all_pad, 0] = True
-        encoded = self.transformer(flat, src_key_padding_mask=~safe_mask)
-        # Mean-pool with mask. Use safe_mask as the divisor lower-bound to
-        # avoid division-by-zero for the (impossible) all-pad row.
-        denom = safe_mask.sum(dim=-1, keepdim=True).clamp(min=1).to(encoded.dtype)
-        masked = encoded * safe_mask.unsqueeze(-1).to(encoded.dtype)
-        e = masked.sum(dim=1) / denom
-        return e.view(bsz, k, D_MODEL)
-
-
-# ---------------------------------------------------------------------------
-# Ψ — context encoder
-# ---------------------------------------------------------------------------
-
-
-class ContextEncoder(nn.Module):
-    """Ψ: failure-set → 64-dim context (spec §5)."""
-
-    def __init__(self, dropout_p: float = DROPOUT) -> None:
-        super().__init__()
-        self.input_ln = nn.LayerNorm(D_MODEL)
-        self.sab1 = SetAttentionBlock(D_MODEL, N_HEADS, dropout_p=dropout_p)
-        self.sab2 = SetAttentionBlock(D_MODEL, N_HEADS, dropout_p=dropout_p)
-        self.pma = PoolingByMultiheadAttention(D_MODEL, N_HEADS, dropout_p=dropout_p)
-        self.out_proj = nn.Linear(D_MODEL, D_MODEL)
-        # Learned "no-failure" context, returned when |F| == 0.
-        self.c0 = nn.Parameter(torch.zeros(D_MODEL))
-
-    def forward(
-        self,
-        f_embeddings: Tensor,  # (B, F, D)
-        f_mask: Tensor,  # (B, F)
-    ) -> Tensor:  # (B, D)
-        """Pool the failure-set embeddings into ``c_t`` (spec §5)."""
-        any_f = f_mask.any(dim=-1, keepdim=True)  # (B, 1) bool
-        x = self.input_ln(f_embeddings)
-        x = self.sab1(x, f_mask)
-        x = self.sab2(x, f_mask)
-        c = self.pma(x, f_mask)  # (B, D); zeros for empty-F rows
-        c = self.out_proj(c)
-        # Where |F| == 0, return broadcast c_0; otherwise c.
-        c0 = self.c0.view(1, -1).expand_as(c)
-        return torch.where(any_f, c, c0)
-
-
-# ---------------------------------------------------------------------------
-# σ — scorer
-# ---------------------------------------------------------------------------
-
-
-class Scorer(nn.Module):
-    """Σ: ``(e(s), c, π(s)) → scalar`` (spec §6)."""
-
-    def __init__(
-        self,
-        prior_dropout_p: float = 0.2,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.prior_dropout_p = prior_dropout_p
-        # π_proj: spec calls for diagonal init at α=0.1 with zero bias.
-        # Linear(1 → 8): there's only one input dim, so "diagonal" reduces
-        # to setting all 8 weights to α and bias to 0.
-        self.prior_proj = nn.Linear(1, 8)
-        with torch.no_grad():
-            self.prior_proj.weight.fill_(0.1)
-            self.prior_proj.bias.fill_(0.0)
-        in_dim = D_MODEL + D_MODEL + 8
-        self.fc1 = nn.Linear(in_dim, 128)
-        self.ln1 = nn.LayerNorm(128)
-        self.dropout1 = nn.Dropout(dropout_p)
-        self.fc2 = nn.Linear(128, 64)
-        self.ln2 = nn.LayerNorm(64)
-        self.dropout2 = nn.Dropout(dropout_p)
-        self.head = nn.Linear(64, 1)
-        with torch.no_grad():
-            self.head.weight.zero_()
-            self.head.bias.zero_()
-
-    def forward(
-        self,
-        e_R: Tensor,  # (B, R, D)
-        c: Tensor,  # (B, D)
-        priors: Tensor,  # (B, R)
-        prior_dropout: bool = False,
-    ) -> Tensor:  # (B, R)
-        """Score each candidate as a scalar logit (spec §6)."""
-        if prior_dropout and self.training and self.prior_dropout_p > 0:
-            keep = (
-                torch.rand(priors.size(0), device=priors.device) >= self.prior_dropout_p
-            )
-            priors = priors * keep.to(priors.dtype).unsqueeze(-1)
-        prior_feat = self.prior_proj(priors.unsqueeze(-1))  # (B, R, 8)
-        c_broadcast = c.unsqueeze(1).expand_as(e_R)
-        x = torch.cat([e_R, c_broadcast, prior_feat], dim=-1)
-        h = self.dropout1(torch.nn.functional.gelu(self.ln1(self.fc1(x))))
-        h = self.dropout2(torch.nn.functional.gelu(self.ln2(self.fc2(h))))
-        return self.head(h).squeeze(-1)
-
-
-# ---------------------------------------------------------------------------
-# SpectreModel — composes Φ, Ψ, σ
-# ---------------------------------------------------------------------------
-
-
-class SpectreModel(nn.Module):
-    """Composes Φ, Ψ, σ per spec §10.3."""
-
-    def __init__(
-        self,
-        vocab: Vocab,
-        prior_dropout_p: float = 0.2,
-        use_atom_sab2: bool = True,
-        static_tag_predicates: list[str] | tuple[str, ...] | None = None,
-        dropout_p: float = DROPOUT,
-    ) -> None:
-        super().__init__()
-        self.vocab = vocab
-        self.skeleton_encoder = SkeletonEncoder(
-            vocab,
-            use_atom_sab2=use_atom_sab2,
-            static_tag_predicates=static_tag_predicates,
-            dropout_p=dropout_p,
-        )
-        self.context_encoder = ContextEncoder(dropout_p=dropout_p)
-        self.scorer = Scorer(prior_dropout_p=prior_dropout_p, dropout_p=dropout_p)
-
-    @property
-    def empty_context(self) -> Tensor:
-        """Returns the learned ``c_0`` vector for inference-time |F|=0 usage."""
-        return self.context_encoder.c0
-
-    # --- Encoder fast-paths -------------------------------------------------
-
-    def encode_pool(
-        self,
-        op_ids: Tensor,
-        op_arg_type_ids: Tensor,
-        op_arg_local_ids: Tensor,
-        op_mask: Tensor,
-        s0_pred_ids: Tensor,
-        s0_arg_type_ids: Tensor,
-        s0_arg_local_ids: Tensor,
-        s0_atom_mask: Tensor,
-        s0_type_histogram: Tensor,
-        sL_pred_ids: Tensor,
-        sL_arg_type_ids: Tensor,
-        sL_arg_local_ids: Tensor,
-        sL_atom_mask: Tensor,
-    ) -> Tensor:
-        """Run Φ over a pool slice.
-
-        ``s_0`` carries no skeleton dim.
-        """
-        # Replicate s_0 type histogram to per-skeleton (matches spec §4.1
-        # which expects ``sL_type_histogram`` per skeleton; in RT2D no
-        # operator add/deletes objects, so it equals ``s0_type_histogram``).
-        bsz, k = op_ids.shape[0], op_ids.shape[1]
-        sL_type_hist = s0_type_histogram.unsqueeze(1).expand(bsz, k, -1)
-        return self.skeleton_encoder(
-            op_ids,
-            op_arg_type_ids,
-            op_arg_local_ids,
-            op_mask,
-            s0_pred_ids,
-            s0_arg_type_ids,
-            s0_arg_local_ids,
-            s0_atom_mask,
-            s0_type_histogram,
-            sL_pred_ids,
-            sL_arg_type_ids,
-            sL_arg_local_ids,
-            sL_atom_mask,
-            sL_type_hist,
-        )
-
-    def encode_context(self, f_embeddings: Tensor, f_mask: Tensor) -> Tensor:
-        """Run Ψ over the (per-example) failure set."""
-        return self.context_encoder(f_embeddings, f_mask)
-
-    def score(
-        self,
-        e_R: Tensor,
-        c: Tensor,
-        r_priors: Tensor,
-        prior_dropout: bool = False,
-    ) -> Tensor:
-        """Run σ to produce per-skeleton logits over the R-pool."""
-        return self.scorer(e_R, c, r_priors, prior_dropout=prior_dropout)
-
-    # --- Whole-batch forward -----------------------------------------------
-
-    def forward(self, batch: SpectreBatch) -> Tensor:
-        """End-to-end SPECTRE forward over a ``SpectreBatch`` (spec §10.3)."""
-        e_R = self.encode_pool(
-            batch.r_op_ids,
-            batch.r_op_arg_type_ids,
-            batch.r_op_arg_local_ids,
-            batch.r_op_mask,
-            batch.s0_pred_ids,
-            batch.s0_arg_type_ids,
-            batch.s0_arg_local_ids,
-            batch.s0_atom_mask,
-            batch.s0_type_histogram,
-            batch.r_sL_pred_ids,
-            batch.r_sL_arg_type_ids,
-            batch.r_sL_arg_local_ids,
-            batch.r_sL_atom_mask,
-        )
-        e_F = self.encode_pool(
-            batch.f_op_ids,
-            batch.f_op_arg_type_ids,
-            batch.f_op_arg_local_ids,
-            batch.f_op_mask,
-            batch.s0_pred_ids,
-            batch.s0_arg_type_ids,
-            batch.s0_arg_local_ids,
-            batch.s0_atom_mask,
-            batch.s0_type_histogram,
-            batch.f_sL_pred_ids,
-            batch.f_sL_arg_type_ids,
-            batch.f_sL_arg_local_ids,
-            batch.f_sL_atom_mask,
-        )
-        c = self.encode_context(e_F, batch.f_mask)
-        return self.score(e_R, c, batch.r_priors, prior_dropout=self.training)
+from alphatamp.approaches.spectre.layers import D_MODEL, FFN_DIM, N_HEADS
+from alphatamp.approaches.spectre.encoders import (
+    D_DESCRIPTOR,
+    D_POSE,
+    D_REL,
+    D_REL_V3,
+    D_TAG,
+    MAX_TAGS_DEFAULT,
+    AuxHead,
+    CandidateEncoder,
+    CrossAttentionScorer,
+    FactEncoder,
+    SceneEncoder,
+    SpectreV2Batch,
+)
+from alphatamp.approaches.spectre.tags import PAD_TAG
+
+DROPOUT = 0.1
+
+# Record-token dims. `MAX_RECORD_ARGS` / `MAX_RECORD_CULPRITS` cap how many objects one
+# record names in each role; DD2D queries are unary and a grasp is blocked by a handful
+# of objects, so these are generous.
+MAX_RECORD_ARGS = 4
+MAX_RECORD_CULPRITS = 8
+D_SCHEMA = 32
+N_RECORD_SCALARS = 4  # [depth j/L, effort (log1p, scaled), exhausted, effort_is_total]
+
+# State-delta dims (`s_j` relative to `s_0`, §6.1). `MAX_DELTA_ATOMS` caps how many atoms
+# one role contributes; measured on dd2d_v4 the maxima are |added| = 4 and |deleted| = 5,
+# so 8 is slack and truncation never fires. It is a pooled sequence axis, so it appears
+# in no parameter shape and can be raised for another domain for free.
+MAX_DELTA_ATOMS = 8
+D_PRED = 32
+D_DELTA = 32
 
 
 @dataclass
-class ModelInfo:
-    """Diagnostic metadata returned by :func:`build_model_info`."""
+class SpectreBatch(SpectreV2Batch):
+    """The v2.2 batch plus v3's failure-record tokens.
 
-    op_mlp_in_features: int
-    atom_proj_in_features: int
-    num_parameters: int
+    Record fields are trailing and optional, so a batch built without them *is* a v2.2
+    batch and the compat path is unaffected. They replace the five bespoke `fact_*`
+    tensors, which stay present so the legacy encoder remains selectable (D-8).
+
+    Tags are **role-separated**: `rec_arg_tags` holds the objects the failing query was
+    *about*, `rec_culprit_tags` the objects observed to block it. v2.2 kept that
+    distinction only implicitly, by giving `grasp-witness` its own fact type; pooling
+    both roles into one slot would tell the net "these objects are associated with this
+    failure" without saying which was the target and which the obstacle.
+    """
+
+    rec_schema_ids: Optional[Tensor] = None  # (B, R) long — 0 = pad
+    rec_arg_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_ARGS) long
+    rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
+    rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
+    rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
+    obj_evidence: Optional[Tensor] = None  # (B, N, N_OBJ_EVIDENCE) float
+    # `s_j - s_0` per record. Role axis is [added, deleted] — kept apart for the same
+    # reason arg-tags and culprit-tags are: "the prefix put o1 on the buffer" and "the
+    # prefix took o1 out of the drawer" are different claims about o1.
+    rec_delta_pred_ids: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS) long
+    rec_delta_arg_tags: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS, A) long
+
+    def to(self, device) -> "SpectreBatch":
+        return SpectreBatch(
+            **{  # type: ignore[arg-type]
+                k: (v.to(device) if v is not None else None)
+                for k, v in self.__dict__.items()
+            }
+        )
 
 
-def build_model_info(model: SpectreModel) -> ModelInfo:
-    """Inspector for §11.1 #5 (vocab arity sourcing smoke test)."""
-    op_in = model.skeleton_encoder.op_enc.in_features
-    atom_in = model.skeleton_encoder.state_enc.atom_in_features
-    n = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    return ModelInfo(
-        op_mlp_in_features=op_in, atom_proj_in_features=atom_in, num_parameters=n
+class RecordEncoder(nn.Module):
+    """One observed failure -> one token, with the object roles kept apart.
+
+    Replaces `FactEncoder`'s hand-built type vocabulary with the domain's own operator
+    schemas, and finally consumes the scalars v2.2 harvested and then dropped on the
+    floor (`Fact.scalars` never reached the tensorizer). No tier embedding: only
+    hint-tier evidence ever entered the network, so it was a constant column.
+    """
+
+    def __init__(
+        self,
+        n_schemas: int,
+        max_tags: int,
+        dropout_p: float = DROPOUT,
+        n_predicates: int = 0,
+        max_pred_arity: int = 0,
+        state_delta: bool = False,
+    ) -> None:
+        super().__init__()
+        self.schema_emb = nn.Embedding(n_schemas + 1, D_SCHEMA, padding_idx=0)
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.proj = nn.Sequential(
+            nn.Linear(D_SCHEMA + 2 * D_TAG + N_RECORD_SCALARS, D_MODEL),
+            nn.Dropout(dropout_p),
+            nn.LayerNorm(D_MODEL),
+        )
+        # The delta enters as an ADDITIVE, ZERO-INITIALIZED branch rather than by
+        # widening `proj[0]`. Widening re-randomizes every weight in that layer
+        # (measured: 0.177 max shift on the shared block against a kaiming bound of
+        # 0.100), which is the same init confound `SpectreConfig` warns about for
+        # `n_prior_feats` -- the flag would then change the draw as well as the
+        # features. Built LAST, and `self.records` is itself built last in
+        # `SpectreModel`, so every pre-existing parameter keeps its exact
+        # initialization and a flag-on model is functionally identical to flag-off at
+        # step 0. Anything measured afterwards is the feature.
+        self.pred_emb: Optional[nn.Embedding] = None
+        self.atom_proj: Optional[nn.Linear] = None
+        self.delta_proj: Optional[nn.Linear] = None
+        self.delta_arity = 0
+        if state_delta:
+            if n_predicates <= 0:
+                raise ValueError(
+                    "use_state_delta needs n_predicates from the vocab; a 1-row "
+                    "embedding table would train silently and mean nothing"
+                )
+            self.delta_arity = max(max_pred_arity, 1)
+            self.pred_emb = nn.Embedding(n_predicates + 1, D_PRED, padding_idx=0)
+            self.atom_proj = nn.Linear(D_PRED + self.delta_arity * D_TAG, D_DELTA)
+            self.delta_proj = nn.Linear(2 * D_DELTA, D_MODEL)
+            nn.init.zeros_(self.delta_proj.weight)
+            nn.init.zeros_(self.delta_proj.bias)
+
+    @staticmethod
+    def _pool(emb: Tensor, ids: Tensor) -> Tensor:
+        """Masked mean over a role's tag slots; zeros when the role is empty."""
+        present = (ids != PAD_TAG).float().unsqueeze(-1)
+        return (emb * present).sum(dim=2) / present.sum(dim=2).clamp(min=1.0)
+
+    def _delta(self, pred_ids: Tensor, arg_tags: Tensor) -> Tensor:
+        """``(B, R, 2*D_DELTA)`` from the per-role atom sets; exact zeros when empty.
+
+        Two properties are load-bearing and easy to lose:
+
+        - an atom's argument slots are **concatenated positionally**, never pooled, so
+          ``p(a, b)`` and ``p(b, a)`` do not collide. DD2D is all-unary and would never
+          show the difference, which is exactly why it is pinned by a test;
+        - the per-atom projection happens **before** the pool over atoms, so
+          ``{on-buffer(o1), holding(o2)}`` and ``{on-buffer(o2), holding(o1)}`` differ.
+          Concatenating the roles and pooling afterwards would make them identical.
+
+        An empty role pools to exactly zero (masked sum over nothing, denominator
+        clamped), so ``j = 0`` -- about half of the aggregated tokens -- contributes
+        nothing rather than a bias, and the first attempt of a rollout stays purely
+        static.
+        """
+        assert self.pred_emb is not None and self.atom_proj is not None
+        b, r = pred_ids.shape[0], pred_ids.shape[1]
+        present = pred_ids.ne(0).unsqueeze(-1).float()
+        args = self.tag_emb(arg_tags).reshape(*arg_tags.shape[:-1], -1)
+        atom = self.atom_proj(torch.cat([self.pred_emb(pred_ids), args], dim=-1))
+        pooled = (atom * present).sum(dim=3) / present.sum(dim=3).clamp(min=1.0)
+        return pooled.reshape(b, r, 2 * D_DELTA)
+
+    def forward(
+        self,
+        schema_ids: Tensor,
+        arg_tags: Tensor,
+        culprit_tags: Tensor,
+        scalars: Tensor,
+        mask: Tensor,
+        delta_pred_ids: Optional[Tensor] = None,
+        delta_arg_tags: Optional[Tensor] = None,
+    ) -> Tensor:
+        parts = [
+            self.schema_emb(schema_ids),
+            self._pool(self.tag_emb(arg_tags), arg_tags),
+            self._pool(self.tag_emb(culprit_tags), culprit_tags),
+            scalars,
+        ]
+        hidden = self.proj[0](torch.cat(parts, dim=-1))
+        if self.delta_proj is not None:
+            # Substituted zeros rather than a skipped branch: a batch whose records all
+            # sit at j=0 must encode identically to the same record beside a batch-mate
+            # that has a delta. Deploy collates ONE example at a time, so the two cases
+            # are not hypothetical. Mirrors `SceneEncoderV3`'s missing-`obj_evidence`
+            # fallback.
+            if delta_pred_ids is None or delta_arg_tags is None:
+                b, r = schema_ids.shape
+                delta_pred_ids = schema_ids.new_zeros(b, r, 2, MAX_DELTA_ATOMS)
+                delta_arg_tags = schema_ids.new_zeros(
+                    b, r, 2, MAX_DELTA_ATOMS, self.delta_arity
+                )
+            hidden = hidden + self.delta_proj(
+                self._delta(delta_pred_ids, delta_arg_tags)
+            )
+        return self.proj[2](self.proj[1](hidden)) * mask.unsqueeze(-1)
+
+
+def sinusoidal_positions(pos: Tensor, dim: int) -> Tensor:
+    """Standard transformer sinusoidal encoding evaluated at arbitrary integer positions.
+
+    Returns ``(*pos.shape, dim)``. Unlike a learned table this is *defined* at every
+    position, which is the whole point: the absolute ``nn.Embedding(64, D)`` it replaces
+    has untrained rows beyond the longest plan seen in training, so a model trained on
+    s0-s2 (plans of <= 5 operators) and deployed on s3 (7) would read
+    randomly-initialized vectors at steps 5 and 6 -- and the length-generalization
+    experiment would be measuring initialization noise rather than generalization.
+    """
+    half = dim // 2
+    freqs = torch.exp(
+        torch.arange(half, device=pos.device, dtype=torch.float32)
+        * (-math.log(10000.0) / max(half - 1, 1))
     )
+    ang = pos.unsqueeze(-1).float() * freqs
+    return torch.cat([torch.sin(ang), torch.cos(ang)], dim=-1)
+
+
+class CrossAttentionScorerV3(CrossAttentionScorer):
+    """Scorer with a **separate attention channel for evidence**.
+
+    v2.2 concatenates scene tokens, the global token and the evidence tokens into one
+    memory and runs a single cross-attention over it. That is the architectural reason
+    the record tokens end up inert, and it is a competition the evidence cannot win:
+
+    - **One softmax must split its mass.** With ~10 scene tokens against up to 2045 record
+      tokens, the geometry that actually determines feasibility is outnumbered ~200:1;
+      with aggregation it is still ~3:1 and grows with |F|.
+    - **Geometry is reliably useful, evidence is noisy.** The loss-minimizing policy for a
+      *shared* attention budget is therefore to spend it on geometry and ignore evidence
+      -- exactly what the ``suppress_records`` diagnostic measured (16.17 -> 16.40, i.e.
+      the trained model had already learned to discard its own records).
+
+    Two channels remove the competition: the candidate attends over ``[scene ; global]``
+    and, independently, over the evidence memory, and the head sees both. Evidence can
+    now be attended to *without* giving up geometry, so a useful record no longer has to
+    out-compete the scene to be read.
+
+    Fully domain-agnostic -- it is a change to how tokens are consumed, not to what they
+    are. The head widens from ``2*D_MODEL`` to ``3*D_MODEL``, so enabling it retires the
+    D-8 oracle exactly as the other v3 architecture switches do.
+    """
+
+    def __init__(
+        self,
+        n_overlap_feats: int = 0,
+        n_prior_feats: int = 0,
+        dropout_p: float = DROPOUT,
+    ) -> None:
+        super().__init__(n_overlap_feats, n_prior_feats, dropout_p)
+        self.evid_attn = nn.MultiheadAttention(
+            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        )
+        self.head = nn.Sequential(
+            nn.Linear(3 * D_MODEL + n_overlap_feats + n_prior_feats, FFN_DIM),
+            nn.GELU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(FFN_DIM, 1),
+        )
+
+    def forward(  # type: ignore[override]
+        self,
+        cand_emb: Tensor,
+        scene_tok: Tensor,
+        obj_mask: Tensor,
+        glob_feats: Tensor,
+        overlap: Optional[Tensor] = None,
+        fact_tok: Optional[Tensor] = None,
+        fact_mask: Optional[Tensor] = None,
+        prior: Optional[Tensor] = None,
+    ) -> Tensor:
+        b, k, _ = cand_emb.shape
+        glob = self.glob_proj(glob_feats).unsqueeze(1)
+        memory = torch.cat([scene_tok, glob], dim=1)
+        key_pad = torch.cat(
+            [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
+            dim=1,
+        )
+        attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
+
+        ev = cand_emb.new_zeros(b, k, D_MODEL)
+        if fact_tok is not None and fact_tok.shape[1] > 0 and fact_mask is not None:
+            # A batch row with no records would be an all-True key-padding mask, which
+            # makes MultiheadAttention emit NaN rather than an empty result. Attend under
+            # a mask that always leaves one key live, then zero those rows afterwards --
+            # the same guard the v1 encoder uses.
+            has = fact_mask.any(dim=1)
+            safe = fact_mask.clone()
+            safe[~has, 0] = True
+            out, _ = self.evid_attn(
+                cand_emb, fact_tok, fact_tok, key_padding_mask=~safe
+            )
+            ev = out * has.view(b, 1, 1)
+
+        parts = [cand_emb, attended, ev]
+        if self.n_overlap_feats:
+            parts.append(
+                overlap
+                if overlap is not None
+                else cand_emb.new_zeros(b, k, self.n_overlap_feats)
+            )
+        pr = cand_emb.new_zeros(b, k, self.n_prior_feats) if prior is None else prior
+        if self.n_prior_feats:
+            parts.append(pr)
+        logit = self.head(torch.cat(parts, dim=-1)).squeeze(-1)
+        if self.n_prior_feats:
+            logit = logit + self.prior_gate(pr).squeeze(-1)
+        return logit
+
+
+N_OVERLAP_V3 = 4
+"""``[dead, jaccard, coverage, waste]``.
+
+The last two are §5.1's necessity features computed from **observed** culprits rather than
+a predicted per-object head: ``coverage`` = the fraction of objects seen blocking that this
+candidate removes, ``waste`` = the fraction of what it removes that was never seen blocking.
+Necessity conditioning was cut because its head would have had to *predict* p_i from
+geometry (`decisions.md` 2026-07-26); once the refiner reports culprits, the same two
+features are available by observation and need no head at all.
+"""
+
+N_OBJ_EVIDENCE = 5
+"""Per-object evidence summary width; see :class:`SceneEncoderV3`."""
+
+
+class SceneEncoderV3(SceneEncoder):
+    """:class:`SceneEncoder` plus a per-object summary of the failures observed so far.
+
+    **Why here, and not as more tokens.** Measured on the G6b checkpoint: deploying a
+    records-trained model with its evidence memory emptied at every step moves it by 0.23
+    FP (16.17 -> 16.40). The model had learned to *ignore* the per-failure tokens. What
+    it does use is `cand_overlap` -- two compact scalars per candidate summarising the
+    same failure set. So the failure is not "evidence is useless" but "free-floating
+    tokens are the wrong shape for this architecture": the scorer's strength is the tag
+    join between objects and candidate arguments, and a record token participates in
+    that join only weakly, through pooled tag slots.
+
+    This routes the same observations onto the objects they *name*, where the tag join
+    already lives. Four scalars per object, all in [0, 1], all zero when no failure has
+    been observed yet:
+
+    ``[frac of failed candidates that manipulate o,
+       frac of hint records naming o as an argument,
+       frac of hint records naming o as a culprit,
+       mean normalized depth of the records naming o]``
+
+    Domain-agnostic by construction -- set membership over record fields, no geometry and
+    no per-environment predicate (C1). Proof-tier records stay excluded exactly as they
+    are from the token path, so nothing here re-imports the "blocked sets are large,
+    prefer longer" correlate that L4 warns about.
+    """
+
+    def __init__(
+        self,
+        max_tags: int = MAX_TAGS_DEFAULT,
+        dropout_p: float = DROPOUT,
+        d_rel: int = D_REL_V3,
+    ) -> None:
+        super().__init__(max_tags, dropout_p, d_rel=d_rel)
+        in_dim = D_TAG + D_DESCRIPTOR + D_POSE + d_rel + 1 + N_OBJ_EVIDENCE
+        self.proj = nn.Sequential(nn.Linear(in_dim, D_MODEL), nn.LayerNorm(D_MODEL))
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        tag = self.tag_emb(batch.obj_tags)
+        desc = self.footprint(batch.obj_boundary, batch.obj_mask)
+        pose = self.pose_proj(batch.obj_pose)
+        rel = self.rel_proj(batch.obj_rel)
+        tgt = batch.obj_is_goal.unsqueeze(-1)
+        ev = getattr(batch, "obj_evidence", None)
+        if ev is None:
+            ev = torch.zeros(
+                *batch.obj_tags.shape,
+                N_OBJ_EVIDENCE,
+                device=tag.device,
+                dtype=tag.dtype,
+            )
+        tok = self.proj(torch.cat([tag, desc, pose, rel, tgt, ev], dim=-1))
+        tok = self.sab1(tok, batch.obj_mask)
+        tok = self.sab2(tok, batch.obj_mask)
+        return tok * batch.obj_mask.unsqueeze(-1)
+
+
+class CandidateEncoderV3(CandidateEncoder):
+    """:class:`CandidateEncoder` with the learned absolute position table removed.
+
+    Subclassed rather than edited in place because v2 modules are frozen (D-7). The
+    ``pos_emb`` submodule is *deleted*, not merely bypassed, so it leaves the state dict
+    -- which is exactly why enabling this retires the D-8 equivalence oracle: a v2.2
+    checkpoint can no longer load ``strict=True`` into this model. That is planned (G9 is
+    the last architectural change), not accidental.
+    """
+
+    def __init__(
+        self, n_ops: int, max_tags: int, max_arity: int, dropout_p: float = DROPOUT
+    ) -> None:
+        super().__init__(n_ops, max_tags, max_arity, dropout_p)
+        del self.pos_emb
+
+    def forward(self, batch: SpectreV2Batch) -> Tensor:
+        b, k, ell = batch.cand_op_ids.shape
+        op = self.op_emb(batch.cand_op_ids)
+        pos = sinusoidal_positions(batch.cand_pos, D_MODEL)
+        args = self.tag_emb(batch.cand_arg_tags)
+        args = args.reshape(b, k, ell, self.max_arity * D_TAG)
+        step = self.step_ln(op + pos + self.arg_proj(args))
+        step = step.reshape(b * k, ell, D_MODEL)
+        smask = batch.cand_step_mask.reshape(b * k, ell)
+        emb = self.pool(step, smask).reshape(b, k, D_MODEL)
+        return emb * batch.pool_mask.unsqueeze(-1)
+
+
+@dataclass(frozen=True)
+class SpectreConfig:
+    """Architecture switches. Every v3 feature defaults **off**, so the default config
+    reproduces deployed v2.2 exactly (D-8).
+
+    ``n_prior_feats`` is retained only so a pre-v3 checkpoint that *was* trained with the
+    short-first prior still loads for comparison. The deployed dd2d_v3 model has it off,
+    and v3 does not reintroduce it: the prior was a per-dataset hand switch that
+    diverged training on the easier collection (``decisions.md`` 2026-07-25). Note the
+    v2 scorer couples ``n_prior_feats > 0`` to a zero-init of the head's output layer, so
+    prior-on and prior-off differ in initialization as well as in features -- a confound
+    to remember when reading any historical prior on/off delta.
+    """
+
+    n_overlap_feats: int = 0
+    n_prior_feats: int = 0
+    max_tags: int = MAX_TAGS_DEFAULT
+    dropout_p: float = DROPOUT
+    # Scene-relation width: 3 for deployed v3 (the anchor-free ``[area, sinθ, cosθ]``
+    # triple; the target-anchored offsets, target area ratio and privileged ``concave``
+    # flag are cut -- see model_v2.D_REL_V3), 8 only in compat mode where the goal is to
+    # reload a frozen v2.2 checkpoint byte-for-byte. Unlike the feature switches above,
+    # narrowing is the *default*: v3 should not have to opt in to dropping inputs that do
+    # not generalize. It is persisted (it changes ``scene.rel_proj``'s shape), and it
+    # RETIRES the v2.2 rollout-equivalence oracle -- a deployed v3 no longer reads the same
+    # scene columns v2.2 did, by design (docs/decisions 2026-08-08).
+    d_rel: int = D_REL_V3
+    # --- v3 feature switches (added by later gates; all no-ops here) ---
+    use_records: bool = False  # G6: role-separated FailureRecord tokens
+    use_necessity: bool = False  # G8: necessity head + its candidate features
+    # G9: sinusoidal step positions instead of the learned absolute table. Turning this
+    # on RETIRES the D-8 equivalence oracle (pos_emb leaves the state dict), so it is the
+    # last architectural change by design.
+    sinusoidal_pos: bool = False
+    # Per-object evidence summary on the scene tokens (see SceneEncoderV3). Changes the
+    # scene projection's input width, so it also retires the D-8 oracle.
+    use_obj_evidence: bool = False
+    # Give evidence its own cross-attention channel instead of making it compete with
+    # the scene inside one softmax. See CrossAttentionScorerV3.
+    evidence_attn: bool = False
+    # Observed coverage/waste appended to cand_overlap (width 2 -> 4).
+    coverage_feats: bool = False
+    # §6.1's `s_j`: each record token also carries the abstract state at the failing
+    # step, as the delta from s_0. Additive and zero-initialized inside `RecordEncoder`,
+    # so a pre-flag v3 checkpoint still loads `strict=True` -- D-8's discipline one
+    # level down, against the *deployed v3* state dict rather than v2.2's.
+    use_state_delta: bool = False
+    # Vocab-derived sizing for the delta's predicate table, filled by whichever caller
+    # holds the vocab (`train_v3`, `load_checkpoint`) exactly as `max_arity` already
+    # is. Not persisted: they are properties of the vocab, and `strict=True` is the
+    # backstop if one ever moves under a checkpoint.
+    n_predicates: int = 0
+    max_pred_arity: int = 0
+
+    @classmethod
+    def from_v2_checkpoint_cfg(cls, cfg: dict) -> "SpectreConfig":
+        """Build the compat config that matches a stored ``train_v2`` checkpoint.
+
+        ``train_v2`` records ``use_prior`` / ``use_overlap`` as booleans and the scorer
+        sizes itself from the corresponding widths, so a checkpoint cannot be loaded
+        without consulting them (``strict=True`` would fail on the head shape).
+        """
+        return cls(
+            n_overlap_feats=2 if cfg.get("use_overlap") else 0,
+            n_prior_feats=2 if cfg.get("use_prior") else 0,
+            max_tags=int(cfg.get("max_tags", MAX_TAGS_DEFAULT)),
+            dropout_p=float(cfg.get("dropout_p", DROPOUT)),
+            # Compat means "reproduce this v2.2 checkpoint exactly", and v2.2's scene is
+            # the width-8 target-anchored vector. So compat keeps d_rel=8 even though
+            # deployed v3 narrows to 3 -- the loader must match the weights on disk.
+            d_rel=D_REL,
+        )
+
+
+class SpectreModel(nn.Module):
+    """The v3 listwise re-ranker.
+
+    Submodule names (``scene`` / ``cands`` / ``facts`` / ``scorer`` / ``aux``) are fixed
+    by the compat contract above -- renaming one silently breaks checkpoint loading, so
+    ``test_v3_equivalence.py`` pins the key set.
+    """
+
+    def __init__(
+        self,
+        n_ops: int,
+        max_arity: int,
+        cfg: Optional[SpectreConfig] = None,
+    ) -> None:
+        super().__init__()
+        self.cfg = cfg or SpectreConfig()
+        c = self.cfg
+        scene_cls = SceneEncoderV3 if c.use_obj_evidence else SceneEncoder
+        # Scene width comes from the config: 3 deployed, 8 in compat mode. Passed to
+        # whichever encoder is chosen -- both take ``d_rel``.
+        self.scene = scene_cls(c.max_tags, c.dropout_p, d_rel=c.d_rel)
+        cand_cls = CandidateEncoderV3 if c.sinusoidal_pos else CandidateEncoder
+        self.cands = cand_cls(n_ops, c.max_tags, max_arity, c.dropout_p)
+        self.facts = FactEncoder(c.max_tags, c.dropout_p)
+        scorer_cls = CrossAttentionScorerV3 if c.evidence_attn else CrossAttentionScorer
+        self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
+        self.aux = AuxHead()
+        # Additive by construction: the record encoder only exists when asked for, so a
+        # default-config state dict is byte-identical to v2.2's (D-8) and the equivalence
+        # oracle keeps loading.
+        self.records = (
+            RecordEncoder(
+                n_ops,
+                c.max_tags,
+                c.dropout_p,
+                c.n_predicates,
+                c.max_pred_arity,
+                c.use_state_delta,
+            )
+            if c.use_records
+            else None
+        )
+        if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
+            raise NotImplementedError(
+                "necessity conditioning was cut from v3 (decisions.md 2026-07-26): D2 "
+                "showed the s2 deficit is within-length, which it does not address"
+            )
+
+    def forward(
+        self, batch: SpectreBatch, overlap: Optional[Tensor] = None
+    ) -> tuple[Tensor, Tensor]:
+        """``(logits (B, K), aux (B, M, 2))`` -- the v2.2 contract, unchanged.
+
+        Logits are ``-inf`` at unavailable candidates (pads, and during a rollout the
+        already-tried ones), so ``argmax`` is the next attempt.
+        """
+        scene_tok = self.scene(batch)
+        cand_emb = self.cands(batch)
+        # Evidence memory: v3 record tokens when enabled, else the legacy fact tokens.
+        # Never both -- they encode the same failures, so stacking them would
+        # double-count the evidence and make the increment unattributable.
+        fact_tok = None
+        fact_mask = batch.fact_mask
+        if (
+            self.records is not None
+            and getattr(batch, "rec_schema_ids", None) is not None
+            and batch.rec_schema_ids is not None
+            and batch.rec_schema_ids.shape[1] > 0
+        ):
+            fact_tok = self.records(
+                batch.rec_schema_ids,
+                batch.rec_arg_tags,
+                batch.rec_culprit_tags,
+                batch.rec_scalars,
+                batch.rec_mask,
+                getattr(batch, "rec_delta_pred_ids", None),
+                getattr(batch, "rec_delta_arg_tags", None),
+            )
+            fact_mask = batch.rec_mask
+        elif (
+            self.records is None
+            and batch.fact_type_ids is not None
+            and batch.fact_type_ids.shape[1] > 0
+        ):
+            fact_tok = self.facts(
+                batch.fact_type_ids,
+                batch.fact_tier_ids,
+                batch.fact_arg_tags,
+                batch.fact_mask,
+            )
+        prior = batch.cand_prior if self.cfg.n_prior_feats else None
+        if overlap is None and self.cfg.n_overlap_feats:
+            overlap = batch.cand_overlap
+        logits = self.scorer(
+            cand_emb,
+            scene_tok,
+            batch.obj_mask,
+            batch.glob_feats,
+            overlap,
+            fact_tok,
+            fact_mask,
+            prior,
+        )
+        avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
+        logits = logits.masked_fill(~avail, float("-inf"))
+        return logits, self.aux(scene_tok)

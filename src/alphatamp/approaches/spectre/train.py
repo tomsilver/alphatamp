@@ -1,24 +1,45 @@
-"""Training loop for the SPECTRE model on RT2D (and any kinder env).
+"""Training loop for SPECTRE v3.
 
-Implements ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §8: AdamW + cosine LR with linear
-warmup, gradient clipping, F-subsample multiplier, prior dropout, per-epoch
-validation with PL loss + AUROC(t) for ``t ∈ {0, 1, 2, 3}``.
+Same objective as v2.2 -- listwise Plackett-Luce over the pool, plus the same loss
+restricted to within plan-length buckets so length cannot be used as a shortcut. What
+changes is the evidence pathway (v3 failure-record tokens instead of five bespoke fact
+types) and the checkpoint selector.
 
-Public surface:
+**Selection is deployed-val-FP, not `relrank`.** v2.2 selected on a
+difficulty-normalized rank statistic that turned out to be miscalibrated on dd2d_v3
+(never below 1, i.e. never better than random) and could pick an underfit epoch. v3
+selects on the quantity actually reported: mean failed attempts before the first
+success, from the real deployed rollout on val -- model scores plus sound demotion.
+Three guards, each from a specific failure:
 
-- :class:`TrainingConfig` — all hyperparameters in one frozen-ish dataclass.
-- :func:`train` — runs the full loop, writes ``best.pt`` + ``log.jsonl`` +
-  ``model_meta.json`` under ``out_dir``.
+- the **rule used for selection is frozen** at ``permissive`` regardless of the mode a
+  gate deploys with, so a change to the demotion rule cannot silently move the selector
+  underneath a comparison;
+- selection uses a **3-epoch moving average**, because a single val pass is noisy and
+  ``argmin`` over 30 epochs is a maximization-biased estimator;
+- selection is **uncensored and over the whole val split**, because a budget is a
+  ceiling on the statistic and the models differ in the tail above it. G6 shipped with
+  the selector censored at 30 attempts over a 50-episode subsample: it scored v2.2 at
+  11.12 and v3 at 11.40 -- indistinguishable -- while the same two models were 4+ FP
+  apart uncensored on test, because s2/s3 episodes routinely need 30-40+ attempts and
+  every one was clipped to the same number. A selector blind to the region where models
+  differ ranks epochs by noise. Cheaper recoveries if this ever costs too much: run it
+  every K epochs, or uncensored on a stride -- never censored below the separating tail.
 
-The Hydra entrypoint at ``experiments/spectre/spectre_train.py`` constructs a
-``TrainingConfig`` from cfg and calls :func:`train`.
+The aux head is *not* trained: no collection populates ``aux_labels``, so v2.2's masked
+BCE contributed exactly zero, and necessity conditioning was cut from v3
+(``decisions.md`` 2026-07-26). Pretending to train it would be theatre.
 """
 
 from __future__ import annotations
 
+import argparse
+import atexit
+import copy
 import json
 import math
-from collections import defaultdict
+import os
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
@@ -26,806 +47,741 @@ from typing import Optional
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from alphatamp.approaches.spectre.dataset import (
-    FSamplingConfig,
-    SpectreBatch,
-    SpectreDataset,
-    SpectreTrainingExample,
-    collate_spectre_batch,
+    build_example,
+    collate,
+    sample_context,
 )
-from alphatamp.approaches.spectre.loss import plackett_luce_loss
-from alphatamp.approaches.spectre.model import SpectreModel
-from alphatamp.approaches.spectre.priors import BasePrior, make_prior
+from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.inference import deployed_rollout_traced
+from alphatamp.approaches.spectre.io import list_episodes, load_episode
+from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
+from alphatamp.approaches.spectre.encoders import D_REL_V3
+from alphatamp.approaches.spectre.model import (
+    N_OVERLAP_V3,
+    SpectreModel,
+    SpectreConfig,
+)
 from alphatamp.approaches.spectre.vocab import Vocab
 
 
 @dataclass
-class TrainingConfig:
-    """Hyperparameters for one SPECTRE training run."""
+class TrainConfig:
+    """Hyperparameters for :func:`train_v3`, persisted into every checkpoint."""
 
-    # Optimizer + schedule
+    epochs: int = 30
     lr: float = 3e-4
-    weight_decay: float = 1e-4
-    beta1: float = 0.9
-    beta2: float = 0.999
-    batch_size: int = 16
-    epochs: int = 20
-    warmup_steps: int = 500
-    lr_min: float = 1e-5
-    grad_clip: float = 1.0
-
-    # Regularization
-    prior_dropout_p: float = 0.2
-    augment: bool = True
-    # ``prior_type``: which BasePrior subclass to use for π(s).
-    #   "zero" — ZeroPrior (the original baseline; π ≡ 0).
-    #   "heuristic" — HeuristicPrior (per-episode z-score of the negated
-    #     pyperplan FF trajectory cost; RT2D-only). Same FF score the new
-    #     B2 baseline uses, surfaced into the model so σ has a warm start.
-    # Recorded in ``model_meta.json`` so eval/inference can reconstruct
-    # the matching prior at test time.
-    prior_type: str = "zero"
-    # Per-module dropout (attention, FFN, transformer, scorer MLP).
-    # Threaded into every nn.Dropout / MultiheadAttention dropout in
-    # ``model.py``. Default 0.1 matches the original spec; bump to
-    # 0.2–0.3 to fight overfitting (Tier 1 of the latest plan).
+    weight_decay: float = 5e-4
+    batch_size: int = 8
+    max_tags: int = 32
     dropout_p: float = 0.1
-
-    # Architecture toggles
-    # ``use_atom_sab2``: include the 2nd SAB in Φ_s atom-pool. Default True
-    # preserves current behavior; set False to ablate against the 1-SAB
-    # baseline (spec §4.3 original).
-    use_atom_sab2: bool = True
-
-    # ``use_static_tag_pool``: F3-B-(1) predicate-type-conditioned pooling.
-    # When True, atoms whose predicate-name is in
-    # ``env_registry.get_static_tag_predicates(env_variant)`` are routed
-    # through a dedicated SAB+PMA stream that does not compete with the
-    # fluent atom pool. Caller must pass ``static_tag_predicates`` to
-    # :func:`train`; if absent the model silently falls back to the
-    # single-pool path.
-    use_static_tag_pool: bool = False
-
-    # F-sampling (spec §8.2 default mix weights)
-    f_sampling_mode: str = "rollout_aligned_mix"
-    f_sampling_mix_weights: tuple[float, float, float] = (0.25, 0.25, 0.5)
-    f_sampling_log_normal_mu: float = 0.0
-    f_sampling_log_normal_sigma: float = 1.0
-
-    # F-subsample multiplier (spec §8.1 fix #5)
-    num_f_samples_per_epoch: int = 8
-    num_f_samples_per_val_episode: int = 4
-
-    # Reproducibility
+    augment: bool = True
     seed: int = 0
+    warmup_epochs: int = 2
+    within_length_weight: float = 1.0
+    use_overlap: bool = True
+    use_records: bool = True
+    select_window: int = 3
+    # Uncensored, whole-split selection. `select_budget=None` means "run to the pool
+    # cap", the same convention reporting uses (`decisions.md` 2026-06-07). See module
+    # docstring for why censoring here was silently fatal.
+    val_episodes: int = 100
+    select_budget: Optional[int] = None
+    num_workers: int = 4
+    # "both" | "jaccard" | "dead" | "none" -- which cand_overlap columns the net sees.
+    # Dropping `dead` is C5 hygiene (the sound rule stays outside the net as demotion);
+    # see the note in `dataset_v3.build_example`.
+    overlap_mode: str = "both"
+    # >0 switches on rollout-aligned |F| sampling out to this size. v2.2's inherited cap
+    # of 8 never shows the model the |F| ~ 20-40 regime an s3 rollout actually spends
+    # most of its attempts in.
+    tail_max_f: int = 0
+    sinusoidal_pos: bool = False
+    # Collapse a candidate's failures to one record per (schema, args). The refiner
+    # emits one per failed *sample*, which lets one unlucky candidate contribute
+    # hundreds of tokens; §6.1 defines a record per failing *query*.
+    aggregate_records: bool = False
+    # Per-object evidence summary on scene tokens (SceneEncoderV3).
+    use_obj_evidence: bool = False
+    # Separate cross-attention channel for evidence (CrossAttentionScorerV3).
+    evidence_attn: bool = False
+    # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
+    coverage_feats: bool = False
+    # Which of the pair the net sees, by zeroing the other column: both | coverage |
+    # waste. They have only ever been measured together, so this isolates them.
+    coverage_mode: str = "both"
+    unified_coverage: bool = True
+    """Compute coverage/waste by the unified definitions rather than the deployed
+    ``S(c) = args \\ goal_objects`` formula.
 
-    # Validation logging knobs
-    auroc_t_max: int = 3  # AUROC(0..auroc_t_max)
-
-    # DataLoader
-    num_workers: int = 0  # 0 = single-process (LRU cache works simply)
-
-    # Early stopping
-    # Stop when the configured ``checkpoint_metric`` has not improved for
-    # ``early_stop_patience`` epochs, provided we have already trained at
-    # least ``early_stop_min_epochs``. Set ``early_stop_patience = 0`` to
-    # disable.
-    early_stop_patience: int = 0
-    early_stop_min_epochs: int = 5
-
-    # Per-epoch deployment-style rollout evaluation. When enabled the
-    # trainer runs ``eda.spectre_evaluate`` on the full train and val
-    # splits each epoch and logs ``train/val_rollout_attempts`` plus
-    # standard deviation and censoring rate. ~10s per epoch overhead on
-    # CPU; required when ``checkpoint_metric == "val_rollout_attempts"``.
-    rollout_eval_each_epoch: bool = True
-
-    # ``checkpoint_metric``: how to pick ``best.pt``.
-    #   "val_rollout_attempts": min mean-attempts on val rollout (lower is
-    #     better), with val_loss as tiebreak (lower is better). Most
-    #     directly tracks the deployment metric.
-    #   "val_loss": legacy — min val PL loss with AUROC(3) tiebreak (higher
-    #     auroc3 is better).
-    # Early stopping uses the same metric.
-    checkpoint_metric: str = "val_rollout_attempts"
-
-    # ``rollout_attempt_budget``: attempt budget used inside the per-epoch
-    # rollout eval. Mirrors the test-time budget the EDA notebook uses
-    # so train-time and reported numbers are directly comparable.
-    rollout_attempt_budget: int = 20
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _set_seed(seed: int) -> None:
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    Default since 2026-07-31: measured -1.66 FP against the 7.44 baseline on dd2d_v4
+    over 3 seeds, CI [-2.71, -0.71], with every seed beating every baseline seed.
+    """
+    # §6.1's `s_j`: each record token also carries the abstract state at its failing
+    # step,
+    # as the delta from s_0 (which atoms the prefix added, which it deleted).
+    use_state_delta: bool = False
+    # Scene-relation width, persisted so ``load_checkpoint`` reloads the right shape.
+    # Fixed at the deployed 3 (the anchor-free triple); a field only so it round-trips
+    # through the saved cfg and a checkpoint predating the narrowing (no key -> 8-wide)
+    # fails to load rather than scoring the un-narrowed model. See docs/decisions
+    # 2026-08-08.
+    d_rel: int = D_REL_V3
+    # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
+    # evidence from 30% of the rest, so >half of training carries no evidence -- while a
+    # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
+    # after it. Over-weighting the static case is the same rollout-alignment error as the
+    # |F| cap, on the other axis.
+    p_empty: float = 0.35
+    p_drop_facts: float = 0.3
+    # G9: restrict the *training* split to these strata (empty = all). This is experiment
+    # design, not a model input -- C2 bans stratum as an input or a test-time gate, and
+    # this is neither: it decides which episodes exist during training, exactly as the
+    # proposal's "train s0-s2, deploy s3" protocol (§7.4 A4) requires.
+    train_strata: tuple[int, ...] = ()
+    # Weight averaging for lower-variance deployment. "none" | "ema". This is a training
+    # *process* lever, not an input or architecture switch: it changes which weights are
+    # saved, never what the model contains or what `build_example` emits. OFF ("none")
+    # never constructs the EMA shadow and takes the current code path byte-for-byte (the
+    # D-8 exact-absence discipline), so `weight_avg="none"` runs are bit-identical to
+    # pre-change training. Added 2026-08-08 to recover the domain-agnostic (narrowed-input)
+    # model's across-seed variance without touching inputs/architecture -- the removed
+    # scene columns were inference-inert (probe Δ0.00) and the best narrowed seed matches
+    # the baseline, so the gap is optimization variance, which EMA targets directly.
+    weight_avg: str = "none"
+    # Per-optimizer-step EMA decay; effective averaging window ~ 1/(1-decay) steps. 0.999
+    # over the post-warmup tail is a fine-grained local average in the single basin the
+    # cosine-to-zero LR settles into. On a tiny dataset (few steps/epoch, e.g. SB2D) drop
+    # toward 0.99 if the EMA barely separates from the raw model.
+    ema_decay: float = 0.999
+    # Epoch at which the EMA shadow is (re-)seeded from the live weights and updates begin.
+    # Default = warmup_epochs so the shadow never averages in the random init or the
+    # high-LR warmup iterates.
+    ema_start_epoch: int = 2
 
 
-def _cosine_with_warmup(
-    optimizer: torch.optim.Optimizer,
-    warmup_steps: int,
-    total_steps: int,
-    base_lr: float,
-    min_lr: float,
-) -> torch.optim.lr_scheduler.LambdaLR:
-    def lr_lambda(step: int) -> float:
-        if step < warmup_steps:
-            return float(step + 1) / float(max(1, warmup_steps))
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        progress = min(progress, 1.0)
-        cos = 0.5 * (1.0 + math.cos(math.pi * progress))
-        # Linear blend between min_lr and base_lr; LambdaLR multiplies the
-        # base_lr passed to AdamW.
-        scale = (min_lr / base_lr) + (1.0 - min_lr / base_lr) * cos
-        return scale
+class SpectreV3Dataset(Dataset):
+    """Episodes -> ``(_V2Example, record arrays)``.
 
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    Loads **raw** and lets ``build_example`` canonicalize once. That is not
+    incidental: ``canonicalize_episode`` is not idempotent, and feeding it an
+    already-canonical episode silently changes the object->tag binding (the bug that
+    skewed every cached comparison number until 2026-07-26).
+    """
+
+    def __init__(
+        self,
+        split_dir: Path,
+        vocab: Vocab,
+        cfg: TrainConfig,
+        spec: Optional[DomainSpec] = None,
+    ) -> None:
+        self.vocab = vocab
+        self.cfg = cfg
+        self.spec = spec
+        self.epoch = 0
+        self._paths = [
+            p
+            for p in list_episodes(split_dir)
+            if _keep(load_episode(p), cfg.train_strata)
+        ]
+
+    @property
+    def paths(self) -> list[Path]:
+        """Episode paths, in split order.
+
+        Public because the selector needs to *stride* this list rather than take a
+        prefix: the collector fills strata in seed bands, so a prefix is the easy half.
+        """
+        return self._paths
+
+    def set_epoch(self, epoch: int) -> None:
+        """Reseed the per-epoch F-subset sampling, so each epoch draws new contexts."""
+        self.epoch = epoch
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def __getitem__(self, idx: int):
+        episode = load_episode(self._paths[idx])
+        spec = self.spec or spec_for(episode.provenance.env_variant)
+        rng = np.random.default_rng((self.cfg.seed, idx, self.epoch))
+        fail_idx = [i for i, o in enumerate(episode.outcomes) if o.outcome == "fail"]
+        ctx, hide = sample_context(
+            fail_idx,
+            rng,
+            p_empty=self.cfg.p_empty,
+            p_drop_facts=self.cfg.p_drop_facts,
+            tail_max_f=self.cfg.tail_max_f,
+        )
+        example, records = build_example(
+            episode,
+            self.vocab,
+            rng=rng,
+            max_tags=self.cfg.max_tags,
+            evidence=True,
+            context_f=ctx,
+            hide_facts=hide,
+            augment_tags=self.cfg.augment,
+            spec=spec,
+            overlap_mode=self.cfg.overlap_mode,
+            aggregate_records=self.cfg.aggregate_records,
+            coverage_feats=self.cfg.coverage_feats,
+            coverage_mode=self.cfg.coverage_mode,
+            unified_coverage=self.cfg.unified_coverage,
+            state_delta=self.cfg.use_state_delta,
+        )
+        if not self.cfg.use_records:
+            records = []
+        return example, records
 
 
-def _move_batch(batch: SpectreBatch, device: torch.device) -> SpectreBatch:
-    """Shallow copy with every tensor moved to ``device``."""
-    fields: dict[str, object] = {}
-    for name, val in batch.__dict__.items():
-        if isinstance(val, torch.Tensor):
-            fields[name] = val.to(device)
+def _trainable(ep) -> bool:
+    return (
+        ep.scene_geometry is not None
+        and ep.summary.num_success >= 1
+        and len(ep.skeleton_pool) >= 2
+    )
+
+
+def _claim_out_dir(out_dir: Path) -> None:
+    """Refuse to start if another live run already owns this checkpoint directory.
+
+    Two runs of the same arm silently interleave their writes to ``best.pt``, so the file
+    ends up from whichever finished last and the checkpoint's provenance is
+    unrecoverable.
+    That happened during the 2026-07-27 push: a relaunch after a crash left two processes
+    on one path, and the same config scored 8.57 then 8.39 as the second overwrote the
+    first. The conclusion survived because the config was identical; it would not have if
+    the arms had differed.
+
+    A stale marker (owner no longer alive) is reclaimed rather than fatal, so a killed run
+    does not block the directory forever.
+    """
+    marker = out_dir / ".owner"
+    if marker.is_file():
+        try:
+            owner = int(marker.read_text().strip())
+            os.kill(owner, 0)  # signal 0 = liveness probe, sends nothing
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass  # stale or unreadable -> reclaim
         else:
-            fields[name] = val
-    return SpectreBatch(**fields)  # type: ignore[arg-type]
+            raise RuntimeError(
+                f"{out_dir} is already being written by pid {owner}. Two runs sharing a "
+                f"checkpoint dir produce a best.pt of unrecoverable provenance. Use a "
+                f"different --out-suffix, or stop that run first."
+            )
+    marker.write_text(str(os.getpid()))
+    atexit.register(lambda: marker.unlink(missing_ok=True))
 
 
-def _collate_with_vocab(vocab: Vocab):
-    def _collate(batch: list[SpectreTrainingExample]) -> SpectreBatch:
-        return collate_spectre_batch(batch, vocab)
+def _keep(ep, strata: tuple[int, ...]) -> bool:
+    """``_trainable`` plus the optional G9 stratum restriction on the training split."""
+    if not _trainable(ep):
+        return False
+    if not strata:
+        return True
+    from alphatamp.approaches.spectre.compare import stratum_of
+
+    return stratum_of(int(ep.provenance.problem_id)) in strata
+
+
+def _make_collate(max_arity: int, max_pred_arity: int = 1):
+    def _collate(items):
+        examples = [e for e, _ in items]
+        records = [r for _, r in items]
+        return collate(
+            examples,
+            max_arity=max_arity,
+            records=records,
+            max_pred_arity=max_pred_arity,
+        )
 
     return _collate
 
 
-def _build_f_sampling_config(cfg: TrainingConfig) -> FSamplingConfig:
-    return FSamplingConfig(
-        mode=cfg.f_sampling_mode,
-        mix_weights=cfg.f_sampling_mix_weights,
-        log_normal_mu=cfg.f_sampling_log_normal_mu,
-        log_normal_sigma=cfg.f_sampling_log_normal_sigma,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Validation: PL loss + AUROC(t) + top-1 hit rate
-# ---------------------------------------------------------------------------
-
-
-def _safe_auroc(scores: list[float], labels: list[int]) -> float | None:
-    """Return AUROC, or ``None`` if undefined (single-class labels).
-
-    Uses a no-sklearn-dependency rank-sum implementation for portability.
-    """
-    if not labels:
-        return None
-    pos = [s for s, y in zip(scores, labels) if y == 1]
-    neg = [s for s, y in zip(scores, labels) if y == 0]
-    if not pos or not neg:
-        return None
-    # Mann-Whitney U / (|pos|*|neg|).
-    ranks = _rank_with_ties(scores)
-    rank_sum_pos = sum(ranks[i] for i, y in enumerate(labels) if y == 1)
-    n_pos = len(pos)
-    n_neg = len(neg)
-    u = rank_sum_pos - n_pos * (n_pos + 1) / 2.0
-    return u / (n_pos * n_neg)
-
-
-def _rank_with_ties(scores: list[float]) -> list[float]:
-    """Average-rank handling for ties; ranks are 1-indexed."""
-    order = sorted(range(len(scores)), key=lambda i: scores[i])
-    ranks = [0.0] * len(scores)
-    i = 0
-    while i < len(order):
-        j = i
-        while j + 1 < len(order) and scores[order[j + 1]] == scores[order[i]]:
-            j += 1
-        avg = (i + j) / 2.0 + 1.0  # 1-indexed average
-        for k in range(i, j + 1):
-            ranks[order[k]] = avg
-        i = j + 1
-    return ranks
-
-
-@dataclass
-class EvalReport:
-    """Per-epoch validation metrics returned by :func:`_evaluate`."""
-
-    val_loss: float
-    auroc_by_t: dict[int, float | None]
-    top1_by_t: dict[int, float | None]
-    per_t_count: dict[int, int]
-
-
-def _accumulate_auroc_buckets(
-    logits: torch.Tensor,
-    batch: SpectreBatch,
-    t_max: int,
-    scores_by_t: dict[int, list[float]],
-    labels_by_t: dict[int, list[int]],
-    top1_correct_by_t: dict[int, int],
-    top1_total_by_t: dict[int, int],
-) -> None:
-    """Stratify-by-|F| accumulator for AUROC(t) + top-1 hit rate.
-
-    Mutates the four passed-in dicts in place. Shared between train and val loops so on-
-    the-fly train AUROC matches the validation definition.
-    """
-    f_sizes = batch.f_mask.sum(dim=-1).cpu().tolist()
-    r_mask = batch.r_mask.cpu()
-    r_succ = batch.r_success_mask.cpu()
-    logits_cpu = logits.detach().cpu()
-    for ex_idx, t in enumerate(f_sizes):
-        t = int(t)
-        if t > t_max:
-            continue
-        row_logits = logits_cpu[ex_idx]
-        row_mask = r_mask[ex_idx]
-        row_succ = r_succ[ex_idx]
-        # AUROC over R-valid slots only.
-        for j in range(row_mask.numel()):
-            if not row_mask[j].item():
-                continue
-            scores_by_t[t].append(float(row_logits[j].item()))
-            labels_by_t[t].append(1 if row_succ[j].item() else 0)
-        # Top-1 hit rate: argmax index over R-valid slots.
-        masked = row_logits.clone()
-        masked[~row_mask] = -float("inf")
-        pick = int(masked.argmax().item())
-        top1_total_by_t[t] += 1
-        if row_succ[pick].item():
-            top1_correct_by_t[t] += 1
-
-
-def _finalize_auroc(
-    scores_by_t: dict[int, list[float]],
-    labels_by_t: dict[int, list[int]],
-    top1_correct_by_t: dict[int, int],
-    top1_total_by_t: dict[int, int],
-    t_max: int,
-) -> tuple[dict[int, float | None], dict[int, float | None], dict[int, int]]:
-    auroc_by_t: dict[int, float | None] = {
-        t: _safe_auroc(scores_by_t[t], labels_by_t[t]) for t in range(t_max + 1)
-    }
-    top1_by_t: dict[int, float | None] = {
-        t: (top1_correct_by_t[t] / top1_total_by_t[t]) if top1_total_by_t[t] else None
-        for t in range(t_max + 1)
-    }
-    per_t_count = {t: top1_total_by_t[t] for t in range(t_max + 1)}
-    return auroc_by_t, top1_by_t, per_t_count
-
-
-def _evaluate(
+@torch.no_grad()
+def deployed_val_fp(
     model: SpectreModel,
-    val_dataset: SpectreDataset,
+    episodes: list,
     vocab: Vocab,
-    cfg: TrainingConfig,
-    device: torch.device,
-) -> EvalReport:
+    device: str,
+    spec: DomainSpec,
+    max_tags: int,
+    budget: Optional[int] = None,
+    overlap_mode: str = "both",
+    aggregate_records: bool = False,
+    coverage_feats: bool = False,
+    coverage_mode: str = "both",
+    unified_coverage: bool = False,
+    state_delta: bool = False,
+) -> float:
+    """Mean failed attempts before first success, on the real deployed loop.
+
+    The selector measures exactly what is deployed: a purely learned ranker, with no
+    proof-demotion (cut from the method on 2026-07-30). ``budget=None`` runs to the pool
+    cap, i.e. uncensored -- the same convention reporting uses, and the only setting under
+    which this statistic can see the s2/s3 tail where models actually differ.
+    """
     model.eval()
-    loader = DataLoader(
-        val_dataset,
-        batch_size=cfg.batch_size,
-        shuffle=False,
-        collate_fn=_collate_with_vocab(vocab),
-        num_workers=cfg.num_workers,
-    )
-    losses: list[float] = []
-    scores_by_t: dict[int, list[float]] = defaultdict(list)
-    labels_by_t: dict[int, list[int]] = defaultdict(list)
-    top1_correct_by_t: dict[int, int] = defaultdict(int)
-    top1_total_by_t: dict[int, int] = defaultdict(int)
-
-    with torch.no_grad():
-        for batch in loader:
-            batch = _move_batch(batch, device)
-            logits = model(batch)
-            loss = plackett_luce_loss(logits, batch.r_success_mask, batch.r_mask)
-            losses.append(float(loss.item()))
-            _accumulate_auroc_buckets(
-                logits,
-                batch,
-                cfg.auroc_t_max,
-                scores_by_t,
-                labels_by_t,
-                top1_correct_by_t,
-                top1_total_by_t,
-            )
-
-    val_loss = float(np.mean(losses)) if losses else float("nan")
-    auroc_by_t, top1_by_t, per_t_count = _finalize_auroc(
-        scores_by_t,
-        labels_by_t,
-        top1_correct_by_t,
-        top1_total_by_t,
-        cfg.auroc_t_max,
-    )
-    return EvalReport(
-        val_loss=val_loss,
-        auroc_by_t=auroc_by_t,
-        top1_by_t=top1_by_t,
-        per_t_count=per_t_count,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Per-epoch deployment-style rollout eval (test-time attempt loop on val/train)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class RolloutSummary:
-    """Mean / std / censoring rate over per-episode attempts.
-
-    Mirrors the columns the EDA notebook reports for B1–B5 + SPECTRE so the per-epoch
-    console output is directly comparable.
-    """
-
-    mean_attempts: float
-    std_attempts: float
-    censoring_rate: float
-    n_episodes: int
-
-    def to_dict(self) -> dict[str, float | int]:
-        """Return the summary as a JSON-serializable dict (for log.jsonl)."""
-        return {
-            "mean_attempts": self.mean_attempts,
-            "std_attempts": self.std_attempts,
-            "censoring_rate": self.censoring_rate,
-            "n_episodes": self.n_episodes,
-        }
-
-
-def _summarize_rollout(
-    arr_attempts: np.ndarray, arr_censored: np.ndarray
-) -> RolloutSummary:
-    if arr_attempts.size == 0:
-        return RolloutSummary(
-            mean_attempts=float("nan"),
-            std_attempts=float("nan"),
-            censoring_rate=float("nan"),
-            n_episodes=0,
+    fps = []
+    for ep in episodes:
+        attempts, _ = deployed_rollout_traced(
+            model,
+            ep,
+            vocab,
+            device,
+            spec=spec,
+            max_tags=max_tags,
+            max_attempts=budget,
+            overlap_mode=overlap_mode,
+            aggregate_records=aggregate_records,
+            coverage_feats=coverage_feats,
+            coverage_mode=coverage_mode,
+            unified_coverage=unified_coverage,
+            state_delta=state_delta,
         )
-    return RolloutSummary(
-        mean_attempts=float(arr_attempts.mean()),
-        std_attempts=float(arr_attempts.std()),
-        censoring_rate=float(arr_censored.mean()),
-        n_episodes=int(arr_attempts.size),
-    )
+        fps.append(float(attempts) - 1.0)
+    return float(np.mean(fps)) if fps else float("inf")
 
 
-def _checkpoint_metric_tuple(
-    cfg: TrainingConfig,
-    val_loss: float,
-    val_auroc3: float | None,
-    val_rollout_attempts: float | None,
-) -> tuple[float, float]:
-    """Return a tuple whose lexicographic min is the "best" checkpoint.
+def _ema_update(ema, model, decay: float) -> None:
+    """In-place EMA of ``model``'s weights into ``ema``.
 
-    Lex-min semantics let us encode any (primary, tiebreak) ordering with "lower is
-    better" by negating quantities where higher is better.
+    Float tensors decay toward the live weights; the rare non-float tensor (none exist in
+    this LayerNorm-only model today) is copied verbatim so the shadow stays a valid,
+    loadable state dict. Called only when EMA is enabled; the ``None`` guard in
+    :func:`_run_epoch` keeps the OFF path bit-identical to pre-change training.
     """
-    if cfg.checkpoint_metric == "val_rollout_attempts":
-        if val_rollout_attempts is None or math.isnan(val_rollout_attempts):
-            # Defensive: fall back to val_loss if rollout produced no
-            # measurement (e.g., no trainable val episodes).
-            return (float("inf"), val_loss)
-        return (val_rollout_attempts, val_loss)
-    if cfg.checkpoint_metric == "val_loss":
-        # Primary: min val_loss. Tiebreak: max auroc3 → use -auroc3.
-        tiebreak = -val_auroc3 if val_auroc3 is not None else 0.0
-        return (val_loss, tiebreak)
-    raise ValueError(
-        f"Unknown checkpoint_metric={cfg.checkpoint_metric!r};"
-        " expected one of {'val_rollout_attempts', 'val_loss'}"
-    )
+    with torch.no_grad():
+        for e, p in zip(ema.state_dict().values(), model.state_dict().values()):
+            if e.is_floating_point():
+                e.mul_(decay).add_(p.detach(), alpha=1.0 - decay)
+            else:
+                e.copy_(p)
 
 
-# ---------------------------------------------------------------------------
-# wandb (optional; train() stays import-free and duck-types on .log/.summary)
-# ---------------------------------------------------------------------------
+def _run_epoch(
+    model, loader, device, wl_weight: float, opt=None, ema=None, ema_decay: float = 0.0
+) -> float:
+    train = opt is not None
+    model.train(train)
+    total, n = 0.0, 0
+    for batch in loader:
+        batch = batch.to(device)
+        with torch.set_grad_enabled(train):
+            logits, _ = model(batch)
+            loss = plackett_luce_loss(logits, batch.success_mask, batch.pool_mask)
+            if train and wl_weight and batch.cand_prior is not None:
+                loss = loss + wl_weight * within_length_pl_loss(
+                    logits,
+                    batch.success_mask,
+                    batch.pool_mask,
+                    batch.cand_prior[:, :, 1],
+                )
+        if train:
+            opt.zero_grad(set_to_none=True)
+            loss.backward()  # type: ignore[no-untyped-call]
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            if ema is not None:
+                _ema_update(ema, model, ema_decay)
+        total += float(loss.item())
+        n += 1
+    return total / max(n, 1)
 
 
-def _flatten_for_wandb(log_record: dict[str, object]) -> dict[str, float]:
-    """Flatten the per-epoch ``log_record`` into slashed scalar wandb keys.
-
-    Nested ``{t: value}`` maps become ``.../{metric}_{t}`` and rollout summaries
-    become ``{split}_rollout/{field}``. ``None`` and ``NaN`` values are skipped so
-    wandb's per-step charts stay clean.
-    """
-    flat: dict[str, float] = {}
-
-    def _put(key: str, val: object) -> None:
-        if val is None or isinstance(val, bool):
-            if isinstance(val, bool):
-                flat[key] = float(val)
-            return
-        if isinstance(val, (int, float)) and not (
-            isinstance(val, float) and math.isnan(val)
-        ):
-            flat[key] = float(val)
-
-    _put("train/loss", log_record.get("train_loss"))
-    _put("val/loss", log_record.get("val_loss"))
-    _put("lr", log_record.get("lr"))
-    _put("global_step", log_record.get("global_step"))
-    for src, dst in (
-        ("auroc", "val/auroc"),
-        ("top1", "val/top1"),
-        ("per_t_count", "val/count"),
-        ("train_auroc", "train/auroc"),
-        ("train_top1", "train/top1"),
-        ("train_per_t_count", "train/count"),
-    ):
-        d = log_record.get(src)
-        if isinstance(d, dict):
-            for t, v in d.items():
-                _put(f"{dst}_{t}", v)
-    for src, dst in (
-        ("train_rollout", "train_rollout"),
-        ("val_rollout", "val_rollout"),
-    ):
-        d = log_record.get(src)
-        if isinstance(d, dict):
-            for k, v in d.items():
-                _put(f"{dst}/{k}", v)
-    return flat
-
-
-# ---------------------------------------------------------------------------
-# train()
-# ---------------------------------------------------------------------------
-
-
-def train(
-    cfg: TrainingConfig,
+def train_v3(
+    cfg: TrainConfig,
     train_dir: Path,
     val_dir: Path,
     vocab: Vocab,
-    type_aug_policy: dict[str, bool] | None,
     out_dir: Path,
-    prior: BasePrior | None = None,
-    device: Optional[torch.device | str] = None,
-    static_tag_predicates: list[str] | tuple[str, ...] | None = None,
-    wandb_run: object | None = None,
-) -> Path:
-    """Run a SPECTRE training session and return the path of ``best.pt``.
+    device: Optional[str] = None,
+) -> dict:
+    """Train one v3 ranker, writing ``best.pt`` and ``log.jsonl`` under ``out_dir``.
 
-    ``out_dir`` will gain ``best.pt``, ``last.pt``, ``log.jsonl``, and
-    ``model_meta.json``.
+    Returns the run summary (best selection score, epochs, training-set size).
     """
-    if prior is None:
-        prior = make_prior(cfg.prior_type)
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device(device) if not isinstance(device, torch.device) else device
-
-    out_dir = Path(out_dir)
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
     out_dir.mkdir(parents=True, exist_ok=True)
-    log_path = out_dir / "log.jsonl"
-    log_handle = open(log_path, "a", encoding="utf-8")
+    _claim_out_dir(out_dir)
 
-    _set_seed(cfg.seed)
+    probe = load_episode(list_episodes(train_dir)[0])
+    spec = spec_for(probe.provenance.env_variant)
 
-    f_cfg = _build_f_sampling_config(cfg)
-    train_dataset = SpectreDataset(
-        split_dir=train_dir,
-        prior=prior,
-        seed=cfg.seed,
-        f_sampling=f_cfg,
-        augment=cfg.augment,
-        type_aug_policy=type_aug_policy,
-        num_f_samples_per_epoch=cfg.num_f_samples_per_epoch,
-    )
-    val_dataset = SpectreDataset(
-        split_dir=val_dir,
-        prior=prior,
-        seed=cfg.seed + 10_000,  # different stream from train
-        f_sampling=f_cfg,
-        augment=False,
-        type_aug_policy=type_aug_policy,
-        num_f_samples_per_epoch=cfg.num_f_samples_per_val_episode,
-    )
-
-    # Resolve the static-tag predicate list: only honored when
-    # ``cfg.use_static_tag_pool`` is set; otherwise pass None so the model
-    # uses the single-pool path even if a list was supplied by the caller.
-    resolved_static_tags = (
-        list(static_tag_predicates)
-        if (cfg.use_static_tag_pool and static_tag_predicates)
-        else None
-    )
-    model = SpectreModel(
-        vocab,
-        prior_dropout_p=cfg.prior_dropout_p,
-        use_atom_sab2=cfg.use_atom_sab2,
-        static_tag_predicates=resolved_static_tags,
-        dropout_p=cfg.dropout_p,
-    ).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=cfg.lr,
-        weight_decay=cfg.weight_decay,
-        betas=(cfg.beta1, cfg.beta2),
-    )
-
+    train_ds = SpectreV3Dataset(train_dir, vocab, cfg, spec)
+    val_ds = SpectreV3Dataset(val_dir, vocab, cfg, spec)
+    collate = _make_collate(vocab.max_operator_arity, vocab.max_predicate_arity)
+    # Tensorization is ~79% of a training step (measured) and the model is tiny, so the
+    # loader is the bottleneck, not the GPU. `persistent_workers` stays off on purpose:
+    # workers are re-forked each epoch and so pick up `set_epoch`, which drives both the
+    # tag permutation and the failure-context sampling.
     train_loader = DataLoader(
-        train_dataset,
+        train_ds,
         batch_size=cfg.batch_size,
         shuffle=True,
-        collate_fn=_collate_with_vocab(vocab),
+        collate_fn=collate,
         num_workers=cfg.num_workers,
     )
-    steps_per_epoch = max(1, math.ceil(len(train_dataset) / cfg.batch_size))
-    total_steps = steps_per_epoch * cfg.epochs
-    scheduler = _cosine_with_warmup(
-        optimizer,
-        warmup_steps=cfg.warmup_steps,
-        total_steps=total_steps,
-        base_lr=cfg.lr,
-        min_lr=cfg.lr_min,
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=cfg.num_workers,
+    )
+    # Stride, never truncate. The collector fills strata in seed bands and episodes are
+    # stored in seed order, so `[:50]` would hand the selector only strata 0-1 -- the
+    # easy half -- and it would happily pick a checkpoint hopeless on s2/s3.
+    _val_paths = val_ds.paths
+    _stride = max(1, len(_val_paths) // max(cfg.val_episodes, 1))
+    val_episodes = [load_episode(p) for p in _val_paths[::_stride]][: cfg.val_episodes]
+
+    model = SpectreModel(
+        n_ops=len(vocab.operators),
+        max_arity=vocab.max_operator_arity,
+        cfg=SpectreConfig(
+            n_overlap_feats=(
+                (N_OVERLAP_V3 if cfg.coverage_feats else 2) if cfg.use_overlap else 0
+            ),
+            n_prior_feats=0,
+            d_rel=cfg.d_rel,
+            max_tags=cfg.max_tags,
+            dropout_p=cfg.dropout_p,
+            use_records=cfg.use_records,
+            sinusoidal_pos=cfg.sinusoidal_pos,
+            use_obj_evidence=cfg.use_obj_evidence,
+            evidence_attn=cfg.evidence_attn,
+            coverage_feats=cfg.coverage_feats,
+            use_state_delta=cfg.use_state_delta,
+            n_predicates=len(vocab.predicates),
+            max_pred_arity=vocab.max_predicate_arity,
+        ),
+    ).to(device)
+    opt = torch.optim.AdamW(
+        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
     )
 
-    # Snapshot training config + vocab metadata so a downstream eval driver
-    # can verify it's loading a checkpoint trained against the right vocab.
-    meta = {
-        "config": asdict(cfg),
-        "vocab_config_hash": vocab.config_hash,
-        "type_aug_policy": dict(type_aug_policy or {}),
-        "static_tag_predicates": list(resolved_static_tags or []),
-        "num_episodes_train": train_dataset.num_episodes,
-        "num_episodes_val": val_dataset.num_episodes,
-        "num_train_examples_per_epoch": len(train_dataset),
-        "steps_per_epoch": steps_per_epoch,
-        "total_steps": total_steps,
-    }
-    (out_dir / "model_meta.json").write_text(json.dumps(meta, indent=2))
+    print(
+        f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
+        f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
+        f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
+        f"tail_max_f={cfg.tail_max_f or 'off'} "
+        f"state_delta={cfg.use_state_delta} "
+        f"weight_avg={cfg.weight_avg}"
+        f"{f'(decay={cfg.ema_decay},start={cfg.ema_start_epoch})' if cfg.weight_avg == 'ema' else ''} "
+        f"selection=deployed-val-FP(ma{cfg.select_window}, "
+        f"n={len(val_episodes)}, "
+        f"budget={cfg.select_budget if cfg.select_budget else 'uncensored'})",
+        flush=True,
+    )
 
-    # Random-Φ + zero-init head baseline. The scorer's head.weight is
-    # zero-initialized, so the untrained logit is identically 0 regardless of
-    # prior_type — this should produce ~0.5 AUROC at every t (uniform
-    # ranking), confirming the architecture initializes as the spec
-    # describes. Anything materially off 0.5 means the init drifted.
-    random_phi_model = SpectreModel(
-        vocab,
-        prior_dropout_p=cfg.prior_dropout_p,
-        use_atom_sab2=cfg.use_atom_sab2,
-        dropout_p=cfg.dropout_p,
-    ).to(device)
-    random_phi_report = _evaluate(random_phi_model, val_dataset, vocab, cfg, device)
-    random_phi_baseline = {
-        "val_loss": random_phi_report.val_loss,
-        "auroc": {str(k): v for k, v in random_phi_report.auroc_by_t.items()},
-        "top1": {str(k): v for k, v in random_phi_report.top1_by_t.items()},
-        "per_t_count": {str(k): v for k, v in random_phi_report.per_t_count.items()},
-    }
-    del random_phi_model
-
-    # Load LoadedSplit objects once for per-epoch deployment-style rollout
-    # eval. Lazy import to avoid pulling eda's heavy video-rendering
-    # imports into the training startup path. The rollout itself runs
-    # ``inference.init_inference_state`` + ``select_next_skeleton`` per
-    # episode — same code path the notebook uses for SPECTRE evaluation.
-    rollout_train_split = None
-    rollout_val_split = None
-    if cfg.rollout_eval_each_epoch or cfg.checkpoint_metric == "val_rollout_attempts":
-        # pylint: disable=import-outside-toplevel
-        from alphatamp.approaches.spectre import eda as _eda
-
-        print("Loading splits for per-epoch rollout eval...")
-        rollout_train_split = _eda.load_split_episodes(train_dir)
-        rollout_val_split = _eda.load_split_episodes(val_dir)
-        print(
-            f"  rollout: train={len(rollout_train_split.episodes)} eps,"
-            f" val={len(rollout_val_split.episodes)} eps"
-        )
-
-    best_metric: tuple[float, float] = (float("inf"), float("inf"))
-    best_epoch = -1
-    epochs_since_improve = 0
-    best_path = out_dir / "best.pt"
-    last_path = out_dir / "last.pt"
-
-    global_step = 0
+    log: list[dict] = []
+    best = float("inf")
+    t0 = time.time()
+    # EMA shadow: built lazily at `ema_start_epoch` from the post-warmup weights, so it
+    # only ever averages in-basin iterates (never the random init / warmup). `None`
+    # everywhere when weight_avg != "ema", which keeps the OFF path byte-identical.
+    ema_model: Optional[SpectreModel] = None
     for epoch in range(cfg.epochs):
-        train_dataset.set_epoch(epoch)
-        model.train()
-        train_losses: list[float] = []
-        # Train-side AUROC accumulators, mirroring _evaluate. Shapes drift
-        # across the epoch as parameters update; this is a "smoothed"
-        # in-loop snapshot used only to detect train-vs-val divergence.
-        train_scores_by_t: dict[int, list[float]] = defaultdict(list)
-        train_labels_by_t: dict[int, list[int]] = defaultdict(list)
-        train_top1_correct: dict[int, int] = defaultdict(int)
-        train_top1_total: dict[int, int] = defaultdict(int)
-        for batch in train_loader:
-            batch = _move_batch(batch, device)
-            logits = model(batch)
-            loss = plackett_luce_loss(logits, batch.r_success_mask, batch.r_mask)
-            optimizer.zero_grad()
-            loss.backward()  # type: ignore[no-untyped-call]
-            nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-            optimizer.step()
-            scheduler.step()
-            train_losses.append(float(loss.item()))
-            global_step += 1
-            _accumulate_auroc_buckets(
-                logits,
-                batch,
-                cfg.auroc_t_max,
-                train_scores_by_t,
-                train_labels_by_t,
-                train_top1_correct,
-                train_top1_total,
-            )
-
-        train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
-        train_auroc_by_t, train_top1_by_t, train_per_t_count = _finalize_auroc(
-            train_scores_by_t,
-            train_labels_by_t,
-            train_top1_correct,
-            train_top1_total,
-            cfg.auroc_t_max,
+        train_ds.set_epoch(epoch)
+        for g in opt.param_groups:
+            g["lr"] = _lr_at(epoch, cfg)
+        if cfg.weight_avg == "ema" and epoch == cfg.ema_start_epoch:
+            ema_model = copy.deepcopy(model).eval()
+            for p in ema_model.parameters():
+                p.requires_grad_(False)
+        tr = _run_epoch(
+            model,
+            train_loader,
+            device,
+            cfg.within_length_weight,
+            opt,
+            ema=ema_model,
+            ema_decay=cfg.ema_decay,
         )
-        report = _evaluate(model, val_dataset, vocab, cfg, device)
+        va = _run_epoch(model, val_loader, device, 0.0, None)
 
-        # Per-epoch deployment-style rollout eval on train + val. Same code
-        # path the notebook uses for SPECTRE evaluation, so the numbers are
-        # directly comparable to the EDA summary table. Train-vs-val gap is
-        # the primary overfitting signal at the deployment metric.
-        train_rollout_summary: RolloutSummary | None = None
-        val_rollout_summary: RolloutSummary | None = None
-        if rollout_train_split is not None and rollout_val_split is not None:
-            # pylint: disable=import-outside-toplevel
-            from alphatamp.approaches.spectre import eda as _eda
-
-            train_rollout = _eda.spectre_evaluate(
-                rollout_train_split,
-                model,
+        # Keyword, not positional: the selector must see exactly the inputs training
+        # feeds,
+        # and a parameter inserted into this list would otherwise shift every switch
+        # after
+        # it by one -- silently selecting under a different configuration than it
+        # trained.
+        def _val_fp(m: SpectreModel) -> float:
+            # Closes over the epoch's selector config so the raw and EMA passes are scored
+            # identically (select what you deploy). Kwargs inlined, not splatted, so mypy
+            # checks each against `deployed_val_fp`'s typed signature.
+            return deployed_val_fp(
+                m,
+                val_episodes,
                 vocab,
-                attempt_budget=cfg.rollout_attempt_budget,
-                prior=prior,
-                device=device,
-                name="train_rollout",
-            )
-            val_rollout = _eda.spectre_evaluate(
-                rollout_val_split,
-                model,
-                vocab,
-                attempt_budget=cfg.rollout_attempt_budget,
-                prior=prior,
-                device=device,
-                name="val_rollout",
-            )
-            train_rollout_summary = _summarize_rollout(
-                train_rollout.attempts, train_rollout.censored
-            )
-            val_rollout_summary = _summarize_rollout(
-                val_rollout.attempts, val_rollout.censored
+                device,
+                spec,
+                max_tags=cfg.max_tags,
+                budget=cfg.select_budget,
+                overlap_mode=cfg.overlap_mode,
+                aggregate_records=cfg.aggregate_records,
+                coverage_feats=cfg.coverage_feats,
+                coverage_mode=cfg.coverage_mode,
+                unified_coverage=cfg.unified_coverage,
+                state_delta=cfg.use_state_delta,
             )
 
-        log_record: dict[str, object] = {
-            "epoch": epoch,
-            "global_step": global_step,
-            "train_loss": train_loss,
-            "val_loss": report.val_loss,
-            "lr": scheduler.get_last_lr()[0],
-            "auroc": {str(k): v for k, v in report.auroc_by_t.items()},
-            "top1": {str(k): v for k, v in report.top1_by_t.items()},
-            "per_t_count": {str(k): v for k, v in report.per_t_count.items()},
-            "train_auroc": {str(k): v for k, v in train_auroc_by_t.items()},
-            "train_top1": {str(k): v for k, v in train_top1_by_t.items()},
-            "train_per_t_count": {str(k): v for k, v in train_per_t_count.items()},
-        }
-        if train_rollout_summary is not None:
-            log_record["train_rollout"] = train_rollout_summary.to_dict()
-        if val_rollout_summary is not None:
-            log_record["val_rollout"] = val_rollout_summary.to_dict()
-        if epoch == 0:
-            log_record["random_phi_baseline"] = random_phi_baseline
-        log_handle.write(json.dumps(log_record) + "\n")
-        log_handle.flush()
-
-        rollout_str = ""
-        if train_rollout_summary is not None and val_rollout_summary is not None:
-            att_gap = (
-                val_rollout_summary.mean_attempts - train_rollout_summary.mean_attempts
-            )
-            rollout_str = (
-                f" train_att={train_rollout_summary.mean_attempts:.2f}±"
-                f"{train_rollout_summary.std_attempts:.2f}"
-                f" val_att={val_rollout_summary.mean_attempts:.2f}±"
-                f"{val_rollout_summary.std_attempts:.2f}"
-                f" gap={att_gap:+.2f}"
-            )
-        print(
-            f"epoch={epoch:02d} train_loss={train_loss:.4f}"
-            f" val_loss={report.val_loss:.4f}"
-            f" auroc0={report.auroc_by_t.get(0)}"
-            f" auroc3={report.auroc_by_t.get(3)}"
-            f"{rollout_str}"
-        )
-
-        # Save last; pick best.pt via the configured metric.
-        torch.save(
+        fp = _val_fp(model)
+        # Select what you deploy: when EMA is on, the EMA weights are the ones that would
+        # be shipped, so the selector must score *them* -- not only the raw model. `None`
+        # until the shadow exists (epoch < ema_start_epoch).
+        fp_ema = _val_fp(ema_model) if ema_model is not None else None
+        log.append(
             {
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "config": asdict(cfg),
-                "vocab_config_hash": vocab.config_hash,
-                "static_tag_predicates": list(resolved_static_tags or []),
-            },
-            last_path,
+                "train_loss": tr,
+                "val_loss": va,
+                "val_fp": fp,
+                "val_fp_ema": fp_ema,
+            }
         )
-        val_rollout_attempts = (
-            val_rollout_summary.mean_attempts if val_rollout_summary else None
-        )
-        cur_metric = _checkpoint_metric_tuple(
-            cfg,
-            val_loss=report.val_loss,
-            val_auroc3=report.auroc_by_t.get(3),
-            val_rollout_attempts=val_rollout_attempts,
-        )
-        is_better = cur_metric < best_metric
-        if is_better:
-            best_metric = cur_metric
-            best_epoch = epoch
-            epochs_since_improve = 0
+        # moving average: a single 100-episode val pass is noisy, and argmin over 30
+        # epochs would systematically pick the luckiest one rather than the best model.
+        # Keep-the-better: smooth the raw and (when present) the EMA series separately and
+        # save whichever weights produced the lower smoothed val_fp. Because both are
+        # scored on the same metric, turning EMA on can never select a *worse* checkpoint
+        # than off -- it can only help or be inert (the arm's safety property).
+        window = [r["val_fp"] for r in log[-cfg.select_window :]]
+        smoothed = float(np.mean(window))
+        candidates: list[tuple[float, str, SpectreModel]] = [(smoothed, "raw", model)]
+        ema_window = [
+            r["val_fp_ema"]
+            for r in log[-cfg.select_window :]
+            if r.get("val_fp_ema") is not None
+        ]
+        smoothed_ema = float(np.mean(ema_window)) if ema_window else None
+        if smoothed_ema is not None and ema_model is not None:
+            candidates.append((smoothed_ema, "ema", ema_model))
+        cand_val, which, winner = min(candidates, key=lambda c: c[0])
+        improved = cand_val < best
+        if improved:
+            best = cand_val
             torch.save(
                 {
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "config": asdict(cfg),
-                    "vocab_config_hash": vocab.config_hash,
-                    "static_tag_predicates": list(resolved_static_tags or []),
-                    "checkpoint_metric": cfg.checkpoint_metric,
-                    "checkpoint_metric_value": list(cur_metric),
+                    "state_dict": winner.state_dict(),
+                    "cfg": asdict(cfg),
+                    "n_ops": len(vocab.operators),
+                    "selected": which,
                 },
-                best_path,
+                out_dir / "best.pt",
             )
-        else:
-            epochs_since_improve += 1
-
-        # Optional wandb logging — duck-typed on ``.log`` / ``.summary`` so
-        # train() never imports wandb and is a no-op when no run is passed.
-        if wandb_run is not None:
-            flat = _flatten_for_wandb(log_record)
-            flat["checkpoint/is_best"] = float(is_better)
-            flat["checkpoint/epochs_since_improve"] = float(epochs_since_improve)
-            wandb_run.log(flat, step=epoch)  # type: ignore[attr-defined]
-            if epoch == 0:
-                run_summary = wandb_run.summary  # type: ignore[attr-defined]
-                run_summary["random_phi_baseline"] = random_phi_baseline
-
-        if (
-            cfg.early_stop_patience > 0
-            and epoch + 1 >= cfg.early_stop_min_epochs
-            and epochs_since_improve >= cfg.early_stop_patience
-        ):
+        if epoch == 0 or epoch == cfg.epochs - 1 or (epoch + 1) % 5 == 0:
+            per = (time.time() - t0) / (epoch + 1)
+            ema_str = f" ema={fp_ema:.2f}" if fp_ema is not None else ""
             print(
-                f"early stop: no {cfg.checkpoint_metric} improvement for"
-                f" {epochs_since_improve} epochs (patience={cfg.early_stop_patience})"
+                f"[train_v3] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
+                f"train={tr:.4f} val={va:.4f} val_fp={fp:.2f}{ema_str} "
+                f"ma={smoothed:.2f} best={best:.2f}"
+                f"{f' *{which}' if improved else ''} | "
+                f"{per:.1f}s/ep ETA {per * (cfg.epochs - epoch - 1) / 60:.1f}m",
+                flush=True,
             )
-            break
+    (out_dir / "log.jsonl").write_text("\n".join(json.dumps(r) for r in log))
+    return {"best_val_fp": best, "epochs": len(log), "n_train": len(train_ds)}
 
-    if wandb_run is not None:
-        summary = wandb_run.summary  # type: ignore[attr-defined]
-        summary["best/epoch"] = best_epoch
-        summary["best/checkpoint_metric"] = cfg.checkpoint_metric
-        summary["best/metric_value"] = list(best_metric)
 
-    log_handle.close()
-    return best_path
+def _lr_at(epoch: int, cfg: TrainConfig) -> float:
+    if epoch < cfg.warmup_epochs:
+        return cfg.lr * (epoch + 1) / max(cfg.warmup_epochs, 1)
+    progress = (epoch - cfg.warmup_epochs) / max(cfg.epochs - cfg.warmup_epochs, 1)
+    return cfg.lr * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def main(argv=None) -> int:
+    """CLI entry point; see the module docstring for the selection protocol."""
+    ap = argparse.ArgumentParser(description="Train the SPECTRE v3 ranker")
+    ap.add_argument("--data-root", default="data/spectre")
+    ap.add_argument("--env", default="dd2d_v4")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--lr", type=float, default=TrainConfig.lr)
+    ap.add_argument("--wl-weight", type=float, default=1.0)
+    ap.add_argument("--no-records", action="store_true", help="ablate record tokens")
+    ap.add_argument("--no-overlap", action="store_true", help="ablate [dead, jaccard]")
+    ap.add_argument("--num-workers", type=int, default=4)
+    ap.add_argument(
+        "--val-episodes",
+        type=int,
+        default=TrainConfig.val_episodes,
+        help="val episodes used by the selector (strided, never truncated)",
+    )
+    ap.add_argument(
+        "--select-budget",
+        type=int,
+        default=None,
+        help="censor the selector's rollout at N attempts; omit for uncensored",
+    )
+    ap.add_argument(
+        "--overlap-mode",
+        default="both",
+        choices=["both", "jaccard", "dead", "none"],
+        help="which cand_overlap columns the net sees; the sound rule is applied "
+        "outside the net as demotion regardless",
+    )
+    ap.add_argument(
+        "--tail-max-f",
+        type=int,
+        default=0,
+        help="rollout-aligned |F| sampling out to this size (0 = v2.2's cap of 8)",
+    )
+    ap.add_argument(
+        "--p-empty",
+        type=float,
+        default=TrainConfig.p_empty,
+        help="fraction of training examples with an empty failure context",
+    )
+    ap.add_argument(
+        "--p-drop-facts",
+        type=float,
+        default=TrainConfig.p_drop_facts,
+        help="evidence dropout rate on the remaining examples",
+    )
+    ap.add_argument(
+        "--coverage-feats",
+        action="store_true",
+        help="append observed coverage/waste to cand_overlap (the §5.1 necessity "
+        "features, grounded in reported culprits instead of a predicted head)",
+    )
+    ap.add_argument(
+        "--legacy-coverage",
+        action="store_false",
+        dest="unified_coverage",
+        default=TrainConfig.unified_coverage,
+        help="compute coverage/waste by the pre-2026-07-31 deployed formula "
+        "(S(c)=args\\goal_objects) instead of the unified definitions of "
+        "docs/unified_culprits_coverage_waste.md. Same two columns and the same tensor "
+        "shape either way; only the scalars change. Kept so the older arm stays "
+        "reproducible -- it measures 1.66 FP worse",
+    )
+    ap.add_argument(
+        "--coverage-mode",
+        default=TrainConfig.coverage_mode,
+        choices=["both", "coverage", "waste"],
+        help="which of the coverage/waste pair the net sees; the other column is "
+        "zeroed (shape unchanged). Only meaningful with --coverage-feats",
+    )
+    ap.add_argument(
+        "--evidence-attn",
+        action="store_true",
+        help="give evidence its own cross-attention channel instead of making it "
+        "compete with the scene inside one softmax",
+    )
+    ap.add_argument(
+        "--obj-evidence",
+        action="store_true",
+        help="summarise failures onto scene tokens via the tag join (SceneEncoderV3)",
+    )
+    ap.add_argument(
+        "--aggregate-records",
+        action="store_true",
+        help="one record token per (schema, args) instead of per failed sample",
+    )
+    ap.add_argument(
+        "--sinusoidal-pos",
+        action="store_true",
+        help="sinusoidal step positions (G9); retires the D-8 equivalence oracle",
+    )
+    ap.add_argument(
+        "--state-delta",
+        action="store_true",
+        help="each record token also carries s_j as the delta from s_0 (§6.1): which "
+        "atoms the failing prefix added and which it deleted",
+    )
+    ap.add_argument(
+        "--train-strata",
+        type=int,
+        nargs="*",
+        default=[],
+        help="restrict the TRAINING split to these strata, e.g. --train-strata 0 1 2",
+    )
+    ap.add_argument(
+        "--weight-avg",
+        default=TrainConfig.weight_avg,
+        choices=["none", "ema"],
+        help="EMA weight averaging for lower-variance deployment; 'none' is the "
+        "byte-identical current path",
+    )
+    ap.add_argument(
+        "--ema-decay",
+        type=float,
+        default=TrainConfig.ema_decay,
+        help="per-step EMA decay (only with --weight-avg ema)",
+    )
+    ap.add_argument(
+        "--ema-start-epoch",
+        type=int,
+        default=TrainConfig.ema_start_epoch,
+        help="epoch at which the EMA shadow is seeded (default = warmup_epochs)",
+    )
+    ap.add_argument(
+        "--select-window",
+        type=int,
+        default=TrainConfig.select_window,
+        help="moving-average window for the val-FP selector; widen for a jitterier model",
+    )
+    ap.add_argument("--out-suffix", default="")
+    a = ap.parse_args(argv)
+
+    root = Path(a.data_root)
+    vocab = Vocab.from_json(root / "derived" / a.env / "train_vocab.json")
+    cfg = TrainConfig(
+        epochs=a.epochs,
+        seed=a.seed,
+        lr=a.lr,
+        within_length_weight=a.wl_weight,
+        use_records=not a.no_records,
+        use_overlap=not a.no_overlap,
+        num_workers=a.num_workers,
+        val_episodes=a.val_episodes,
+        select_budget=a.select_budget,
+        overlap_mode=a.overlap_mode,
+        tail_max_f=a.tail_max_f,
+        aggregate_records=a.aggregate_records,
+        use_obj_evidence=a.obj_evidence,
+        evidence_attn=a.evidence_attn,
+        coverage_feats=a.coverage_feats,
+        coverage_mode=a.coverage_mode,
+        unified_coverage=a.unified_coverage,
+        use_state_delta=a.state_delta,
+        p_empty=a.p_empty,
+        p_drop_facts=a.p_drop_facts,
+        sinusoidal_pos=a.sinusoidal_pos,
+        train_strata=tuple(a.train_strata),
+        weight_avg=a.weight_avg,
+        ema_decay=a.ema_decay,
+        ema_start_epoch=a.ema_start_epoch,
+        select_window=a.select_window,
+    )
+    sub = "checkpoints_v3"
+    if a.no_records:
+        sub += "_norec"
+    if a.no_overlap:
+        sub += "_noov"
+    if not a.unified_coverage:
+        # Distinct directory: the two definitions produce different features, so a run
+        # must never land on top of a checkpoint trained under the other one. The
+        # *default* (unified) keeps the clean name; the legacy arm is the one marked.
+        sub += "_legacycov"
+    sub += a.out_suffix
+    out = root / sub / a.env / f"seed_{a.seed}"
+    res = train_v3(
+        cfg, root / "raw" / a.env / "train", root / "raw" / a.env / "val", vocab, out
+    )
+    print(f"train_v3 done: {res} -> {out}/best.pt", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

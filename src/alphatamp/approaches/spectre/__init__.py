@@ -1,30 +1,33 @@
 """SPECTRE: Skeleton-Pool Embedding with Contextual Transformer for REordering.
 
-Data pipeline + model subpackage. See ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md``
-for the RT2D-specific method and training spec;
-``docs/archive/SPECTRE_METHOD_SPEC.md`` for the original (kinder-env) method
-spec; and ``docs/archive/SPECTRE_TRAINING_PIPELINE_SPEC.md`` for the
-data-collection pipeline motivation.
+A learned listwise re-ranker for bilevel-TAMP skeleton pools. See ``docs/proposal.md``
+for the current method and evaluation direction.
 """
 
 from alphatamp.approaches.spectre.inference import (
-    InferenceState,
-    argmax_in_pool,
-    init_inference_state,
-    record_failure,
-    score_pool,
-    select_next_skeleton,
+    Trace,
+    deployed_rollout,
+    deployed_rollout_traced,
+    load_checkpoint,
 )
-from alphatamp.approaches.spectre.loss import plackett_luce_loss
-from alphatamp.approaches.spectre.model import SpectreModel
+from alphatamp.approaches.spectre.loss import (
+    plackett_luce_loss,
+    within_length_pl_loss,
+)
+from alphatamp.approaches.spectre.model import (
+    SpectreBatch,
+    SpectreConfig,
+    SpectreModel,
+)
 
 __all__ = [
-    "InferenceState",
+    "SpectreBatch",
+    "SpectreConfig",
     "SpectreModel",
-    "argmax_in_pool",
-    "init_inference_state",
+    "Trace",
+    "deployed_rollout",
+    "deployed_rollout_traced",
+    "load_checkpoint",
     "plackett_luce_loss",
-    "record_failure",
-    "score_pool",
-    "select_next_skeleton",
+    "within_length_pl_loss",
 ]

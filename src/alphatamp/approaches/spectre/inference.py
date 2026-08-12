@@ -1,276 +1,322 @@
-"""Test-time inference helper per ``docs/archive/SPECTRE_RT2D_METHOD_SPEC.md`` §10.5.
+"""The SPECTRE deployed ranker: a purely learned listwise re-ranker over the pool.
 
-Usage:
+The loop is the deployment story in five lines: score the pool with the failures observed
+so far, mask the already-tried candidates, try the argmax, observe the outcome, stop on
+the first success. Nothing outside the network touches the ordering — proof-tier demotion
+was cut from the method on 2026-07-30 (``decisions.md``); v3 is a purely learned ranker.
 
-    state = init_inference_state(model, episode, vocab, prior)
-    while pool remaining:
-        idx = select_next_skeleton(state, model)
-        outcome = ...        # consult the episode's pre-recorded outcome
-        if outcome.success:
-            break
-        record_failure(state, idx)
-
-The episode-start cost is one batched Φ forward over the K candidates;
-subsequent steps run Ψ over a set of size ``len(fail_indices)`` plus a
-broadcasted σ. For ``K ≤ 30`` and ``t ≤ 30`` both are trivial.
+The per-step trace exists because the comparison cache stores it: persisting the raw
+logits lets the analysis notebook show what the ranker thought at every step without ever
+running inference at load time.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import dataclasses
+import time
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import torch
-from torch import Tensor
 
-from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
-from alphatamp.approaches.spectre.dataset import (
-    SpectreTrainingExample,
-    collate_spectre_batch,
+from alphatamp.approaches.spectre.dataset import build_example, collate
+from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
+from alphatamp.approaches.spectre.encoders import D_REL_V3
+from alphatamp.approaches.spectre.model import (
+    N_OVERLAP_V3,
+    SpectreModel,
+    SpectreConfig,
 )
-from alphatamp.approaches.spectre.model import SpectreModel
-from alphatamp.approaches.spectre.priors import BasePrior, ZeroPrior, make_prior
 from alphatamp.approaches.spectre.schema import EpisodeRecord
 from alphatamp.approaches.spectre.vocab import Vocab
 
+# Sentinel applied to already-attempted candidates before the argmax, so a candidate is
+# never re-tried within a rollout.
+_TRIED = -1e9
+
+
+def _zero_scene_columns(batch, cols: frozenset[str]):
+    """Zero a whole scene channel in place -- a deploy-time diagnostic.
+
+    Mirrors ``suppress_records``: it feeds a trained model a *null* version of an input it
+    was trained on, to price how much the deployed model leans on that channel.
+    ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the anchor-free
+    ``obj_rel`` triple ``[area, sinθ, cosθ]``. Not a deployment mode: it only measures
+    reliance. Batch tensors are rebuilt every step, so mutating them never leaks across
+    steps. (An earlier form of this hook, tied to the pre-narrowing width-8 ``obj_rel``,
+    priced the removal of the target-anchored columns before they were cut -- see the
+    Step-0 measurement in docs/notebook 2026-08-08.)
+    """
+    if "is_goal" in cols:
+        batch.obj_is_goal.zero_()
+    if "rel" in cols:
+        batch.obj_rel.zero_()
+    return batch
+
 
 def load_checkpoint(
-    ckpt_path: Path,
-    vocab: Vocab,
-    device: torch.device | str = "cpu",
-    fallback_static_tag_predicates: list[str] | None = None,
-) -> SpectreModel:
-    """Load a :class:`SpectreModel` from a training checkpoint.
+    ckpt: Path | str, vocab: Vocab, device: str = "cpu"
+) -> tuple[SpectreModel, dict]:
+    """Rebuild a trained v3 model, with dropout off, plus its **deploy kwargs**.
 
-    Auto-detects the architecture flags saved by ``train.py``:
-    ``use_atom_sab2``, ``prior_dropout_p``, ``use_static_tag_pool``, and
-    the resolved ``static_tag_predicates`` list. ``fallback_static_tag_predicates``
-    is consulted when the checkpoint pre-dates the F3-B-(1) save format
-    (callers should pass ``env_registry.get_static_tag_predicates(env_variant)``).
+    The second return value is the set of feature switches that change what
+    :func:`build_example` *emits* rather than what the model *contains*, so they are
+    invisible to ``load_state_dict`` and a mismatch fails silently instead of loudly:
+    deploying under a different ``overlap_mode`` (or ``coverage_mode``) than a model
+    trained under feeds it a column it has never seen populated, or blanks one it relies
+    on. Reading them back off the checkpoint — never accepting them from the caller — is
+    what makes that unrepresentable. Splat the dict into
+    :func:`deployed_rollout_traced` / :func:`build_example`.
 
-    Returns ``model.eval()``.
+    Switches that *do* change the architecture (``use_records``, ``evidence_attn``,
+    ``use_obj_evidence``, ``sinusoidal_pos``, and ``coverage_feats`` via the
+    ``cand_overlap`` width) are rebuilt into ``SpectreConfig`` here, where ``strict=True``
+    catches any error. Older checkpoints predate several of these keys, hence ``.get``.
     """
-    state = torch.load(ckpt_path, map_location=device, weights_only=False)
-    cfg_dict = state.get("config", {}) or {}
-    use_atom_sab2 = bool(cfg_dict.get("use_atom_sab2", True))
-    prior_dropout_p = float(cfg_dict.get("prior_dropout_p", 0.2))
-    use_static_tag_pool = bool(cfg_dict.get("use_static_tag_pool", False))
-    dropout_p = float(cfg_dict.get("dropout_p", 0.1))
-    saved_tags = state.get("static_tag_predicates")
-    if use_static_tag_pool:
-        static_tag_predicates: list[str] | None = list(
-            saved_tags if saved_tags else (fallback_static_tag_predicates or [])
-        )
-        if not static_tag_predicates:
-            static_tag_predicates = None
-    else:
-        static_tag_predicates = None
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    cfg = ck["cfg"]
     model = SpectreModel(
-        vocab,
-        prior_dropout_p=prior_dropout_p,
-        use_atom_sab2=use_atom_sab2,
-        static_tag_predicates=static_tag_predicates,
-        dropout_p=dropout_p,
-    ).to(device)
-    sd = dict(state["model_state_dict"])
-    # ``static_tag_predicate_ids`` is a non-persistent buffer in the current
-    # model (always rebuilt from ``static_tag_predicates`` at construction).
-    # Drop any legacy persistent-buffer entry from older checkpoints so
-    # ``strict=True`` load still passes; the saved value is redundant with
-    # the constructor argument.
-    sd.pop("skeleton_encoder.state_enc.static_tag_predicate_ids", None)
-    model.load_state_dict(sd)
-    model.eval()
-    return model
+        n_ops=int(ck["n_ops"]),
+        max_arity=vocab.max_operator_arity,
+        cfg=SpectreConfig(
+            n_overlap_feats=(
+                (N_OVERLAP_V3 if cfg.get("coverage_feats") else 2)
+                if cfg.get("use_overlap")
+                else 0
+            ),
+            n_prior_feats=0,
+            # Scene-relation width is bound to the checkpoint: deployed v3 is 3, and a
+            # checkpoint predating the narrowing has no key and was 8-wide. `strict=True`
+            # below is the backstop -- a wrong width fails to load rather than silently
+            # scoring the un-narrowed model.
+            d_rel=int(cfg.get("d_rel", D_REL_V3)),
+            max_tags=int(cfg.get("max_tags", 32)),
+            dropout_p=0.0,
+            use_records=bool(cfg.get("use_records")),
+            sinusoidal_pos=bool(cfg.get("sinusoidal_pos")),
+            use_obj_evidence=bool(cfg.get("use_obj_evidence")),
+            evidence_attn=bool(cfg.get("evidence_attn")),
+            coverage_feats=bool(cfg.get("coverage_feats")),
+            use_state_delta=bool(cfg.get("use_state_delta")),
+            n_predicates=len(vocab.predicates),
+            max_pred_arity=vocab.max_predicate_arity,
+        ),
+    )
+    model.load_state_dict(ck["state_dict"], strict=True)
+    return model.eval().to(device), {
+        "overlap_mode": str(cfg.get("overlap_mode", "both")),
+        "aggregate_records": bool(cfg.get("aggregate_records")),
+        "coverage_feats": bool(cfg.get("coverage_feats")),
+        "coverage_mode": str(cfg.get("coverage_mode", "both")),
+        # Absent key => False, and that is load-bearing rather than incidental: every
+        # checkpoint trained before 2026-07-31 was trained on the deployed
+        # `S(c) = args \ goal_objects` features and must keep being scored on them, even
+        # though unified is now the default for new runs. The checkpoint decides, not
+        # the current default.
+        "unified_coverage": bool(cfg.get("unified_coverage")),
+        # Architectural *and* emitted: the encoder needs the submodules and the
+        # tensorizer
+        # needs to produce the arrays, so it appears in both places -- exactly as
+        # `coverage_feats` does -- with the checkpoint as the single source of truth.
+        "state_delta": bool(cfg.get("use_state_delta")),
+    }
 
 
-def load_prior_for_checkpoint(ckpt_path: Path) -> BasePrior:
-    """Reconstruct the ``BasePrior`` the checkpoint was trained against.
+@dataclasses.dataclass(frozen=True)
+class Trace:
+    """Step-aligned record of one rollout; one entry per attempt made.
 
-    Reads ``cfg.prior_type`` from the saved checkpoint and dispatches via
-    :func:`priors.make_prior`. Pre-``prior_type`` checkpoints (which always
-    used ZeroPrior) silently fall back to ``ZeroPrior`` so eval scripts
-    against legacy runs keep working.
+    ``step_scores`` are the **raw** model logits, before the tried-mask. Raw on purpose:
+    the tried sentinels would swamp a rendered score column, and the effective row is
+    exactly reconstructible from ``order``. Entries for candidates already in the failure
+    context come back ``-inf`` from the model's own availability mask, so at step ``t``
+    the non-finite entries are exactly ``order[:t]``; a JSON serialiser must map them to
+    ``null``.
 
-    Mirror of :func:`load_checkpoint`'s discovery — kept as a separate
-    helper so callers that already have the model don't pay the prior
-    construction cost they don't need.
+    ``step_dead`` is retained as an always-empty ``[]`` per step so the stored cache JSON
+    schema is unchanged; proof-tier demotion was cut from the method (2026-07-30), so no
+    candidate is ever demoted.
     """
-    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg_dict = state.get("config", {}) or {}
-    prior_type = str(cfg_dict.get("prior_type", "zero"))
-    return make_prior(prior_type)
+
+    order: list[int]
+    step_scores: list[list[float]]
+    step_dead: list[list[int]]
+    infer_seconds: float = 0.0
+    """Wall-clock spent on inference across the rollout: per-step tensorization
+    (``build_example`` + ``collate``) + the model forward, summed.
+
+    Defaulted so callers that ignore timing are unaffected; the timing bracket includes
+    the device sync, so on cuda it is a true end-to-end measure. Warm the model up once
+    before a timed pass so one-time CUDA init does not land in the first step.
+    """
+
+    refine_capped_seconds: float = 0.0
+    """Refinement wall-clock along the realized order, each candidate's stored
+    ``refinement_wall_clock_s`` clamped to ``refine_cap_s`` (uncapped sum when no cap).
+
+    Reuses the per-candidate refiner times stored on the episode; the rollout must
+    accumulate it here (rather than a caller summing ``_refine_seconds`` over ``order``)
+    because a capped rollout's order can contain a *slow-feasible* candidate that did
+    not stop the loop -- a plain "sum to first success" would break there and
+    undercount. 0.0 when the episode carries no per-candidate times.
+    """
 
 
-@dataclass
-class InferenceState:
-    """Per-episode state — encoded pool, priors, pool mask, fail history."""
-
-    e_S: Tensor  # (K, D) — episode-start Φ embeddings
-    priors: Tensor  # (K,)
-    pool_mask: Tensor  # (K,) bool — True for slots still in R
-    fail_indices: list[int] = field(default_factory=list)
-
-
-def init_inference_state(
+@torch.no_grad()
+def deployed_rollout_traced(
     model: SpectreModel,
     episode: EpisodeRecord,
     vocab: Vocab,
-    prior: BasePrior | None = None,
-    device: torch.device | str = "cpu",
-) -> InferenceState:
-    """Encode every skeleton in the episode pool once.
+    device: str,
+    spec: Optional[DomainSpec] = None,
+    max_tags: int = 32,
+    max_attempts: Optional[int] = None,
+    overlap_mode: str = "both",
+    aggregate_records: bool = False,
+    coverage_feats: bool = False,
+    coverage_mode: str = "both",
+    unified_coverage: bool = False,
+    state_delta: bool = False,
+    suppress_records: bool = False,
+    zero_scene_cols: frozenset[str] = frozenset(),
+    refine_cap_s: Optional[float] = None,
+) -> tuple[int, Trace]:
+    """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
-    Uses **deterministic canonicalization** (no augmentation) — this is the
-    test-time contract per spec §4.5.
+    ``attempts`` is 1-indexed (the rollout FP reported downstream is ``attempts - 1``).
+    ``spec`` defaults to the contract registered for the episode's own ``env_variant``.
 
-    Skeletons whose outcome is ``"error"`` are excluded from the inference
-    pool (their slots in ``pool_mask`` start False).
+    ``max_attempts`` censors the rollout at a fixed budget. Reporting always runs
+    uncensored -- the budget equals the pool cap, so it never binds -- and censoring
+    exists only for *checkpoint selection*, where the metric is recomputed every epoch
+    and the full loop otherwise costs several times the training step it is selecting
+    over. This mirrors the split the project already runs: selection under a budget,
+    reporting without one.
+
+    The ordering is purely the model's: proof-tier demotion was cut from the deployed
+    method on 2026-07-30 (``decisions.md``), so nothing outside the network reorders the
+    pool. ``Trace.step_dead`` is emitted as an always-empty list per step to keep the
+    stored cache schema unchanged.
+
+    ``suppress_records=True`` is a **diagnostic**, not a deployment mode: it runs a
+    records-trained model with its evidence memory emptied at every step. Deliberately a
+    train/deploy mismatch, and useful precisely because of that -- it separates "training
+    with records damaged the weights" (still bad with records suppressed) from "the
+    evidence input misleads at deploy" (good with them suppressed). Never report a number
+    produced with it as a method result.
+
+    ``zero_scene_cols`` is the geometry analogue of ``suppress_records`` and is likewise a
+    **diagnostic**: it blanks a scene channel at deploy to price how much the model leans
+    on it. ``"is_goal"`` blanks the goal-membership boolean; ``"rel"`` blanks the
+    anchor-free ``obj_rel`` triple. A small FP delta means the channel is close to inert
+    for ranking; a large one means it is load-bearing. Never a method number.
+
+    ``refine_cap_s`` models a **per-candidate refinement-abandonment cap**: a deployment
+    that bounds each skeleton's refinement at ``refine_cap_s`` seconds before moving on.
+    A feasible candidate whose stored ``refinement_wall_clock_s`` exceeds the cap is
+    then *not* a stopping success -- it is abandoned and observed like any other
+    failure (so it enters the failure context and re-ranks the pool), and the loop
+    continues. This only reorders the *ranking*, never removes a plan (P-E holds): the
+    pool is still exhausted in order, so a problem is lost only if every feasible
+    candidate exceeds the cap. ``Trace.refine_capped_seconds`` accumulates the
+    wall-clock the capped deployment pays. ``None`` (default) is the uncapped rollout.
     """
-    if prior is None:
-        prior = ZeroPrior()
-
-    # Canonicalize once with rng=None so local ids match the training-time
-    # eval-mode ordering (alphabetical within each type).
-    ep_view = canonicalize_episode(episode, rng=None, type_aug_policy=None)
-
-    # Build a single SpectreTrainingExample-shaped object whose ``r_skeletons``
-    # is the full pool. ``f_skeletons`` is empty — we only need Φ here, so
-    # the F-side tensors will collate to width 1 and never be consumed.
-    pool = ep_view.skeleton_pool
-    error_indices = {o.skeleton_idx for o in episode.outcomes if o.outcome == "error"}
-    priors_list: list[float] = []
-    for j, skel in enumerate(pool):
-        priors_list.append(
-            float(prior.score(episode.provenance.problem_id, j, skel, episode))
-        )
-
-    example = SpectreTrainingExample(
-        problem_id=episode.provenance.problem_id,
-        initial_abstract_state=ep_view.initial_abstract_state,
-        goal_atoms=ep_view.goal_atoms,
-        object_registry=ep_view.object_registry,
-        r_skeletons=pool,
-        r_priors=tuple(priors_list),
-        r_success_mask=tuple(False for _ in pool),  # not consumed at inference
-        f_skeletons=(),
-    )
-    batch = collate_spectre_batch([example], vocab)
-
-    # Move tensors to device.
-    def _to(t: Tensor) -> Tensor:
-        return t.to(device)
-
     model.eval()
-    with torch.no_grad():
-        e_R = model.encode_pool(
-            _to(batch.r_op_ids),
-            _to(batch.r_op_arg_type_ids),
-            _to(batch.r_op_arg_local_ids),
-            _to(batch.r_op_mask),
-            _to(batch.s0_pred_ids),
-            _to(batch.s0_arg_type_ids),
-            _to(batch.s0_arg_local_ids),
-            _to(batch.s0_atom_mask),
-            _to(batch.s0_type_histogram),
-            _to(batch.r_sL_pred_ids),
-            _to(batch.r_sL_arg_type_ids),
-            _to(batch.r_sL_arg_local_ids),
-            _to(batch.r_sL_atom_mask),
-        )  # (1, K, D)
-    e_S = e_R[0].detach()
-    priors_t = torch.tensor(priors_list, dtype=torch.float32, device=e_S.device)
-    pool_mask = torch.ones(len(pool), dtype=torch.bool, device=e_S.device)
-    for idx in error_indices:
-        pool_mask[idx] = False
-    return InferenceState(
-        e_S=e_S, priors=priors_t, pool_mask=pool_mask, fail_indices=[]
+    spec = spec or spec_for(episode.provenance.env_variant)
+    n_candidates = len(episode.skeleton_pool)
+
+    def _stops(o) -> bool:
+        # A candidate ends the rollout only if it refines *and* does so within the cap;
+        # a slow-feasible candidate over the cap is abandoned and treated as a failure.
+        if o.outcome != "success":
+            return False
+        if refine_cap_s is None:
+            return True
+        return float(o.refinement_wall_clock_s or 0.0) <= refine_cap_s
+
+    success = {i for i, o in enumerate(episode.outcomes) if _stops(o)}
+    tried: list[int] = []
+    step_scores: list[list[float]] = []
+    step_dead: list[list[int]] = []
+    infer_seconds = 0.0
+    refine_capped_seconds = 0.0
+
+    budget = n_candidates if max_attempts is None else min(max_attempts, n_candidates)
+    while len(tried) < budget:
+        _t_infer = time.perf_counter()
+        example, records = build_example(
+            episode,
+            vocab,
+            rng=None,
+            max_tags=max_tags,
+            evidence=True,
+            context_f=frozenset(tried),
+            augment_tags=False,
+            spec=spec,
+            overlap_mode=overlap_mode,
+            aggregate_records=aggregate_records,
+            coverage_feats=coverage_feats,
+            coverage_mode=coverage_mode,
+            unified_coverage=unified_coverage,
+            state_delta=state_delta,
+        )
+        # Records are passed at deployment too, not just in training. Omitting them here
+        # would deploy a records-trained model blind to its own evidence -- the train/
+        # deploy input mismatch the proposal warns about, and one that degrades silently.
+        batch = collate(
+            [example],
+            max_arity=vocab.max_operator_arity,
+            records=[[] if suppress_records else records],
+            max_pred_arity=vocab.max_predicate_arity,
+        ).to(device)
+        if zero_scene_cols:
+            batch = _zero_scene_columns(batch, zero_scene_cols)
+        logits, _ = model(batch)
+        raw = logits[0].detach().cpu().numpy().astype(float)
+        # end-to-end inference time: tensorize + collate + forward. The .cpu() above
+        # already forces a device sync; synchronize() is a defensive no-op making the
+        # bracket a true wall-clock even if that copy is ever removed.
+        if device.startswith("cuda"):
+            torch.cuda.synchronize()
+        infer_seconds += time.perf_counter() - _t_infer
+        step_scores.append([float(x) for x in raw])
+        step_dead.append([])
+
+        row = raw.copy()
+        if tried:
+            row[tried] = _TRIED
+        pick = int(np.argmax(row))
+        tried.append(pick)
+        _t_pick = float(episode.outcomes[pick].refinement_wall_clock_s or 0.0)
+        refine_capped_seconds += (
+            _t_pick if refine_cap_s is None else min(_t_pick, refine_cap_s)
+        )
+        if pick in success:
+            break
+
+    return len(tried), Trace(
+        order=list(tried),
+        step_scores=step_scores,
+        step_dead=step_dead,
+        infer_seconds=infer_seconds,
+        refine_capped_seconds=round(refine_capped_seconds, 6),
     )
 
 
-def score_pool(
-    state: InferenceState,
+def deployed_rollout(
     model: SpectreModel,
-    freeze_context: bool = False,
-) -> torch.Tensor:
-    """Score every pooled skeleton under the current context — ``(K,)`` logits.
-
-    Returned **unmasked**: entries for already-attempted / error skeletons are the
-    model's raw opinion, not ``-inf``. :func:`select_next_skeleton` applies the pool
-    mask via :func:`argmax_in_pool`; callers that want to *record* the row (the traced
-    rollouts, whose traces are JSON-serialised for the comparison notebook) keep the
-    raw values, since ``-inf`` is not representable in strict JSON.
-
-    ``freeze_context=True`` is the frozen-context ablation: the context vector fed to
-    σ is forced to the learned empty-F vector ``c_0`` at every step — regardless of
-    ``state.fail_indices`` — by always taking the all-False-mask path through
-    ``encode_context``. Only the context is frozen; the pool still shrinks via
-    ``record_failure``, so the resulting policy is exactly a static ranking by the
-    initial logits.
-    """
-    device = state.e_S.device
-    if state.fail_indices and not freeze_context:
-        f_emb = state.e_S[state.fail_indices].unsqueeze(0)  # (1, |F|, D)
-        f_mask = torch.ones(1, len(state.fail_indices), dtype=torch.bool, device=device)
-    else:
-        # Send a synthetic 1-token "empty" set; the context encoder routes
-        # to ``c_0`` via the all-False mask check.
-        f_emb = torch.zeros(
-            1, 1, state.e_S.size(-1), device=device, dtype=state.e_S.dtype
-        )
-        f_mask = torch.zeros(1, 1, dtype=torch.bool, device=device)
-    model.eval()
-    with torch.no_grad():
-        c = model.encode_context(f_emb, f_mask)  # (1, D)
-        e_R = state.e_S.unsqueeze(0)  # (1, K, D)
-        priors = state.priors.unsqueeze(0)  # (1, K)
-        logits = model.score(e_R, c, priors, prior_dropout=False)  # (1, K)
-    return logits[0]
-
-
-def argmax_in_pool(logits: torch.Tensor, pool_mask: torch.Tensor) -> int:
-    """Index of the highest-scoring skeleton still in the pool (``-inf`` elsewhere)."""
-    neg_inf = torch.tensor(-float("inf"), dtype=logits.dtype, device=logits.device)
-    masked = torch.where(pool_mask, logits, neg_inf)
-    return int(masked.argmax(dim=-1).item())
-
-
-def select_next_skeleton(
-    state: InferenceState,
-    model: SpectreModel,
-    freeze_context: bool = False,
+    episode: EpisodeRecord,
+    vocab: Vocab,
+    device: str,
+    spec: Optional[DomainSpec] = None,
+    max_tags: int = 32,
 ) -> int:
-    """Return the argmax-index over the remaining pool (spec §10.5).
+    """Attempts to first success.
 
-    Thin composition of :func:`score_pool` and :func:`argmax_in_pool` — same single
-    forward pass, same selection, so the split is behaviour-preserving (pinned by
-    ``test_inference.test_select_next_skeleton_matches_score_pool_argmax``). See
-    :func:`score_pool` for the ``freeze_context`` ablation semantics.
+    See :func:`deployed_rollout_traced` for the trace.
     """
-    return argmax_in_pool(score_pool(state, model, freeze_context), state.pool_mask)
-
-
-def record_failure(state: InferenceState, skeleton_idx: int) -> None:
-    """Move ``skeleton_idx`` from R into F (in place)."""
-    if not state.pool_mask[skeleton_idx].item():
-        raise ValueError(
-            f"skeleton {skeleton_idx} is not in the remaining pool"
-            f" (already attempted or excluded as error)"
-        )
-    state.fail_indices = list(state.fail_indices) + [int(skeleton_idx)]
-    new_mask = state.pool_mask.clone()
-    new_mask[skeleton_idx] = False
-    state.pool_mask = new_mask
-
-
-# Re-export for convenience; downstream code can ``from inference import *``.
-__all__ = [
-    "InferenceState",
-    "argmax_in_pool",
-    "init_inference_state",
-    "load_checkpoint",
-    "load_prior_for_checkpoint",
-    "record_failure",
-    "score_pool",
-    "select_next_skeleton",
-]
+    attempts, _ = deployed_rollout_traced(
+        model, episode, vocab, device, spec, max_tags
+    )
+    return attempts
