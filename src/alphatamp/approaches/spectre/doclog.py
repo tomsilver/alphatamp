@@ -89,6 +89,8 @@ TRACKS = (
     "env-dd2d",
     "env-rt2d",
     "env-stickbutton2d",
+    "env-shelf3d",
+    "env-restock3d",
     "baselines",
     "tooling",
     "infra",

@@ -4,6 +4,278 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-14-restock3d-env-built-baseline-oracle-fp-gap"></a>
+## 2026-08-14 — Restock3D env built; baseline-oracle FP gap validated across strata r0-r3
+
+<!--strip-->
+> **id** `2026-08-14-restock3d-env-built-baseline-oracle-fp-gap` · **status** active ·
+> **tracks** method, evaluation, env-restock3d
+<!--/strip-->
+
+**What.** Built the Restock3D MuJoCo env (design + rationale in the ADR
+[2026-08-14](../decisions/07-stickbutton2d.md#2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric))
+and measured the baseline-planner difficulty (`experiments/spectre/restock3d_difficulty.py`): for
+each stratum, enumerate the astar/hff skeleton pool (cap 200), classify every candidate with the
+geometric feasibility gate (`refine.evaluate_skeleton`), and report the baseline FP = position of
+the first feasible candidate in the default order (oracle FP = 0). 6 seeds/stratum, uncensored at
+the pool cap. Strata are `(n_small, n_tall, n_tall_regions, n_short_regions)`.
+
+**Result.** The gap grows with stratum and the F2/F3 mix matches the recipe:
+
+| stratum | recipe | σt | σs | solve | mean FP | feasible/200 | F2 / F3 |
+|---|---|---|---|---|---|---|---|
+| r0 | (3,0,2,5) | 2 | 4 | 6/6 | 0.2 | ~126 | 74 / 0 |
+| r1 | (5,0,1,4) | 1 | 0 | 6/6 | 5.3 | ~8 | 192 / 0 |
+| r2 | (3,1,2,4) | 1 | 2 | 6/6 | 16.0 | ~22 | 61 / 117 |
+| r3 | (4,2,3,5) | 1 | 2 | 4/6 | ~150 | ~1 | 92 / 106 |
+
+r1 is pure F2 (short-cell over-assignment), r2/r3 add F3 (tall-in-short height). Oracle FP=0 every
+stratum, so the astar↔oracle gap is the whole mean-FP column — r2's 16 clears the ~10 "earns its
+slot" bar. A smoke collection (`restock3d_collect.py`, 2/stratum) then produced valid
+`EpisodeRecord`s; they load and `FailureRecord`s parse through the env-agnostic path — F2 records
+name culprits (e.g. `cube_goal3`, `block_goal1`) with `proves_failure=True`, F3 records are
+culprit-free + `exhausted` + `proves_failure=True`; vocab builds. The MuJoCo demo (physics pick +
+geometric place) reaches the goal.
+
+**Takeaway / next.** Env works and earns its slot on F2+F3. Two things to quote with care: (1) r3
+is a **hard tail** — both cells tight → low feasible density (~1/200), so only ~4/6 raw-solvable;
+the collector's reject-resample keeps only solvable problems, so this costs collection effort, not
+validity. (2) The FP is **noisy per-problem** (the height-/capacity-blind default order mixes
+feasible/infeasible near-uniformly, all same length), so the per-stratum **mean** over many
+problems is the stable statistic, not any single seed. Deferred (not this pass): F1 grasp
+obstruction + coverage/waste discretionary steps, learned baselines, the `compare_envs.py`
+`EnvSpec`, multi-slot region capacity.
+
+---
+
+<a id="2026-08-13-shelfobstruct3d-fp-0-shelf-fully-reachable"></a>
+## 2026-08-13 — ShelfObstruct3D has no FP>0: shelf fully reachable + obstruction inert; not a re-ranking testbed
+
+<!--strip-->
+> **id** `2026-08-13-shelfobstruct3d-fp-0-shelf-fully-reachable` · **status** active ·
+> **tracks** method, env-shelf3d, evaluation
+<!--/strip-->
+
+**What.** With class-1 obstruction shown physically inert
+([earlier today](#2026-08-13-m2-certifying-generator-built-shelf-cube-width)), the fallback FP
+source for a class-2 use of ShelfObstruct3D was **reachability** — placements outside the arm's
+range fail as class-2 deviations. Mapped the reachable window by refining `pick_blocker →
+place(blocker, free_region)` with the free region swept in lateral y and in depth (ly → world-x).
+
+**Result.**
+- **Lateral:** place-relocate REACHABLE at y = 0.10 / 0.18 / 0.24; FAILS at 0.30 — but 0.30 is
+  *off the shelf* (usable half-width ≈ 0.27), not an arm limit. The whole shelf width is reachable.
+- **Depth:** REACHABLE at ly = 0.10 / 0.06 / 0.04 / 0.02, i.e. world-x = 1.40 / 1.44 / 1.46 / 1.48
+  — the full usable depth. (The arm reaches deeper than the ~1.42 I'd inferred from the grasp; the
+  place base repositions closer.) No unreachable interior region exists.
+- **Grasp-obstruction** (an adjacent blocker fouling the lateral finger path) needs two blockers
+  within ~0.10 m to obstruct yet ≥ ~0.10 m apart to spawn stably — a ~0.003 m window, unusable.
+
+**Takeaway.** **ShelfObstruct3D has no robust FP>0 mechanism** — the small shelf is *fully
+reachable* (lateral + depth), the obstruction is *inert*, and grasp-obstruction is *unhittable*.
+So refinement always succeeds on the first candidate (FP=0): the env induces **no re-ranking
+difficulty at all**, for class-1 *or* class-2. This supersedes the "leans class-2" implication of
+the [class-1 ADR](../decisions/07-stickbutton2d.md#2026-08-13-shelfobstruct3d-class-1-culprits-physically-infeasible-certifying):
+the class-2 route is not viable here either, because there is nothing to re-rank. It is the same
+FP≡0 that made *vanilla* Shelf3D o1/o2 unusable — the obstruction redesign did not fix it, because
+the substrate's small fully-reachable shelf and squeeze-past placement physics defeat every
+obstruction/reachability knob. **Recommendation: ShelfObstruct3D (this design) is a dead end for a
+SPECTRE re-ranking gap; route the effort to a 2D DD2D-like obstruction env (robust top-down
+culprits), or a fundamentally different 3D substrate (a much larger/deeper shelf that is not fully
+reachable, or a rigid non-squeeze obstruction).** Kept, all CI-clean & reusable: the M1 obstruction
+env + custom shelf grasp (a genuine new skill), the instrumented refiner (both channels), the
+certifying generator, and unit tests. Single-scene diagnostics, not results.
+
+---
+
+<a id="2026-08-13-m2-certifying-generator-built-shelf-cube-width"></a>
+## 2026-08-13 — M2 certifying generator built; shelf cube-width limit makes obstruction inert
+
+<!--strip-->
+> **id** `2026-08-13-m2-certifying-generator-built-shelf-cube-width` · **status**
+> active · **tracks** method, env-shelf3d, evaluation
+<!--/strip-->
+
+**What.** Built the **M2 certifying generator** (`envs/shelf3d/generator.py`) to reliably land
+class-1 obstructions in the culprit band (the direction chosen after the delicacy finding). It
+lays a parametric row of target + free regions on shelf 2, places obstructor cubes in the band of
+chosen free regions, and a fast **geometric certification** (via the instrumented refiner's
+`_place_culprits`) accepts a seed only if an obstructed free region reads `Clear` yet is flagged,
+a clear free region exists, and every blocker sits At its target. Then verified an obstructed
+candidate by refinement.
+
+**Result.**
+- **Generator + geometric certification work.** A level-1 seed certified: `free_region_1` Clear +
+  culprit `cube_obstructor1`, `free_region_2` clear, blocker At target → `CERTIFIED=True`. The cert
+  is robust to spawn variance — an obstructor that fell to the shelf below was correctly *not*
+  flagged (a new **Z-proximity guard** in `_place_culprits` rejects cross-shelf overlaps).
+- **But the obstruction is physically inert** — the certified obstructed candidate refined to
+  **SUCCESS**. Two measured facts explain it:
+  - **Shelf holds cubes ≤ 0.07 m wide only.** Single cube, deep, no overhang: half-extent
+    0.045/0.055 (0.09/0.11 m) rests at z **0.328/0.338** (fell to shelf below) vs 0.585 for 0.035.
+  - **So Clear-but-blocking overlap ≤ ~0.03 m** (collision 0.07 − At-radius 0.05), and the
+    placement squeezes past it rather than failing. A larger obstructor would block but can't stay
+    on the shelf.
+- Also hit a **lateral grasp-range limit**: a 4-region row (span 0.54) put the blocker at y=−0.259
+  where the shelf grasp fails (o1's worked at −0.14); tightened the pitch to 0.15 and cut to 3
+  regions to keep the row in ~[−0.18, 0.20].
+
+**Takeaway / next.** Conclusive: **ShelfObstruct3D cannot robustly produce class-1 collision
+culprits** — a fundamental geometric/physical limit (thin shelf + bulky gripper + At-radius vs
+collision distance), unlike DD2D's 2D top-down obstruction. So it **leans class-2 like SB2D**, and
+the `coverage`/`waste` payoff (the reason for the harder env) is not attainable here. ADR:
+[decisions/07 2026-08-13](../decisions/07-stickbutton2d.md#2026-08-13-shelfobstruct3d-class-1-culprits-physically-infeasible-certifying).
+Kept, all CI-clean: M1 Gate-0 env, instrumented refiner (both channels), certifying generator
+(correct; obstruction inert). M3 sweep / M4 coverage/waste are **not worth running on
+ShelfObstruct3D as-is** for the class-1 story — decision point for the user: class-2 use of
+ShelfObstruct3D, or route class-1 to a 2D-obstruction env. Single-scene diagnostics, not results.
+
+---
+
+<a id="2026-08-13-shelfobstruct3d-instrumented-refiner-class-1-culprit-geometry"></a>
+## 2026-08-13 — ShelfObstruct3D instrumented refiner + class-1 culprit geometry is delicate
+
+<!--strip-->
+> **id** `2026-08-13-shelfobstruct3d-instrumented-refiner-class-1-culprit-geometry` ·
+> **status** active · **tracks** method, env-shelf3d, evaluation
+<!--/strip-->
+
+**What.** Built the ShelfObstruct3D **instrumented refiner** (`envs/shelf3d/instrumented_refiner.py`)
+— the class-1 evidence that feeds `coverage`/`waste` — and tried to exercise it on a scene that
+produces refinement *failures* (o1 has FP=0). The refiner is a `RecordingObstructionSampler` over
+the stock `ParameterizedControllerTrajectorySampler`: it keeps every rejection (class-2 deviation
+between predicted/achieved abstract state) and, for a failed `place(cube, region)`, runs a
+geometric footprint-overlap check naming any other cube blocking the destination (class-1 culprit,
+`deviation=None`) — DD2D's `grasp_blocker` idea. `failure_metadata` emits the
+`refiner_metadata["failures"]` payload `unified_evidence` consumes.
+
+**Result.**
+- **Both channels verified.** Unit test: moving `cube_target1` onto `free_region_1`'s centre →
+  `_place_culprits` returns `('cube_target1',)`; on the ground → `()`. Infra: refining o1 cand 0
+  through the recording sampler SUCCEEDS and captured a real class-2 deviation during backtracking
+  (a transient `pick_target` where the target ended `OnGround` instead of `Holding` — `dev_added
+  [OnGround(cube_target1)]`, `dev_deleted [Holding(...)]`). CI-clean (black/isort/mypy green).
+- **The key geometric finding.** A clean class-1 obstruction failure needs a cube *farther than the
+  abstractor's At-radius from a region centre yet still overlapping a placed cube's footprint*. With
+  the At-radius above the cube collision distance (the original `_AT_XY_TOL=0.12` > 2·half-width
+  ~0.07) that band is **empty** — any cube close enough to block a placement is assigned `At` the
+  region, so the region reads not-`Clear` and the planner never attempts the obstructed place.
+  Lowering `_AT_XY_TOL` to **0.05** (o1 still refines end-to-end; placements land within ~0.005)
+  opens the band, but it is **narrow (~0.05–0.085 m) and spawn-variance-sensitive**: a clutter cube
+  aimed into it landed `At free_region_1` instead (abstraction correctly saw the region occupied →
+  planner used the other free region → FP=0). Grasp-obstruction (adjacent blocker fouling the
+  lateral finger path) is similarly narrow — the window where two blockers both spawn stably *and*
+  obstruct each other is ~0.08–0.10 m, and a 2-blocker attempt had the second blocker fall to the
+  shelf below on spawn.
+
+**Takeaway / next.** ShelfObstruct3D's 3D geometry (reachable front-band only, bulky gripper,
+At-radius vs cube size, thin-shelf spawn stability) makes **robust class-1 collision culprits hard**,
+unlike DD2D's top-down obstruction — so as built the env **leans class-2 like SB2D**, where the
+representation/adaptivity advantage did not reproduce. FP>0 is still reachable via reachability /
+ordering, but those failures carry no blame (means-failures), so they don't feed `coverage`/`waste`.
+The instrumented refiner is done and correct; **the open work is a scene *generator* (M2) that
+reliably lands obstructions in the band** (or a redesign that widens it — e.g. larger cubes + a
+smaller At-radius + certified per-seed placement), before the M3 sweep and M4 coverage/waste
+verification are worth running. This is a decision point on whether ShelfObstruct3D is the right
+class-1 testbed or whether the effort should route to a 2D-obstruction env with DD2D-like geometry.
+Numbers here are single-scene diagnostics, not results.
+
+---
+
+<a id="2026-08-12-shelfobstruct3d-o1-gate-0-clearing-plan-refines"></a>
+## 2026-08-12 — ShelfObstruct3D-o1 Gate 0: clearing plan refines end-to-end
+
+<!--strip-->
+> **id** `2026-08-12-shelfobstruct3d-o1-gate-0-clearing-plan-refines` · **status**
+> active · **tracks** method, env-shelf3d, evaluation
+<!--/strip-->
+
+**What.** Built the ShelfObstruct3D obstruction variant (spectre-local `envs/shelf3d/`) and
+ran the M1 Gate-0 de-risk on the hand-authored `ShelfObstruct3D-o1` scene (1 blocker on shelf 2
+obstructing `target_region_1`, 1 target on the ground, 2 free regions). Pieces: custom
+`PickFromShelfController` (grasp off shelf) + `PlaceToShelfRegionController` (place at a region
+centre), `region_geometry.py` (symbolic region → world centre), `models.py` (At/Clear abstractor
++ clear-then-place operators + skills). Design decisions in
+[decisions/07 2026-08-12](../decisions/07-stickbutton2d.md#2026-08-12-shelfobstruct3d-obstruction-env-custom-shelf-grasp).
+
+**Result.**
+- **Custom shelf grasp is reliable:** `reset_ok 8/8, lifted 8/8` across seeds (gym env). Pick+place
+  relocation demonstrated end-to-end (blocker moved target_region_1 → free_region_1).
+- **Abstractor correct:** initial atoms `At(cube_blocker1,target_region_1)`,
+  `Clear(free_region_1)`, `Clear(free_region_2)`, `HandEmpty`, `OnGround(cube_target1)`; goal
+  `At(cube_target1,target_region_1)`. Symbolic pool = 20 candidates; cand 0 = pick_blocker →
+  place(free_region_1) → pick_target → place(target_region_1).
+- **Full clearing plan refines end-to-end:** all four steps give `abstract match=True`
+  (manual step-through), and the real `BacktrackingRefiner` returns **success on cands 0 and 1**
+  (6.4 s / 15.4 s).
+- **Video:** `envs/shelf3d/demo_o1_clearing.mp4` (live closed-loop execution). Region markers
+  (target yellow, free cyan) render as translucent boxes.
+- **Two substrate traps found & fixed:** (1) the `ObjectCentricTidyBot3DEnv` `set_state`-per-step
+  rollout drops the shelf cube (~80% nondet) — refinement now rolls out on the gym `TidyBot3DEnv`
+  with continuous stepping; (2) open-loop action replay diverges (grasp weak, target not placed) —
+  videos must be rendered by live closed-loop execution, not recorded-action replay.
+
+**Takeaway / next.** The obstruction **mechanism works** — clear-then-place refines and the
+abstract states match, so the hard de-risk (custom shelf grasp + relocation + planning) is done.
+o1 FP is 0 (two reachable free regions; first candidate succeeds), so the FP magnitude and the
+class-1 **culprit** signal (which feeds `coverage`/`waste`, the whole point for SPECTRE) are the
+next milestone: wire the instrumented refiner to capture the collided object on a failed sample,
+then the per-seed generator + strata (M2) and the difficulty sweep to hit ~50–100 FP at ≥80%
+solve on 3 targets (M3), then coverage/waste verification (M4). Numbers here are 1 seed / single
+scene — not paper numbers.
+
+---
+
+<a id="2026-08-12-shelf3d-difficulty-under-baseline-planner-5-seed"></a>
+## 2026-08-12 — Shelf3D difficulty under the baseline planner; the 5-seed pilot under-samples the refinement tail
+
+<!--strip-->
+> **id** `2026-08-12-shelf3d-difficulty-under-baseline-planner-5-seed` · **status**
+> active · **tracks** evaluation, method, env-shelf3d
+<!--/strip-->
+
+**What.** Built a standalone Shelf3D difficulty harness — `experiments/spectre/shelf3d_collect.py`
+(collector) + `experiments/spectre/shelf3d_difficulty.py` (marimo) — to quantify how hard vanilla
+**dynamic3d / MuJoCo TidyBot** `kinder/Shelf3D-o{1,2,8}` is for the SPECTRE baseline astar planner,
+before the env config is modified into harder variants. Per problem (= variant × seed) it enumerates
+the astar skeleton pool and refines candidates one at a time (`BacktrackingRefiner`, `samples/step=20`,
+`horizon=500`) under a per-plan-attempt wall-clock budget, recording each attempt's success/fail +
+time. Two phases: a **5-seed × 15-plan pilot** at 30 s/attempt to pick the budget (offline cap
+re-derivation — the refiner is monotone in the timeout), then a **20-seed full** collection
+(short-circuit) with faithful `set_state`-rendered videos of the successful plans. Env-integration
+workarounds (self-registration, egl, ikfast BLAS-symlink) are in
+[`decisions/07` 2026-08-12](../decisions/07-stickbutton2d.md#2026-08-12-shelf3d-difficulty-harness-standalone-collector-per-attempt-budget).
+
+**Result.** Full run (20 seeds/variant; o1/o2 at the deployed **20 s/attempt**, o8 at 10 s — the
+budget is irrelevant for o8, see below):
+
+| variant | pool | solve | FP | wall-to-first-success (s) | successful-refine range (s) |
+|---|---|---|---|---|---|
+| **o1** | 1 | **100 % (20/20)** | 0.00 ± 0.00 | 1.96 ± 2.47 | 1.2 – 12.4 |
+| **o2** | 2 | **85 % (17/20)** | 0.00 ± 0.00 | 5.09 ± 3.75 | 3.2 – 19.4 |
+| **o8** | 15–100 | **0 % (0/20)** | — | — | — |
+
+- **o1/o2 are trivially solvable by the first pooled skeleton** (FP ≡ 0). **o8 is unsolvable**: every
+  candidate raises `ValueError: No valid parameters found` from `PlaceShelfController.sample_parameters`
+  (`kinder_models/dynamic3d/shelf/parameterized_skills.py`), which rejects any shelf placement within a
+  2-D-overhead collision threshold of *any other cube* and exhausts `MAX_SAMPLER_ATTEMPTS` — the 8 floor
+  cubes flood that plane. It fails in ~3 s, well under any budget, so o8 is 0 % at **every** budget.
+- **o2's three misses are `AssertionError: Motion planning failed`** (the pybullet arm motion planner),
+  ~3–4 s each — *not* budget-truncated — and they are **nondeterministic run-to-run**: the 10 s run
+  missed seed 11; the 20 s run missed seeds 1/2/3. The exact o2 solve count carries ≈ ±2/20 of variance.
+
+**Takeaway.** (1) **o8 already saturates the vanilla place skill** at 0 % on 8-cube clutter — it is the
+natural hard end; harder-variant work should build from o1/o2. (2) **The 5-seed pilot badly
+under-sampled the refinement-time tail.** Pilot o2 max was 5.32 s → it read "≥ 8 s sufficient, 30 s
+overkill"; but the 20-seed full run's tail reaches **12.4 s** (o1 seed 8 — genuinely budget-truncated at
+10 s, solves at 20 s) and **19.45 s** (o2), so **≈ 20–30 s is actually needed and the original 30 s
+eyeball was *not* overkill.** The standing "a small-seed report is least trustworthy in the tail"
+lesson, concretely: size a budget against the full-sample tail, never a 5-seed max. (3) **Shelf3D
+refinement is nondeterministic run-to-run** (MuJoCo/pybullet, not the sampler seed) — like the DD2D
+`PYTHONHASHSEED` caveat, solve counts carry run-to-run variance on marginal instances.
+
+---
+
 <a id="2026-08-12-publication-de-versioning-refactor"></a>
 ## 2026-08-12 — Publication de-versioning refactor
 
