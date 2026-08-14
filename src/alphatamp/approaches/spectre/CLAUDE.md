@@ -249,6 +249,13 @@ proof-demotion off** and **coverage/waste on the unified definitions** — the l
 `TrainV3Config.unified_coverage=True`, so the preset needs no extra flag. Over **3 seeds
 each**:
 
+> **⚠️ CURRENT (2026-08-12).** The live `compare_methods.py` caches — retrained under the
+> de-versioned code — read **DD2D SPECTRE-adaptive 6.29 ± 0.31** and **SB2D 1.75 ± 0.19**.
+> **[`docs/as_built.md` §10](docs/as_built.md) is the authoritative current comparison** across
+> both environments. The 5.78/5.92 (DD2D) and 1.69/1.84 (SB2D) figures in this section are the
+> **frozen yardsticks** these tie within seed variance; they — and the `v3` / `TrainV3Config` /
+> `unified_coverage` names below — are pre-refactor and retained here as history.
+
 | | ALL | s0 | s1 | s2 | s3 |
 |---|---|---|---|---|---|
 | v3 deployed | **5.78 ± 0.10** | 0.00 | **3.44 ± 1.36** | **10.49 ± 0.77** | **9.19 ± 0.76** |
@@ -424,7 +431,9 @@ mean over unbalanced strata as a method comparison.
 
 **Headline (3 seeds, uncensored, test n=100).** Mean failed attempts before first success. *(The
 **1.69** here is the frozen target-anchored model; the deployed model since 2026-08-09 is the
-domain-agnostic narrowed inputs + `--select-window 5`, which ties it at **1.84 ± 0.26** — see the
+domain-agnostic narrowed inputs + `--select-window 5`, which ties it at **1.84 ± 0.26**; the **live
+cache now reads 1.75 ± 0.19** after the 2026-08-12 retrain ([`docs/as_built.md` §10](docs/as_built.md)
+is the authoritative current table) — see the
 "Where v3 stands" update above and [`decisions/07` 2026-08-09](docs/decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider).)*
 
 | | ALL | b1 | b2 | b3 | b5 |

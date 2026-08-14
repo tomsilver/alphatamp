@@ -1,13 +1,14 @@
 """Unified culprits, coverage and waste — the definitions of
 ``docs/unified_culprits_coverage_waste.md``.
 
-**Why this module exists.** v3's deployed ``coverage``/``waste`` are computed against
-``S(c) = args \\ goal_objects``, which encodes "discretionary work = touching non-goal
-objects". That is true on DD2D and false wherever tools exist: on StickButton2D every
-candidate has ``S(c) = {stick}``, so deployed coverage is identically 0 (the culprit
-buttons are goal objects, structurally barred from ``S``) and deployed waste is
-identically 1 for every stick-using plan — including the plan that responds perfectly to
-the evidence. Blind and anti-signed respectively.
+**Why this module exists.** SPECTRE's **earlier** ``coverage``/``waste`` were computed
+against ``S(c) = args \\ goal_objects``, which encodes "discretionary work = touching
+non-goal objects". That is true on DD2D and false wherever tools exist: on StickButton2D
+every candidate has ``S(c) = {stick}``, so that coverage was identically 0 (the culprit
+buttons are goal objects, structurally barred from ``S``) and that waste was identically
+1 for every stick-using plan — including the plan that responds perfectly to the
+evidence. Blind and anti-signed respectively. That formula has been removed; the
+definitions below are the sole coverage/waste path.
 
 The replacements here derive everything from the **operator schemas**: which objects a
 failure's own explanation names, and which of a candidate's steps the abstraction's

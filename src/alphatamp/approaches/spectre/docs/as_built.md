@@ -1,162 +1,253 @@
 # SPECTRE — As Built
 
-Companion to the archived [`as_built_v2.2.md`](archive/as_built_v2.2.md): what SPECTRE *is*,
-as implemented, with the evidence for each choice. The design intent lived in the archived
-[`SPECTRE_v3_proposal.md`](archive/SPECTRE_v3_proposal.md); where this document and the proposal
-disagree, **this one describes the code** and the proposal describes what was planned.
-Numbers cite [`notebook.md`](notebook/README.md); decisions cite [`decisions.md`](decisions/README.md)
-and, for the 2026-07-26/27 autonomous run, [`autorun_decisions.md`](autorun_decisions.md).
+What SPECTRE *is*, as implemented, with the evidence for each choice. This document describes the
+**code** (the authoritative source); where a design note or the living [`proposal.md`](proposal.md)
+disagrees, the code wins. Numbers are the current [`compare_methods.py`](../../../../experiments/spectre/compare_methods.py)
+caches; decisions cite [`decisions/`](decisions/README.md), runs cite [`notebook/`](notebook/README.md).
 
-> **Publication refactor (2026-08-12).** SPECTRE was de-versioned to one unified method — the
-> "v3" this document describes *is* SPECTRE. The modules lost their `_v3` suffixes
-> (`model_v3.py`→`model.py`, `dataset_v3.py`→`dataset.py`, `inference_v3.py`→`inference.py`,
-> `train_v3.py`→`train.py`; shared primitives in `layers.py` / `encoders.py`), the baselines
-> moved under `baselines/` (`baselines/{vlmplan,piginet,lazy,drake-tamp}/`), and the nested
-> `envs/dd2d/dd2d/` flattened to `envs/dd2d/drawer/`. The built-then-disabled features named
-> below — **proof-tier demotion, legacy-coverage, per-object (obj-)evidence, sinusoidal
-> positions, `tail_max_f`, and the unwired necessity head** — were **removed** in that refactor
-> (all were OFF in the deployed recipe, so removal is behaviour-preserving). **EMA
-> weight-averaging and the ablation flags are kept**, one flag away. The sections below still
-> name and reason about the removed features because that reasoning is the record of *why*
-> they are gone; where the older text says a removed component is "kept / one flag away",
-> read it as **removed in the 2026-08-12 refactor** unless the sentence is about EMA or an
-> ablation flag.
-
-> **⚠️ Update (2026-08-09).** The deployed input surface was made **domain-agnostic** —
-> `obj_is_target`→`obj_is_goal`, `obj_rel` 8→3 (`d_rel=3`), `concave` cut
-> ([`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)).
-> That regressed the mean as optimization *variance* (not information loss), recovered by a
-> training-side lever, **`--select-window 5`**, giving **DD2D 5.92 ± 0.29 (s1 4.84), SB2D
-> 1.84 ± 0.26** — both tie the frozen target-anchored yardstick below (5.78 / 1.69), paired CI
-> includes 0. EMA weight-averaging was built and tested but is inert on both envs
-> ([`decisions/07` 2026-08-09](decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider)).
-> The **5.78** below is the frozen yardstick, not the current deployed number.
->
-> **Status (2026-07-31).** All three v3 goals are met on DD2D. Performance: over **3 seeds
-> each**, v3 **5.78 ± 0.10** vs deployed v2.2 **17.27 ± 3.02**, winning every stratum — §7.
-> Cleanliness and generality: §1, §3, and [`porting_guide.md`](porting_guide.md).
->
-> **Coverage/waste moved to the unified definitions on 2026-07-31**
-> ([`unified_culprits_coverage_waste.md`](unified_culprits_coverage_waste.md),
-> `decisions.md` that date), which took v3 from 7.44 ± 0.76 to **5.78 ± 0.10** —
-> **−1.66 FP, CI [−2.71, −0.71]**, every seed beating every baseline seed. Sections below
-> that quote 7.44 describe the *previous* definition and are correct for it; they are not
-> retracted, because those models were trained and scored consistently. The deployed arm is
-> now `checkpoints_v3_unified`.
->
-> **v3 is a purely learned ranker. Proof-tier demotion was cut from the method on
-> 2026-07-30** (`decisions.md`): nothing outside the network touches the ordering any
-> more. It cost a measured **0.23 FP** (7.20 → 7.44) and bought a system with one kind of
-> component in it — see §4.1 for the trade and §8 for what the axiom registry is still
-> for. The machinery is kept, tested and one flag away; it is *off*, not deleted.
->
-> **The deployed model gained the record's abstract-state delta (§6.1's `s_j`) on
-> 2026-07-28.** It is a *tie* with the previous configuration, not an improvement, and is
-> deployed because it completes the record schema at no porting cost — §7.1 gives both
-> readings, including the 6-seed one in which it is nominally behind.
->
-> **Caveats:** the headline is 3 seeds, chosen as the count every method has; the ablations
-> in §7.2 are 1-seed and predate both the delta and the demotion cut; and the generality
-> claim is architectural, not demonstrated by a transfer to a second environment. §9 lists
-> the limitations.
+*(Historical note: SPECTRE was built iteratively (v1 → v2.2 → v3) and unified into one method in the
+2026-08-12 publication refactor. The "vN" comparisons that motivated individual choices live in the
+[`decisions/`](decisions/README.md) log and the frozen [`docs/archive/`](archive/); this document
+describes only the current, single method.)*
 
 ---
 
-## 1. What changed from v2.2, in one table
+## 1. The problem, and the thesis
 
-| | v2.2 | v3 |
-|---|---|---|
-| Per-environment knowledge | 11 DD2D literals across "domain-agnostic" modules | **one `DomainSpec`**: 3 lines, 0 geometry |
-| Evidence schema | 5 bespoke fact types + `FactEncoder` type vocabulary | **one `FailureRecord`** + role-separated tokens over the domain's own operator schemas |
-| Sound demotion | `failure_action.startswith("retrieve")`, DD2D-specific, always on | **cut from the method** (R10). The declarative `QueryAxioms(monotone, local, exact)` machinery remains, off by default |
-| What acts on the ranking | model scores **+ an external proof offset** | **model scores only** — one kind of component |
-| Evidence source | offline harvest pass reconstructing facts from stored geometry | **refiner instrumentation**, observation-only (verified 290/290) |
-| Prior | `[-index, -length]` data-dependent hand switch | removed (R1); length survives only as the within-length loss bucket key |
-| Checkpoint selection | `relrank`, miscalibrated on dd2d_v3 | **uncensored deployed-val-FP** over the whole val split |
+Bilevel TAMP planners enumerate a pool `S = {s₁ … s_K}` of goal-reaching abstract skeletons, then
+refine them one at a time until one succeeds. On hard problems the **order of refinement attempts
+dominates wall-clock**, so the value is in a good re-ranker.
 
-The generality claim is concrete and checkable: porting to a new environment needs a
-converter and refiner instrumentation. The `DomainSpec` (§3) is still read — it derives
-`manipulated`, `goal_objects` and `length_key` from the operator schema — but its **axiom
-declarations are no longer required at deploy**, because nothing consumes a proof.
+**The thesis is failure-information utilization.** Every refinement failure observed *within an
+episode* carries instance-specific information about which remaining skeletons to try next — which
+object blocked, which query burned, how deep the refinement got. Existing re-rankers underuse it:
+
+- static historical rankers and the default planner order (astar/FF) fix the order before the first
+  attempt and never update — they ignore within-episode failures entirely;
+- **PIGINet** scores each skeleton once from the concrete low-level initial state — a *static*
+  feasibility predictor, blind to the failures that accrue during the episode;
+- **VLMPlan** proposes plans zero-shot from a scene image — no failure feedback at all;
+- even the other *learned adaptive* baseline, **LAZY** (Khodeir et al.), consumes failures only as a
+  scalar online feasibility statistic.
+
+SPECTRE turns **each observed failure into structured evidence** and re-scores the whole pool against
+the accumulated failure context on every attempt: the *culprits* a failure blamed become
+per-candidate **coverage/waste** features (§6); each failure becomes a **record token** carrying its
+burned query and arguments (§4–§5); and each record carries the abstract-state delta at its failing
+step. The claim is that this *stronger utilization* of failure information — not a new representation
+per se — is what buys the ordering.
+
+**The results are literal about this** (§10.4): SPECTRE and the static rankers solve the *same*
+episodes on the first attempt (the first attempt separates them not at all); the entire margin
+appears **after the first observed failure**. SPECTRE beats both the failure-blind static baselines
+and the other adaptive learned baseline (LAZY) on the DD2D packing domain. It is evaluated on two
+environments — **DD2D** (Drawer-Declutter 2D, a packing/retrieval domain) and **StickButton2D**
+(SB2D, a tool-use button-pressing domain) — with a 3-line per-environment contract (§7).
+
+*(Secondary, not the thesis: SPECTRE reads an abstract, object-centric representation rather than
+low-level pixels — which is how PIGINet enters as the low-level comparator. On DD2D the abstract
+ranker wins decisively; on SB2D the learned methods do not separate — §10.)*
 
 ---
 
-## 2. Architecture
+## 2. The method in brief
 
-Unchanged from v2.2 except where stated; shared primitives (SAB/PMA, tags, PL losses) are
-*imported*, never copied, because they are survivors rather than v2-specific.
+Given a pool of `K` candidate skeletons and the set `F` of failures observed so far this episode,
+SPECTRE scores every candidate and the deployed rollout tries them in descending score, updating `F`
+after each failure. Three modules, trained jointly (d = 64 throughout):
 
-- **`SceneEncoder`** — per-object [tag emb; 32-point boundary descriptor via PMA; pose;
-  `obj_rel`; `obj_is_goal`] → SAB×2. **Narrowed for domain-agnosticism (2026-08-08,
-  [ADR](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)):**
-  `obj_rel` is the width-3 anchor-free triple `[area, sinθ, cosθ]` (`D_REL_V3 = 3`), not v2.2's
-  width-8 target-anchored vector; `obj_is_goal` (any goal-named object) replaces `obj_is_target`
-  (the single DD2D target). The encoder takes `d_rel` per instance, so a compat-mode load of a
-  v2.2 checkpoint still builds the width-8 scene. An inference probe priced the removal at Δ 0.00
-  FP on both deployed models.
-- **`CandidateEncoder`** — per-step [op emb + position + projected arg tags] → PMA.
-  `CandidateEncoderV3` optionally replaces the learned absolute position table with a
-  sinusoidal encoding (§6).
-- **`RecordEncoder`** (new) — one observed failure → one token:
-  `Linear([schema emb ; pooled arg-tags ; pooled culprit-tags ; scalars])`.
-  **Role separation is load-bearing**: in v2.2 "argument of the failed query" and "object
-  implicated as a blocker" were distinguished *by fact type*; pooling both into one slot
-  would destroy that distinction. Scalars are `[j/L, log1p(effort)/10, exhausted,
-  effort_is_total]` — v2.2 harvested `Fact.scalars` and then dropped them in the tensorizer.
-- **`CrossAttentionScorer`** — candidates attend over scene tokens and the evidence memory;
-  `[dead, jaccard]` overlap features concatenated at the head.
-- **`CrossAttentionScorerV3`** (new, gated) — the same, but with a **separate attention
-  channel for evidence**. v2.2 concatenates scene, global and evidence into one memory, so a
-  single softmax must divide its mass between ~10 scene tokens and up to 2045 record tokens;
-  since geometry is reliably useful and evidence noisy, discarding evidence is
-  loss-minimizing, and the model duly learned to. Two channels remove the competition.
-- **`SceneEncoderV3`** (new, gated) — scene tokens gain a 5-scalar per-object summary of the
-  observed failures, so evidence enters through the **tag join** the architecture is built
-  around rather than as free-floating tokens. Column 5 carries proof-tier *culprits*: the
-  identity of an object the refiner reported as blocking, which is the observed counterpart
-  of the `clears` predicate L2 rejected — rejected for being a routine *we* ran, not for the
-  information it carried.
-- **Observed `coverage` / `waste`** (new, gated) — `cand_overlap` widens to 4. These are
-  §5.1's necessity features computed from reported culprits instead of a predicted per-object
-  head; necessity conditioning was cut because the head would have had to predict `p_i` from
-  geometry, and once the refiner reports culprits the same two features need no head at all.
-- **`AuxHead`** — present, **never trained**. No collection has ever populated
-  `aux_labels`, so v2.2's masked BCE contributed exactly zero gradient. v3 says so rather
-  than implying an aux loss exists. (`as_built_v2.2` §2.4's claim to the contrary is
-  incorrect and is corrected here.)
+- **Φ, per-candidate encoding** — a `SceneEncoder` over the initial abstract state's objects (§4) and
+  a `CandidateEncoder` over the skeleton's operator sequence.
+- **Ψ, failure evidence** — a `RecordEncoder` turns each observed failure into a token; the culprits
+  those failures blame become the `coverage`/`waste` overlap features (§6).
+- **σ, scorer** — an `EvidenceCrossAttentionScorer`: candidates cross-attend over the scene tokens and,
+  in a *separate* attention channel, over the evidence tokens, with the overlap features concatenated
+  at the head → one scalar logit per candidate.
 
-**Which of these the deployed config actually enables** — the gated components are not all
-on, and it matters for reading §7's ablations:
+**Loss is listwise Plackett–Luce**, global plus within-length buckets (`plackett_luce_loss` +
+`within_length_pl_loss`) — rollout-aligned with time-to-first-success. Pointwise BCE is not used on
+the ranker (it is not rollout-aligned). The within-length bucket key is `DomainSpec.length_key`
+(the operator count).
 
-| component | in deployed config? |
+---
+
+## 3. Architecture (as implemented)
+
+`SpectreModel(SpectreConfig)` (`model.py`) composes, over a `SpectreBatch` (`encoders.py`):
+
+- **`SceneEncoder`** (`self.scene`) — per object `[tag embedding; 32-point boundary descriptor pooled
+  by PMA; pose; obj_rel; obj_is_goal]` → SAB×2 (§4). Point-set boundary encoding (`FootprintEncoder`)
+  is concave-safe.
+- **`CandidateEncoder`** (`self.cands`) — per step `[operator embedding + learned position + projected
+  argument tags]` → PMA.
+- **`RecordEncoder`** (`self.records`, built when `use_records`) — one observed failure → one token,
+  `Linear([schema embedding ; pooled arg-tags ; pooled culprit-tags ; scalars])`. **Role separation is
+  load-bearing**: the objects the failed query was *about* (`rec_arg_tags`) and the objects observed to
+  *block* it (`rec_culprit_tags`) go in different slots; pooling both into one slot would say "these
+  objects are associated with this failure" without saying which was the target and which the obstacle.
+  Scalars are `[j/L, log1p(effort)/10, exhausted, effort_is_total]`. Each token also carries the
+  record's **state delta** `s_j − s_0` (added/deleted atoms, kept on separate role axes).
+- **`EvidenceCrossAttentionScorer`** (`self.scorer`) — candidates attend over scene tokens and, in a
+  *second* `MultiheadAttention` channel, over the evidence memory, with `cand_overlap` features
+  concatenated at the head. The separate channel is deployed because a single softmax over ~10 scene
+  tokens and up to hundreds of record tokens makes evidence compete with geometry for attention mass —
+  geometry is reliably useful and the model learned to discard evidence; two channels remove the
+  competition (§9). (The base single-memory `CrossAttentionScorer` remains as its superclass, selected
+  only when `evidence_attn` is off — not the deployed path.)
+- **`FactEncoder`** (`self.facts`) and **`AuxHead`** (`self.aux`) — both **built but not trained**: they
+  are survivors of the earlier fact-based evidence path and the aux head, kept because their parameters
+  are in the deployed checkpoint's `state_dict`, and left inert (the training loss is Plackett–Luce
+  only; `run_training` discards the aux logits). `use_necessity` raises — necessity conditioning was cut
+  (§9).
+
+**Which components the deployed config enables** (the `v3final` recipe, §8):
+
+| component | deployed? |
 |---|---|
-| `RecordEncoder` (record tokens), aggregated per query | **yes** |
-| `CrossAttentionScorerV3` (separate evidence channel) | **yes** |
-| observed `coverage`/`waste`, `dead` dropped from the net | **yes** — this is what carries the result |
-| record `state_delta` (§6.1's `s_j`, as a delta from `s_0`) | **yes** — a tie on DD2D; deployed to complete the record schema (§7.1) |
-| **proof-tier demotion** (the external offset) | **no** — cut 2026-07-30 (§4.1); `apply_demotion=False` is the default everywhere |
-| `SceneEncoderV3` (per-object evidence) | **no** — built and tested; hurt s1 badly on its own (20.84) |
-| `CandidateEncoderV3` (sinusoidal positions) | **no** — built and tested; G9 descoped. The D-8 oracle's *forward*/structure half is live; its *rollout* half retired with the 2026-08-08 scene narrowing |
-| necessity head | **no** — cut; `use_necessity` raises |
+| `RecordEncoder` record tokens, aggregated per query | **yes** |
+| `EvidenceCrossAttentionScorer` (separate evidence channel) | **yes** |
+| observed `coverage`/`waste` on `cand_overlap`; `dead` dropped from the net | **yes** — carries the result (§6, §9) |
+| record `state_delta` (`s_j − s_0`) | **yes** — a tie on DD2D, deployed to complete the record schema at no porting cost (§10.5) |
+| `FactEncoder`, `AuxHead` | built, **untrained** |
 
-**Loss** — listwise Plackett–Luce, global + within-length buckets. No pointwise BCE on the
-ranker. The bucket key is `domain.length_key`, verified to induce the identical partition
-to v2.2's DD2D-specific key on 120000/120000 skeletons.
-
-**D-8, exact absence.** Every v3 *feature* is config-gated on `V3Config`, and with all flags
-off the model is built from the *same submodule classes under the same attribute names* as
-v2.2 — so a v2.2 checkpoint loads `strict=True` in compat mode. **The rollout-equivalence half
-of the oracle retired 2026-08-08**: deployed v3 narrows the scene (`d_rel = 3`) where v2.2 is
-width-8, so a *deployed* rollout is no longer bit-identical to v2.2 by design. What
-`test_v3_equivalence.py` still enforces, and is what made the data-path rewrites safe: v2.2
-loads into a **compat-mode** (`d_rel = 8`) `SpectreV3Model`, the submodule structure matches at
-that width, and a **forward pass over the same width-8 batch stays bit-identical**. (The
-scene-narrowing is a *removal*, so unlike the config-gated features it is not additive; it is
-the deliberate exception noted in the ADR.)
+The deployed model is **324311 parameters**; `inference.load_checkpoint` rebuilds it and returns the
+deploy-time switches that change what `dataset.build_example` *emits* (`overlap_mode`,
+`aggregate_records`, `coverage_feats`, `coverage_mode`, `state_delta`) — read off the checkpoint, never
+from the caller, so a model is never scored on a feature it was not trained on.
 
 ---
 
-## 3. The domain contract — the whole per-environment surface
+## 4. The input surface — domain-agnostic by design
+
+The scene inputs were **narrowed to domain-agnostic columns** so the same encoder serves both
+environments without target-specific privilege ([`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)).
+Per object, `SceneEncoder` reads `[obj_tags, boundary(32-pt ring), pose(x/scale, y/scale, θ),
+obj_rel, obj_is_goal]`, where:
+
+- **`obj_rel` = the width-3 anchor-free triple `[area, sin θ, cos θ]`** (`D_REL = 3`), not a
+  target-anchored vector. The DD2D-specific offsets **`(dx, dy, distance-to-target, area-ratio-to-target)`**
+  and the privileged **`concave`** flag were **dropped** — they are meaningless on SB2D (there is no
+  single "target" object; a button is not "near the drawer target"). Absolute position survives in
+  `pose`.
+- **`obj_is_goal`** (1.0 for any object named in the goal literals) **replaces** the old single-target
+  `is_target`.
+
+An inference-time probe priced the removal at **Δ 0.00 FP** on both deployed models — the dropped
+columns were inference-inert, not information the ranker used. The narrowing raised across-seed
+variance, recovered by widening the selection window (§8).
+
+The **`cand_overlap`** feature block is width **4**: `[dead, jaccard, coverage, waste]` (`N_OVERLAP_COV`).
+`dead` and `jaccard` are cheap set-overlap signals against the failed set; `coverage`/`waste` are the
+evidence-grounded features of §6. (`overlap_mode`/`coverage_mode` zero unwanted columns rather than
+resize, so the tensor shape is fixed.)
+
+---
+
+## 5. Failures as observations
+
+Instrumentation is **observation-only** — an invariant. `n_attempts` *is* `counter.calls`, so one
+extra stream call would shift every label; culprit extraction therefore reads answers the refiner
+produced anyway (e.g. DD2D's `grasp_cfree` was refactored to expose the blocker witness the
+short-circuit already computed). Verified differentially: label, steps-bound, plan-length,
+failure-action identical on 290/290 replayed candidates.
+
+Each failure is one `FailureRecord` (`failure_record.py`):
+`(candidate_idx, step_index, schema, args, culprits, unmoved, n_step, exhausted, budget_exhausted,
+effort_is_total, instrumented, dev_blame, state_delta)`. The two evidence channels:
+
+- **`culprits`** — **class-1** blame: the objects a validity check (collision, bounds) named when it
+  rejected a sample before a successor state existed. DD2D's grasp collisions are class 1.
+- **`dev_blame`** — **class-2** blame: the objects named by the *collateral* effect-mismatch deviation,
+  for environments (like SB2D) whose refiner returns only a bool from its collision check and so has no
+  class-1 channel. SB2D's incidental button presses are class 2.
+
+`state_delta` is `s_j − s_0` by STRIPS progression over the candidate's own plan — pure abstract
+bookkeeping, no new instrumentation; `None` (not computed) is distinguished from `StateDelta()`
+(computed-but-empty). `proves_failure()` = `exhausted and not budget_exhausted` (a query that ran to
+exhaustion, not one cut off by the attempt budget). `effort_is_total` distinguishes backfilled
+whole-attempt effort from per-step instrumented effort, so a re-collection cannot silently redefine a
+scalar.
+
+**Aggregation.** The refiner emits one record per failed *sample*; the deployed config aggregates to
+one per `(schema, args)` (`--aggregate-records`) — deepest step, summed effort, unioned culprits —
+because a candidate whose `place-buffer(o)` was retried across many poses would otherwise contribute
+hundreds of near-identical tokens (up to ~2045 at `|F|=30`). Aggregation is −88.7% tokens with
+nothing the token *encodes* lost.
+
+---
+
+## 6. Coverage and waste — evidence-grounded, from the operator schema alone
+
+Two per-candidate scalars appended to `cand_overlap`, computed only from failures the refiner already
+reported by `unified_evidence.coverage_and_waste(...)` — the **sole** coverage/waste path (the old
+`coverage = |S(c) ∩ culprits| / |culprits|`, `waste = |S(c) \ culprits| / |S(c)|` with
+`S(c) = args \ goal_objects` was **removed** in the 2026-08-12 refactor; there is no toggle). Both are
+exactly `0` when `F = ∅` (`if not records or not pool: return 0.0`) — the leakage invariant, so the
+first attempt is purely static and the signal accrues as the rollout proceeds.
+
+**Notation.** A candidate `c = ⟨s_1 … s_L⟩`; `touch(c, k)` = the step indices whose add/delete effects
+mention object `k`; `ŝ_j(c)` = the candidate's predicted abstract state *before* step `s_j` by STRIPS
+progression (`predicted_states`, the same machinery `state_delta` runs).
+
+**Two domain-only filters** (`scene_filters`, from the grounded operator set — no environment named):
+an object is **universal** iff it appears in the argument list of *every* ground operator instance
+(behaviourally the robot); an atom is **anchored** iff it mentions a non-universal object; an object is
+**actionable** iff some operator's effects mention it. On DD2D `universal = ∅`; on SB2D it is the robot.
+
+**Culprits** (`blame`, `culprit_pool`). A failed sample dies in one of two classes, each of which
+already named the objects to blame:
+- **Class 1:** `blame(r)` = the objects the violated check named (`culprits`).
+- **Class 2:** the raw deviation is `(added, deleted)`; blame reads the **collateral** deviation — the
+  raw deviation minus the failed step's *own* declared effects, `collateral(r) = (added − A⁻(s_r),
+  deleted − A⁺(s_r))` — and `blame(r)` = the objects those collateral atoms mention. The stripped
+  remainder (the step's own effects that failed to take) is **means failure** — it names no culprit and
+  instead rides the burned-query record token. So an out-of-reach robot-press blames nobody
+  (`collateral = (∅, ∅)`). *In one line: culprits are collateral damage; burned queries are failed
+  means.*
+
+The **culprit pool** is `K = (Actionable \ Universal) ∩ ⋃_{r∈F} blame(r)`. Universal objects are
+excluded from `K` itself — not merely from anchoring — because waste's justification is a per-step
+existential over `K`, and one universal object (the robot, touched by every step) would spuriously
+justify every superfluous step.
+
+**Context matching** (`matched_steps`). A step `s_j` of `c` *matches* record `r` iff its effects
+intersect the anchored, *signed* effect signature of `r`'s failed step (`A⁺(s_j) ∩ anch(A⁺(s_r))` or
+`A⁻(s_j) ∩ anch(A⁻(s_r))` non-empty). Matching is by what a step *does*, not what it is named — a
+stick-press of `b2` re-enters the context of a failed robot-press of `b2` — with sign respected
+(adding what the failed step deleted is the opposite of a re-attempt). `M_c(r)` = the matched indices.
+
+**Coverage** (`covered`, `coverage`) — recall over the failures' stories, **conjunctive** across every
+record blaming `k`, and **class-dependent** (the abstraction can state a class-2 hazard as a predicate
+but not a class-1 "blockedness"):
+- *Class-1 test (index precedence):* if `M_c(r) ≠ ∅`, some `j ∈ touch(c, k)` with `j < min M_c(r)`
+  (deal with `k` before the earliest recurrence); if `M_c(r) = ∅`, bare membership `touch(c, k) ≠ ∅`.
+- *Class-2 test (state entailment):* for every `j ∈ M_c(r)`, restricting the collateral deviation to
+  atoms mentioning `k`, the needed adds must hold and the forbidden deletes must be absent in `ŝ_j(c)`
+  (`need ⊆ ŝ_j` and `forbid ∩ ŝ_j = ∅`) — replaying the recorded accident against the candidate's own
+  predictions is a no-op wherever the situation recurs (the accident has been made intentional).
+- `coverage(c) = |{ k ∈ K : covered(k | c) }| / |K|`.
+
+**Waste** (`superfluous_steps`, `_justified`, `waste`) — precision over unexplained work:
+- *Superfluous steps (backward relevance):* initialise `needed ← anch(goal)`, walk `c` back-to-front; a
+  step is *live* iff it adds something needed (then `needed ← (needed − adds) ∪ anch(pre)`), else
+  *superfluous*. The live causal spine — including tool acquisition, `PickStick` feeding `Grasped` —
+  never enters the denominator, which is what dissolves SB2D's tool anti-signal with *no per-environment
+  switch*. The pass never consults deletes (detects irrelevance, not threats) — sound because candidates
+  are STRIPS-valid sequential plans.
+- *Justified:* a superfluous step is justified iff it touches some `k ∈ K` at an index before every
+  matched step of every record blaming `k`.
+- `waste(c) = |{ j superfluous : ¬justified(j) }| / |{ superfluous }|`, and **abstains** (returns 0) on
+  an empty culprit pool — otherwise every candidate would read 1.0 from zero evidence.
+
+**Intuition.** On DD2D a grasp collision names a blocker (class 1); a candidate that stages the blocker
+before extracting is covered, and staging an *unnamed* object is waste. On SB2D an incidental press
+names a button (class 2); a candidate whose own predictions already contain that press at the
+recurrence is covered, and a stick-fiddle that feeds no goal atom is waste. Nothing in these definitions
+names a drawer, a button, or a stick — the per-domain input is the operator schemas themselves.
+
+---
+
+## 7. The domain contract — the whole per-environment surface
 
 ```python
 _DD2D = DomainSpec(
@@ -170,417 +261,165 @@ _DD2D = DomainSpec(
 ```
 
 Everything else is derived from the operator schema: `goal_objects` from the goal literals,
-`manipulated` as `args(σ) \ goal_objects` (equals v2.2's `place-buffer` filter on
-120000/120000 skeletons), `length_key` as the operator count.
+`manipulated` as `args(σ) \ goal_objects`, `length_key` as the operator count. Declaring an axiom has
+the epistemic status of writing the PDDL domain file — specification, not a learned routine. `spec_for`
+maps an env-variant to its spec; **`EMPTY_SPEC`** (declares nothing) is the fallback, and **is what SB2D
+uses** — SB2D registers no axioms, so its per-environment code is entirely the converter + refiner
+instrumentation under `envs/stickbutton2d/`.
 
-Declaring an axiom has the epistemic status of writing the PDDL domain file — it is
-*specification*, not a learned or inferred routine. An unknown environment degrades to
-`EMPTY_SPEC` rather than raising.
-
-**Since 2026-07-30 the axioms are optional at deploy.** With demotion cut (§4.1) nothing
-consumes a proof, so the three `QueryAxioms` lines above affect only (a) which records are
-held out of the token path as proof-tier — 1.3% of them on dd2d_v4, all `retrieve` — and
-(b) the opt-in `apply_demotion=True` path. **"Learning is the floor" stopped being the
-fallback and became the deployed configuration.** A new environment supplies a converter
-and refiner instrumentation; the axiom block is now a tuning knob rather than a
-requirement.
-
-*(Retained because it still governs the opt-in path:)* **the `exact` axiom is not
-decoration.** `refine()` reports the deepest step *reached*, which on a wall-clock exit was
-never tested — it will name `retrieve(target)` though the retrieve never ran. That is the
-confirmed cause of all 12/18694 dd2d_v2 demotion violations, and splitting "the domain says
-this query type is exhaustive when it completes" from "the observation says it actually
-ran" is what makes `strict` mode sound: 0 demoted-but-feasible.
+Since the proof-tier demotion was cut (§9), **nothing at deploy time consumes a proof**, so the
+`QueryAxioms` are *optional*: their only remaining effect is (a) which failures set the `dead` overlap
+column and (b) which proof-tier records are held out of the learned token stream (1.3% of dd2d_v4
+records, all `retrieve`). "Learning is the floor" is the deployed configuration, not a fallback — an
+`EMPTY_SPEC` environment (like SB2D) runs the full learned method.
 
 ---
 
-## 4. Failures as observations
+## 8. Training and selection
 
-`FailureRecord(candidate_idx, step_index, schema, args, culprits, unmoved, n_step,
-exhausted, budget_exhausted, effort_is_total, instrumented, state_delta)`.
+`run_training` (`train.py`): AdamW, lr 3e-4, cosine schedule with 2 warmup epochs, 30 epochs, batch 8,
+dropout 0.1, weight decay 5e-4, within-length weight 1.0, tag-permutation augmentation on.
 
-The records were consumed in two tiers, and **the proof tier was cut on 2026-07-30**
-(§4.1). What remains:
+**Deployed recipe** (`spectre_sweep.py --preset v3final`): `--overlap-mode jaccard --coverage-feats
+--aggregate-records --evidence-attn --state-delta --select-window 5`.
 
-- **Hint tier** — a record becomes a learned token, and the observed culprits it carries
-  become the per-candidate `coverage`/`waste` columns. This is now the *only* consumer.
-- **Proof tier** — where the domain declares monotone + local + exact *and* the observation
-  proves the query ran, the consequence *could* be applied outside the network as a finite
-  demotion offset (never pool removal, P-E). Retained, tested, `apply_demotion=True`, and
-  **not deployed**.
+**Selection is uncensored deployed-val-FP** over the whole 100-episode val split, on a moving average
+of the last **5** epochs (`--select-window 5`). The window was widened from the default 3 because the
+domain-agnostic narrowing (§4) raised across-seed variance and a 3-epoch window locked onto unlucky val
+epochs; ma5 recovers parity ([`decisions/07` 2026-08-09](decisions/07-stickbutton2d.md#2026-08-09-narrowed-input-variance-selector-noise-fixed-wider)).
+The hard-won lesson generalizes: **a selection statistic must never be censored below the region where
+the candidates differ**, and *stable curves are not evidence of a good selector*.
 
-The tier split itself still runs: proof-tier records are held out of the token path exactly
-as before, so the trained checkpoints see the input distribution they trained on. On
-dd2d_v4 that is **391 / 29054 records (1.3%)**, all `retrieve` — see §4.1 for why that
-number matters.
-
-### 4.1 Why the proof tier was cut
-
-**The story is the reason, and the price is small and measured.** v3's claim is one
-canonical record consumed by learned components. An external, hand-declared deduction
-acting on the ranking is a second kind of thing in the system: it needs the axiom registry,
-it needs `strict`/`permissive` semantics, and it needs a soundness argument (C5/P-E) that
-is a paragraph of the paper. Removing it makes the deployed system **one mechanism**, and
-makes "learning is the floor" the configuration rather than the fallback.
-
-What it costs, measured (`notebook.md` 2026-07-30, notebook §4.3): **0.23 FP**, 7.20 →
-7.44 over 3 seeds, paired-bootstrap CI [+0.08, +0.43]. Real, significant, and small.
-
-Three measurements say it is a cheap thing to give up *on this domain*:
-
-- **It barely fires.** Demotion changed the realized attempt order on **18/300 (6%)** of
-  deployed (problem, seed) pairs, against **55/100 (55%)** on the stripped floor arm. The
-  learned features have already ordered the pool so the proof usually has nothing left to
-  correct.
-- **The learned components absorb ~79% of it.** On the floor arm — jaccard only, no
-  `coverage`/`waste`, no record tokens — withholding the offset costs **1.09 FP** (15.47 →
-  16.56), 4.7× the deployed cost.
-- **It only ever acted at s2/s3.** s0 and s1 are *bit-identical* with and without it, at
-  both 3 and 6 seeds. Demotion needs a subset-containment proof, which needs multi-object
-  stagings; an s1 candidate stages one object, so nothing there is ever provably dead.
-
-**What is honestly given up.** The offset was *sound* — 0 demoted-but-feasible under
-`strict` — and a learned correlate is not a proof. On a domain whose proofs fire far more
-often than DD2D's 6%, this trade would go the other way, and the flag exists for exactly
-that. Also: with no proof consumer, the 1.3% of records the tier split holds back are now
-used by **nothing**. Routing them into the token path is the obvious follow-up and needs a
-retrain, so it was not done here (§9).
-
-*(This also corrects an unverified note in `autorun_decisions.md` A19, which guessed from a
-single episode that "most DD2D failures are `retrieve`" and therefore proof-tier. Measured
-across the test split it is 1.3%.)*
-
-**`effort_is_total` exists because a re-collection would otherwise silently redefine a
-column**: backfilled records report whole-attempt effort, instrumented ones report per-step.
-
-**`state_delta` fills §6.1's last empty slot** (`--state-delta`, **in the deployed
-configuration** since 2026-07-28). Every other field of the proposal's record was built;
-`s_j` — the abstract state at the failing step — was not. What is carried is the *delta*
-from `s_0` (which atoms the prefix added, which it deleted), since `s_0` already reaches the
-scorer through the scene tokens. It is pure STRIPS progression over the candidate's own
-plan, so it needs **no new instrumentation**: any environment that can supply an
-`EpisodeRecord` at all gets it for free. That is why it is deployed — it is a **tie** on
-DD2D, not a win (§7.1), and completing the schema for free is the whole of the case for it.
-
-Encoding, with two choices that are load-bearing rather than incidental: each delta atom is
-projected **before** the pool over atoms (so `{on-buffer(o1), holding(o2)}` and
-`{on-buffer(o2), holding(o1)}` differ), and an atom's argument slots are **concatenated
-positionally** rather than pooled (so `p(a,b)` and `p(b,a)` differ — invisible on all-unary
-DD2D, which is why a synthetic test pins it). The branch is additive and **zero-initialized**
-so that turning the flag on changes no other parameter's initialization; widening the record
-projection instead would have re-randomized all of it and made the arm an init lottery rather
-than an ablation.
-
-Two DD2D-specific caveats bound what it can show *here* and are recorded so they are not
-re-derived:
-
-- the delta's *object* set is exactly `all_objects − unmoved` on **946,063/946,063** records,
-  so on this domain its only content beyond the already-populated (and never-tensorized)
-  `unmoved` field is the **predicate label** on each object;
-- under `aggregate_records`, **47.8%** of tokens carry an *empty* delta (54.9% at s2/s3),
-  because aggregation collapses the deep re-sampled records and leaves the shallow `j = 0`
-  ones proportionally dominant.
-
-Its **size** is nearly determined by the `j/L` scalar the token already carries
-(corr 0.940), so no count feature is derived from it — that would be `dead` again. What it
-adds is object *identity*: given everything the model already sees about a record
-(`problem, schema, args, j/L`) there are 2.65 distinct staged sets on average, >1 in 53.6%
-of groups.
-
-**Instrumentation is observation-only, and that is an invariant.** `n_attempts` *is*
-`counter.calls`, so one extra stream call shifts it and cascades into every label.
-`grasp_cfree` was therefore refactored to `grasp_blocker(...) < 0` — the culprit is the
-witness the short-circuit already computed. Verified differentially: `label`, `steps_bound`,
-`plan_length`, `failure_action` identical on 290/290 replayed candidates.
-
-**Aggregation.** The refiner emits one observation per failed *sample*; §6.1 defines a record
-per failing *query*. Left raw, a candidate whose `place-buffer(o)` was retried across many
-poses contributes hundreds of near-identical tokens (mean 2.2 per candidate but max 290; at
-|F|=30, mean 226 tokens and max 2045, against v2.2's ~40 facts). `aggregate_records` collapses
-to one per `(schema, args)` — deepest step, summed effort, unioned culprits — for −88.7%
-tokens with nothing the token *encodes* lost.
+**EMA weight-averaging** (`--weight-avg ema`) is built and tested but **off** — it was inert on both
+environments. Checkpoints land in `data/spectre/checkpoints_spectre*` (the DD2D deployed model is
+`checkpoints_spectre_unified`, SB2D is `checkpoints_spectre`).
 
 ---
 
-## 5. Training and selection
+## 9. What was removed, and why
 
-Recipe: AdamW, lr 3e-4, cosine with 2 warmup epochs, 30 epochs, batch 8, dropout 0.1,
-weight decay 5e-4, within-length weight 1.0, tag-permutation augmentation on. Identical to
-v2.2's deployed recipe — verified field-by-field against the stored checkpoint cfgs, so
-v3-vs-v2.2 is not a recipe comparison.
+Each of these was built, measured, and cut; the reasoning is the record of why the deployed method is
+one learned mechanism rather than a stack of parts.
 
-Deployed feature flags (the `v3final` sweep preset): `--overlap-mode jaccard
---coverage-feats --aggregate-records --evidence-attn --state-delta`.
+| component | disposition | evidence |
+|---|---|---|
+| **proof-tier demotion** (an external, hand-declared score offset on provably-dead candidates) | **cut** 2026-07-30; machinery removed | costs **0.23 FP** (7.20 → 7.44 at the time), fired on only **6%** of deployed rollouts (vs 55% on a stripped floor arm), and the learned features absorbed ~79% of its value — so on this domain it barely acts, and cutting it makes the deployed system *one mechanism* (model scores only, pure argmax). It was *sound* (0 demoted-but-feasible); on a domain whose proofs fire far more often the trade reverses. |
+| **legacy coverage/waste** (`S(c) = args \ goal_objects`) | **removed** 2026-08-12 | the unified definitions (§6) are the only path; they are domain-agnostic where the legacy denominator hard-coded "discretionary = touches a non-goal object," true on DD2D and false wherever tools exist. |
+| **per-object obj-evidence** (a scene-token evidence summary) | **removed** | hurt s1 badly on its own; evidence enters through the record tokens + separate attention channel instead. |
+| **sinusoidal positions** (`CandidateEncoderV3`) | **removed** | the motivating OOV never occurs on DD2D (s0–s2 pools already contain longer plans than s3 needs); it was future-proofing, not a fix. |
+| **`tail_max_f`** (`|F|` sampling out to ~40) | **removed** | an unused training knob. |
+| **necessity head** (proposal §5.1, a predicted per-object `p_i`) | **cut**; `use_necessity` raises | the s2 deficit it targeted is *within-length*, which it does not address — and once the refiner *reports* culprits the same two features (coverage/waste) need no predicted head at all. |
 
-**Selection is uncensored deployed-val-FP** over the whole 100-episode val split, on a
-3-epoch moving average, with the demotion rule pinned to `permissive` so a change to the
-rule cannot move the selector underneath a comparison. Three guards, each from a specific
-failure — see `train.py`'s module docstring. The censoring lesson generalizes and is
-worth restating: **a selection statistic must never be censored below the region where the
-candidates differ**, and *stable curves are not evidence of a good selector* — the censored
-selector's curves were stable and picked sensible mid-training epochs while spanning ≈6 FP
-where the uncensored one spans ≈15.
-
-**Failure-context sampling.** `sample_context` keeps ~35% of mass at `|F| = 0` (the
-deployment start, which the static pathway must own alone) and applies evidence dropout.
-`tail_max_f` optionally spreads half the non-empty mass out to |F| ≈ 40, because v2.2's
-inherited cap of 8 never shows the model the regime an s3 rollout actually spends most of
-its attempts in.
+The single substitution the win rests on: §5.1 wanted a per-object necessity `p_i` *predicted* by a
+head; SPECTRE gets the same two candidate features from culprits the refiner *reported* — no head, no
+second loss, no geometry routine, and strictly more C2-legal (nothing is inferred by us). A leakage
+audit returned 0 violations (features zero at `|F|=0`; culprits only from candidates already in the
+failure context; the deploy loop breaks on success before a successful candidate can enter the context).
 
 ---
 
-## 6. Position encoding
+## 10. Results
 
-`CandidateEncoderV3` replaces the learned absolute `nn.Embedding(64, D_MODEL)` with a
-sinusoidal encoding, subclassed rather than edited in place because D-7 freezes v2 modules.
-`pos_emb` is *deleted*, so it leaves the state dict — which is precisely why enabling it
-retires the D-8 oracle.
+Uncensored deployed FP, test n=100. Lower is better; mean ± across-seed std (3 seeds for the learned
+methods; a single deterministic run — no ± — for astar and VLMPlan). Numbers are the current
+`compare_methods.py` caches; render any environment with `SPECTRE_COMPARE_ENV=<key> python
+experiments/spectre/compare_methods.py`.
 
-**Honest scope note:** the motivating OOV problem does **not** occur on DD2D. Measured, s0–s2
-candidate pools already contain 9-operator plans (max step index 8) while s3 needs only 6, so
-under the "train s0–s2 / deploy s3" protocol the absolute table is never queried out of range.
-The sinusoidal encoder is future-proofing for longer-horizon domains and a generality argument
-— not a fix for a live DD2D defect. Claiming otherwise would be unsupported.
-
----
-
-## 7. Results
-
-**Uncensored deployed FP on dd2d_v4 test, n=100.** Lower is better.
-
-**Headline: 3 seeds each** (mean ± std *across seeds* of the per-stratum mean):
+### 10.1 DD2D — `dd2d_v4` (strata s0…s3 = size of the minimum feasible subset)
 
 | method | ALL | s0 | s1 | s2 | s3 |
 |---|---|---|---|---|---|
-| **v3 deployed** (no demotion) | **7.44 ± 0.76** | 0.00 ± 0.00 | **3.96 ± 2.50** | **13.15 ± 0.34** | **12.64 ± 1.95** |
-| **v2.2 yardstick** (with demotion) | 17.27 ± 3.02 | 0.00 ± 0.00 | 13.67 ± 14.20 | 23.45 ± 2.76 | 31.95 ± 5.62 |
+| **SPECTRE-adaptive** | **6.29 ± 0.31** | 0.00 | 6.67 ± 1.67 | 9.75 ± 0.21 | 8.73 ± 1.01 |
+| SPECTRE-static | 19.80 ± 2.12 | 0.00 | 25.64 | 20.39 | 33.16 |
+| PIGINet (low-level, BCE) | 17.27 ± 0.19 | 0.05 | 5.04 | 18.77 | 45.20 |
+| LAZY-adaptive (Khodeir et al.) | 23.26 ± 0.50 | 0.36 | 9.59 | 24.44 | 58.65 |
+| astar-dist | 34.52 | 0.00 | 2.24 | 17.08 | 118.76 |
+| VLMPlan-GPT5.6 (terra, n=40) | 35.23 | 26.9 | 26.7 | 28.0 | 59.3 |
+| VLMPlan-32B (local Qwen, n=40) | 23.55 | 6.76 | 5.04 | 13.16 | 69.24 |
 
-**−9.83 FP, 95% CI [−12.57, −7.36]** (paired bootstrap over problems on the seed-mean).
-v3 wins ALL, s2 and s3; s0 is a tie at 0.00 (every method solves those on the first
-attempt); s1 is a win on the means but against a ±14.20 baseline spread, so read it as
-"not worse" rather than as a 3× improvement. Per-seed ALL: 6.56 / 7.84 / 7.91.
+SPECTRE-adaptive beats every comparator — the failure-blind static rankers and PIGINet, the other
+adaptive learned ranker LAZY, and both VLMPlan arms. *(The deployed number reads **6.29 ± 0.31** in the
+current caches, retrained under the 2026-08-12 refactor code; it ties the frozen yardsticks **5.92**
+(domain-agnostic) / **5.78** (target-anchored) within ~1.3 seed-sd — the small delta is fresh-run GPU
+non-determinism, confirmed by a byte-identical same-checkpoint rollout at 324311 params.)*
 
-**The comparison is deliberately asymmetric and it handicaps v3.** v3 runs without
-proof-demotion (§4.1); the v2.2 yardstick keeps its own observed demotion, because 17.27 is
-the number published for it throughout this project and re-scoring the baseline to match a
-v3 design choice would be moving the goalposts. So the margin is measured against a
-*stronger* baseline than v3 gives itself.
+### 10.2 StickButton2D — `stickbutton2d_v1_kinder` (strata b1/b2/b3/b5 = button count)
 
-**Three seeds because that is what every method has** — v2.2 was trained at exactly 3, and
-PIGINet gained a seed axis for the comparison notebook. It is a protocol set by the
-weakest-covered method. §7.1 gives v3's 6-seed reading, which is *worse*, and it is stated
-there rather than omitted.
-
-**Against the other comparators** (same split, same protocol; full table in
-[`notebook.md` 2026-07-28](notebook/README.md)):
-
-| method | seeds | ALL | s1 | s2 | s3 |
+| method | ALL | b1 | b2 | b3 | b5 |
 |---|---|---|---|---|---|
-| **SPECTREv3-adaptive** | 3 | **7.44 ± 0.76** | 3.96 ± 2.50 | 13.15 ± 0.34 | 12.64 ± 1.95 |
-| PIGINet (low-level, BCE) | 3 | 17.27 ± 0.19 | 5.04 ± 1.49 | 18.77 ± 1.58 | 45.20 ± 0.84 |
-| SPECTREv2-adaptive | 3 | 17.27 ± 3.02 | 13.67 ± 14.20 | 23.45 ± 2.76 | 31.95 ± 5.62 |
-| VLMPlan-32B (zero-shot) | 1 † | 23.55 | 5.04 | 13.16 | 69.24 |
-| astar-dist | - | 34.52 | 2.24 | 17.08 | 118.76 |
+| **SPECTRE-adaptive** | **1.75 ± 0.19** | 0.08 | 0.31 | 1.13 | 5.49 |
+| SPECTRE-static | 2.06 ± 0.21 | 0.08 | 0.36 | 1.57 | 6.21 |
+| PIGINet (kinder crops) | 2.28 ± 0.29 | 0.07 | 0.35 | 1.17 | 7.55 |
+| LAZY-adaptive | 1.85 ± 0.02 | 0.08 | 0.36 | 2.32 | 4.63 |
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+| VLMPlan-GPT5.6 (terra, n=40) | 6.43 | 0.00 | 2.4 | 0.9 | 22.4 |
+| VLMPlan-32B (local Qwen, n=40) | 13.18 | 0.70 | 1.30 | 6.20 | 44.50 |
 
-† grafted from dd2d_v3. **PIGINet and v2.2 tie on the mean at 17.27 and are nothing alike** —
-±0.19 vs ±3.02, and PIGINet is much better at s1/s2 and much worse at s3. Never quote either
-mean without its spread; the coincidence is exactly the kind that reads as a finding.
+**On SB2D the learned methods do not separate.** Paired bootstrap: SPECTRE-adaptive − PIGINet =
+−0.60, CI [−1.24, +0.08]; SPECTRE-adaptive − LAZY = −0.01, CI [−0.72, +0.72]. The *adaptive increment*
+within SPECTRE is positive on both environments; the *representation* advantage over the low-level
+predictor is DD2D-only. The failure-information thesis holds (adaptivity helps on both); the
+abstract-vs-low-level contrast does not transfer.
 
-Reproduce:
+### 10.3 Generalization and held-out strata
+
+- **Unseen shapes** (`dd2d_v4gen_shapeonly_sz07`, concave tee/cross figures): SPECTRE-adaptive
+  **2.79 ± 0.36** vs PIGINet 22.68 — shape generalization is essentially free, and adaptivity does the
+  lifting (SPECTRE-static 15.00).
+- **Held-out stratum, DD2D** (train s0–s2, evaluate the never-trained s3): SPECTRE-adaptive s3 **9.97**
+  ≈ its in-distribution s3, while PIGINet s3 **85.89** (~9× worse) — the low-level predictor collapses
+  out-of-distribution while the abstract ranker generalizes.
+- **Held-out stratum, SB2D** (train b1/b2/b3, evaluate never-trained b5): PIGINet **5.36** ≈ SPECTRE
+  **6.87** — the SB2D non-separation reproduces out-of-distribution.
+
+### 10.4 What the win rests on — the after-first-failure decomposition
+
+SPECTRE and the static rankers solve the **same** episodes on attempt 1 (on DD2D, exactly the s0
+episodes; neither solves any s1–s3 episode immediately), so the first attempt separates the two methods
+**not at all**. The entire margin appears *after* the first observed failure. SPECTRE is not a better
+*static* ranker — it is a better *re*-ranker, which is exactly what a failure-conditioned method should
+buy, and an independent corroboration of the leakage audit (a feature leaking feasibility would have
+lifted the first pick too).
+
+### 10.5 Wall-clock (§2b), and the state-delta tie
+
+Under a per-candidate refinement-abandonment cap (a deployment knob; DD2D 2 s, SB2D 10 s), SPECTRE-adaptive is the **fastest** method to first success on both environments — DD2D 1.79 s ALL (vs astar
+2.96), SB2D 11.17 s (vs static 12.64, PIGINet 15.15, astar 97.40). Uncapped on DD2D its wall-clock is
+~equal to astar's despite 6× fewer failed attempts (its few failures are the *expensive* near-feasible
+traps), which the cap targets directly. — The **record state-delta** is deployed as a *tie* on DD2D (it
+completes the record schema at zero porting cost, needing no new instrumentation), not because it moved
+the number.
+
+### 10.6 Reproduce
 
 ```bash
-python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2
-# demotion is OFF by default; `--with-demotion` re-enables it (the §4.1 ablation).
-# NOTE the `--v2-arm` yardstick is scored through the same switch, so this command
-# reports v2.2 WITHOUT its demotion; the 17.27 above is v2.2 as published, read from
-# the compare cache, whose `cache_spectre2` uses v2's own always-demoting rollout.
-python experiments/spectre/spectre_score.py --env-variant dd2d_v4 \
-    --arm "v3 deployed:checkpoints_v3_v3delta_s{seed}" --seeds 0 1 2
+python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2      # DD2D, 3 seeds
+bash experiments/spectre/sb2d_finalize.sh                                       # SB2D pipeline
+python experiments/spectre/precompute_dd2d_cache.py --env-variant dd2d_v4 --force --methods spectre3 --no-ablations
+SPECTRE_COMPARE_ENV=dd2d python experiments/spectre/compare_methods.py          # render the table
 ```
 
-**The baseline is now averaged, not best-cased, and that inflates the margin.** Earlier
-versions of this document compared against v2.2 **seed 0** (14.66) because v3 had 6 seeds
-and v2.2 had 1, and seed 0 is v2.2's *best* (per-seed 14.66 / 16.57 / 20.57). With both
-sides at 3 seeds the like-for-like comparison is mean-to-mean, so the yardstick moves to
-17.27 — a weaker baseline than the one previously quoted, and roughly 2.6 FP of the −9.83
-is that change of basis rather than a change in v3. Against seed 0 the margin is ≈ −7.2.
-v2.2's s1 spread of ±14.20 (seed 2 lands at 30.04, `relrank` selecting a bad epoch) is
-itself the miscalibration R8 replaced.
-
-### 7.1 Seed counts, and the reading that disagrees
-
-v3 has **6** trained seeds; the headline uses 3. The two readings disagree about whether
-the state delta helped, and both are ties by paired bootstrap:
-
-| configuration | 3 seeds (0–2) | 6 seeds |
-|---|---|---|
-| **v3 deployed** (state delta, no demotion) | **7.44 ± 0.76** | 8.54 ± 1.43 |
-| v3 pre-delta, *with* demotion (`checkpoints_v3_v3final_s*`) | 7.44 ± 0.23 | 7.90 ± 0.61 |
-
-Delta-vs-pre-delta at 6 seeds is **+0.34 FP, CI [−0.30, +1.07]** — a tie, with the sign
-splitting 3–3 across seeds (6.49 / 7.51 / 7.61 / 8.61 / 10.43 / 8.76 against 7.50 / 7.63 /
-7.19 / 8.05 / 8.08 / 8.94). So **the state delta is deployed on the strength of completing
-the record schema for free, not on the strength of the number.** Anyone quoting 7.44 should
-know that the same model over all six trained seeds reads 8.54, and that 3 seeds is the
-better-looking half of what exists — it is the count every *method* has, which is a real
-constraint, but it is not the count v3 has.
-
-*(Both columns are now demotion-free for the deployed row; the delta-vs-pre-delta
-comparison quoted above was measured with demotion on, before it was cut. The tie stands
-either way — the demotion cut moves both configurations by ~0.2-0.3 FP.)*
-
-**s1 is where a 3-seed report is least trustworthy**, and this has bitten before: at 3 seeds
-the pre-delta arm's s1 read 3.79 ± 3.29 and looked like a clear win; at 6 it moved to
-5.60 ± 3.06, with four of six seeds *worse* than the v2.2 seed-0 figure. s1 has the smallest
-FP and the largest relative spread. Overall FP is by contrast stable across seeds.
-
-### 7.2 Ablations (1 seed, pre-delta)
-
-All against v2.2 seed 0. These arms **predate the state delta** and were not re-run, so they
-decompose the pre-delta configuration; the deployed row differs from them by the delta as
-well as by record aggregation and evidence-attention.
-
-| method | ALL | s0 | s1 | s2 | s3 |
-|---|---|---|---|---|---|
-| v3 pre-delta (seed 0) | 7.50 | 0.00 | 1.16 | 15.80 | 13.04 |
-| v3, coverage + `dead` kept | 7.76 | 0.00 | 2.56 | 12.60 | 15.88 |
-| v3, coverage, **no record tokens** | 7.82 | 0.00 | 3.48 | 12.28 | 15.52 |
-| v3, coverage only (no aggregation/attention) | 8.39 | 0.00 | 2.72 | 12.64 | 18.20 |
-| v3, rollout-aligned context, no coverage | 14.34 | 0.00 | 8.04 | 17.48 | 31.84 |
-| v3, evidence-attention only | 14.92 | 0.00 | 3.56 | 27.48 | 28.64 |
-| v3, no records at all | 15.34 | 0.00 | 4.64 | 26.24 | 30.48 |
-| v3 as of G6b (record tokens, shared attention) | 16.17 | 0.00 | 8.56 | 22.00 | 34.12 |
-| **v2.2 yardstick** | 14.66 | 0.00 | 6.20 | 26.00 | 26.44 |
-
-**Every coverage-bearing arm beats the yardstick significantly** (−6.3 to −7.2 FP, all CIs
-excluding 0), so the result does not depend on the exact combination. What it depends on is
-`coverage`/`waste`: the one arm without them (rollout-aligned context) is a tie at −0.32.
-
-**Both consumptions of the record are load-bearing**, measured at 6 seeds each:
-
-| | ALL | s1 | s2 | s3 |
-|---|---|---|---|---|
-| deployed (**with** record tokens) | **7.90 ± 0.61** | **5.60 ± 3.06** | 13.03 ± 1.52 | 12.96 ± 2.46 |
-| coverage only (**no** tokens) | 9.18 ± 1.41 | 10.78 ± 6.47 | 12.91 ± 0.84 | 13.03 ± 2.00 |
-
-The tokens are worth **1.28 FP**, and their contribution is concentrated entirely at **s1**
-(5.60 vs 10.78 — without them the model is *worse than v2.2* there) while s2 and s3 are
-ties. They also **halve the variance** (overall sd 0.61 vs 1.41). So the method is one
-canonical record consumed *two* ways: compact per-candidate features carrying s2/s3, and a
-per-failure token stream carrying s1 and the stability. Neither alone is the method.
-
-*(An earlier 1-seed comparison put the token contribution at 0.26 FP and is superseded —
-`autorun_decisions.md` A17.)*
-
-**The deployed configuration** is `--overlap-mode jaccard --coverage-feats
---aggregate-records --evidence-attn`, i.e. four changes to the G6b model, each motivated by
-a measurement rather than a sweep:
-
-| change | why | measured before training |
-|---|---|---|
-| drop `dead` from the net | it is a *length* proxy: correct at s3, wrong at s1 | corr(dead, \|S\|) = −0.284 |
-| observed `coverage`/`waste` | states the *count* `dead` was proxying for | 2.45× separation at s3 |
-| aggregate records per query | one token per failing *query*, not per failed sample | −88.7% tokens, max 2045 → 37 |
-| separate evidence attention | evidence competed with geometry in one softmax | `suppress_records`: 16.17 → 16.40 |
-
-**On P-v3-1.** The pre-registered bar was s2 ≤ 17.08 *via necessity conditioning*, and note
-the bar was measured on **dd2d_v3** while ours is **dd2d_v4** (~0.08% of labels differ, so
-comparable, but not the same benchmark). s2 lands
-at 15.88 (12.64 in the coverage-only arm), so the **number** is beaten — but by observed
-culprits, not by the predicted necessity head, which was withdrawn. Both halves are worth
-stating: the target was right, the proposed mechanism was not needed.
-
-**On P-v3-3.** Falsified, and reported as such: removing `cand_overlap` costs −5.07 FP,
-CI [−8.56, −1.78]. It is reinstated per R7's own escape clause.
-
-### 7.3 It is not the selector
-
-v3 replaced v2.2's `relrank` checkpoint selection with uncensored deployed-val-FP (R8), and
-`relrank` is known-miscalibrated — so an obvious question is how much of the margin is just
-better selection rather than the representation. **The ablations answer it directly: every
-v3 arm *without* coverage ties v2.2, despite all of them using the v3 selector.**
-
-| arm (all use the v3 selector) | ALL | vs v2.2 |
-|---|---|---|
-| rollout-aligned context, no coverage | 14.34 | −0.32, n.s. |
-| evidence-attention only | 14.92 | +0.26, n.s. |
-| no records at all | 15.34 | +0.68, n.s. |
-| *v2.2 (relrank selector)* | *14.66* | — |
-
-If the selector were carrying the result, those arms would already show it. They do not, so
-the ~7 FP belongs to `coverage`/`waste`, not to R8.
-
-### 7.4 What the win rests on
-
-The whole gain traces to one substitution. §5.1 wanted a per-object necessity `p_i`
-*predicted* by a head; v3 gets the same two candidate features from culprits the refiner
-*reported*:
-
-```
-coverage = |S(c) ∩ culprits| / |culprits|      waste = |S(c) \ culprits| / |S(c)|
-```
-
-Both are exactly zero until a failure has been observed, so the first attempt is still
-purely static and the signal accrues as the rollout proceeds.
-
-**Measured, and it is the sharpest statement of the contribution:** v3 and v2.2 solve the
-*same* 25% of episodes on attempt 1, while among the episodes needing a second attempt v3
-averages **10.00** FP against v2.2's **19.55**. The entire −7 FP appears *after the first
-observed failure*.
-
-Stated precisely, because the round number invites over-claiming: that 25% is exactly the 25
-s0 episodes, for both models — neither solves any s1–s3 episode immediately. So the claim is
-not "the static rankers are equally good in some nuanced sense" but the blunter and stronger
-**"the first attempt separates the two methods not at all; every attempt after it does."**
-v3 is not a better static ranker, it is a better **re**-ranker — which is what the adaptive
-component is supposed to buy, and an independent corroboration of the leakage audit, since a
-feature leaking feasibility would have lifted the first pick as well. A leakage audit
-(features zero at |F|=0; culprits only from candidates in the failure context, all of which
-are failures; the deploy loop breaks on success before a successful candidate can enter the
-context) returned 0 violations.
+*Caveat on the notebook's §4 ablation grid (DD2D only):* those arms were trained under the
+**pre-2026-07-31** coverage/waste definition and are read internally against their own floor — they are
+matched-settings and not comparable to the §10.1 headline (which uses the unified definition). Do not
+cross-quote them.
 
 ---
 
-## 8. What was removed, and what came back
+## 11. Known limitations
 
-| # | Component | Disposition | Evidence |
-|---|---|---|---|
-| R1 | short-first prior | **removed** | data-dependent; diverged training on dd2d_v3 (L3) |
-| R2 | computed demotion source | **not ported** | last per-env geometry routine in the deployment story |
-| R3 | packing certificate in the method | **not ported** | inert: 0 proofs at λ=0.8 |
-| R4 | analytic `grasp-witness` | **replaced** by observed culprits | C1/C2 |
-| R5 | 5 fact types + `FactEncoder` vocab | **replaced** by one record | §4 |
-| R6 | global token | **kept** — container tokens (its replacement) are G10 work, which was not reached; removing it first would have deleted information with nothing to carry it | |
-| R7 | `cand_overlap` | **kept — P-v3-3 falsified** | removal costs −5.07 FP, CI [−8.56, −1.78] |
-| R8 | `relrank` selection | **replaced** | §5 |
-| R9 | `exclude_marginal` | **not ported** | inert twice over; reinstating needs a real label mask |
-| R10 | **proof-tier demotion** (the external offset) | **cut from the method 2026-07-30**; machinery kept, `apply_demotion=False` everywhere | costs 0.23 FP, CI [+0.08, +0.43]; fires on 6% of deployed rollouts vs 55% on the floor arm (§4.1) |
-
-Necessity conditioning (proposal §5) was **cut** — D2 showed the s2 deficit is
-*within-length*, which necessity conditioning does not address. `necessity.py` remains built
-and tested but unwired, and `V3Config.use_necessity` raises rather than silently doing
-nothing.
-
----
-
-## 9. Known limitations
-
-1. **The headline is 3 seeds, and v3 has 6.** 3 is the count every *method* has (v2.2 was
-   trained at exactly 3), so it is the like-for-like protocol — but it is also the
-   better-looking half of v3's seeds: over all 6 the deployed model reads **8.54 ± 1.43**
-   rather than 7.44 ± 0.76. §7.1 carries both. The **ablations in §7.2 are 1 seed** and
-   predate the state delta, accepted by paired bootstrap over problems.
-2. **The state delta is deployed on a tie.** It does not improve the number on DD2D
-   (§7.1); it is in the deployed config because it completes §6.1's record schema at zero
-   porting cost. Two measured DD2D properties bound what it could show here (§4) and
-   neither is a property of the mechanism.
-3. **Cutting demotion leaves 1.3% of records consumed by nothing.** The tier split still
-   holds proof-tier records out of the token path (391/29054 on dd2d_v4, all `retrieve`),
-   but there is no longer a proof consumer to hand them to. Routing them into the token
-   path is the obvious follow-up and needs a retrain, so it was not done here (§4.1).
-4. **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is reproducible
-   across processes. dd2d_v4 differs from dd2d_v3 on 0.08% of candidate labels.
-5. **dd2d_v4 carries no harvested post-mortem facts**, so any v2.2 checkpoint trained on it
-   has an inert evidence pathway. This is a property of the *collection*, not of v2.2.
-6. **Env-2 has not been attempted.** The generality claim is therefore *architectural* — the
-   contract is 3 lines and the fallback is measured — not yet *demonstrated by transfer*.
+1. **The representation advantage is DD2D-only.** On SB2D the learned methods (SPECTRE, PIGINet, LAZY)
+   do not separate (§10.2); the abstract-vs-low-level contrast does not transfer, even though the
+   failure-conditioned adaptive increment is positive on both. The generality claim for SB2D rests on
+   adaptivity, not representation.
+2. **The headline is 3 seeds.** It is the count every *method* has (the comparators were trained at 3);
+   SPECTRE itself has 6 trained seeds, over which the DD2D deployed model reads ~8.5 rather than 6.3.
+   The current cache retrain reads **6.29 ± 0.31** vs the frozen **5.92** yardstick — within ~1.3
+   seed-sd; the definitive behavior check is the byte-identical same-checkpoint rollout, not the retrain
+   mean.
+3. **The state delta is deployed on a tie** (§10.5) — it completes the record schema at zero porting
+   cost, not because it improved DD2D FP.
+4. **SB2D's b5 train split is small** (17 episodes, a wall-clock-budget cut), so the b5 column is
+   substantially a generalization number rather than a like-for-like stratum result.
+5. **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is bit-reproducible across
+   processes.
