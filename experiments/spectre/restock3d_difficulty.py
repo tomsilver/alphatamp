@@ -62,6 +62,9 @@ def probe_one(stratum: int, seed: int, pool_cap: int) -> dict:
     # pylint: disable=import-outside-toplevel
     import gymnasium
     import kinder
+    from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (
+        AbstractPlanGenerator,
+    )
     from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
         RelationalHeuristicSearchAbstractPlanGenerator,
     )
@@ -104,23 +107,23 @@ def probe_one(stratum: int, seed: int, pool_cap: int) -> dict:
         goal = models.goal_deriver(x0)
         region_infos = load_region_infos(task_path, x0)
         dims = object_dims(x0, CubeType)
-        bpg = BilevelPlanningGraph()
+        bpg: BilevelPlanningGraph = BilevelPlanningGraph()
         bpg.add_abstract_state_node(s0)
         bpg.add_state_node(x0)
         bpg.add_state_abstractor_edge(x0, s0)
-        gen = RelationalHeuristicSearchAbstractPlanGenerator(
+        gen: AbstractPlanGenerator = RelationalHeuristicSearchAbstractPlanGenerator(
             models.types, models.predicates, models.operators, "hff", seed=seed
         )
         pool = list(itertools.islice(gen(x0, s0, goal, 30.0, bpg), pool_cap))
         first_fp: int | None = None
-        fam = {"feasible": 0, "F2": 0, "F3": 0}
+        fam: dict[str, int] = {"feasible": 0, "F2": 0, "F3": 0}
         for i, (sp, ap) in enumerate(pool):
             v = evaluate_skeleton(sp, ap, region_infos, dims)
             if v.feasible:
                 fam["feasible"] += 1
                 if first_fp is None:
                     first_fp = i
-            else:
+            elif v.family is not None:
                 fam[v.family] = fam.get(v.family, 0) + 1
     finally:
         env.close()
@@ -178,7 +181,9 @@ def main(argv: list[str] | None = None) -> int:
             f"{round(statistics.mean(r['n_f2'] for r in rs)):>5} "
             f"{round(statistics.mean(r['n_f3'] for r in rs)):>5}"
         )
-    print("\n(oracle FP = 0 for every stratum: an oracle refines a feasible candidate first.)")
+    print(
+        "\n(oracle FP = 0 for every stratum: an oracle refines a feasible candidate first.)"
+    )
 
     if args.out:
         out = Path(args.out)

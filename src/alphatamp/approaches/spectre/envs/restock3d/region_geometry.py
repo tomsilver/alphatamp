@@ -27,13 +27,16 @@ _REGION_PREFIX = "region_"
 
 @dataclass(frozen=True)
 class RegionInfo:
-    """A shelf region: world centre, footprint, the shelf it sits on, and its cell clearance."""
+    """A shelf region: world centre, footprint, the shelf it sits on, and its cell
+    clearance."""
 
     name: str
     shelf: int
     center_xy: tuple[float, float]  # world (x, y) of the region box centre
     half_xy: tuple[float, float]  # world-aligned footprint half-extents (x, y)
-    cell_clearance: float  # vertical gap above the region's shelf surface (for F3 height gate)
+    cell_clearance: (
+        float  # vertical gap above the region's shelf surface (for F3 height gate)
+    )
     surface_z: float  # world z of the region's shelf surface (place height reference)
 
 
@@ -94,7 +97,8 @@ def load_region_infos(task_json_path: str, state) -> dict[str, RegionInfo]:
 
 
 def shelf_surface_z_from_cube(state, movable_on_shelf) -> float:
-    """Shelf surface height read off a cube currently resting on that shelf (fallback)."""
+    """Shelf surface height read off a cube currently resting on that shelf
+    (fallback)."""
     return float(
         state.get(movable_on_shelf, "z") - state.get(movable_on_shelf, "bb_z") / 2
     )

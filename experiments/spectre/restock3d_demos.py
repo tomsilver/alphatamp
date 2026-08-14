@@ -1,12 +1,12 @@
 """Render a MuJoCo demo of Restock3D: pick floor cubes and store them into shelf regions.
 
 Plans the first feasible restock skeleton (the geometric gate rules out over-assign / height
-violations) and executes its controllers LIVE in the gym TidyBot3DEnv (continuous env.step ->
-faithful render), then writes an mp4 to ``envs/restock3d/demos/``. Uses the physics place
-controller (geometric_place is a data-collection device, not used here) on a short-cell scene —
-the currently-proven placement geometry.
+violations), refines it with physics picks + deterministic geometric places, and renders the
+refined states via ``set_state`` (drift-free) to an mp4 under ``envs/restock3d/demos/``. Physics
+picks show the real arm motion; the geometric place stores each cube (the flaky physics-insertion
+MP is a data device, not shown — DD-6). Short-cell scene (the currently-proven placement geometry).
 
-    python experiments/spectre/restock3d_demos.py
+python experiments/spectre/restock3d_demos.py
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ import tempfile
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.pop("PYOPENGL_PLATFORM", None)
-os.environ.setdefault("LAPACK_DIR", os.path.expanduser("~/.cache/alphatamp_ikfast_blas"))
+os.environ.setdefault(
+    "LAPACK_DIR", os.path.expanduser("~/.cache/alphatamp_ikfast_blas")
+)
 os.environ.setdefault("BLAS_DIR", os.path.expanduser("~/.cache/alphatamp_ikfast_blas"))
 _SRC = os.path.join(os.path.dirname(__file__), "..", "..", "src")
 sys.path.insert(0, _SRC)
@@ -28,6 +30,9 @@ import gymnasium  # noqa: E402
 import imageio  # noqa: E402
 import kinder  # noqa: E402
 import numpy as np  # noqa: E402
+from bilevel_planning.abstract_plan_generators.abstract_plan_generator import (  # noqa: E402
+    AbstractPlanGenerator,
+)
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (  # noqa: E402
     RelationalHeuristicSearchAbstractPlanGenerator,
 )
@@ -144,10 +149,12 @@ _DEMO_SCENE = {
 
 
 def render_demo(task_path: str, out_path: str) -> bool:
-    """Refine the first feasible restock skeleton (physics pick + geometric place) and render its
-    states via ``set_state`` (drift-free). Physics picks show the real arm motion; the geometric
-    places store each cube deterministically (the flaky physics-insertion MP is a data device,
-    not shown). Returns whether the goal is reached.
+    """Refine the first feasible restock skeleton (physics pick + geometric place) and
+    render its states via ``set_state`` (drift-free).
+
+    Physics picks show the real arm motion; the geometric places store each cube
+    deterministically (the flaky physics-insertion MP is a data device, not shown).
+    Returns whether the goal is reached.
     """
     # pylint: disable=import-outside-toplevel
     from bilevel_planning.refiners.backtracking_refiner import BacktrackingRefiner
@@ -175,11 +182,11 @@ def render_demo(task_path: str, out_path: str) -> bool:
     goal = models.goal_deriver(x0)
     region_infos = load_region_infos(task_path, x0)
     dims = object_dims(x0, CubeType)
-    bpg = BilevelPlanningGraph()
+    bpg: BilevelPlanningGraph = BilevelPlanningGraph()
     bpg.add_abstract_state_node(s0)
     bpg.add_state_node(x0)
     bpg.add_state_abstractor_edge(x0, s0)
-    gen = RelationalHeuristicSearchAbstractPlanGenerator(
+    gen: AbstractPlanGenerator = RelationalHeuristicSearchAbstractPlanGenerator(
         models.types, models.predicates, models.operators, "hff", seed=0
     )
     pool = list(itertools.islice(gen(x0, s0, goal, 30.0, bpg), 40))
@@ -215,8 +222,10 @@ def render_demo(task_path: str, out_path: str) -> bool:
         render_env.unwrapped.set_state(space.vectorize(state))  # type: ignore[attr-defined]
         frames.append(render_env.render())
     reached = goal.check_abstract_state(models.state_abstractor(plan.states[-1]))
-    imageio.mimsave(out_path, frames, fps=20)
-    print(f"[restock3d] wrote {out_path} ({len(frames)} frames); goal_reached={reached}")
+    imageio.mimsave(out_path, frames, fps=20)  # type: ignore[arg-type]
+    print(
+        f"[restock3d] wrote {out_path} ({len(frames)} frames); goal_reached={reached}"
+    )
     render_env.close()
     env.close()
     return bool(reached)

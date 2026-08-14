@@ -1,14 +1,16 @@
-"""Symbolic feasibility of a Restock3D skeleton — the data feasibility + evidence source (DD-7).
+"""Symbolic feasibility of a Restock3D skeleton — the data feasibility + evidence source
+(DD-7).
 
-A skeleton's refinement feasibility is fully determined by its assignment (which object goes to
-which region, in what order) plus object heights and region cells — none of which needs physics.
-:func:`evaluate_skeleton` walks the skeleton, applies the shared :func:`geometry.place_gate` at
-every place against the *predicted* abstract state, and returns whether it refines and, if not,
-the ``refiner_metadata["failures"]``-shaped record for the first doomed step.
+A skeleton's refinement feasibility is fully determined by its assignment (which object
+goes to which region, in what order) plus object heights and region cells — none of
+which needs physics. :func:`evaluate_skeleton` walks the skeleton, applies the shared
+:func:`geometry.place_gate` at every place against the *predicted* abstract state, and
+returns whether it refines and, if not, the ``refiner_metadata["failures"]``-shaped
+record for the first doomed step.
 
 This is deterministic and exact (``exhausted=True``, never a budget cut), so F3's
-``proves_failure()`` holds and F2 names the self-placed residents. The physics sampler in
-``instrumented_refiner`` is used only for the demo and as a physical spot-check.
+``proves_failure()`` holds and F2 names the self-placed residents. The physics sampler
+in ``instrumented_refiner`` is used only for the demo and as a physical spot-check.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ class SkeletonVerdict:
     """Result of evaluating one skeleton."""
 
     feasible: bool
-    failure: Optional[dict]  # a refiner_metadata["failures"] record, or None if feasible
+    failure: Optional[
+        dict
+    ]  # a refiner_metadata["failures"] record, or None if feasible
     family: Optional[str]  # "F2" | "F3" | None (diagnostic)
 
 
@@ -45,7 +49,8 @@ def object_dims(state: ObjectCentricState, cube_type) -> dict[str, tuple[float, 
 def _residents(
     state: RelationalAbstractState, region_name: str, placed_name: str
 ) -> tuple[str, ...]:
-    """Objects predicted ``InRegion(region_name)`` before this place (excluding the placed one)."""
+    """Objects predicted ``InRegion(region_name)`` before this place (excluding the
+    placed one)."""
     return tuple(
         sorted(
             atom.objects[0].name
@@ -64,7 +69,10 @@ def evaluate_skeleton(
     obj_dims: dict[str, tuple[float, float]],
     num_attempts: int = _NUM_ATTEMPTS,
 ) -> SkeletonVerdict:
-    """Symbolic gate walk. Returns feasibility + the first doomed step's failure record."""
+    """Symbolic gate walk.
+
+    Returns feasibility + the first doomed step's failure record.
+    """
     for k, a in enumerate(action_plan):
         if a.name != "place":
             continue

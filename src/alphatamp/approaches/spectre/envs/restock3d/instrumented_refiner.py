@@ -45,20 +45,26 @@ _HEIGHT_MARGIN = 0.02  # vertical slack the hand needs above a held object (F3 g
 
 @dataclass(frozen=True)
 class _Rejection:
-    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the family."""
+    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the
+    family."""
 
     step: GroundOperator
     expected: frozenset[GroundAtom]
-    achieved: Optional[frozenset[GroundAtom]]  # None if rejected before any successor state
-    culprits: tuple[str, ...]  # class-1: objects the gate named (F2); empty for F3/class-2
+    achieved: Optional[
+        frozenset[GroundAtom]
+    ]  # None if rejected before any successor state
+    culprits: tuple[
+        str, ...
+    ]  # class-1: objects the gate named (F2); empty for F3/class-2
     family: str  # "F2" | "F3" | "C2" (physics deviation) — diagnostic, not serialized
 
 
 class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
     """Gated trajectory sampler that records every rejection with its blamed objects.
 
-    Accumulates into :attr:`rejections` across calls (the refiner backtracks); :func:`clear`
-    resets between candidates and :func:`failure_metadata` reduces to the deepest-step record.
+    Accumulates into :attr:`rejections` across calls (the refiner backtracks);
+    :func:`clear` resets between candidates and :func:`failure_metadata` reduces to the
+    deepest-step record.
     """
 
     def __init__(
@@ -127,11 +133,12 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         ns: RelationalAbstractState,
         bpg: BilevelPlanningGraph,
     ) -> tuple[list, list]:
-        """Deterministic geometric place: teleport the held cube to the region slot, open gripper.
+        """Deterministic geometric place: teleport the held cube to the region slot,
+        open gripper.
 
-        Feasibility is already decided by the gate, so this realizes the successful placement
-        without the flaky shelf-insertion motion plan (DD-6). The abstractor then reads
-        InRegion + Stored + HandEmpty, matching ``ns``.
+        Feasibility is already decided by the gate, so this realizes the successful
+        placement without the flaky shelf-insertion motion plan (DD-6). The abstractor
+        then reads InRegion + Stored + HandEmpty, matching ``ns``.
         """
         _, obj, region = a.parameters
         info = self._region_infos.get(region.name)
@@ -217,7 +224,8 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
 def _deepest_rejection(
     rejections: Sequence[_Rejection], action_plan: Sequence[GroundOperator]
 ) -> Optional[tuple[int, _Rejection]]:
-    """The rejection at the furthest step the refiner reached (backtracking retries shallow)."""
+    """The rejection at the furthest step the refiner reached (backtracking retries
+    shallow)."""
     best: Optional[tuple[int, _Rejection]] = None
     for rej in rejections:
         index = next((j for j, op in enumerate(action_plan) if op == rej.step), None)
@@ -244,10 +252,11 @@ def failure_metadata(
 ) -> list[dict]:
     """The ``refiner_metadata["failures"]`` payload for one failed candidate.
 
-    A class-1 record (F2, culprits named) carries ``culprits`` and no deviation; a class-2 record
-    (physics deviation) carries the ``dev_added``/``dev_deleted`` deviation; an F3 record is
-    culprit-free with an empty deviation (a means failure) — and, when the step exhausted without
-    a budget cut, it ``proves_failure()`` downstream. The reduction is the deepest reached step.
+    A class-1 record (F2, culprits named) carries ``culprits`` and no deviation; a
+    class-2 record (physics deviation) carries the ``dev_added``/``dev_deleted``
+    deviation; an F3 record is culprit-free with an empty deviation (a means failure) —
+    and, when the step exhausted without a budget cut, it ``proves_failure()``
+    downstream. The reduction is the deepest reached step.
     """
     deepest = _deepest_rejection(sampler.rejections, action_plan)
     if deepest is None:
@@ -284,8 +293,8 @@ def make_recording_sampler(
 ) -> RestockRecordingSampler:
     """Construct the gated recording sampler with the model's region geometry.
 
-    ``geometric_place=True`` (data collection) uses the deterministic geometric place; pass
-    ``False`` (demo) for a full physics place rollout.
+    ``geometric_place=True`` (data collection) uses the deterministic geometric place;
+    pass ``False`` (demo) for a full physics place rollout.
     """
     return RestockRecordingSampler(
         controller_generator=controller_generator,

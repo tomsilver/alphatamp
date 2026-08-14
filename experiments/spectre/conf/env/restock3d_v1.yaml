@@ -1,0 +1,16 @@
+# Restock3D — the pooled SPECTRE collection (r0-r3, 400/100/100).
+#
+# One env_variant covering four difficulty strata (by d = (sigma_tall, sigma_short) — per-cell
+# slot slack), pooled under the stratum-encoded problem ids of envs/restock3d/strata.py, so
+# compare.stratum_of recovers the stratum. A MuJoCo TidyBot restock task: store floor cubes +
+# tall blocks into single-object shelf regions across a short cell and a tall cell. Region
+# capacity and cell height are invisible above the abstraction line, so a height-/capacity-blind
+# A* produces goal-reaching skeletons that fail refinement (F2 over-assignment, F3 height
+# mismatch) — the false positives an oracle avoids.
+#
+# The collection is driven by experiments/spectre/restock3d_collect.py (not a native SesameModels
+# collection dispatch); only `env_variant` selects the on-disk layout. `env_id` exists so the
+# standard per-variant entry points (spectre_build_vocab.py) resolve.
+env_id: "restock3d/Restock3D-v0"
+env_variant: "restock3d_v1"
+model_name: "restock3d"

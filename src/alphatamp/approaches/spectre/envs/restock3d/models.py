@@ -72,20 +72,22 @@ InRegion = Predicate("InRegion", [CubeType, RegionType])
 Stored = Predicate("Stored", [CubeType])
 
 # Tolerances.
-_ON_SHELF_Z = 0.3  # a cube above this height is on a shelf, not the floor
+_FLOOR_Z_TOL = 0.1  # a cube resting this near the ground (and in no region) is OnFloor
 _HOLDING_TOL = 0.05
 _HANDEMPTY_TOL = 1e-3
 _GRASP_THRESHOLD = 0.1
-_INREGION_MARGIN = 0.02  # slack added to the region footprint for the InRegion containment test
+_INREGION_MARGIN = (
+    0.02  # slack added to the region footprint for the InRegion containment test
+)
 
 
 class RestockAbstractor:
     """State/goal abstractor: HandEmpty/Holding/OnFloor/InRegion/Stored.
 
-    ``InRegion(cube, region)`` holds when a shelf cube's world xy is inside the region footprint
-    (plus a small margin); ``Stored(cube)`` is derived from any InRegion. Region *capacity* is not
-    represented — the abstraction sees no reason a second cube cannot join a region, which is
-    exactly where the false positives come from.
+    ``InRegion(cube, region)`` holds when a shelf cube's world xy is inside the region
+    footprint (plus a small margin); ``Stored(cube)`` is derived from any InRegion.
+    Region *capacity* is not represented — the abstraction sees no reason a second cube
+    cannot join a region, which is exactly where the false positives come from.
     """
 
     def __init__(self, sim: ObjectCentricTidyBot3DEnv, task_json_path: str) -> None:
@@ -125,7 +127,7 @@ class RestockAbstractor:
         if self._region_infos:
             return next(iter(self._region_infos.values())).surface_z
         for cube in state.get_objects(CubeType):
-            if state.get(cube, "z") > _ON_SHELF_Z:
+            if state.get(cube, "z") > 0.3:  # a cube this high is resting on a shelf
                 return float(state.get(cube, "z") - state.get(cube, "bb_z") / 2)
         return 0.55
 
@@ -167,21 +169,21 @@ class RestockAbstractor:
         for cube in movables:
             if cube.name in held:
                 continue
-            z = state.get(cube, "z")
-            if z <= _ON_SHELF_Z:
-                if np.isclose(z - state.get(cube, "bb_z") / 2, 0.0, atol=0.05):
-                    atoms.add(GroundAtom(OnFloor, [cube]))
-                continue
+            # XY-primary: region membership is footprint containment (the tall cell sits near
+            # floor level, so a z threshold cannot separate it from the ground — DD-8).
             region = self._region_of(state, cube)
             if region is not None:
                 atoms.add(GroundAtom(InRegion, [cube, self._region_objs[region]]))
                 atoms.add(GroundAtom(Stored, [cube]))
+            elif state.get(cube, "z") - state.get(cube, "bb_z") / 2 < _FLOOR_Z_TOL:
+                atoms.add(GroundAtom(OnFloor, [cube]))
 
         objects = {robot} | set(movables) | set(self._region_objs.values())
         return RelationalAbstractState(atoms, objects)
 
     def goal_deriver(self, state: ObjectCentricState) -> RelationalAbstractGoal:
-        """Every goal object must be ``Stored`` (in some region — assignment is free)."""
+        """Every goal object must be ``Stored`` (in some region — assignment is
+        free)."""
         atoms: set[GroundAtom] = set()
         for name in self._goal_object_names:
             if name in state.get_object_names():
@@ -260,7 +262,9 @@ def create_restock3d_models(
     PlaceOperator = LiftedOperator(
         "place",
         [robot, obj, region],
-        preconditions={LiftedAtom(Holding, [robot, obj])},  # NO Clear -> capacity invisible
+        preconditions={
+            LiftedAtom(Holding, [robot, obj])
+        },  # NO Clear -> capacity invisible
         add_effects={
             LiftedAtom(HandEmpty, [robot]),
             LiftedAtom(InRegion, [obj, region]),
