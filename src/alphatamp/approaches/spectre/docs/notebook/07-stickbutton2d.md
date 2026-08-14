@@ -20,18 +20,20 @@ geometric feasibility gate (`refine.evaluate_skeleton`), and report the baseline
 the first feasible candidate in the default order (oracle FP = 0). 6 seeds/stratum, uncensored at
 the pool cap. Strata are `(n_small, n_tall, n_tall_regions, n_short_regions)`.
 
-**Result.** The gap grows with stratum and the F2/F3 mix matches the recipe:
+**Result.** The gap grows with stratum and the F2/F3 mix matches the recipe (8 seeds/stratum;
+mean ± sd of the baseline FP; oracle FP = 0):
 
-| stratum | recipe | σt | σs | solve | mean FP | feasible/200 | F2 / F3 |
+| stratum | recipe | σt | σs | solve | mean FP ± sd | feasible/200 | F2 / F3 |
 |---|---|---|---|---|---|---|---|
-| r0 | (3,0,2,5) | 2 | 4 | 6/6 | 0.2 | ~126 | 74 / 0 |
-| r1 | (5,0,1,4) | 1 | 0 | 6/6 | 5.3 | ~8 | 192 / 0 |
-| r2 | (3,1,2,4) | 1 | 2 | 6/6 | 16.0 | ~22 | 61 / 117 |
-| r3 | (4,2,3,5) | 1 | 2 | 4/6 | ~150 | ~1 | 92 / 106 |
+| r0 | (3,0,2,5) | 2 | 4 | 8/8 | 0.2 ± 0.5 | ~126 | 74 / 0 |
+| r1 | (5,0,1,4) | 1 | 0 | 8/8 | 14.9 ± 19.5 | ~8 | 192 / 0 |
+| r2 | (3,1,2,4) | 1 | 2 | 8/8 | 12.2 ± 20.9 | ~21 | 65 / 114 |
+| r3 | (4,2,3,5) | 1 | 2 | 5/8 | 123.0 ± 69.5 | ~1 | 82 / 116 |
 
 r1 is pure F2 (short-cell over-assignment), r2/r3 add F3 (tall-in-short height). Oracle FP=0 every
-stratum, so the astar↔oracle gap is the whole mean-FP column — r2's 16 clears the ~10 "earns its
-slot" bar. A smoke collection (`restock3d_collect.py`, 2/stratum) then produced valid
+stratum, so the astar↔oracle gap is the whole mean-FP column: **r0 (~0) ≪ r1/r2 (~12–15) ≪ r3
+(~123)** — r2 clears the ~10 "earns its slot" bar. A smoke collection (`restock3d_collect.py`,
+2/stratum) then produced valid
 `EpisodeRecord`s; they load and `FailureRecord`s parse through the env-agnostic path — F2 records
 name culprits (e.g. `cube_goal3`, `block_goal1`) with `proves_failure=True`, F3 records are
 culprit-free + `exhausted` + `proves_failure=True`; vocab builds. The MuJoCo demo (physics pick +
@@ -40,9 +42,11 @@ geometric place) reaches the goal.
 **Takeaway / next.** Env works and earns its slot on F2+F3. Two things to quote with care: (1) r3
 is a **hard tail** — both cells tight → low feasible density (~1/200), so only ~4/6 raw-solvable;
 the collector's reject-resample keeps only solvable problems, so this costs collection effort, not
-validity. (2) The FP is **noisy per-problem** (the height-/capacity-blind default order mixes
-feasible/infeasible near-uniformly, all same length), so the per-stratum **mean** over many
-problems is the stable statistic, not any single seed. Deferred (not this pass): F1 grasp
+validity. (2) The FP is **very noisy per-problem** — sd ≈ or > the mean (r1 14.9 ± 19.5, r2 12.2 ± 20.9),
+because the height-/capacity-blind default order mixes feasible/infeasible near-uniformly (all same
+length) so a few high-FP draws dominate. The robust claim is the **gap tier** (r0 ≈0 ≪ r1/r2 ≈12–15
+≪ r3 ≈123, oracle 0), not a clean per-stratum ordering — **r1 vs r2 do not separate at 8 seeds**;
+stable per-stratum means need the full ~100-problem-per-stratum collection. Deferred (not this pass): F1 grasp
 obstruction + coverage/waste discretionary steps, learned baselines, the `compare_envs.py`
 `EnvSpec`, multi-slot region capacity.
 
