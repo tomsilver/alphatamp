@@ -1,0 +1,81 @@
+{
+ "description": "Restock3D pool-diversity probe: 3 floor cubes, 4 single-object shelf regions.",
+ "robots": {"tidybot": {"robot": {}}},
+ "scene": "lab2",
+ "fixtures": {
+  "cupboard": {
+   "cupboard_1": {
+    "length": 0.60198,
+    "depth": 0.254,
+    "shelf_heights": [0.254, 0.254, 0.254],
+    "shelf_partitions": [[], [], []],
+    "shelf_thickness": 0.0127,
+    "side_and_back_open": false
+   }
+  }
+ },
+ "regions": {
+  "ground_cupboard_init_region": {
+   "target": "ground", "ranges": [[1.5, 0.0, 1.5, 0.0]], "yaw_ranges": [[90, 90]]
+  },
+  "robot_0_task_init_region": {
+   "target": "ground", "ranges": [[-0.1, -0.1, 0.1, 0.1]], "yaw_ranges": [[0, 0]]
+  },
+  "goal1_init_region": {
+   "target": "ground", "ranges": [[0.5, -0.22, 0.56, -0.16]], "yaw_ranges": [[0, 0]]
+  },
+  "goal2_init_region": {
+   "target": "ground", "ranges": [[0.5, -0.03, 0.56, 0.03]], "yaw_ranges": [[0, 0]]
+  },
+  "goal3_init_region": {
+   "target": "ground", "ranges": [[0.5, 0.16, 0.56, 0.22]], "yaw_ranges": [[0, 0]]
+  },
+  "region_2_1": {
+   "target": "cupboard_1", "shelf": 2,
+   "ranges": [[-0.18, 0.085, 0.0, -0.12, 0.105, 0.03]],
+   "rgba": [0.0, 1.0, 1.0, 0.3], "yaw_ranges": [[0, 0]]
+  },
+  "region_2_2": {
+   "target": "cupboard_1", "shelf": 2,
+   "ranges": [[-0.08, 0.085, 0.0, -0.02, 0.105, 0.03]],
+   "rgba": [0.0, 1.0, 1.0, 0.3], "yaw_ranges": [[0, 0]]
+  },
+  "region_2_3": {
+   "target": "cupboard_1", "shelf": 2,
+   "ranges": [[0.02, 0.085, 0.0, 0.08, 0.105, 0.03]],
+   "rgba": [0.0, 1.0, 1.0, 0.3], "yaw_ranges": [[0, 0]]
+  },
+  "region_2_4": {
+   "target": "cupboard_1", "shelf": 2,
+   "ranges": [[0.12, 0.085, 0.0, 0.18, 0.105, 0.03]],
+   "rgba": [0.0, 1.0, 1.0, 0.3], "yaw_ranges": [[0, 0]]
+  }
+ },
+ "region_meta": {
+  "region_2_1": {"cell_clearance": 0.2413, "surface_z": 0.55},
+  "region_2_2": {"cell_clearance": 0.2413, "surface_z": 0.55},
+  "region_2_3": {"cell_clearance": 0.2413, "surface_z": 0.55},
+  "region_2_4": {"cell_clearance": 0.2413, "surface_z": 0.55}
+ },
+ "objects": {
+  "cube": {
+   "cube_goal1": {"size": 0.02, "rgba": [0.1, 0.5, 0.1, 1], "mass": 0.1},
+   "cube_goal2": {"size": 0.02, "rgba": [0.1, 0.3, 0.6, 1], "mass": 0.1},
+   "cube_goal3": {"size": 0.02, "rgba": [0.6, 0.4, 0.1, 1], "mass": 0.1}
+  }
+ },
+ "cameras": {
+  "task_view": {
+   "position": [-1, 1, 2], "lookat": [2, 0, 0], "fovy": 42, "resolution": [640, 480]
+  }
+ },
+ "initial_state": [
+  ["on", "cupboard_1", "ground_cupboard_init_region"],
+  ["on", "cube_goal1", "goal1_init_region"],
+  ["on", "cube_goal2", "goal2_init_region"],
+  ["on", "cube_goal3", "goal3_init_region"],
+  ["on", "robot", "robot_0_task_init_region"]
+ ],
+ "goal_objects": ["cube_goal1", "cube_goal2", "cube_goal3"],
+ "goal_state": []
+}
