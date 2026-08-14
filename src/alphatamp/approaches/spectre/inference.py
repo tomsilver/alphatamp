@@ -22,9 +22,9 @@ import torch
 
 from alphatamp.approaches.spectre.dataset import build_example, collate
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
-from alphatamp.approaches.spectre.encoders import D_REL_V3
+from alphatamp.approaches.spectre.encoders import D_REL
 from alphatamp.approaches.spectre.model import (
-    N_OVERLAP_V3,
+    N_OVERLAP_COV,
     SpectreConfig,
     SpectreModel,
 )
@@ -81,7 +81,7 @@ def load_checkpoint(
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
             n_overlap_feats=(
-                (N_OVERLAP_V3 if cfg.get("coverage_feats") else 2)
+                (N_OVERLAP_COV if cfg.get("coverage_feats") else 2)
                 if cfg.get("use_overlap")
                 else 0
             ),
@@ -90,7 +90,7 @@ def load_checkpoint(
             # checkpoint predating the narrowing has no key and was 8-wide. `strict=True`
             # below is the backstop -- a wrong width fails to load rather than silently
             # scoring the un-narrowed model.
-            d_rel=int(cfg.get("d_rel", D_REL_V3)),
+            d_rel=int(cfg.get("d_rel", D_REL)),
             max_tags=int(cfg.get("max_tags", 32)),
             dropout_p=0.0,
             use_records=bool(cfg.get("use_records")),

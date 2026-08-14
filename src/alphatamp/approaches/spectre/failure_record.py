@@ -154,7 +154,7 @@ class FailureRecord:
     load-bearing: ``None`` is *not computed*, ``StateDelta()`` is *computed, and the
     prefix changed nothing* (``j == 0``, ~48% of aggregated dd2d_v4 tokens). Only the
     token path requests it -- ``records_for_candidate`` is called three times per
-    candidate in ``build_v3_example`` and the progression is not free.
+    candidate in ``build_example`` and the progression is not free.
     """
 
     def proves_failure(self) -> bool:

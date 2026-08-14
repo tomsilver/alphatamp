@@ -66,7 +66,7 @@ def scene_filters(
     """``(universal, actionable)`` for one problem's grounded domain.
 
     Cached because both filters are properties of the *problem*, not of the candidate,
-    and ``build_v3_example`` is called many times per episode. The lifted operator set
+    and ``build_example`` is called many times per episode. The lifted operator set
     is recovered from the pool's own ``GroundOperator.parent``, so nothing here needs to
     know which environment it is looking at.
     """
@@ -598,7 +598,7 @@ def coverage_and_waste(
 
     The tensorizer wants both columns for every candidate, and they depend on the same
     per-(candidate, record) quantities. Computing them together halves the hoisted work
-    again and is the entry point ``dataset_v3`` uses.
+    again and is the entry point ``dataset`` uses.
     """
     if not records:
         return 0.0, 0.0

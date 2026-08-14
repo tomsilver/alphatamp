@@ -36,7 +36,7 @@ from typing import IO
 REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
 
-#: Named sweeps. Each entry is ``name -> extra CLI args for train_v3``.
+#: Named sweeps. Each entry is ``name -> extra CLI args for train.py``.
 #: G6 holds ``cand_overlap`` out of *both* the record and no-record arms, so the
 #: evidence increment is not measured against a bar contaminated by the same
 #: set-overlap signal.
@@ -47,7 +47,7 @@ PRESETS: dict[str, dict[str, str]] = {
         "g6_recON_ovON": "",
     },
     # G6b re-runs G6 with the *only* change being an uncensored, whole-split selector
-    # (now the `train_v3` default, hence no extra args). G6's censored-at-30 selector
+    # (now the `train.py` default, hence no extra args). G6's censored-at-30 selector
     # scored v2.2 and v3 within 0.3 FP of each other while they were 4+ FP apart on
     # test, so it was ranking epochs by noise. Separate output dirs: G6's checkpoints
     # are kept so the two selectors can be compared rather than one quietly overwriting
@@ -82,8 +82,8 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # P4: the records-first fix, and the one that targets the cause directly.
     # `suppress_records` showed the trained model discards its own record tokens;
-    # CrossAttentionScorerV3 says why -- one softmax over [scene ; global ; records]
-    # makes
+    # EvidenceCrossAttentionScorer says why -- one softmax over [scene ; global ;
+    # records] makes
     # evidence compete with geometry for attention mass, and geometry wins because it is
     # reliably useful. A separate channel removes the competition, so records can drive
     # adaptiveness rather than being ignored.

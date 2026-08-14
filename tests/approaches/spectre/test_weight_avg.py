@@ -1,4 +1,4 @@
-"""EMA weight-averaging in train_v3 (docs/decisions 2026-08-08).
+"""EMA weight-averaging in run_training (docs/decisions 2026-08-08).
 
 The lever is a training-*process* addition to recover the domain-agnostic
 (narrowed-input) model's across-seed variance without touching inputs or architecture.
@@ -109,12 +109,12 @@ def test_weight_avg_none_never_builds_the_shadow(tmp_path) -> None:
     """
     import json
 
-    from alphatamp.approaches.spectre.train import train_v3
+    from alphatamp.approaches.spectre.train import run_training
 
     vocab = _vocab()  # type: ignore[no-untyped-call]
     cfg = TrainConfig(seed=0, weight_avg="none", **_FAST)  # type: ignore[arg-type]
     out = tmp_path / "none"
-    train_v3(cfg, _TRAIN, _VAL, vocab, out)
+    run_training(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]
     assert all(r["val_fp_ema"] is None for r in log), "shadow built with EMA off"
     saved = torch.load(out / "best.pt", map_location="cpu", weights_only=False)
@@ -133,14 +133,14 @@ def test_weight_avg_ema_is_not_inert(tmp_path) -> None:
     """
     import json
 
-    from alphatamp.approaches.spectre.train import train_v3
+    from alphatamp.approaches.spectre.train import run_training
 
     vocab = _vocab()  # type: ignore[no-untyped-call]
     cfg = TrainConfig(
         seed=0, weight_avg="ema", ema_start_epoch=0, **_FAST  # type: ignore[arg-type]
     )
     out = tmp_path / "ema"
-    train_v3(cfg, _TRAIN, _VAL, vocab, out)
+    run_training(cfg, _TRAIN, _VAL, vocab, out)
     log = [json.loads(x) for x in (out / "log.jsonl").read_text().splitlines()]
     ema_vals = [r["val_fp_ema"] for r in log if r.get("val_fp_ema") is not None]
     assert ema_vals, "EMA was on but val_fp_ema never logged -- shadow not evaluated"

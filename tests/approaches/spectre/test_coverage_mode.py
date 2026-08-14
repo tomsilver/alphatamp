@@ -137,7 +137,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     model a column it never saw populated. So they are read back, never passed in.
 
     Self-contained: it saves a checkpoint through the same ``asdict(TrainConfig)`` path
-    ``train_v3`` uses, rather than reading a disk artifact -- a real deployed
+    ``run_training`` uses, rather than reading a disk artifact -- a real deployed
     checkpoint is the width-3 narrowed model now, and a pre-narrowing artifact no
     longer loads by design.
     """
@@ -147,7 +147,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
 
     from alphatamp.approaches.spectre.inference import load_checkpoint
     from alphatamp.approaches.spectre.model import (
-        N_OVERLAP_V3,
+        N_OVERLAP_COV,
         SpectreConfig,
         SpectreModel,
     )
@@ -155,7 +155,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
 
     vocab = Vocab.from_json(_VOCAB)
     # the deployed arm: jaccard overlap, coverage on both columns, records aggregated,
-    # state-delta off (the v3final flags) -- built and saved exactly as train_v3 does.
+    # state-delta off (the v3final flags) -- built and saved as run_training does.
     cfg = TrainConfig(
         overlap_mode="jaccard",
         use_overlap=True,
@@ -169,7 +169,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
-            n_overlap_feats=N_OVERLAP_V3,
+            n_overlap_feats=N_OVERLAP_COV,
             n_prior_feats=0,
             d_rel=cfg.d_rel,
             use_records=True,

@@ -1,7 +1,7 @@
 """Ground-truth object-centric scene geometry for StickButton2D.
 
 ``EpisodeRecord.scene_geometry`` is optional in the schema and ``None`` for every kinder
-collection to date, which is a silent trap rather than a gap: ``train_v3._trainable``
+collection to date, which is a silent trap rather than a gap: ``train._trainable``
 filters every geometry-less episode, so ``n_train`` reaches 0, ``deployed_val_fp``
 returns ``inf``, ``improved = inf < inf`` is never true, and the run finishes with exit
 code 0 and no ``best.pt``. A collection without this module produces a training run that
@@ -36,7 +36,7 @@ from alphatamp.approaches.spectre.schema import (
     SceneGeometry,
 )
 
-#: Points used to polygonalize a disc. ``dataset_v2.resample_ring`` re-samples every
+#: Points used to polygonalize a disc. ``dataset.resample_ring`` re-samples every
 # ring : to ``N_BOUNDARY_POINTS`` (32) by arc length anyway, so this only has to be fine
 # enough : that the arc-length parameterisation is not visibly faceted.
 _CIRCLE_POINTS = 32
@@ -140,7 +140,7 @@ def build_scene_geometry(
 
     ``is_target`` stays ``False`` on every object: DD2D's target is the one item being
     retrieved, and StickButton2D has no analogue. The consequence is visible rather than
-    hidden -- ``dataset_v3`` falls back to ``(0, 0)`` for the target pose, so its
+    hidden -- ``dataset`` falls back to ``(0, 0)`` for the target pose, so its
     ``rel`` block degrades from target-relative offsets to absolute world coordinates
     and its area ratio becomes a raw area. That is acceptable here because the world is
     a fixed 3.5 x 2.5 frame, so absolute coordinates are themselves meaningful; it would
@@ -172,7 +172,7 @@ def build_scene_geometry(
         objects=tuple(sorted(objects, key=lambda o: o.name)),
         containers=containers,
         units="m",
-        # Normalisation frame. DD2D names these `drawer_w`/`drawer_d`; `dataset_v3`
+        # Normalisation frame. DD2D names these `drawer_w`/`drawer_d`; `dataset`
         # accepts both spellings, and an absent frame would leave SB2D's coordinates
         # unnormalised out to 3.5 while DD2D's arrive in [0, 1].
         frame={"frame_w": world[2] - world[0], "frame_d": world[3] - world[1]},

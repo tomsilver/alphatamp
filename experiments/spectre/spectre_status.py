@@ -32,13 +32,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
 
-# Training heartbeat from either trainer, e.g.
-#   [train_v2] seed=0 epoch 15/30 ... relrank=1.428 best=1.428 * ... ETA 4.2m
-#   [train_v3] seed=0 epoch 15/30 ... val_fp=17.20 ma=17.9 best=17.9 * ... ETA 4.2m
-# The selection metric differs between them (relrank vs deployed val FP), so it is
-# captured generically as "whatever this trainer calls best".
+# Training heartbeat from the trainer, e.g.
+#   [train] seed=0 epoch 15/30 ... val_fp=17.20 ma=17.9 best=17.9 * ... ETA 4.2m
+# The optional `_v[23]` suffix in the pattern keeps legacy versioned prefixes parsing so
+# older logs still resolve; the selection metric can differ across eras (relrank vs
+# deployed val FP), so it is captured generically as "whatever this trainer calls best".
 _TRAIN = re.compile(
-    r"\[(?P<who>train_v[23])\]\s+seed=(?P<seed>\d+)\s+epoch\s+(?P<ep>\d+)/(?P<tot>\d+)"
+    r"\[(?P<who>train(?:_v[23])?)\]\s+seed=(?P<seed>\d+)\s+epoch\s+"
+    r"(?P<ep>\d+)/(?P<tot>\d+)"
     r".*?(?:best=(?P<best>[\d.]+))?.*?(?:ETA\s+(?P<eta>[\d.]+)m)?$"
 )
 # collector heartbeat, e.g.

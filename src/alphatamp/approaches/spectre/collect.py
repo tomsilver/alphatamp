@@ -404,7 +404,7 @@ def collect_episode(
 
         object_registry = _collect_all_objects(s0, skeleton_pool, goal.atoms)
 
-        # Ground-truth geometry. Required by v3 (`train_v3._trainable` drops episodes
+        # Ground-truth geometry. Required by v3 (`train._trainable` drops episodes
         # without it, silently) and by the later PIGINet / VLMPlan comparators. Only
         # StickButton2D has a builder; the other kinder envs stay abstract-only
         # as before.

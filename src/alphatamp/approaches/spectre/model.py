@@ -34,7 +34,6 @@ from torch import Tensor, nn
 
 from alphatamp.approaches.spectre.encoders import (
     D_REL,
-    D_REL_V3,
     D_TAG,
     MAX_TAGS_DEFAULT,
     AuxHead,
@@ -42,7 +41,7 @@ from alphatamp.approaches.spectre.encoders import (
     CrossAttentionScorer,
     FactEncoder,
     SceneEncoder,
-    SpectreV2Batch,
+    SpectreBatch,
 )
 from alphatamp.approaches.spectre.layers import D_MODEL, FFN_DIM, N_HEADS
 from alphatamp.approaches.spectre.tags import PAD_TAG
@@ -64,41 +63,6 @@ N_RECORD_SCALARS = 4  # [depth j/L, effort (log1p, scaled), exhausted, effort_is
 MAX_DELTA_ATOMS = 8
 D_PRED = 32
 D_DELTA = 32
-
-
-@dataclass
-class SpectreBatch(SpectreV2Batch):
-    """The v2.2 batch plus v3's failure-record tokens.
-
-    Record fields are trailing and optional, so a batch built without them *is* a v2.2
-    batch and the compat path is unaffected. They replace the five bespoke `fact_*`
-    tensors, which stay present so the legacy encoder remains selectable (D-8).
-
-    Tags are **role-separated**: `rec_arg_tags` holds the objects the failing query was
-    *about*, `rec_culprit_tags` the objects observed to block it. v2.2 kept that
-    distinction only implicitly, by giving `grasp-witness` its own fact type; pooling
-    both roles into one slot would tell the net "these objects are associated with this
-    failure" without saying which was the target and which the obstacle.
-    """
-
-    rec_schema_ids: Optional[Tensor] = None  # (B, R) long — 0 = pad
-    rec_arg_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_ARGS) long
-    rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
-    rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
-    rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
-    # `s_j - s_0` per record. Role axis is [added, deleted] — kept apart for the same
-    # reason arg-tags and culprit-tags are: "the prefix put o1 on the buffer" and "the
-    # prefix took o1 out of the drawer" are different claims about o1.
-    rec_delta_pred_ids: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS) long
-    rec_delta_arg_tags: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS, A) long
-
-    def to(self, device) -> "SpectreBatch":
-        return SpectreBatch(
-            **{  # type: ignore[arg-type]
-                k: (v.to(device) if v is not None else None)
-                for k, v in self.__dict__.items()
-            }
-        )
 
 
 class RecordEncoder(nn.Module):
@@ -218,7 +182,7 @@ class RecordEncoder(nn.Module):
         return self.proj[2](self.proj[1](hidden)) * mask.unsqueeze(-1)
 
 
-class CrossAttentionScorerV3(CrossAttentionScorer):
+class EvidenceCrossAttentionScorer(CrossAttentionScorer):
     """Scorer with a **separate attention channel for evidence**.
 
     v2.2 concatenates scene tokens, the global token and the evidence tokens into one
@@ -311,16 +275,15 @@ class CrossAttentionScorerV3(CrossAttentionScorer):
         return logit
 
 
-N_OVERLAP_V3 = 4
+N_OVERLAP_COV = 4
 """``[dead, jaccard, coverage, waste]``.
 
-The last two are §5.1's necessity features computed from **observed** culprits rather
-than a predicted per-object head: ``coverage`` = the fraction of objects seen blocking
-that this candidate removes, ``waste`` = the fraction of what it removes that was never
-seen blocking.
-Necessity conditioning was cut because its head would have had to *predict* p_i from
-geometry (`decisions.md` 2026-07-26); once the refiner reports culprits, the same two
-features are available by observation and need no head at all.
+``coverage`` and ``waste`` are the **observed** necessity features -- recall / precision
+over the failures the refiner reported. They are the *unified* definition, computed in
+:mod:`alphatamp.approaches.spectre.unified_evidence` (spec:
+``docs/unified_culprits_coverage_waste.md``) over a filtered culprit pool, **not** the
+older object-set ratio, which was removed. This line only labels the column vector;
+``unified_evidence`` is the authoritative definition -- do not restate a formula here.
 """
 
 
@@ -342,20 +305,16 @@ class SpectreConfig:
     n_prior_feats: int = 0
     max_tags: int = MAX_TAGS_DEFAULT
     dropout_p: float = DROPOUT
-    # Scene-relation width: 3 for deployed v3 (the anchor-free ``[area, sinθ, cosθ]``
-    # triple; the target-anchored offsets, target area ratio and privileged ``concave``
-    # flag are cut -- see model_v2.D_REL_V3), 8 only in compat mode where the goal is to
-    # reload a frozen v2.2 checkpoint byte-for-byte. Unlike the feature switches above,
-    # narrowing is the *default*: v3 should not have to opt in to dropping inputs that
-    # do not generalize. It is persisted (it changes ``scene.rel_proj``'s shape), and it
-    # RETIRES the v2.2 rollout-equivalence oracle -- a deployed v3 no longer reads the
-    # same scene columns v2.2 did, by design (docs/decisions 2026-08-08).
-    d_rel: int = D_REL_V3
+    # Scene-relation width: the anchor-free ``[area, sinθ, cosθ]`` triple (3). The
+    # target-anchored offsets, target area ratio and privileged ``concave`` flag were cut
+    # (see ``encoders.D_REL``). Persisted, because it changes ``scene.rel_proj``'s shape;
+    # a checkpoint is bound to the width it was trained on (docs/decisions 2026-08-08).
+    d_rel: int = D_REL
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
     use_necessity: bool = False  # G8: necessity head + its candidate features
     # Give evidence its own cross-attention channel instead of making it compete with
-    # the scene inside one softmax. See CrossAttentionScorerV3.
+    # the scene inside one softmax. See EvidenceCrossAttentionScorer.
     evidence_attn: bool = False
     # Observed coverage/waste appended to cand_overlap (width 2 -> 4).
     coverage_feats: bool = False
@@ -365,30 +324,11 @@ class SpectreConfig:
     # level down, against the *deployed v3* state dict rather than v2.2's.
     use_state_delta: bool = False
     # Vocab-derived sizing for the delta's predicate table, filled by whichever caller
-    # holds the vocab (`train_v3`, `load_checkpoint`) exactly as `max_arity` already
+    # holds the vocab (`run_training`, `load_checkpoint`) exactly as `max_arity` already
     # is. Not persisted: they are properties of the vocab, and `strict=True` is the
     # backstop if one ever moves under a checkpoint.
     n_predicates: int = 0
     max_pred_arity: int = 0
-
-    @classmethod
-    def from_v2_checkpoint_cfg(cls, cfg: dict) -> "SpectreConfig":
-        """Build the compat config that matches a stored ``train_v2`` checkpoint.
-
-        ``train_v2`` records ``use_prior`` / ``use_overlap`` as booleans and the scorer
-        sizes itself from the corresponding widths, so a checkpoint cannot be loaded
-        without consulting them (``strict=True`` would fail on the head shape).
-        """
-        return cls(
-            n_overlap_feats=2 if cfg.get("use_overlap") else 0,
-            n_prior_feats=2 if cfg.get("use_prior") else 0,
-            max_tags=int(cfg.get("max_tags", MAX_TAGS_DEFAULT)),
-            dropout_p=float(cfg.get("dropout_p", DROPOUT)),
-            # Compat means "reproduce this v2.2 checkpoint exactly", and v2.2's scene is
-            # the width-8 target-anchored vector. So compat keeps d_rel=8 even though
-            # deployed v3 narrows to 3 -- the loader must match the weights on disk.
-            d_rel=D_REL,
-        )
 
 
 class SpectreModel(nn.Module):
@@ -408,11 +348,13 @@ class SpectreModel(nn.Module):
         super().__init__()
         self.cfg = cfg or SpectreConfig()
         c = self.cfg
-        # Scene width comes from the config: 3 deployed, 8 in compat mode.
+        # Scene width comes from the config: the anchor-free ``[area, sinθ, cosθ]``.
         self.scene = SceneEncoder(c.max_tags, c.dropout_p, d_rel=c.d_rel)
         self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
-        scorer_cls = CrossAttentionScorerV3 if c.evidence_attn else CrossAttentionScorer
+        scorer_cls = (
+            EvidenceCrossAttentionScorer if c.evidence_attn else CrossAttentionScorer
+        )
         self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
         self.aux = AuxHead()
         # Additive by construction: the record encoder only exists when asked for, so a

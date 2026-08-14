@@ -55,12 +55,12 @@ from alphatamp.approaches.spectre.dataset import (
     sample_context,
 )
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
-from alphatamp.approaches.spectre.encoders import D_REL_V3
+from alphatamp.approaches.spectre.encoders import D_REL
 from alphatamp.approaches.spectre.inference import deployed_rollout_traced
 from alphatamp.approaches.spectre.io import list_episodes, load_episode
 from alphatamp.approaches.spectre.loss import plackett_luce_loss, within_length_pl_loss
 from alphatamp.approaches.spectre.model import (
-    N_OVERLAP_V3,
+    N_OVERLAP_COV,
     SpectreConfig,
     SpectreModel,
 )
@@ -69,7 +69,7 @@ from alphatamp.approaches.spectre.vocab import Vocab
 
 @dataclass
 class TrainConfig:
-    """Hyperparameters for :func:`train_v3`, persisted into every checkpoint."""
+    """Hyperparameters for :func:`run_training`, persisted into every checkpoint."""
 
     epochs: int = 30
     lr: float = 3e-4
@@ -92,13 +92,13 @@ class TrainConfig:
     num_workers: int = 4
     # "both" | "jaccard" | "dead" | "none" -- which cand_overlap columns the net sees.
     # Dropping `dead` is C5 hygiene (the sound rule stays outside the net as demotion);
-    # see the note in `dataset_v3.build_example`.
+    # see the note in `dataset.build_example`.
     overlap_mode: str = "both"
     # Collapse a candidate's failures to one record per (schema, args). The refiner
     # emits one per failed *sample*, which lets one unlucky candidate contribute
     # hundreds of tokens; §6.1 defines a record per failing *query*.
     aggregate_records: bool = False
-    # Separate cross-attention channel for evidence (CrossAttentionScorerV3).
+    # Separate cross-attention channel for evidence (EvidenceCrossAttentionScorer).
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
     coverage_feats: bool = False
@@ -114,7 +114,7 @@ class TrainConfig:
     # through the saved cfg and a checkpoint predating the narrowing (no key -> 8-wide)
     # fails to load rather than scoring the un-narrowed model. See docs/decisions
     # 2026-08-08.
-    d_rel: int = D_REL_V3
+    d_rel: int = D_REL
     # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
     # evidence from 30% of the rest, so >half of training carries no evidence -- while a
     # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
@@ -150,8 +150,8 @@ class TrainConfig:
     ema_start_epoch: int = 2
 
 
-class SpectreV3Dataset(Dataset):
-    """Episodes -> ``(_V2Example, record arrays)``.
+class SpectreDataset(Dataset):
+    """Episodes -> ``(SpectreExample, record arrays)``.
 
     Loads **raw** and lets ``build_example`` canonicalize once. That is not
     incidental: ``canonicalize_episode`` is not idempotent, and feeding it an
@@ -377,7 +377,7 @@ def _run_epoch(
     return total / max(n, 1)
 
 
-def train_v3(
+def run_training(
     cfg: TrainConfig,
     train_dir: Path,
     val_dir: Path,
@@ -385,7 +385,7 @@ def train_v3(
     out_dir: Path,
     device: Optional[str] = None,
 ) -> dict:
-    """Train one v3 ranker, writing ``best.pt`` and ``log.jsonl`` under ``out_dir``.
+    """Train one ranker, writing ``best.pt`` and ``log.jsonl`` under ``out_dir``.
 
     Returns the run summary (best selection score, epochs, training-set size).
     """
@@ -398,8 +398,8 @@ def train_v3(
     probe = load_episode(list_episodes(train_dir)[0])
     spec = spec_for(probe.provenance.env_variant)
 
-    train_ds = SpectreV3Dataset(train_dir, vocab, cfg, spec)
-    val_ds = SpectreV3Dataset(val_dir, vocab, cfg, spec)
+    train_ds = SpectreDataset(train_dir, vocab, cfg, spec)
+    val_ds = SpectreDataset(val_dir, vocab, cfg, spec)
     collate = _make_collate(vocab.max_operator_arity, vocab.max_predicate_arity)
     # Tensorization is ~79% of a training step (measured) and the model is tiny, so the
     # loader is the bottleneck, not the GPU. `persistent_workers` stays off on purpose:
@@ -431,7 +431,7 @@ def train_v3(
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
             n_overlap_feats=(
-                (N_OVERLAP_V3 if cfg.coverage_feats else 2) if cfg.use_overlap else 0
+                (N_OVERLAP_COV if cfg.coverage_feats else 2) if cfg.use_overlap else 0
             ),
             n_prior_feats=0,
             d_rel=cfg.d_rel,
@@ -455,7 +455,7 @@ def train_v3(
         else ""
     )
     print(
-        f"[train_v3] seed={cfg.seed} device={device} n_train={len(train_ds)} "
+        f"[train] seed={cfg.seed} device={device} n_train={len(train_ds)} "
         f"n_val={len(val_ds)} epochs={cfg.epochs} records={cfg.use_records} "
         f"overlap={cfg.overlap_mode if cfg.use_overlap else 'off'} "
         f"state_delta={cfg.use_state_delta} "
@@ -567,7 +567,7 @@ def train_v3(
             per = (time.time() - t0) / (epoch + 1)
             ema_str = f" ema={fp_ema:.2f}" if fp_ema is not None else ""
             print(
-                f"[train_v3] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
+                f"[train] seed={cfg.seed} epoch {epoch + 1}/{cfg.epochs} "
                 f"train={tr:.4f} val={va:.4f} val_fp={fp:.2f}{ema_str} "
                 f"ma={smoothed:.2f} best={best:.2f}"
                 f"{f' *{which}' if improved else ''} | "
@@ -729,10 +729,10 @@ def main(argv=None) -> int:
         sub += "_noov"
     sub += a.out_suffix
     out = root / sub / a.env / f"seed_{a.seed}"
-    res = train_v3(
+    res = run_training(
         cfg, root / "raw" / a.env / "train", root / "raw" / a.env / "val", vocab, out
     )
-    print(f"train_v3 done: {res} -> {out}/best.pt", flush=True)
+    print(f"[train] done: {res} -> {out}/best.pt", flush=True)
     return 0
 
 

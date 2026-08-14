@@ -39,10 +39,8 @@ from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.encoders import (
     D_GLOBAL_IN,
     D_REL,
-    D_REL_V3,
     MAX_FACT_ARGS,
     N_BOUNDARY_POINTS,
-    SpectreV2Batch,
 )
 from alphatamp.approaches.spectre.facts import TIER_IDS, gather_context_facts
 from alphatamp.approaches.spectre.failure_record import records_for_candidate
@@ -50,7 +48,7 @@ from alphatamp.approaches.spectre.model import (
     MAX_DELTA_ATOMS,
     MAX_RECORD_ARGS,
     MAX_RECORD_CULPRITS,
-    N_OVERLAP_V3,
+    N_OVERLAP_COV,
     N_RECORD_SCALARS,
     SpectreBatch,
 )
@@ -108,7 +106,7 @@ def resample_ring(
 
 
 @dataclasses.dataclass
-class _V2Example:
+class SpectreExample:
     """Per-episode numpy/py arrays before collation."""
 
     obj_tags: np.ndarray
@@ -132,7 +130,7 @@ class _V2Example:
     )
 
 
-def _glob_feats(ex: _V2Example) -> np.ndarray:
+def _glob_feats(ex: SpectreExample) -> np.ndarray:
     n_obj = len(ex.obj_tags)
     k = len(ex.op_ids)
     mean_len = float(np.mean([len(o) for o in ex.op_ids])) if ex.op_ids else 0.0
@@ -141,8 +139,8 @@ def _glob_feats(ex: _V2Example) -> np.ndarray:
     )[:D_GLOBAL_IN]
 
 
-def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
-    """Pad + stack per-episode examples into a ``SpectreV2Batch``."""
+def _collate_base(examples: list[SpectreExample], max_arity: int) -> SpectreBatch:
+    """Pad + stack per-episode examples into a ``SpectreBatch`` (record fields unset)."""
     b = len(examples)
     n = max(len(e.obj_tags) for e in examples)
     k = max(len(e.op_ids) for e in examples)
@@ -156,7 +154,7 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
     # collator serves both. All examples in a batch share a builder and therefore a
     # width; assert it rather than silently truncating a mismatched one to
     # ``examples[0]``.
-    d_rel = examples[0].obj_rel.shape[-1] if examples else D_REL
+    d_rel = examples[0].obj_rel.shape[-1] if examples else 3
     assert all(
         e.obj_rel.shape[-1] == d_rel for e in examples
     ), "obj_rel width differs within a batch"
@@ -215,7 +213,7 @@ def collate_v2(examples: list[_V2Example], max_arity: int) -> SpectreV2Batch:
             fact_arg[bi, fi, : len(ar)] = ar[:fa]
 
     t = torch.as_tensor
-    return SpectreV2Batch(
+    return SpectreBatch(
         obj_tags=t(obj_tags),
         obj_boundary=t(obj_boundary),
         obj_pose=t(obj_pose),
@@ -426,7 +424,7 @@ def build_example(
     coverage_feats: bool = False,
     coverage_mode: str = "both",
     state_delta: bool = False,
-) -> tuple[_V2Example, list[RecordArray]]:
+) -> tuple[SpectreExample, list[RecordArray]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
     Returns ``(example, record_arrays)``. The records come back from *here* rather than
@@ -495,7 +493,7 @@ def build_example(
     obj_is_goal = np.array(
         [1.0 if o.name in goal_objs else 0.0 for o in geo.objects], dtype=np.float32
     )
-    rel = np.zeros((n_obj, D_REL_V3), dtype=np.float32)
+    rel = np.zeros((n_obj, D_REL), dtype=np.float32)
     for i, o in enumerate(geo.objects):
         rel[i] = [o.area, *_sin_cos(o.pose[2])]
 
@@ -563,14 +561,15 @@ def build_example(
     want_jac = overlap_mode in ("both", "jaccard")
     want_cov = coverage_feats
     # `coverage_mode` splits the pair the same way, and for the same reason: they answer
-    # different questions -- `coverage` asks "does this candidate remove the objects
-    # the refiner reported as blocking", `waste` asks "does it also remove objects
-    # that were never implicated". They have only ever been measured together, so which
-    # one carries the effect is unknown; zeroing one column isolates it without changing
-    # any shape.
+    # different questions. `coverage` asks "does this candidate discharge the culprit
+    # before re-entering the situation that named it"; `waste` asks "of the steps its
+    # own causal chain cannot justify, do any answer to no named culprit". (Unified
+    # definitions; see `unified_evidence.py`.) They have only ever been measured
+    # together, so which one carries the effect is unknown; zeroing one column isolates
+    # it without changing any shape.
     want_coverage = want_cov and coverage_mode in ("both", "coverage")
     want_waste = want_cov and coverage_mode in ("both", "waste")
-    n_ov = N_OVERLAP_V3 if want_cov else 2
+    n_ov = N_OVERLAP_COV if want_cov else 2
     overlap = [[0.0] * n_ov for _ in range(k)]
     _uni_records: list = []
     _uni_pool: frozenset = frozenset()
@@ -632,7 +631,7 @@ def build_example(
     )
 
     return (
-        _V2Example(
+        SpectreExample(
             obj_tags,
             obj_boundary,
             obj_pose,
@@ -659,7 +658,7 @@ def _sin_cos(theta: float) -> tuple[float, float]:
 
 
 def collate(
-    examples: list[_V2Example],
+    examples: list[SpectreExample],
     max_arity: int,
     records: Optional[list[list[RecordArray]]] = None,
     max_pred_arity: int = 1,
@@ -669,8 +668,8 @@ def collate(
     ``records`` is per-example and optional; without it the result is exactly a v2.2
     batch, which is what keeps the compat path (and the equivalence oracle) intact.
     """
-    # `collate_v2` hard-codes a width-2 `cand_overlap` and D-7 freezes it, so a wider
-    # example is stacked here instead. Narrow *copies* go to the v2 collator -- mutating
+    # `_collate_base` hard-codes a width-2 `cand_overlap` and D-7 freezes it, so a wider
+    # example is stacked here instead. Narrow *copies* go to `_collate_base` -- mutating
     # the caller's examples in place and restoring them afterwards would work today and
     # break the moment anything holds a reference.
     wide = max((len(e.overlap[0]) if e.overlap else 2) for e in examples)
@@ -682,7 +681,7 @@ def collate(
         if wide > 2
         else examples
     )
-    base = collate_v2(narrow, max_arity=max_arity)
+    base = _collate_base(narrow, max_arity=max_arity)
     batch = SpectreBatch(**base.__dict__)
     if wide > 2:
         b_, k_ = batch.pool_mask.shape

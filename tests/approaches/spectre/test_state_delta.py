@@ -208,8 +208,8 @@ def test_zero_init_delta_branch_is_a_functional_no_op_at_init() -> None:
 def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> None:
     """A state-delta-off checkpoint round-trips: loads strictly, no ``delta_proj``.
 
-    Self-contained (saved through ``asdict(TrainConfig)`` like ``train_v3``) rather than
-    reading a disk artifact -- a pre-narrowing width-8 checkpoint no longer loads by
+    Self-contained (saved through ``asdict(TrainConfig)`` like ``run_training``) rather
+    than reading a disk artifact -- a pre-narrowing width-8 checkpoint no longer loads by
     design, and the narrowing is orthogonal to what this asserts (that state-delta OFF
     yields a records encoder without the delta branch).
     """
@@ -219,7 +219,7 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
 
     from alphatamp.approaches.spectre.inference import load_checkpoint
     from alphatamp.approaches.spectre.model import (
-        N_OVERLAP_V3,
+        N_OVERLAP_COV,
         SpectreConfig,
         SpectreModel,
     )
@@ -239,7 +239,7 @@ def test_state_delta_off_loads_the_deployed_checkpoint_strictly(tmp_path) -> Non
         n_ops=len(vocab.operators),
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
-            n_overlap_feats=N_OVERLAP_V3,
+            n_overlap_feats=N_OVERLAP_COV,
             n_prior_feats=0,
             d_rel=cfg.d_rel,
             use_records=True,

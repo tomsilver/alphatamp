@@ -49,15 +49,13 @@ D_TAG = 32
 D_POINT = 16
 D_DESCRIPTOR = 32
 D_POSE = 8
-D_REL = 8  # v2.2 scene relation scalars (frozen; target-anchored, see SceneEncoder)
-# v3 narrows the scene relation to the three *anchor-free* per-object scalars
-# ``[area, sinθ, cosθ]`` -- the target-anchored offsets (dx, dy, dist), the area ratio
-# to a single target, and the privileged ``concave`` flag are all cut, because they
-# either presuppose one distinguished target (meaningless with N goal objects) or are
-# privileged geometry a non-privileged pipeline could not read. v2.2 keeps the width-8
-# vector so its published numbers are untouched; the two coexist because
-# ``SceneEncoder`` takes the width per instance. See docs/decisions 2026-08-08.
-D_REL_V3 = 3
+# Scene relation: the three *anchor-free* per-object scalars ``[area, sinθ, cosθ]``. The
+# earlier target-anchored offsets (dx, dy, dist), the area ratio to a single target, and
+# the privileged ``concave`` flag were all cut, because they either presuppose one
+# distinguished target (meaningless with N goal objects) or are privileged geometry a
+# non-privileged pipeline could not read. ``SceneEncoder`` takes the width per instance;
+# a checkpoint is bound to the width it was trained on. See docs/decisions 2026-08-08.
+D_REL = 3
 MAX_TAGS_DEFAULT = 32
 DROPOUT = 0.1
 
@@ -80,14 +78,23 @@ N_OVERLAP = 2
 
 
 @dataclass
-class SpectreV2Batch:
-    """Padded tensors for one batch of episodes (0 = pad; see ``dataset_v2``)."""
+class SpectreBatch:
+    """Padded tensors for one batch of episodes (0 = pad; see ``dataset``).
+
+    The leading fields are the static scene/candidate/label tensors; the trailing
+    ``rec_*`` fields carry the failure-record tokens and default to ``None``, so a batch
+    built without them is exactly the static batch. Record tags are **role-separated**:
+    ``rec_arg_tags`` holds the objects the failing query was *about* and
+    ``rec_culprit_tags`` the objects observed to block it -- pooling both into one slot
+    would tell the net "these objects are associated with this failure" without saying
+    which was the target and which the obstacle.
+    """
 
     # scene (objects)
     obj_tags: Tensor  # (B, N) long — episode-local tag ids (0 = pad)
     obj_boundary: Tensor  # (B, N, P, 2) float — resampled boundary ring, item frame
     obj_pose: Tensor  # (B, N, 3) float — (x, y, theta), normalized
-    obj_rel: Tensor  # (B, N, d_rel) float — per-object scene scalars (v2: 8, v3: 3)
+    obj_rel: Tensor  # (B, N, d_rel) float — per-object anchor-free scene scalars (3)
     obj_is_goal: Tensor  # (B, N) float — 1 for an object named by the goal atoms
     obj_mask: Tensor  # (B, N) bool — real object
     # candidates (skeletons)
@@ -116,9 +123,20 @@ class SpectreV2Batch:
     # (Step 11 fix); 0 when no facts / static path. Lets the ranker use proofs by
     # set-containment.
     cand_overlap: Optional[Tensor] = None  # (B, K, N_OVERLAP) float
+    # failure-record tokens (all None on the static path). See MAX_RECORD_* in model.py.
+    rec_schema_ids: Optional[Tensor] = None  # (B, R) long — 0 = pad
+    rec_arg_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_ARGS) long
+    rec_culprit_tags: Optional[Tensor] = None  # (B, R, MAX_RECORD_CULPRITS) long
+    rec_scalars: Optional[Tensor] = None  # (B, R, N_RECORD_SCALARS) float
+    rec_mask: Optional[Tensor] = None  # (B, R) bool — real record
+    # `s_j - s_0` per record. Role axis is [added, deleted] — kept apart for the same
+    # reason arg-tags and culprit-tags are: "the prefix put o1 on the buffer" and "the
+    # prefix took o1 out of the drawer" are different claims about o1.
+    rec_delta_pred_ids: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS) long
+    rec_delta_arg_tags: Optional[Tensor] = None  # (B, R, 2, MAX_DELTA_ATOMS, A) long
 
-    def to(self, device) -> "SpectreV2Batch":
-        return SpectreV2Batch(
+    def to(self, device) -> "SpectreBatch":
+        return SpectreBatch(
             **{  # type: ignore[arg-type]
                 k: (v.to(device) if v is not None else None)
                 for k, v in self.__dict__.items()
@@ -172,9 +190,8 @@ class SceneEncoder(nn.Module):
         d_rel: int = D_REL,
     ) -> None:
         super().__init__()
-        # ``d_rel`` is the width of ``obj_rel``: 8 for v2.2 (target-anchored), 3 for v3
-        # (anchor-free ``[area, sinθ, cosθ]``). Carried per instance so the same class
-        # serves both without a fork; a checkpoint is bound to the width it was
+        # ``d_rel`` is the width of ``obj_rel``: the anchor-free ``[area, sinθ, cosθ]``
+        # triple (3). Carried per instance so the width is bound to the checkpoint it was
         # trained on.
         self.d_rel = d_rel
         self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
@@ -186,7 +203,7 @@ class SceneEncoder(nn.Module):
         self.sab1 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
         self.sab2 = SetAttentionBlock(dim=D_MODEL, n_heads=N_HEADS, dropout_p=dropout_p)
 
-    def forward(self, batch: SpectreV2Batch) -> Tensor:
+    def forward(self, batch: SpectreBatch) -> Tensor:
         tag = self.tag_emb(batch.obj_tags)  # (B, N, D_TAG)
         desc = self.footprint(batch.obj_boundary, batch.obj_mask)  # (B, N, D_DESC)
         pose = self.pose_proj(batch.obj_pose)
@@ -216,7 +233,7 @@ class CandidateEncoder(nn.Module):
         )
         self.max_arity = max_arity
 
-    def forward(self, batch: SpectreV2Batch) -> Tensor:
+    def forward(self, batch: SpectreBatch) -> Tensor:
         b, k, ell = batch.cand_op_ids.shape
         op = self.op_emb(batch.cand_op_ids)  # (B, K, L, D)
         pos = self.pos_emb(batch.cand_pos.clamp(max=63))

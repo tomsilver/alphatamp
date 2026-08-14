@@ -291,7 +291,7 @@ _V3_ARMS: dict[str, str] = {
 #: DD2D's carries the `_unified` tag from the 2026-07-31 definition change.
 _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
     # StickButton2D's arms were trained by `spectre_sweep.py --preset sb2dabl`, which
-    # writes one directory per (arm, seed) -- hence `{seed}` -- and `train_v3` prefixes
+    # writes one directory per (arm, seed) -- hence `{seed}` -- and `run_training` prefixes
     # `_norec` onto any `--no-records` run, so two of the six carry it. DD2D's arms
     # predate that sweep and use their own historical names, which is exactly why this
     # map is per-variant rather than a string rule.
@@ -912,14 +912,14 @@ def _assert_same_selector(arms: dict[str, str]) -> None:
 def _is_mid_training(ckpt: Path) -> bool:
     """True if a live training run still owns this checkpoint directory.
 
-    ``train_v3`` writes ``best.pt`` the first time selection improves -- at epoch 1 of 30
+    ``run_training`` writes ``best.pt`` the first time selection improves -- at epoch 1 of 30
     -- so the file existing says nothing about the run being finished. Caching it
     produces a full, complete-looking directory of numbers from a half-trained model,
     and because ``_dir_complete`` then skips it, a later run without ``--force`` leaves
     the bad row in place silently. This is the failure the scorer's mtime warning was
     meant to catch, but a warning in a buffered log is not a guard.
 
-    ``train_v3._claim_out_dir`` writes a ``.owner`` pid marker for exactly this class of
+    ``train._claim_out_dir`` writes a ``.owner`` pid marker for exactly this class of
     problem, so read it: a live owner means skip, a stale one means the run died and the
     checkpoint is the last good one. Falls back to an mtime heuristic for ``train_v2``
     checkpoints, which predate the marker.
