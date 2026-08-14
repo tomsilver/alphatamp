@@ -256,7 +256,7 @@ _V2_CKPT_SUBDIR = {
 # compare checkpoints chosen by two different instruments -- `_assert_same_selector`
 # enforces this rather than trusting the directory name.
 _V3_ARMS: dict[str, str] = {
-    # The deployed model. Repointed 2026-07-28 from `checkpoints_v3_v3final_s{seed}` to
+    # The deployed model. Repointed 2026-07-28 from `checkpoints_spectre_v3final_s{seed}` to
     # the state-delta arm, which is now the deployed configuration (`decisions.md`
     # 2026-07-28). **Re-cache with `--force`**: `spectre3_{static,adaptive}/seed_0` was
     # written from the pre-delta checkpoint and `_dir_complete` skips any full directory,
@@ -268,26 +268,26 @@ _V3_ARMS: dict[str, str] = {
     # holding all three seeds, so no `{seed}` substitution here.
     # **Re-cache with `--force`**: `_dir_complete` skips a full directory, so without it
     # the row silently keeps the previous definition's rollout.
-    "spectre3": "checkpoints_v3_unified",
+    "spectre3": "checkpoints_spectre_unified",
     # ^ DD2D's deployed dir. Per-variant overrides live in `_V3_ARM_OVERRIDES` below:
     # a second environment trains the same arm under a different run name, and silently
     # scoring the wrong directory (or, as happened first, skipping the arm entirely with
     # a "missing checkpoint" line buried in a log) is not a failure worth repeating.
     # coverage x record-tokens 2x2
-    # NOT `checkpoints_v3_p8_cov_final_s{seed}`, despite autorun_decisions A15 naming it
+    # NOT `checkpoints_spectre_p8_cov_final_s{seed}`, despite autorun_decisions A15 naming it
     # "the clean 3-seed re-run": all three of those runs stopped at **epoch 5 of 30**, so
     # their best.pt is a mid-training stub that scores 26.97 (s0 36.64, where every other
     # arm gets 0.00). Retrained here at identical flags. See notebook.md 2026-07-27.
-    "abl_cov_rec": "checkpoints_v3_abl_cov_rec",
-    "abl_cov_norec": "checkpoints_v3_norec_p9_cov_norec",
-    "abl_nocov_rec": "checkpoints_v3_g8_jac",
-    "abl_nocov_norec": "checkpoints_v3_norec_abl_jac_norec_nocov",
+    "abl_cov_rec": "checkpoints_spectre_abl_cov_rec",
+    "abl_cov_norec": "checkpoints_spectre_norec_p9_cov_norec",
+    "abl_nocov_rec": "checkpoints_spectre_g8_jac",
+    "abl_nocov_norec": "checkpoints_spectre_norec_abl_jac_norec_nocov",
     # coverage vs waste, split apart by --coverage-mode
-    "abl_cov_only": "checkpoints_v3_abl_cov_only",
-    "abl_waste_only": "checkpoints_v3_abl_waste_only",
+    "abl_cov_only": "checkpoints_spectre_abl_cov_only",
+    "abl_waste_only": "checkpoints_spectre_abl_waste_only",
 }
 #: Per-variant checkpoint-dir overrides for the v3 arms. StickButton2D trained the
-#: deployed config with no `--out-suffix`, so its dir is the bare `checkpoints_v3`;
+#: deployed config with no `--out-suffix`, so its dir is the bare `checkpoints_spectre`;
 #: DD2D's carries the `_unified` tag from the 2026-07-31 definition change.
 _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
     # StickButton2D's arms were trained by `spectre_sweep.py --preset sb2dabl`, which
@@ -296,13 +296,13 @@ _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
     # predate that sweep and use their own historical names, which is exactly why this
     # map is per-variant rather than a string rule.
     "stickbutton2d_v1": {
-        "spectre3": "checkpoints_v3",
-        "abl_cov_rec": "checkpoints_v3_abl_cov_rec_s{seed}",
-        "abl_cov_norec": "checkpoints_v3_norec_abl_cov_norec_s{seed}",
-        "abl_nocov_rec": "checkpoints_v3_abl_nocov_rec_s{seed}",
-        "abl_nocov_norec": "checkpoints_v3_norec_abl_nocov_norec_s{seed}",
-        "abl_cov_only": "checkpoints_v3_abl_cov_only_s{seed}",
-        "abl_waste_only": "checkpoints_v3_abl_waste_only_s{seed}",
+        "spectre3": "checkpoints_spectre",
+        "abl_cov_rec": "checkpoints_spectre_abl_cov_rec_s{seed}",
+        "abl_cov_norec": "checkpoints_spectre_norec_abl_cov_norec_s{seed}",
+        "abl_nocov_rec": "checkpoints_spectre_abl_nocov_rec_s{seed}",
+        "abl_nocov_norec": "checkpoints_spectre_norec_abl_nocov_norec_s{seed}",
+        "abl_cov_only": "checkpoints_spectre_abl_cov_only_s{seed}",
+        "abl_waste_only": "checkpoints_spectre_abl_waste_only_s{seed}",
     },
 }
 
@@ -316,7 +316,7 @@ def _v3_arm_dir(arm: str, env_variant: str) -> str:
 # every step. Not a method result -- it is a train/deploy mismatch on purpose, to
 # separate "training with records damaged the weights" from "the model ignores them".
 _V3_SUPPRESS_ARMS: dict[str, str] = {
-    "abl_suppress_records": "checkpoints_v3_v3final_s{seed}",
+    "abl_suppress_records": "checkpoints_spectre_v3final_s{seed}",
 }
 
 # Env-variant-dependent path globals. The cache functions read these as module globals
@@ -819,7 +819,7 @@ def _v3_ckpt(ckpt_subdir: str, seed: int) -> Path:
     """Resolve a v3 arm's checkpoint for ``seed``.
 
     v3 multi-seed arms write **one top-level directory per seed**
-    (``checkpoints_v3_v3final_s3/dd2d_v4/seed_3/best.pt``), which the v1/v2
+    (``checkpoints_spectre_v3final_s3/dd2d_v4/seed_3/best.pt``), which the v1/v2
     ``<dir>/<env>/seed_<n>`` pattern cannot express -- so ``{seed}`` in the sub-dir is
     substituted as well as the path component, exactly as ``spectre_score.py`` does.
     The env component is ``CKPT_VARIANT`` (the TRAIN collection), so a train-old /
@@ -856,13 +856,13 @@ def _warn_if_undertrained(arms: dict[str, str]) -> None:
             continue
         cfg = torch.load(ckpt, map_location="cpu", weights_only=False)["cfg"]
         total = int(cfg.get("epochs", 0))
-        # arm name = the checkpoint dir minus the checkpoints_v3[_norec][_noov]_ prefix
+        # arm name = the checkpoint dir minus the checkpoints_spectre[_norec][_noov]_ prefix
         name = subdir.replace("{seed}", str(SEEDS[0]))
         for junk in (
-            "checkpoints_v3_norec_noov_",
-            "checkpoints_v3_norec_",
-            "checkpoints_v3_noov_",
-            "checkpoints_v3_",
+            "checkpoints_spectre_norec_noov_",
+            "checkpoints_spectre_norec_",
+            "checkpoints_spectre_noov_",
+            "checkpoints_spectre_",
         ):
             if name.startswith(junk):
                 name = name[len(junk) :]

@@ -14,9 +14,9 @@ used.
 Usage::
 
     python experiments/spectre/spectre_score.py \\
-        --arm "records+overlap:checkpoints_v3_g6_recON_ovON" \\
-        --arm "records only:checkpoints_v3_noov_g6_recON_ovOFF" \\
-        --baseline "no records:checkpoints_v3_norec_noov_g6_recOFF_ovOFF"
+        --arm "records+overlap:checkpoints_spectre_g6_recON_ovON" \\
+        --arm "records only:checkpoints_spectre_noov_g6_recON_ovOFF" \\
+        --baseline "no records:checkpoints_spectre_norec_noov_g6_recOFF_ovOFF"
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="+",
         default=None,
         help="aggregate every arm over these seeds. A subdir may contain '{seed}' when "
-        "the arm writes one directory per seed (e.g. checkpoints_v3_v3final_s{seed}); "
+        "the arm writes one directory per seed (e.g. checkpoints_spectre_v3final_s{seed}); "
         "the checkpoint path's own seed_<n> component is substituted regardless, which "
         "is what lets a single-directory arm aggregate too. Missing seeds are skipped "
         "with a warning. Reports mean +- std ACROSS SEEDS of the per-stratum mean, "

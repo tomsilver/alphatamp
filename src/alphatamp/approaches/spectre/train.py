@@ -722,7 +722,7 @@ def main(argv=None) -> int:
         ema_start_epoch=a.ema_start_epoch,
         select_window=a.select_window,
     )
-    sub = "checkpoints_v3"
+    sub = "checkpoints_spectre"
     if a.no_records:
         sub += "_norec"
     if a.no_overlap:

@@ -107,7 +107,7 @@ PRESETS: dict[str, dict[str, str]] = {
     # 8.23 +/- 1.36 vs 7.90 +/- 0.61 at 6 -- and it is deployed because it completes the
     # record schema at no cost in a new environment, not because it improved the number.
     # `decisions.md` 2026-07-28. The pre-delta checkpoints survive as
-    # `checkpoints_v3_v3final_s{0..5}`; this preset now writes over that name, so use
+    # `checkpoints_spectre_v3final_s{0..5}`; this preset now writes over that name, so use
     # `--out-suffix` if you need both on disk at once.
     # 2026-07-31: coverage/waste now use the **unified** definitions by default
     # (`TrainConfig.unified_coverage=True`), so this preset needs no extra flag and a
@@ -127,8 +127,8 @@ PRESETS: dict[str, dict[str, str]] = {
     # EMA weight-averaging arm of the deployed config, to recover the domain-agnostic
     # (narrowed-input) model's inflated across-seed variance without touching inputs or
     # architecture (docs/decisions 2026-08-08). Same flag set as v3final plus
-    # `--weight-avg ema`; writes `checkpoints_v3_v3ema_s{seed}` (a NEW location, so the
-    # deployed `checkpoints_v3_unified` is never touched until an arm is verified and
+    # `--weight-avg ema`; writes `checkpoints_spectre_v3ema_s{seed}` (a NEW location, so the
+    # deployed `checkpoints_spectre_unified` is never touched until an arm is verified and
     # promoted). `sb2dema` is the StickButton2D twin for the cheap variance-attribution
     # triage. `--select-window 5` can be appended ad-hoc via `--arm` for the selector
     # probe.
@@ -150,7 +150,7 @@ PRESETS: dict[str, dict[str, str]] = {
     },
     # `v3delta` is FOLDED INTO `v3final` above -- it is the same flag set, and keeping a
     # second name for the deployed config is how two "current" arms end up on disk. Its
-    # checkpoints (`checkpoints_v3_v3final_s{0..5}`, 6 seeds) are what the comparison
+    # checkpoints (`checkpoints_spectre_v3final_s{0..5}`, 6 seeds) are what the comparison
     # cache reads; `_V3_ARMS["spectre3"]` in `precompute_dd2d_cache.py` points at them.
     #
     # StickButton2D's ablation set, mirroring the six arms the DD2D notebook's section 4

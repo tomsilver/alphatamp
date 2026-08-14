@@ -203,7 +203,7 @@ DD2D = EnvSpec(
     has_timing=True,
     caveats=(
         "The §1/§2 `SPECTRE` rows are the **deployed unified coverage/waste** "
-        "checkpoint (`checkpoints_v3_unified`), rebuilt 2026-08-01: adaptive 5.78 ± "
+        "checkpoint (`checkpoints_spectre_unified`), rebuilt 2026-08-01: adaptive 5.78 ± "
         "0.10. The §4 ablation component arms (`abl_*`) predate the 2026-07-31 "
         "unification and score under the **old** coverage/waste definition, so the §4 "
         "`deployed` row (unified, ~5.78) is not directly comparable to the matched "
