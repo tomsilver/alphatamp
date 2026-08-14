@@ -41,6 +41,11 @@ from .geometry import place_gate
 from .region_geometry import RegionInfo
 
 _HEIGHT_MARGIN = 0.02  # vertical slack the hand needs above a held object (F3 gate)
+# Geometric-pick constants (demo only): a tall block (kinder's small-cube pick controller cannot
+# grasp a ~0.29 m block) is lifted in place to a held pose rather than physics-picked.
+_TALL_PICK_THRESHOLD = 0.1
+_HELD_Z = 0.6  # lifted height for a geometric pick (above the floor, clear of any shelf surface)
+_GRIPPER_CLOSED = 0.5  # a gripper value read as closed (> models._GRASP_THRESHOLD)
 
 
 @dataclass(frozen=True)
@@ -74,12 +79,15 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         robot_name: str,
         height_margin: float = _HEIGHT_MARGIN,
         geometric_place: bool = True,
+        geometric_pick_tall: bool = False,
         **kwargs: object,
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._region_infos = region_infos
         self._robot_name = robot_name
         self._height_margin = height_margin
+        # Demo only: geometrically pick objects too tall for kinder's pick controller.
+        self._geometric_pick_tall = geometric_pick_tall
         # Data refiner uses a deterministic geometric place (physics place is flaky as the shelf
         # fills — DD-6). The demo constructs the sampler with geometric_place=False for real
         # physics execution.
@@ -163,6 +171,39 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         )
         raise TrajectorySamplingFailure()
 
+    def _geometric_pick_transition(
+        self,
+        x: ObjectCentricState,
+        a: GroundOperator,
+        ns: RelationalAbstractState,
+        bpg: BilevelPlanningGraph,
+    ) -> tuple[list, list]:
+        """Deterministic geometric pick: lift the object to a held pose, close the
+        gripper.
+
+        For tall blocks kinder's small-cube pick controller cannot grasp (demo only).
+        The abstractor then reads Holding (lifted + gripper closed), matching ``ns``.
+        """
+        obj = a.parameters[1]
+        nx = x.copy()
+        obj_o = nx.get_object_from_name(obj.name)
+        nx.set(obj_o, "z", _HELD_Z)
+        nx.set(
+            nx.get_object_from_name(self._robot_name), "pos_gripper", _GRIPPER_CLOSED
+        )
+        u = np.zeros(11, dtype=np.float32)
+        bpg.add_state_node(nx)
+        bpg.add_action_edge(x, u, nx)
+        achieved = self._state_abstractor(nx)
+        bpg.add_abstract_state_node(achieved)
+        bpg.add_state_abstractor_edge(nx, achieved)
+        if achieved == ns:
+            return [x, nx], [u]
+        self.rejections.append(
+            _Rejection(a, frozenset(ns.atoms), frozenset(achieved.atoms), (), "C2")
+        )
+        raise TrajectorySamplingFailure()
+
     def __call__(  # type: ignore[override]
         self,
         x: ObjectCentricState,
@@ -179,6 +220,14 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
 
         if a.name == "place" and self._geometric_place:
             return self._geometric_place_transition(x, a, ns, bpg)
+
+        if (
+            a.name == "pick"
+            and self._geometric_pick_tall
+            and float(x.get(x.get_object_from_name(a.parameters[1].name), "bb_z"))
+            > _TALL_PICK_THRESHOLD
+        ):
+            return self._geometric_pick_transition(x, a, ns, bpg)
 
         controller = self._controller_generator(a)
         params = controller.sample_parameters(x, rng)
@@ -290,11 +339,13 @@ def make_recording_sampler(
     robot_name: str,
     height_margin: float = _HEIGHT_MARGIN,
     geometric_place: bool = True,
+    geometric_pick_tall: bool = False,
 ) -> RestockRecordingSampler:
     """Construct the gated recording sampler with the model's region geometry.
 
     ``geometric_place=True`` (data collection) uses the deterministic geometric place;
-    pass ``False`` (demo) for a full physics place rollout.
+    pass ``False`` for a full physics place rollout. ``geometric_pick_tall=True`` (demo)
+    geometrically picks objects too tall for kinder's pick controller.
     """
     return RestockRecordingSampler(
         controller_generator=controller_generator,
@@ -305,4 +356,5 @@ def make_recording_sampler(
         robot_name=robot_name,
         height_margin=height_margin,
         geometric_place=geometric_place,
+        geometric_pick_tall=geometric_pick_tall,
     )

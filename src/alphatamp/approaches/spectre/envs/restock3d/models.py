@@ -73,7 +73,9 @@ Stored = Predicate("Stored", [CubeType])
 
 # Tolerances.
 _FLOOR_Z_TOL = 0.1  # a cube resting this near the ground (and in no region) is OnFloor
-_HOLDING_TOL = 0.05
+_SURFACE_Z_TOL = (
+    0.08  # a cube rests in a region iff its base is this near the region's surface_z
+)
 _HANDEMPTY_TOL = 1e-3
 _GRASP_THRESHOLD = 0.1
 _INREGION_MARGIN = (
@@ -92,7 +94,6 @@ class RestockAbstractor:
 
     def __init__(self, sim: ObjectCentricTidyBot3DEnv, task_json_path: str) -> None:
         initial_state, _ = sim.reset()
-        self._pybullet_sim = PyBulletSim(initial_state, rendering=False)
         self._robot_name = sim.robot_name
         self._task_json_path = task_json_path
         self._region_infos: dict[str, RegionInfo] = load_region_infos(
@@ -132,10 +133,19 @@ class RestockAbstractor:
         return 0.55
 
     def _region_of(self, state: ObjectCentricState, cube: Object) -> str | None:
-        """The region whose footprint contains the cube's world xy, if any."""
+        """The region whose footprint contains the cube's world xy AND whose shelf
+        surface the cube is resting on.
+
+        The surface-z match disambiguates the vertically-stacked Config B cells (a tall
+        cell and a short cell share the same xy footprint at different heights); xy
+        alone would assign a short-cell cube to the tall region below it.
+        """
         cx, cy = state.get(cube, "x"), state.get(cube, "y")
+        rest_z = state.get(cube, "z") - state.get(cube, "bb_z") / 2
         best, best_slack = None, 1e9
         for name, info in self._region_infos.items():
+            if abs(rest_z - info.surface_z) > _SURFACE_Z_TOL:
+                continue  # not resting on this region's shelf (wrong cell of a stacked pair)
             dx = abs(cx - info.center_xy[0]) - (info.half_xy[0] + _INREGION_MARGIN)
             dy = abs(cy - info.center_xy[1]) - (info.half_xy[1] + _INREGION_MARGIN)
             if dx <= 0 and dy <= 0:
@@ -147,36 +157,29 @@ class RestockAbstractor:
     # -- abstraction ------------------------------------------------------
     def state_abstractor(self, state: ObjectCentricState) -> RelationalAbstractState:
         atoms: set[GroundAtom] = set()
-        self._pybullet_sim.set_state(state)
         robot = state.get_object_from_name(self._robot_name)
         movables = list(state.get_objects(CubeType))
 
         gripper_val = state.get(robot, "pos_gripper")
+        gripper_closed = gripper_val > _GRASP_THRESHOLD
         if np.isclose(gripper_val, 0.0, atol=_HANDEMPTY_TOL):
             atoms.add(GroundAtom(HandEmpty, [robot]))
 
-        held: set[str] = set()
-        if gripper_val > _GRASP_THRESHOLD:
-            ee = self._pybullet_sim.get_ee_pose()
-            for cube in movables:
-                if state.get(cube, "z") > 0.1 and all(
-                    abs(ee.position[i] - state.get(cube, ax)) < _HOLDING_TOL
-                    for i, ax in enumerate(("x", "y", "z"))
-                ):
-                    atoms.add(GroundAtom(Holding, [robot, cube]))
-                    held.add(cube.name)
-
+        # Each cube is InRegion (resting in a shelf region: xy + surface-z match), OnFloor (resting
+        # near the ground in no region), or — if lifted with the gripper closed — Holding.
+        # Position-agnostic Holding works for both a physics pick (held cube lifted near the EE)
+        # and a geometric pick (cube teleported to a lifted pose).
         for cube in movables:
-            if cube.name in held:
-                continue
-            # XY-primary: region membership is footprint containment (the tall cell sits near
-            # floor level, so a z threshold cannot separate it from the ground — DD-8).
             region = self._region_of(state, cube)
             if region is not None:
                 atoms.add(GroundAtom(InRegion, [cube, self._region_objs[region]]))
                 atoms.add(GroundAtom(Stored, [cube]))
-            elif state.get(cube, "z") - state.get(cube, "bb_z") / 2 < _FLOOR_Z_TOL:
+                continue
+            rest_z = state.get(cube, "z") - state.get(cube, "bb_z") / 2
+            if rest_z < _FLOOR_Z_TOL:
                 atoms.add(GroundAtom(OnFloor, [cube]))
+            elif gripper_closed:
+                atoms.add(GroundAtom(Holding, [robot, cube]))
 
         objects = {robot} | set(movables) | set(self._region_objs.values())
         return RelationalAbstractState(atoms, objects)
