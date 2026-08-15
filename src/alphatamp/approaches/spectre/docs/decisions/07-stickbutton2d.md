@@ -4,6 +4,71 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget"></a>
+## 2026-08-15 — Restock3D eager-validity heuristic, oracle solver, and budget/K_max calibration
+
+<!--strip-->
+> **id** `2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget` ·
+> **status** active · **tracks** method, evaluation, env-restock3d, tooling ·
+> **ratifies** autonomous_restock3d_calibration_session
+<!--/strip-->
+
+**Context.** The kinematic Restock3D env
+([2026-08-14](#2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating)) works and its
+Stage-0 gate is approved, but it was not ready to collect a training set affordably: hff is
+geometry-blind by design (`Place` has no `Clear`), so the naive A* order interleaves infeasible
+skeletons ahead of feasible ones, and each real-collision refinement is slow. No principled
+per-candidate timeout or K_max existed. This entry covers an **autonomous overnight build** (no human
+in the loop) of the four pieces needed to *design* the collection later: an oracle solver, an
+eager-validity heuristic, per-stratum timeout estimates, and per-stratum K_max estimates. Scope:
+**no-clutter v1 (F2 over-assignment + F3 tall-into-short only)**; F1/clutter stays deferred, so no
+relocation operator / buffers were built. Design docs: `docs/restock3d_eager_heuristic_guide.md`,
+`docs/restock3d_oracle_solver.md`.
+
+**Decision.**
+- **Eager-validity heuristic (`plan_generator="astar_eager"`).** A subclass of the substrate A*+hff
+  generator (`envs/restock3d/eager_search.py`) adds a state-dependent penalty
+  (`envs/restock3d/eager_tables.py`) to the g-cost, keyed on the pre-state: T1 tall→short (λ_h=50, F3),
+  T2 region already occupied (λ_c=8, F2), T3 cube squats a still-needed tall region (λ_r=8). No-clutter
+  v1 collapses the guide's tables — regions are single-object (`slots=1`), `blockers=∅`,
+  `fits(o,R)=(cube) or (R tall-section)` — so the whole signal is a Place-only penalty; the Pick
+  penalty (T5) is inert. Penalties are finite (never prune), so F3 skeletons stay enumerable.
+- **Oracle solver** (`envs/restock3d/oracle.py`): bipartite assignment (talls→distinct tall regions,
+  cubes→distinct remaining, central-first) + FFD sequencing + STRIPS-built skeleton, refined through
+  the **standard refiner** (retry fresh seeds until success-or-budget). No relocation phase (no
+  clutter). It certifies feasibility and supplies feasible-refinement wall-clock for calibration.
+- **Governance:** the eager order is a **collection accelerator + a named baseline arm
+  (astar-eager)**, NOT the reported classical baseline — that stays plain hff over the same pool. Pool
+  membership + the reported baseline use the **plain** order; K_max is sized from the plain first-
+  feasible index.
+- **Real per-candidate cap** (`envs/restock3d/refine_cap.py`, SIGALRM) since the substrate timeout is
+  only cooperative; used by the refinement-pilot fallback and the eventual collection.
+- **`num_sampling_attempts_per_step` 3→10** (the config default) in the restock3d scripts.
+
+**Consequences.**
+- **Timeout (oracle, 8 problems/stratum, 100% certified, ~1 refiner call each):** feasible refinement
+  is *fast* (single call), not the ~120 s feared — t_oracle max r0 11.4 / r1 19.8 / r2 19.0 / r3 23.7 s
+  → **`cap_r = max×1.2` = r0 13.7, r1 23.8, r2 22.8, r3 28.4 s**.
+- **K_max (20 problems/stratum, no refinement, first-feasible index):** **plain** →
+  r0 8, r1 113, r2 48, r3 179 (`ceil(max×1.2)`); **eager** first-feasible index = **0 on every
+  problem** (the heuristic works; collection short-circuit depth ~1). r3 has a hard tail: 6/20 problems
+  have no feasible in the plain top-200 (~1/200 density), which eager finds at index 0.
+- **DC1 — eager buries F3, so it is not the training-pool order.** All goal plans are equal length, so a
+  working eager order front-loads the ~1–3 feasibles and demotes every F3 (the eager top-100 pool has
+  **0** F3 vs 57–86 in the plain pool). Reported baseline + pool membership therefore use plain; a
+  learning pool needs plain-order membership (or a hybrid), a collection-design decision left deferred.
+- **DC3 — the no-refinement K_max is trusted; the refinement-pilot fallback was not needed.**
+  `is_feasible_skeleton` is a sound feasibility oracle here (F2/F3 are real collisions ⇒ no false
+  negatives; table-feasible certifies 100% via the oracle), so the plain first-feasible index equals
+  the real baseline FP. r3's censoring is pool-coverage, not classifier error.
+- **Invariant reaffirmed:** refiner instrumentation stays observation-only; the eager penalty and cap
+  act on the *ordering / budget*, never the representation.
+- Full-scale collection, F1/clutter/coverage-waste, learned baselines, and the `compare_envs` EnvSpec
+  remain deferred. Judgment calls made without a human are logged in
+  `docs/autonomous_restock3d_calibration_session.md`.
+
+---
+
 <a id="2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating"></a>
 ## 2026-08-14 — Restock3D rebuilt on kinematic PyBullet: real-collision gating + front grasp
 
@@ -73,9 +138,16 @@ multi-seed collection → train → score, learned baselines (PIGINet/VLMPlan/LA
 <!--strip-->
 > **id** `2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric` ·
 > **status** superseded · **tracks** method, evaluation, env-restock3d, data ·
-> **superseded_by** 2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating
+> **superseded by**
+> 2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating
 >
-> ⚠️ **SUPERSEDED** by [2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating](#2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating): the MuJoCo-direct build's demos showed dynamics is the wrong substrate (soft collisions, teleport places), so Restock3D was rebuilt on kinematic PyBullet with real-collision gating and a front grasp. The `geometry.place_gate` / `refine.evaluate_skeleton` design and its Config-B numbers below are historical — the live env gates on real collisions, not a symbolic walk.
+> ⚠️ **SUPERSEDED** by
+> [2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating](#2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating):
+> the MuJoCo-direct build's demos showed dynamics is the wrong substrate (soft
+> collisions, teleport places), so Restock3D was rebuilt on kinematic PyBullet with
+> real-collision gating and a front grasp. The `geometry.place_gate` /
+> `refine.evaluate_skeleton` design and its Config-B numbers below are historical —
+> the live env gates on real collisions, not a symbolic walk.
 <!--/strip-->
 
 **Context.** SPECTRE needs a third, 3D/real-robot evaluation environment. ShelfObstruct3D was a

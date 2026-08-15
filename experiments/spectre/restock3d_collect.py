@@ -1,21 +1,23 @@
 """Collect Restock3D episodes (kinematic-PyBullet, real-collision feasibility).
 
 A thin CLI over :func:`alphatamp.approaches.spectre.collect.collect_and_save`: one
-``CollectionConfig`` per stratum (``spectre/Restock3D-r{r}-v0`` + ``model_name="restock3d"``),
-looping over the per-stratum problem-id band from :mod:`envs.restock3d.strata`. Feasibility and the
-F2/F3 failure evidence come from the real controllers + :class:`RestockRecordingSampler`; no gate.
+``CollectionConfig`` per stratum (env ``spectre/Restock3D-r{r}-v0``), looping over the
+per-stratum problem-id band from :mod:`envs.restock3d.strata`. Feasibility
+and the F2/F3 failure evidence come from the real controllers +
+:class:`RestockRecordingSampler`; no gate.
 
-Keep this pass small (the plan): real BiRRT per candidate is far cheaper than MuJoCo but not free.
+Keep this pass small (the plan): real BiRRT per candidate is far cheaper than MuJoCo, but
+not free.
 
 Run from the repo root (venv active)::
 
-    python experiments/spectre/restock3d_collect.py --split train --strata 0,1,2,3 --per-stratum 20
-    python experiments/spectre/restock3d_collect.py --split test  --per-stratum 10 --workers 8
+    python experiments/spectre/restock3d_collect.py --strata 0,1,2,3 --per-stratum 20
+    python experiments/spectre/restock3d_collect.py --split test --per-stratum 10
 """
 
 from __future__ import annotations
 
-# --- IKFast needs static LAPACK/BLAS; shim the shared libs (once, cached afterwards). ----------
+# --- IKFast needs static LAPACK/BLAS; shim the shared libs (cached afterwards). ---
 import glob
 import os
 import pathlib
@@ -39,6 +41,7 @@ for _a, (_sd, _pt) in {
             _lk.symlink_to(_r)
 
 import argparse
+import multiprocessing as mp
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -50,7 +53,13 @@ from alphatamp.approaches.spectre.envs.restock3d import strata as S
 _ENV_VARIANT = "restock3d_v1"
 
 
-def _config(split: str, stratum: int, per_stratum: int, k_max: int) -> CollectionConfig:
+def _config(
+    split: str,
+    stratum: int,
+    per_stratum: int,
+    k_max: int,
+    plan_generator: str = "closed_form",
+) -> CollectionConfig:
     start = S.problem_id(split, stratum, 0)
     return CollectionConfig(
         env_id=f"spectre/Restock3D-r{stratum}-v0",
@@ -62,9 +71,10 @@ def _config(split: str, stratum: int, per_stratum: int, k_max: int) -> Collectio
         problem_seed_start=start,
         problem_seed_end=start + max(1, per_stratum),
         K_max=k_max,
-        abstract_plan_timeout_s=15.0,
+        plan_generator=plan_generator,  # type: ignore[arg-type]
+        abstract_plan_timeout_s=30.0,
         refinement_timeout_s=20.0,
-        num_sampling_attempts_per_step=3,
+        num_sampling_attempts_per_step=10,  # config default; per calibration (was 3)
         max_trajectory_steps=500,
     )
 
@@ -82,6 +92,12 @@ def main() -> None:
     parser.add_argument("--per-stratum", type=int, default=20)
     parser.add_argument("--k-max", type=int, default=30)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--plan-generator",
+        choices=["closed_form", "heuristic_search", "astar_eager"],
+        default="closed_form",
+        help="astar_eager surfaces feasibles early (accelerator; see the ADR).",
+    )
     parser.add_argument("--data-root", default="data/spectre")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -89,7 +105,9 @@ def main() -> None:
     strata = [int(s) for s in args.strata.split(",")]
     jobs = []
     for stratum in strata:
-        cfg = _config(args.split, stratum, args.per_stratum, args.k_max)
+        cfg = _config(
+            args.split, stratum, args.per_stratum, args.k_max, args.plan_generator
+        )
         for index in range(args.per_stratum):
             pid = S.problem_id(args.split, stratum, index)
             jobs.append((cfg, args.data_root, pid))
@@ -103,7 +121,9 @@ def main() -> None:
     start = time.perf_counter()
     done = 0
     if args.workers > 1:
-        with ProcessPoolExecutor(max_workers=args.workers) as ex:
+        # spawn: pyperplan / bilevel_planning keep module-level state that fork corrupts.
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as ex:
             futs = [ex.submit(_one, j) for j in jobs]
             for fut in as_completed(futs):
                 fut.result()
@@ -125,7 +145,7 @@ def _heartbeat(done: int, total: int, start: float) -> None:
         rate = done / max(elapsed, 1e-9)
         eta = (total - done) / max(rate, 1e-9)
         print(
-            f"[restock3d_collect] {done}/{total}  elapsed={elapsed:.0f}s  eta={eta:.0f}s",
+            f"[restock3d] {done}/{total} elapsed={elapsed:.0f}s eta={eta:.0f}s",
             flush=True,
         )
 

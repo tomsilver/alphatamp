@@ -1,9 +1,8 @@
 """Per-episode collection: pool → per-skeleton refinement → serialized record.
 
-Non-short-circuiting: every skeleton in the pool is refined regardless of
-earlier successes. This is the defining difference from the standard SeSaMe
-planner behavior (which stops at first success). See
-``docs/archive/SPECTRE_METHOD_SPEC.md`` §5.1 and
+Non-short-circuiting: every skeleton in the pool is refined regardless of earlier
+successes. This is the defining difference from the standard SeSaMe planner behavior
+(which stops at first success). See ``docs/archive/SPECTRE_METHOD_SPEC.md`` §5.1 and
 ``docs/archive/SPECTRE_TRAINING_PIPELINE_SPEC.md`` §6.
 """
 
@@ -14,6 +13,7 @@ import hashlib
 import itertools
 import time
 from pathlib import Path
+from typing import Callable
 
 import kinder
 from bilevel_planning.abstract_plan_generators.heuristic_search_plan_generator import (
@@ -47,10 +47,10 @@ from alphatamp.approaches.spectre.schema import (
 _STICK_BUTTON_MODEL_NAME = "stickbutton2d"
 _RESTOCK3D_MODEL_NAME = "restock3d"
 
-# Restock3D's recording sampler needs the models' internal sim + region_infos, which the frozen
-# SesameModels cannot carry. `_make_env_models` stashes them here for `_make_trajectory_sampler`;
-# collection is per-process sequential (episode N's env models are built before its sampler), so a
-# module-level holder is safe (workers are separate processes).
+# Restock3D's recording sampler needs the models' internal sim + region_infos, which the
+# frozen SesameModels cannot carry. `_make_env_models` stashes them here for
+# `_make_trajectory_sampler`; collection is per-process sequential (episode N's models
+# are built before its sampler), so a module-level holder is safe (separate workers).
 _restock_extras: dict[str, object] = {}
 
 
@@ -69,9 +69,10 @@ def _make_env_models(
 ) -> SesameModels:
     """Dispatch on ``cfg.model_name`` to build the SesameModels for this env.
 
-    Restock3D builds its own kinematic models (custom env, not a kinder factory) and stashes the
-    internal sim + region_infos for the recording sampler. All other envs fall through to the kinder
-    factory. Imports are deferred so callers that never build env models do not pay the cost.
+    Restock3D builds its own kinematic models (custom env, not a kinder factory) and
+    stashes the internal sim + region_infos for the recording sampler. All other envs
+    fall through to the kinder factory. Imports are deferred so callers that never build
+    env models do not pay the cost.
     """
     # pylint: disable=import-outside-toplevel
     if cfg.model_name == _RESTOCK3D_MODEL_NAME:
@@ -84,6 +85,7 @@ def _make_env_models(
         )
         _restock_extras["sim"] = bundle.sim
         _restock_extras["region_infos"] = bundle.region_infos
+        _restock_extras["goal_names"] = bundle.abstractor.goal_object_names()
         return bundle.models
 
     from kinder_bilevel_planning.env_models import (
@@ -128,6 +130,32 @@ def _make_plan_generator(
 
         state = x0 if x0 is not None else env_models.observation_to_state(obs)
         return make_plan_generator(env_models, state, seed=problem_id)
+    if cfg.model_name == _RESTOCK3D_MODEL_NAME and cfg.plan_generator == "astar_eager":
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.restock3d.eager_search import (
+            EagerValidityPlanGenerator,
+        )
+        from alphatamp.approaches.spectre.envs.restock3d.eager_tables import (
+            EagerWeights,
+            build_tables,
+            make_penalty,
+        )
+        from alphatamp.approaches.spectre.envs.restock3d.region_geometry import (
+            RegionInfo,
+        )
+
+        region_infos: dict[str, RegionInfo]
+        region_infos = _restock_extras["region_infos"]  # type: ignore[assignment]
+        goal_names: list[str] = _restock_extras["goal_names"]  # type: ignore[assignment]
+        tables = build_tables(region_infos, goal_names)
+        return EagerValidityPlanGenerator(
+            env_models.types,
+            env_models.predicates,
+            env_models.operators,
+            heuristic_name=cfg.heuristic_name,
+            seed=problem_id,
+            penalty_fn=make_penalty(tables, EagerWeights()),
+        )
     del obs  # heuristic-search path takes its inputs from env_models alone
     return RelationalHeuristicSearchAbstractPlanGenerator(
         env_models.types,
@@ -141,13 +169,14 @@ def _make_plan_generator(
 def time_pool_generation(cfg: CollectionConfig, problem_id: int) -> float:
     """Wall-clock (s) to draw the capped skeleton pool for one problem.
 
-    The abstract-plan-generation cost the pool-ranking methods share, measured on its own
-    by mirroring :func:`collect_episode`'s setup up to — and timing only — the ``islice``
-    pool draw, then stopping before any refinement. Env-agnostic: it dispatches the same
-    env models and generator the collection used, so on StickButton2D it times the
-    geometry-aware ``AcyclicPlanGenerator`` exactly as collected. Used by the §2b
-    wall-clock breakdown (``precompute_dd2d_cache._measure_plan_gen``) to supply a
-    per-stratum plan-gen constant, the analog of DD2D's ``planner.plan`` timing.
+    The abstract-plan-generation cost the pool-ranking methods share, measured on its
+    own by mirroring :func:`collect_episode`'s setup up to — and timing only — the
+    ``islice`` pool draw, then stopping before any refinement. Env-agnostic: it
+    dispatches the same env models and generator the collection used, so on
+    StickButton2D it times the geometry-aware ``AcyclicPlanGenerator`` exactly as
+    collected. Used by the §2b wall-clock breakdown
+    (``precompute_dd2d_cache._measure_plan_gen``) to supply a per-stratum plan-gen
+    constant, the analog of DD2D's ``planner.plan`` timing.
     """
     register_extra_envs()
     env = kinder.make(cfg.env_id)
@@ -211,7 +240,7 @@ def _make_trajectory_sampler(
         return RestockRecordingSampler(
             sim=_restock_extras["sim"],
             region_infos=_restock_extras["region_infos"],  # type: ignore[arg-type]
-            **kwargs,
+            **kwargs,  # type: ignore[arg-type]
         )
     return ParameterizedControllerTrajectorySampler(**kwargs)  # type: ignore[arg-type]
 
@@ -235,6 +264,26 @@ def _make_refiner(
         num_sampling_attempts_per_step=cfg.num_sampling_attempts_per_step,
         seed=seed,
     )
+
+
+def _failure_metadata_fn(
+    model_name: str,
+) -> Callable[..., list[dict[str, object]]] | None:
+    """The env's observation-only failure-harvest fn (SB2D / Restock3D), else None."""
+    # pylint: disable=import-outside-toplevel
+    if model_name == _STICK_BUTTON_MODEL_NAME:
+        from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
+            failure_metadata as sb_fm,
+        )
+
+        return sb_fm
+    if model_name == _RESTOCK3D_MODEL_NAME:
+        from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
+            failure_metadata as rs_fm,
+        )
+
+        return rs_fm
+    return None
 
 
 def _collect_all_objects(
@@ -281,9 +330,9 @@ def collect_episode(
 ) -> EpisodeRecord:
     """Collect one episode: pool generation + per-skeleton refinement.
 
-    The pool size is capped by ``cfg.K_max`` via ``itertools.islice``. Each
-    skeleton is refined independently with a deterministic seed; outcomes are
-    recorded for every skeleton regardless of earlier successes.
+    The pool size is capped by ``cfg.K_max`` via ``itertools.islice``. Each skeleton is
+    refined independently with a deterministic seed; outcomes are recorded for every
+    skeleton regardless of earlier successes.
     """
     register_extra_envs()
     env = kinder.make(cfg.env_id)
@@ -346,21 +395,11 @@ def collect_episode(
                 outcome = "error"
                 error_info = {"cls": type(exc).__name__, "msg": str(exc)}
 
-            # Harvest the observed failure (StickButton2D / Restock3D). Observation-only --
-            # every field was computed by the acceptance check the refiner already ran.
-            failure_metadata = None
-            if outcome == "fail":
-                # pylint: disable=import-outside-toplevel
-                if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
-                    from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
-                        failure_metadata,
-                    )
-                elif cfg.model_name == _RESTOCK3D_MODEL_NAME:
-                    from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (  # pylint: disable=line-too-long
-                        failure_metadata,
-                    )
-            if failure_metadata is not None:
-                failures = failure_metadata(
+            # Harvest the observed failure (SB2D / Restock3D). Observation-only -- every
+            # field was computed by the acceptance check the refiner already ran.
+            fm_fn = _failure_metadata_fn(cfg.model_name) if outcome == "fail" else None
+            if fm_fn is not None:
+                failures = fm_fn(
                     trajectory_sampler,  # type: ignore[arg-type]
                     action_plan,
                     cfg.num_sampling_attempts_per_step,
@@ -370,7 +409,8 @@ def collect_episode(
                 )
                 if failures:
                     refiner_metadata["failures"] = failures
-                    stuck_step_index = int(failures[0]["step_index"])
+                    step_i = failures[0]["step_index"]
+                    stuck_step_index = int(step_i)  # type: ignore[call-overload]
 
             wall_clock = time.perf_counter() - start
             total_wall_clock += wall_clock
@@ -523,10 +563,10 @@ def collect_and_save_result(
 ) -> tuple[int, Path | None, str | None]:
     """Worker-safe wrapper around :func:`collect_and_save`.
 
-    Returns ``(problem_id, path, error_message)``. Exceptions are captured so
-    one bad problem doesn't kill a worker pool. Lives in the package (not in
-    the Hydra entrypoint script) so it has a stable importable qualname under
-    ``multiprocessing`` ``spawn`` start method.
+    Returns ``(problem_id, path, error_message)``. Exceptions are captured so one bad
+    problem doesn't kill a worker pool. Lives in the package (not in the Hydra
+    entrypoint script) so it has a stable importable qualname under ``multiprocessing``
+    ``spawn`` start method.
     """
     try:
         path = collect_and_save(cfg, data_root, problem_id)

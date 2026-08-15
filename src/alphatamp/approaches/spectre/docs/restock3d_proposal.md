@@ -16,6 +16,19 @@ tagged:
 This document is deliberately **stage-gated**: no phase begins until its gate's probes pass, and
 each gate names its fallback. The design is a hypothesis, not a commitment.
 
+> **Build status (2026-08-15, autonomous).** The kinematic **no-clutter v1** (F2 over-assignment +
+> F3 tall-into-short; F1/clutter deferred) is built and Stage-0 approved. Since then: the
+> **eager-validity heuristic** (`astar_eager`, `envs/restock3d/eager_search.py` +
+> `eager_tables.py`), the **oracle solver** (`envs/restock3d/oracle.py`), and a real per-candidate
+> cap (`refine_cap.py`) are built; per-stratum **timeout** and **K_max** are calibrated. Numbers +
+> the eager-vs-plain pool-order finding:
+> [`decisions/07` 2026-08-15](decisions/07-stickbutton2d.md#2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget)
+> / [`notebook/07` 2026-08-15](notebook/07-stickbutton2d.md#2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout).
+> The guide docs `restock3d_eager_heuristic_guide.md` / `restock3d_oracle_solver.md` describe the
+> full-clutter design; v1 realises their F2+F3 subset (regions single-object, `blockers=∅`, Pick
+> penalty inert, no relocation phase). Still deferred: F1/clutter/coverage-waste, the full
+> collection, learned baselines, the `compare_envs` EnvSpec.
+
 ---
 
 ## 1. Background and rationale

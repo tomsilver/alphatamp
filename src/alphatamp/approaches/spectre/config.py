@@ -82,8 +82,13 @@ class CollectionConfig:
     # ``"closed_form"`` (the default; the name is kept for config compatibility)
     # uses each env's default generator -- the geometry-aware A* on
     # StickButton2D and plain A*+FF on the other kinder envs;
-    # ``"heuristic_search"`` forces the stock A*+FF ordering on every env.
-    plan_generator: Literal["closed_form", "heuristic_search"] = "closed_form"
+    # ``"heuristic_search"`` forces the stock A*+FF ordering on every env;
+    # ``"astar_eager"`` (Restock3D only) adds the eager-validity penalty to the
+    # A* g-cost so feasible skeletons surface early (a named arm, never defaulted;
+    # collection/calibration tool + baseline, not the reported classical baseline).
+    plan_generator: Literal["closed_form", "heuristic_search", "astar_eager"] = (
+        "closed_form"
+    )
     refinement_seed_rule: str = "v1_blake2b_problem_skeleton"
     collect_instrumentation: bool = False
     state_path_depth: Literal["s0_sL_only", "full"] = "s0_sL_only"

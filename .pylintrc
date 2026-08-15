@@ -35,7 +35,7 @@ ignore-paths=.*/envs/dd2d/(?!spectre_).*
 # NOTE: pytest-pylint reads `ignore` and `ignore-patterns` only, never
 # `ignore-paths` -- see pytest_pylint/util.py:should_include_file. A path rule put
 # in ignore-paths is silently ignored under `pytest --pylint`.
-ignore-patterns=analyze_spectre\.py$|compare_(dd2d_)?methods(_archive)?\.py$|precompute_dd2d_cache\.py$,.*/piginet/(?!domain|record|sb2d_adapter)[a-z0-9_]+\.py$
+ignore-patterns=analyze_spectre\.py$|compare_(dd2d_)?methods(_archive)?\.py$|precompute_dd2d_cache\.py$|shelf3d_difficulty\.py$|restock3d_(stage0|demos|probe|difficulty|harness|oracle|kmax)\.py$,.*/piginet/(?!domain|record|sb2d_adapter)[a-z0-9_]+\.py$
 
 # Python code to execute, usually for sys.path manipulation such as
 # pygtk.require().

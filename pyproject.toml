@@ -87,9 +87,17 @@ exclude = [
     # marimo notebook (cell-scoped locals, untyped `scienceplots` import); like
     # analyze_spectre.py above, not worth annotating notebook cells.
     "experiments/spectre/compare_methods\\.py$",
+    # marimo notebook (cell-scoped locals, widget-display statements); excluded like
+    # compare_methods.py above.
+    "experiments/spectre/shelf3d_difficulty\\.py$",
     # Dev diagnostic script (one-off holdout-vs-full comparison); excluded like the
     # marimo notebooks rather than annotating throwaway analysis code.
     "experiments/spectre/holdout_vs_full\\.py$",
+    # Restock3D one-off diagnostic / calibration harnesses (stage-0 gate, demo render,
+    # FP probe, difficulty table, oracle+K_max calibration). Sibling-module imports and
+    # dynamic job tuples; excluded like shelf3d_difficulty.py / holdout_vs_full.py above.
+    # The real collection entry point restock3d_collect.py stays type-checked.
+    "experiments/spectre/restock3d_(stage0|demos|probe|difficulty|harness|oracle|kmax)\\.py$",
     # Vendored DD2D environment (migrated from the envsearch repo, see
     # envs/dd2d/MIGRATION_DD2D.md). Excluded from strict mypy like lib/ vendoring;
     # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
@@ -135,5 +143,6 @@ module = [
     "matplotlib.*",
     "sklearn.*",
     "shapely.*",
+    "spatialmath.*",
 ]
 ignore_missing_imports = true

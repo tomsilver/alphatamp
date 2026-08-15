@@ -4,6 +4,62 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout"></a>
+## 2026-08-15 — Restock3D eager heuristic + oracle calibration: timeout & K_max estimates (autonomous)
+
+<!--strip-->
+> **id** `2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout` ·
+> **status** active · **tracks** method, evaluation, env-restock3d
+<!--/strip-->
+
+**What.** Autonomous overnight build + run (no human in the loop; ADR
+[2026-08-15](../decisions/07-stickbutton2d.md#2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget),
+session log `docs/autonomous_restock3d_calibration_session.md`) to make Restock3D collectible: an
+**eager-validity heuristic** (`astar_eager`), an **oracle solver**, and worker-parallel runs that
+estimate the per-candidate **timeout** and **K_max** per stratum. Scope no-clutter v1 (F2+F3);
+`samples_per_step=10`; parallel across problems (spawn, 8–24 workers on the 32-core box).
+
+**Result.**
+- **Strata reconciliation (step 1).** r0–r3 are correctly implemented for the no-clutter v1 design:
+  `STRATA={0:(3,0,2,5),1:(5,0,1,4),2:(3,1,2,4),3:(4,2,3,5)}` = `(n_small,n_tall,n_tall_reg,n_short_reg)`,
+  clutter hard-0 for every stratum. "No clutter in r1" is the **expected F1 deferral**, not a bug — r1's
+  difficulty is short-cell over-assignment (σ_short=0). r2/r3 both compute d=(σt,σs)=(1,2); they differ
+  only in raw counts.
+- **Eager heuristic (V1–V3).** V1: on slack r0, eager≈plain (first-feasible 0 vs 1–2), penalties ≈0.
+  V2: **eager first-feasible index = 0 on every r0–r3 problem** (the informed order front-loads a
+  feasible skeleton). V3: F3 (tall→short) candidates are present in the **plain** top-K pool (~128 r2,
+  ~174 r3) but **absent from the eager pool** (0), because λ_h=50 buries them past K=200 — expected,
+  and the reason the training pool uses the plain order (ADR DC1).
+- **Oracle + timeout (8 problems/stratum, 300 s budget).** 100% certified every stratum, ~1 refiner
+  call each — feasible refinement is **fast** (single call), not the ~120 s feared. t_oracle max
+  r0 11.4 / r1 19.8 / r2 19.0 / r3 23.7 s → **cap_r (max×1.2) = 13.7 / 23.8 / 22.8 / 28.4 s**
+  (`data/spectre/derived/restock3d_v1/oracle_calibration.json`).
+- **K_max (20 problems/stratum, no refinement).** Plain-order first-feasible → **K_max_r = 8 / 113 /
+  48 / 179** (`ceil(max×1.2)`); r3 has 6/20 censored beyond K=200 (~1/200 density; eager finds them at
+  0). Eager first-feasible index = 0 everywhere (collection short-circuit depth ~1)
+  (`data/spectre/derived/restock3d_v1/kmax_estimate.json`).
+
+| stratum | cap_r (s) | K_max_r (plain) | plain 1st-feas max | eager 1st-feas | F3 in plain pool |
+|---|---|---|---|---|---|
+| r0 | 13.7 | 8 | 6 | 0 | 0 (no talls) |
+| r1 | 23.8 | 113 | 94 | 0 | 0 (no talls) |
+| r2 | 22.8 | 48 | 40 | 0 | ~128 |
+| r3 | 28.4 | 179 | 149 (6/20 censored) | 0 | ~174 |
+
+**Takeaway / next.** All four deliverables are in hand: oracle (100% certify), eager heuristic
+(first-feasible 0), per-stratum cap_r, per-stratum K_max_r. Two settled findings guide the deferred
+collection design: (1) feasible-refinement is cheap and single-call, so the cap can be small (~14–28 s)
+and infeasible candidates die at it; (2) the eager order finds the feasible instantly but strips F3, so
+pool membership must stay plain (or hybrid) — sizing K_max to the eager index would give an FP-poor
+pool. The no-refinement K_max is trusted because `is_feasible_skeleton` is a sound feasibility oracle
+here (F2/F3 are real collisions; table-feasible certifies 100%), so the refinement-pilot fallback was
+not needed. Deferred: F1/clutter/coverage-waste, full collection, learned baselines, `compare_envs`
+EnvSpec. Traps this run added: eager enumeration to K=200 is memory-heavy (24 workers OOM-broke the
+pool on r2/r3 → default lowered to 12 + a resubmit-at-4 self-heal); the oracle refine (lighter) is fine
+at 24.
+
+---
+
 <a id="2026-08-14-restock3d-kinematic-stage-0-gate-collection-smoke"></a>
 ## 2026-08-14 — Restock3D kinematic Stage-0 gate + collection smoke
 

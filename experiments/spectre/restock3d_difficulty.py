@@ -1,4 +1,5 @@
-"""Restock3D difficulty probe: baseline (hff-order) false positives vs an oracle, per stratum.
+"""Restock3D difficulty probe: baseline (hff-order) false positives vs an oracle, per
+stratum.
 
 Runs the real collection loop (:func:`collect_episode`) on a small per-stratum sample and reads
 feasibility off the **real refiner** (a skeleton is feasible iff it refined). The naive planner-order
@@ -46,7 +47,8 @@ from alphatamp.approaches.spectre.envs.restock3d import strata as S
 
 
 def _classify(failures: list[dict]) -> str:
-    """F2 (movable culprit) / F3 (culprit-free, proved) / other, from the deepest record."""
+    """F2 (movable culprit) / F3 (culprit-free, proved) / other, from the deepest
+    record."""
     if not failures:
         return "none"
     f = failures[0]
@@ -57,7 +59,13 @@ def _classify(failures: list[dict]) -> str:
     return "other"
 
 
-def _run_stratum(stratum: int, per_stratum: int, k_max: int, split: str):
+def _run_stratum(
+    stratum: int,
+    per_stratum: int,
+    k_max: int,
+    split: str,
+    plan_generator: str = "closed_form",
+):
     cfg = CollectionConfig(
         env_id=f"spectre/Restock3D-r{stratum}-v0",
         env_variant="restock3d_v1",
@@ -68,9 +76,10 @@ def _run_stratum(stratum: int, per_stratum: int, k_max: int, split: str):
         problem_seed_start=S.problem_id(split, stratum, 0),
         problem_seed_end=S.problem_id(split, stratum, 0) + max(1, per_stratum),
         K_max=k_max,
-        abstract_plan_timeout_s=15.0,
+        plan_generator=plan_generator,  # type: ignore[arg-type]
+        abstract_plan_timeout_s=30.0,
         refinement_timeout_s=20.0,
-        num_sampling_attempts_per_step=3,
+        num_sampling_attempts_per_step=10,  # config default; per calibration (was 3)
         max_trajectory_steps=500,
     )
     fps: list[int] = []
@@ -94,7 +103,10 @@ def main() -> None:
     parser.add_argument("--per-stratum", type=int, default=8)
     parser.add_argument("--k-max", type=int, default=30)
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
+    # Default reports the plain-hff baseline FP; --eager measures the informed order instead.
+    parser.add_argument("--eager", action="store_true")
     args = parser.parse_args()
+    plan_generator = "astar_eager" if args.eager else "closed_form"
 
     print(
         f"{'stratum':>7} {'solve':>7} {'FP_mean':>8} {'FP_sd':>7} {'FP_max':>7}  families",
@@ -102,7 +114,7 @@ def main() -> None:
     )
     for stratum in [int(s) for s in args.strata.split(",")]:
         fps, solved, n, fam = _run_stratum(
-            stratum, args.per_stratum, args.k_max, args.split
+            stratum, args.per_stratum, args.k_max, args.split, plan_generator
         )
         mean = statistics.mean(fps) if fps else float("nan")
         sd = statistics.pstdev(fps) if len(fps) > 1 else 0.0
