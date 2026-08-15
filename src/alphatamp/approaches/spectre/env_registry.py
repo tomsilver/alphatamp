@@ -37,6 +37,9 @@ _CLUTTERED_RETRIEVAL_ENTRY_POINT = (
     "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv"
 )
 _STICK_BUTTON_ENTRY_POINT = "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv"
+_RESTOCK3D_ENTRY_POINT = (
+    "alphatamp.approaches.spectre.envs.restock3d.kinematic_env:Restock3DEnv"
+)
 
 
 # Per-type augmentation policy tables for SPECTRE Φ training-time
@@ -60,6 +63,17 @@ _STICKBUTTON2D_TYPE_AUG_POLICY: dict[str, bool] = {
     "crv_robot": True,
     "rectangle": True,
     "circle": True,
+}
+
+# Restock3D (kinematic): the robot is a singleton (augmentation vacuous) and all movables share
+# the `Kinematic3DCuboid` type -- cubes and blocks are interchangeable within it because each
+# object's geometry (half-extents) is re-read after renumbering, so permutation is a valid symmetry.
+# `region` is NON-augmentable: regions carry section-specific roles (a tall-section region and a
+# short-section region are not interchangeable), so their ids must not be permuted.
+_RESTOCK3D_TYPE_AUG_POLICY: dict[str, bool] = {
+    "Kinematic3DRobot": True,
+    "Kinematic3DCuboid": True,
+    "region": False,
 }
 
 _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
@@ -94,6 +108,10 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     "stickbutton2d_b3": _STICKBUTTON2D_TYPE_AUG_POLICY,
     "stickbutton2d_b5": _STICKBUTTON2D_TYPE_AUG_POLICY,
     "stickbutton2d_b10": _STICKBUTTON2D_TYPE_AUG_POLICY,
+    # restock3d_v1: the kinematic single-multi-section-shelf restock env (r0-r3 pooled by
+    # problem-id band). One augmentation policy across strata (movables interchangeable, regions
+    # section-semantic).
+    "restock3d_v1": _RESTOCK3D_TYPE_AUG_POLICY,
 }
 
 
@@ -175,14 +193,31 @@ def stick_button_variants(button_counts: range | list[int]) -> list[ExtraVariant
     ]
 
 
+def register_restock3d_envs() -> None:
+    """Register ``spectre/Restock3D-r{0..3}-v0`` (our kinematic env, not a kinder family).
+
+    A ``spectre/`` prefix, so it cannot go through :class:`ExtraVariant` (which forces
+    ``kinder/``). One gym id per stratum (fixed object count within a stratum); pooled into
+    ``restock3d_v1`` by problem-id banding, exactly as StickButton2D's ``b{N}``.
+    """
+    for r in range(4):
+        gid = f"spectre/Restock3D-r{r}-v0"
+        if gid not in gymnasium.registry:
+            gymnasium.register(
+                id=gid, entry_point=_RESTOCK3D_ENTRY_POINT, kwargs={"stratum": r}
+            )
+
+
 def register_extra_envs(
     variants: list[ExtraVariant] | None = None,
 ) -> None:
     """Register kinder variants that are not registered by default.
 
-    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``.
+    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``; also always
+    registers the ``spectre/Restock3D-r{0..3}`` ids.
     """
     kinder.register_all_environments()
+    register_restock3d_envs()
 
     if variants is None:
         variants = list(cluttered_storage_variants(range(1, 16)))

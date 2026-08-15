@@ -1,36 +1,25 @@
-"""Per-seed parametric problem generator for Restock3D (Config B two-level cupboard).
+"""Per-seed parametric problem generator for the **kinematic** Restock3D (Config B two shelves).
 
-Lays a **tall cell** (shelf 0, clearance ~0.495) and a **short cell** (shelf 1, clearance ~0.241)
-of single-object front-strip regions, and stages small cubes + tall blocks on the floor to be
-stored. Region capacity and cell height are invisible to the planner (no ``Clear`` precond, DD-3),
-so a height-/capacity-blind A* enumerates goal-reaching skeletons that over-assign a region (F2)
-or send a tall block to a short cell (F3); those fail the geometric gate (``refine``), an oracle
-avoids them. Four strata of increasing tightness; the difficulty statistic ``d = (sigma_tall,
-sigma_short)`` = per-cell slot slack, oracle-computable and stored in provenance.
+Lays a **tall shelf** (high ceiling — a tall block fits) and a **short shelf** (low ceiling — a
+tall block collides with the board above), each holding single-object front-strip regions, and
+stages small cubes + tall blocks (+ F1 clutter) on the floor to be stored. Region capacity and
+cell height are invisible to the planner (``Place`` has no ``Clear`` precond), so a
+height-/capacity-blind A* enumerates goal-reaching skeletons that over-assign a region (F2) or send
+a tall block to a short shelf (F3); those genuinely fail refinement by real PyBullet collision, an
+oracle avoids them. Four strata of increasing tightness; the difficulty statistic
+``d = (sigma_tall, sigma_short)`` = per-shelf region-slot slack, oracle-computable and stored in
+provenance.
 
-Surfaces/clearances are the *measured* Config B values (shelf 0 surface z=0.017, shelf 1 z=0.537;
-see the ADRs). F1 (grasp obstruction / clutter relocation) is deferred, so there is no floor
-clutter in v1 — difficulty is carried by F2 + F3.
+This module owns only the abstract per-seed layout (region ys, floor spots, clutter). The concrete
+shelf/object geometry lives in :mod:`kinematic_env` (``Restock3DEnvConfig``); regions are computed
+from that config in :mod:`region_geometry`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Config B geometry (measured — DD-6/DD-8).
-_TALL_SHELF, _SHORT_SHELF = 0, 1
-_TALL_SURFACE_Z, _SHORT_SURFACE_Z = 0.017, 0.537
-_TALL_CLEARANCE, _SHORT_CLEARANCE = 0.495, 0.241
-_SHELF_HEIGHTS = [0.508, 0.254]
-
-# Front-strip depth band (reliable place/grasp window) and region footprint half-width.
-_FRONT_LY = (0.085, 0.105)
-_REGION_HALF_LX = 0.03
-_REGION_PITCH = 0.10  # lateral spacing between region centres (world y)
-
-# Object specs.
-_SMALL_HALF = 0.02  # 0.04 cube
-_TALL_HALF_XY, _TALL_HALF_Z = 0.025, 0.145  # 0.05 x 0.05 x 0.29 block
+_REGION_PITCH = 0.10  # lateral spacing between region centres (world x)
 
 #: Stratum recipes: (n_small, n_tall, n_tall_regions, n_short_regions). Tuned so difficulty rises;
 #: r0 slack (~0 FP), r1 short-cell capacity pressure (F2), r2 tall-slot competition + height (F3),
@@ -68,6 +57,7 @@ class RestockSpec:
     short_region_ys: list[float]
     small_floor: list[tuple[float, float]] = field(default_factory=list)
     tall_floor: list[tuple[float, float]] = field(default_factory=list)
+    clutter_floor: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def sigma_tall(self) -> int:
@@ -91,28 +81,61 @@ def _row_ys(n: int, jitter: float) -> list[float]:
     return [round(y0 + i * _REGION_PITCH, 4) for i in range(n)]
 
 
+# A well-spaced floor grid over the reachable staging zone. Spots are >= 0.30 m apart so NO floor
+# object blocks another's grasp -- a tall block within ~0.1 m of a cube obstructs the cube's top-down
+# pick (the descending arm hits the tall block), which would make feasibility depend on floor layout
+# rather than the intended region assignment (F2/F3). Six spots fit the max object count (r3 = 6).
+_FLOOR_XS = [0.3, 0.6]
+_FLOOR_YS = [-0.25, 0.05, 0.35]
+
+
 def _floor_spots(n: int, rng: _Rng) -> list[tuple[float, float]]:
-    """``n`` distinct floor staging spots (world x, y)."""
+    """``n`` distinct, well-spaced floor staging spots (world x, y), grid + small jitter."""
+    grid = [(x, y) for y in _FLOOR_YS for x in _FLOOR_XS]
     spots: list[tuple[float, float]] = []
     for i in range(n):
-        col, row = i % 3, i // 3
-        x = 0.48 + 0.09 * row + (rng.uniform() - 0.5) * 0.02
-        y = -0.22 + 0.20 * col + (rng.uniform() - 0.5) * 0.02
-        spots.append((round(x, 4), round(y, 4)))
+        gx, gy = grid[i % len(grid)]
+        spots.append(
+            (
+                round(gx + (rng.uniform() - 0.5) * 0.02, 4),
+                round(gy + (rng.uniform() - 0.5) * 0.02, 4),
+            )
+        )
     return spots
 
 
+# Clutter blocks per stratum (ring a goal cube so a top-down grasp is obstructed -> F1). F1 is
+# DEFERRED from restock3d v1 (see kinematic_env.CLUTTER_PER_STRATUM); v1 runs with zero clutter.
+_CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+
+# Lateral offsets (world x, y) that ring a goal cube; the first ``n`` are used.
+_CLUTTER_RING = [(0.07, 0.0), (-0.07, 0.0), (0.0, 0.07), (0.0, -0.07)]
+
+
 def build_spec(seed: int, stratum: int) -> RestockSpec:
-    """Deterministic-in-seed problem for a stratum (a fixed row jitter + floor
-    layout)."""
+    """Deterministic-in-seed problem for a stratum.
+
+    Region ys are **stratum-deterministic** (no per-seed jitter) so the models factory and the
+    collection env agree on region geometry without threading the problem id; the floor layout is
+    seed-dependent. Clutter blocks (F1) ring the first small goal cube.
+    """
     n_small, n_tall, n_tall_reg, n_short_reg = STRATA[stratum]
     rng = _Rng(seed * 97 + stratum)
-    tall_ys = _row_ys(n_tall_reg, (rng.uniform() - 0.5) * 0.03)
-    short_ys = _row_ys(n_short_reg, (rng.uniform() - 0.5) * 0.03)
-    small_floor = _floor_spots(n_small, rng)
-    tall_floor = _floor_spots(n_tall, _Rng(seed * 131 + stratum + 7))
-    # keep the tall-block floor spots clear of the small ones
-    tall_floor = [(x, y + 0.06) for x, y in tall_floor]
+    tall_ys = _row_ys(n_tall_reg, 0.0)
+    short_ys = _row_ys(n_short_reg, 0.0)
+    # Allocate cubes AND blocks from ONE well-spaced grid so no two floor objects collide or block
+    # each other's grasp. Blocks take the last spots (kept furthest apart from the cube cluster).
+    all_floor = _floor_spots(n_small + n_tall, rng)
+    small_floor = all_floor[:n_small]
+    tall_floor = all_floor[n_small : n_small + n_tall]
+
+    clutter_floor: list[tuple[float, float]] = []
+    n_clutter = _CLUTTER_PER_STRATUM[stratum]
+    if n_clutter and small_floor:
+        cx, cy = small_floor[0]
+        for dx, dy in _CLUTTER_RING[:n_clutter]:
+            clutter_floor.append((round(cx + dx, 4), round(cy + dy, 4)))
+
     return RestockSpec(
         stratum=stratum,
         n_small=n_small,
@@ -121,121 +144,12 @@ def build_spec(seed: int, stratum: int) -> RestockSpec:
         short_region_ys=short_ys,
         small_floor=small_floor,
         tall_floor=tall_floor,
+        clutter_floor=clutter_floor,
     )
 
 
-def _region(
-    shelf: int, cy: float, surface_z: float, clearance: float
-) -> tuple[dict, dict]:
-    """A region JSON entry + its region_meta entry (local box on ``shelf`` at world-y
-    ``cy``)."""
-    ly0, ly1 = _FRONT_LY
-    box = [cy - _REGION_HALF_LX, ly0, 0.0, cy + _REGION_HALF_LX, ly1, 0.03]
-    entry = {
-        "target": "cupboard_1",
-        "shelf": shelf,
-        "ranges": [box],
-        "rgba": [0.0, 1.0, 1.0, 0.3] if shelf == _SHORT_SHELF else [1.0, 0.7, 0.0, 0.3],
-        "yaw_ranges": [[0, 0]],
-    }
-    meta = {"cell_clearance": clearance, "surface_z": surface_z}
-    return entry, meta
-
-
-def build_task_config(spec: RestockSpec) -> dict:
-    """A Restock3D task-config dict realising ``spec``."""
-    cfg: dict = {
-        "description": f"Restock3D r{spec.stratum} (sigma_tall={spec.sigma_tall}, "
-        f"sigma_short={spec.sigma_short})",
-        "robots": {"tidybot": {"robot": {}}},
-        "scene": "lab2",
-        "fixtures": {
-            "cupboard": {
-                "cupboard_1": {
-                    "length": 0.60198,
-                    "depth": 0.254,
-                    "shelf_heights": _SHELF_HEIGHTS,
-                    "shelf_partitions": [[] for _ in _SHELF_HEIGHTS],
-                    "shelf_thickness": 0.0127,
-                    "side_and_back_open": False,
-                }
-            }
-        },
-        "regions": {
-            "ground_cupboard_init_region": {
-                "target": "ground",
-                "ranges": [[1.5, 0.0, 1.5, 0.0]],
-                "yaw_ranges": [[90, 90]],
-            },
-            "robot_0_task_init_region": {
-                "target": "ground",
-                "ranges": [[-0.1, -0.1, 0.1, 0.1]],
-                "yaw_ranges": [[0, 0]],
-            },
-        },
-        "region_meta": {},
-        "cameras": {
-            "task_view": {
-                "position": [-1, 1, 2],
-                "lookat": [2, 0, 0],
-                "fovy": 42,
-                "resolution": [640, 480],
-            }
-        },
-        "objects": {"cube": {}},
-        "initial_state": [
-            ["on", "cupboard_1", "ground_cupboard_init_region"],
-            ["on", "robot", "robot_0_task_init_region"],
-        ],
-        "goal_objects": [],
-        "goal_state": [],
-    }
-    regions = cfg["regions"]
-    meta = cfg["region_meta"]
-    cubes = cfg["objects"]["cube"]
-    init = cfg["initial_state"]
-    goals = cfg["goal_objects"]
-
-    for i, cy in enumerate(spec.tall_region_ys, start=1):
-        entry, m = _region(_TALL_SHELF, cy, _TALL_SURFACE_Z, _TALL_CLEARANCE)
-        regions[f"region_0_{i}"] = entry
-        meta[f"region_0_{i}"] = m
-    for i, cy in enumerate(spec.short_region_ys, start=1):
-        entry, m = _region(_SHORT_SHELF, cy, _SHORT_SURFACE_Z, _SHORT_CLEARANCE)
-        regions[f"region_1_{i}"] = entry
-        meta[f"region_1_{i}"] = m
-
-    for i, (fx, fy) in enumerate(spec.small_floor, start=1):
-        name = f"cube_goal{i}"
-        cubes[name] = {"size": _SMALL_HALF, "rgba": [0.1, 0.5, 0.1, 1], "mass": 0.02}
-        regions[f"{name}_init_region"] = {
-            "target": "ground",
-            "ranges": [[fx - 0.02, fy - 0.02, fx + 0.02, fy + 0.02]],
-            "yaw_ranges": [[0, 0]],
-        }
-        init.append(["on", name, f"{name}_init_region"])
-        goals.append(name)
-    for i, (fx, fy) in enumerate(spec.tall_floor, start=1):
-        name = f"block_goal{i}"
-        cubes[name] = {
-            "size": [_TALL_HALF_XY, _TALL_HALF_XY, _TALL_HALF_Z],
-            "rgba": [0.6, 0.2, 0.2, 1],
-            "mass": 0.05,
-        }
-        regions[f"{name}_init_region"] = {
-            "target": "ground",
-            "ranges": [[fx - 0.03, fy - 0.03, fx + 0.03, fy + 0.03]],
-            "yaw_ranges": [[0, 0]],
-        }
-        init.append(["on", name, f"{name}_init_region"])
-        goals.append(name)
-    return cfg
-
-
-def write_task(cfg: dict, path: str) -> str:
-    """Write a task-config dict to ``path`` and return it."""
-    import json
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=1)
-    return path
+def goal_object_names(spec: RestockSpec) -> list[str]:
+    """The names of the goal objects (small cubes + tall blocks) for ``spec``."""
+    return [f"cube_goal{i}" for i in range(1, spec.n_small + 1)] + [
+        f"block_goal{i}" for i in range(1, spec.n_tall + 1)
+    ]

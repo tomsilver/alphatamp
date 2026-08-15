@@ -1,24 +1,21 @@
-"""Restock3D refinement with a geometric feasibility gate + failure recording.
+"""Kinematic Restock3D refinement with real-collision failure recording.
 
-The base sampler enforces a *geometric feasibility gate* before rolling out any placement — this
-is the env's feasibility model, and it is what makes an infeasible candidate genuinely fail
-(rather than letting MuJoCo physics squeeze past, the ShelfObstruct3D failure). Two families in
-v1 (F1 grasp obstruction is deferred):
+Unlike the MuJoCo build (which gated feasibility with a hand-written geometric ``place_gate``), the
+kinematic refiner **does not gate**: it runs the real pick/place controllers, which fail motion
+planning when no collision-free solution exists (the base env also reverts colliding moves). A
+candidate genuinely fails by real PyBullet collision. On each rejection the recorder runs a **real
+collision probe** (``getClosestPoints`` / ``check_body_collisions``) purely to *attribute* the
+failure — it never changes the accept/reject decision (observation-only):
 
-* **F2 over-assignment (self-inflicted, class 1).** ``Place(obj, region)`` where the plan already
-  assigned ``region`` its capacity of residents (read from the *predicted* abstract state ``s`` —
-  the plan's own intent) is rejected, naming those residents as culprits. Self-inflicted: the
-  residents are there because earlier ``Place`` steps of *this* skeleton put them there.
-* **F3 height mismatch (culprit-free, exhausted).** ``Place(tall, short_cell)`` where the object
-  is taller than the cell clearance has no valid sample — rejected culprit-free, so the record
-  ``proves_failure()`` (a clean sampler-exhaustible infeasibility).
+* **F1 grasp obstruction** (pick) — the arm at the grasp IK collides with adjacent floor clutter;
+  those blockers are class-1 *pre-existing* culprits.
+* **F2 crowding** (place) — the held block, at the region's resting pose, collides with a resident
+  the plan already placed there; those residents are class-1 *self-inflicted* culprits.
+* **F3 height mismatch** (place) — the held block, lifted just clear of the surface, collides only
+  with the shelf board above (no movable); culprit-free + exhausted, so it ``proves_failure()``.
 
-The gate is params-independent, so every attempt at a doomed step rejects → the step exhausts →
-the candidate fails there. **Observation-only:** the gate lives in the base sampler (the env's
-feasibility), and the recording subclass only *keeps* the rejections it would otherwise discard,
-so the accept/reject decisions are identical to an uninstrumented gated run. ``failure_metadata``
-emits the canonical ``refiner_metadata["failures"]`` payload the env-agnostic SPECTRE downstream
-consumes (schema shared with ``envs/shelf3d/instrumented_refiner.py``).
+``failure_metadata`` emits the canonical ``refiner_metadata["failures"]`` payload the env-agnostic
+SPECTRE downstream consumes (schema shared with ``envs/shelf3d/instrumented_refiner.py``).
 """
 
 from __future__ import annotations
@@ -27,6 +24,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
 import numpy as np
+import pybullet as p
 from bilevel_planning.bilevel_planning_graph import BilevelPlanningGraph
 from bilevel_planning.structs import RelationalAbstractState, TransitionFailure
 from bilevel_planning.trajectory_samplers.parameterized_controller_sampler import (
@@ -35,175 +33,59 @@ from bilevel_planning.trajectory_samplers.parameterized_controller_sampler impor
 from bilevel_planning.trajectory_samplers.trajectory_sampler import (
     TrajectorySamplingFailure,
 )
+from pybullet_helpers.geometry import Pose, get_pose, multiply_poses, set_pose
+from pybullet_helpers.inverse_kinematics import (
+    InverseKinematicsError,
+    check_body_collisions,
+    inverse_kinematics,
+)
 from relational_structs import GroundAtom, GroundOperator, ObjectCentricState
 
-from .geometry import place_gate
+from .place_controller import (
+    _target_uses_front,
+    front_grasp_transform,
+    top_down_grasp_transform,
+)
 from .region_geometry import RegionInfo
 
-_HEIGHT_MARGIN = 0.02  # vertical slack the hand needs above a held object (F3 gate)
-# Geometric-pick constants (demo only): a tall block (kinder's small-cube pick controller cannot
-# grasp a ~0.29 m block) is lifted in place to a held pose rather than physics-picked.
-_TALL_PICK_THRESHOLD = 0.1
-_HELD_Z = 0.6  # lifted height for a geometric pick (above the floor, clear of any shelf surface)
-_GRIPPER_CLOSED = 0.5  # a gripper value read as closed (> models._GRASP_THRESHOLD)
+_PROBE_LIFT = (
+    0.006  # lift the held object this far clear of the surface before the F3 probe
+)
+_COLLISION_MARGIN = 1e-3
 
 
 @dataclass(frozen=True)
 class _Rejection:
-    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the
-    family."""
+    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the family."""
 
     step: GroundOperator
     expected: frozenset[GroundAtom]
-    achieved: Optional[
-        frozenset[GroundAtom]
-    ]  # None if rejected before any successor state
-    culprits: tuple[
-        str, ...
-    ]  # class-1: objects the gate named (F2); empty for F3/class-2
-    family: str  # "F2" | "F3" | "C2" (physics deviation) — diagnostic, not serialized
+    achieved: Optional[frozenset[GroundAtom]]
+    culprits: tuple[str, ...]
+    family: str  # "F1" | "F2" | "F3" | "C2" — diagnostic, not serialized
 
 
 class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
-    """Gated trajectory sampler that records every rejection with its blamed objects.
-
-    Accumulates into :attr:`rejections` across calls (the refiner backtracks);
-    :func:`clear` resets between candidates and :func:`failure_metadata` reduces to the
-    deepest-step record.
-    """
+    """Real-collision trajectory sampler that records every rejection with its blamed objects."""
 
     def __init__(
         self,
         *args: object,
+        sim,
         region_infos: dict[str, RegionInfo],
-        robot_name: str,
-        height_margin: float = _HEIGHT_MARGIN,
-        geometric_place: bool = True,
-        geometric_pick_tall: bool = False,
+        robot_name: str = "robot",
         **kwargs: object,
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._sim = sim
         self._region_infos = region_infos
         self._robot_name = robot_name
-        self._height_margin = height_margin
-        # Demo only: geometrically pick objects too tall for kinder's pick controller.
-        self._geometric_pick_tall = geometric_pick_tall
-        # Data refiner uses a deterministic geometric place (physics place is flaky as the shelf
-        # fills — DD-6). The demo constructs the sampler with geometric_place=False for real
-        # physics execution.
-        self._geometric_place = geometric_place
         self.rejections: list[_Rejection] = []
 
     def clear(self) -> None:
-        """Drop accumulated rejections — call between candidates."""
         self.rejections.clear()
 
-    # -- the geometric feasibility gate -----------------------------------
-    def _gate(
-        self,
-        x: ObjectCentricState,
-        s: RelationalAbstractState,
-        a: GroundOperator,
-        ns: RelationalAbstractState,
-    ) -> Optional[_Rejection]:
-        """Reject a placement that violates height (F3) or region capacity (F2)."""
-        if a.name != "place":
-            return None  # F1 (pick-side grasp obstruction) is deferred
-        _, obj, region = a.parameters
-        info = self._region_infos.get(region.name)
-        if info is None:
-            return None
-        obj_obj = x.get_object_from_name(obj.name)
-        residents = tuple(
-            sorted(
-                atom.objects[0].name
-                for atom in s.atoms
-                if atom.predicate.name == "InRegion"
-                and atom.objects[1].name == region.name
-                and atom.objects[0].name != obj.name
-            )
-        )
-        family, culprits = place_gate(
-            info,
-            float(x.get(obj_obj, "bb_z")),
-            0.5 * float(x.get(obj_obj, "bb_x")),
-            residents,
-            self._height_margin,
-        )
-        if family is None:
-            return None
-        return _Rejection(a, frozenset(ns.atoms), None, culprits, family)
-
-    def _geometric_place_transition(
-        self,
-        x: ObjectCentricState,
-        a: GroundOperator,
-        ns: RelationalAbstractState,
-        bpg: BilevelPlanningGraph,
-    ) -> tuple[list, list]:
-        """Deterministic geometric place: teleport the held cube to the region slot,
-        open gripper.
-
-        Feasibility is already decided by the gate, so this realizes the successful
-        placement without the flaky shelf-insertion motion plan (DD-6). The abstractor
-        then reads InRegion + Stored + HandEmpty, matching ``ns``.
-        """
-        _, obj, region = a.parameters
-        info = self._region_infos.get(region.name)
-        nx = x.copy()
-        obj_o = nx.get_object_from_name(obj.name)
-        if info is not None:
-            cx, cy = info.center_xy
-            nx.set(obj_o, "x", cx)
-            nx.set(obj_o, "y", cy)
-            nx.set(obj_o, "z", info.surface_z + 0.5 * float(x.get(obj_o, "bb_z")))
-        nx.set(nx.get_object_from_name(self._robot_name), "pos_gripper", 0.0)
-        u = np.zeros(11, dtype=np.float32)
-        bpg.add_state_node(nx)
-        bpg.add_action_edge(x, u, nx)
-        achieved = self._state_abstractor(nx)
-        bpg.add_abstract_state_node(achieved)
-        bpg.add_state_abstractor_edge(nx, achieved)
-        if achieved == ns:
-            return [x, nx], [u]
-        self.rejections.append(
-            _Rejection(a, frozenset(ns.atoms), frozenset(achieved.atoms), (), "C2")
-        )
-        raise TrajectorySamplingFailure()
-
-    def _geometric_pick_transition(
-        self,
-        x: ObjectCentricState,
-        a: GroundOperator,
-        ns: RelationalAbstractState,
-        bpg: BilevelPlanningGraph,
-    ) -> tuple[list, list]:
-        """Deterministic geometric pick: lift the object to a held pose, close the
-        gripper.
-
-        For tall blocks kinder's small-cube pick controller cannot grasp (demo only).
-        The abstractor then reads Holding (lifted + gripper closed), matching ``ns``.
-        """
-        obj = a.parameters[1]
-        nx = x.copy()
-        obj_o = nx.get_object_from_name(obj.name)
-        nx.set(obj_o, "z", _HELD_Z)
-        nx.set(
-            nx.get_object_from_name(self._robot_name), "pos_gripper", _GRIPPER_CLOSED
-        )
-        u = np.zeros(11, dtype=np.float32)
-        bpg.add_state_node(nx)
-        bpg.add_action_edge(x, u, nx)
-        achieved = self._state_abstractor(nx)
-        bpg.add_abstract_state_node(achieved)
-        bpg.add_state_abstractor_edge(nx, achieved)
-        if achieved == ns:
-            return [x, nx], [u]
-        self.rejections.append(
-            _Rejection(a, frozenset(ns.atoms), frozenset(achieved.atoms), (), "C2")
-        )
-        raise TrajectorySamplingFailure()
-
+    # -- the real refinement rollout --------------------------------------
     def __call__(  # type: ignore[override]
         self,
         x: ObjectCentricState,
@@ -213,29 +95,14 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         bpg: BilevelPlanningGraph,
         rng: np.random.Generator,
     ) -> tuple[list, list]:
-        rejection = self._gate(x, s, a, ns)
-        if rejection is not None:
-            self.rejections.append(rejection)
-            raise TrajectorySamplingFailure()
-
-        if a.name == "place" and self._geometric_place:
-            return self._geometric_place_transition(x, a, ns, bpg)
-
-        if (
-            a.name == "pick"
-            and self._geometric_pick_tall
-            and float(x.get(x.get_object_from_name(a.parameters[1].name), "bb_z"))
-            > _TALL_PICK_THRESHOLD
-        ):
-            return self._geometric_pick_transition(x, a, ns, bpg)
-
         controller = self._controller_generator(a)
         params = controller.sample_parameters(x, rng)
         try:
             controller.reset(x, params)
-        except BaseException:  # pylint: disable=broad-exception-caught
-            # Physics/motion-planning failure before any successor state (class 2, no culprit).
-            self.rejections.append(_Rejection(a, frozenset(ns.atoms), None, (), "C2"))
+        except (
+            BaseException
+        ):  # noqa: BLE001  (TrajectorySamplingFailure is BaseException)
+            self._record(x, a, ns, None)
             raise TrajectorySamplingFailure()  # pylint: disable=raise-missing-from
 
         x_traj: list = [x]
@@ -244,7 +111,11 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         for _ in range(self._max_trajectory_steps):
             if controller.terminated():
                 break
-            u = controller.step()
+            try:
+                u = controller.step()
+            except BaseException:  # noqa: BLE001
+                self._record(cur, a, ns, None)
+                raise TrajectorySamplingFailure()  # pylint: disable=raise-missing-from
             try:
                 nx = self._transition_function(cur, u)
             except TransitionFailure:
@@ -262,19 +133,146 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         bpg.add_state_abstractor_edge(final_state, achieved)
         if achieved == ns:
             return x_traj, u_traj
-
-        # Passed the gate but physics did not reach the predicted state -> class-2 deviation.
-        self.rejections.append(
-            _Rejection(a, frozenset(ns.atoms), frozenset(achieved.atoms), (), "C2")
-        )
+        # Rolled out but did not reach the predicted abstract state.
+        self._record(final_state, a, ns, achieved)
         raise TrajectorySamplingFailure()
+
+    # -- rejection recording + real-collision attribution -----------------
+    def _record(
+        self,
+        state: ObjectCentricState,
+        a: GroundOperator,
+        ns: RelationalAbstractState,
+        achieved: Optional[RelationalAbstractState],
+    ) -> None:
+        culprits, family = self._probe(state, a)
+        self.rejections.append(
+            _Rejection(
+                a,
+                frozenset(ns.atoms),
+                None if achieved is None else frozenset(achieved.atoms),
+                culprits,
+                family,
+            )
+        )
+
+    def _probe(
+        self, state: ObjectCentricState, a: GroundOperator
+    ) -> tuple[tuple[str, ...], str]:
+        try:
+            if a.name == "place":
+                return self._probe_place(state, a)
+            if a.name == "pick":
+                return self._probe_pick(state, a)
+        except BaseException:  # noqa: BLE001  (a probe must never change the decision)
+            return (), "C2"
+        return (), "C2"
+
+    def _movable_ids(self) -> dict[str, int]:
+        return {
+            n: self._sim._object_name_to_pybullet_id(n)
+            for n in self._sim.movable_names()
+        }
+
+    def _probe_place(
+        self, state: ObjectCentricState, a: GroundOperator
+    ) -> tuple[tuple[str, ...], str]:
+        _, obj, region = a.parameters
+        info = self._region_infos.get(region.name)
+        if info is None:
+            return (), "C2"
+        self._sim.set_state(state.copy())
+        pcid = self._sim.physics_client_id
+        held_id = self._sim._object_name_to_pybullet_id(obj.name)
+        half_z = float(state.get(state.get_object_from_name(obj.name), "half_extent_z"))
+        saved = get_pose(held_id, pcid)
+        # Lift the object just clear of the surface at the region centre: bottom above the board,
+        # top penetrating the ceiling iff it is too tall (F3); overlapping a resident iff F2.
+        probe_pose = Pose(
+            (
+                info.center_xy[0],
+                info.center_xy[1],
+                info.surface_z + half_z + _PROBE_LIFT,
+            )
+        )
+        set_pose(held_id, probe_pose, pcid)
+        p.performCollisionDetection(physicsClientId=pcid)
+        culprits = [
+            name
+            for name, mid in self._movable_ids().items()
+            if name != obj.name
+            and check_body_collisions(
+                held_id,
+                mid,
+                pcid,
+                distance_threshold=_COLLISION_MARGIN,
+                perform_collision_detection=False,
+            )
+        ]
+        # F3: the upright held object at the region rest pose collides the shelf STRUCTURE (a board
+        # above a too-short cell, or a wall) and no movable — culprit-free, so it proves_failure().
+        shelf_hit = any(
+            check_body_collisions(
+                held_id,
+                sid,
+                pcid,
+                distance_threshold=_COLLISION_MARGIN,
+                perform_collision_detection=False,
+            )
+            for sid in self._sim.shelf_structure_ids()
+        )
+        set_pose(held_id, saved, pcid)
+        if culprits:
+            return tuple(sorted(culprits)), "F2"
+        if shelf_hit:
+            return (), "F3"
+        return (), "C2"
+
+    def _probe_pick(
+        self, state: ObjectCentricState, a: GroundOperator
+    ) -> tuple[tuple[str, ...], str]:
+        obj = a.parameters[1]
+        self._sim.set_state(state.copy())
+        pcid = self._sim.physics_client_id
+        target_pose = state.get_object_pose(obj.name)
+        half_z = float(state.get(state.get_object_from_name(obj.name), "half_extent_z"))
+        # Match the grasp the controller would actually use (front for tall blocks, top-down for
+        # cubes) so the blockers named are the ones that really obstruct THIS object's grasp.
+        grasp_tf = (
+            front_grasp_transform(half_z)
+            if _target_uses_front(state, obj.name)
+            else top_down_grasp_transform(half_z)
+        )
+        ee_pose = multiply_poses(target_pose, grasp_tf)
+        try:
+            joints = inverse_kinematics(
+                self._sim.robot.arm, ee_pose, validate=False, set_joints=True
+            )
+            self._sim.robot.arm.set_joints(joints)
+        except InverseKinematicsError:
+            return (), "F1"  # unreachable grasp; blockers unknown but pick-side
+        p.performCollisionDetection(physicsClientId=pcid)
+        target_id = self._sim._object_name_to_pybullet_id(obj.name)
+        blockers = [
+            name
+            for name, mid in self._movable_ids().items()
+            if name != obj.name
+            and mid != target_id
+            and check_body_collisions(
+                self._sim.robot.arm.robot_id,
+                mid,
+                pcid,
+                distance_threshold=_COLLISION_MARGIN,
+                perform_collision_detection=False,
+            )
+        ]
+        return tuple(sorted(blockers)), "F1"
 
 
 def _deepest_rejection(
     rejections: Sequence[_Rejection], action_plan: Sequence[GroundOperator]
 ) -> Optional[tuple[int, _Rejection]]:
-    """The rejection at the furthest step the refiner reached (backtracking retries
-    shallow)."""
+    """The rejection at the furthest step the refiner reached (backtracking retries shallow)."""
     best: Optional[tuple[int, _Rejection]] = None
     for rej in rejections:
         index = next((j for j, op in enumerate(action_plan) if op == rej.step), None)
@@ -301,11 +299,10 @@ def failure_metadata(
 ) -> list[dict]:
     """The ``refiner_metadata["failures"]`` payload for one failed candidate.
 
-    A class-1 record (F2, culprits named) carries ``culprits`` and no deviation; a
-    class-2 record (physics deviation) carries the ``dev_added``/``dev_deleted``
-    deviation; an F3 record is culprit-free with an empty deviation (a means failure) —
-    and, when the step exhausted without a budget cut, it ``proves_failure()``
-    downstream. The reduction is the deepest reached step.
+    A class-1 record (F1 blockers / F2 residents) carries ``culprits`` and no deviation; a class-2
+    record carries the ``dev_added``/``dev_deleted`` deviation; an F3 record is culprit-free with an
+    empty deviation, and when the step exhausted without a budget cut it ``proves_failure()``. The
+    reduction keeps the deepest reached step.
     """
     deepest = _deepest_rejection(sampler.rejections, action_plan)
     if deepest is None:
@@ -319,7 +316,7 @@ def failure_metadata(
         {
             "step_index": int(index),
             "schema": str(rej.step.name),
-            "args": [p.name for p in rej.step.parameters],
+            "args": [pp.name for pp in rej.step.parameters],
             "culprits": list(rej.culprits),
             "n_step": int(n_step),
             "exhausted": bool(n_step >= num_sampling_attempts_per_step),
@@ -335,26 +332,17 @@ def make_recording_sampler(
     transition_function: Callable,
     state_abstractor: Callable,
     max_trajectory_steps: int,
+    sim,
     region_infos: dict[str, RegionInfo],
-    robot_name: str,
-    height_margin: float = _HEIGHT_MARGIN,
-    geometric_place: bool = True,
-    geometric_pick_tall: bool = False,
+    robot_name: str = "robot",
 ) -> RestockRecordingSampler:
-    """Construct the gated recording sampler with the model's region geometry.
-
-    ``geometric_place=True`` (data collection) uses the deterministic geometric place;
-    pass ``False`` for a full physics place rollout. ``geometric_pick_tall=True`` (demo)
-    geometrically picks objects too tall for kinder's pick controller.
-    """
+    """Construct the real-collision recording sampler."""
     return RestockRecordingSampler(
         controller_generator=controller_generator,
         transition_function=transition_function,
         state_abstractor=state_abstractor,
         max_trajectory_steps=max_trajectory_steps,
+        sim=sim,
         region_infos=region_infos,
         robot_name=robot_name,
-        height_margin=height_margin,
-        geometric_place=geometric_place,
-        geometric_pick_tall=geometric_pick_tall,
     )

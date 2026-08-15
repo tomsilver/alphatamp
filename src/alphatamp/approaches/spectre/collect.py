@@ -45,6 +45,13 @@ from alphatamp.approaches.spectre.schema import (
 )
 
 _STICK_BUTTON_MODEL_NAME = "stickbutton2d"
+_RESTOCK3D_MODEL_NAME = "restock3d"
+
+# Restock3D's recording sampler needs the models' internal sim + region_infos, which the frozen
+# SesameModels cannot carry. `_make_env_models` stashes them here for `_make_trajectory_sampler`;
+# collection is per-process sequential (episode N's env models are built before its sampler), so a
+# module-level holder is safe (workers are separate processes).
+_restock_extras: dict[str, object] = {}
 
 
 def _refinement_seed(rule: str, problem_id: int, skeleton_idx: int) -> int:
@@ -62,10 +69,23 @@ def _make_env_models(
 ) -> SesameModels:
     """Dispatch on ``cfg.model_name`` to build the SesameModels for this env.
 
-    All supported envs fall through to the kinder factory. The kinder import is
-    deferred so callers that never build env models do not pay the import cost.
+    Restock3D builds its own kinematic models (custom env, not a kinder factory) and stashes the
+    internal sim + region_infos for the recording sampler. All other envs fall through to the kinder
+    factory. Imports are deferred so callers that never build env models do not pay the cost.
     """
     # pylint: disable=import-outside-toplevel
+    if cfg.model_name == _RESTOCK3D_MODEL_NAME:
+        from alphatamp.approaches.spectre.envs.restock3d.models import (
+            create_restock3d_models,
+        )
+
+        bundle = create_restock3d_models(
+            observation_space, action_space, int(cfg.model_kwargs["stratum"])
+        )
+        _restock_extras["sim"] = bundle.sim
+        _restock_extras["region_infos"] = bundle.region_infos
+        return bundle.models
+
     from kinder_bilevel_planning.env_models import (
         create_bilevel_planning_models,
     )
@@ -182,6 +202,17 @@ def _make_trajectory_sampler(
         )
 
         return RecordingSampler(**kwargs)
+    if cfg.model_name == _RESTOCK3D_MODEL_NAME:
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
+            RestockRecordingSampler,
+        )
+
+        return RestockRecordingSampler(
+            sim=_restock_extras["sim"],
+            region_infos=_restock_extras["region_infos"],  # type: ignore[arg-type]
+            **kwargs,
+        )
     return ParameterizedControllerTrajectorySampler(**kwargs)  # type: ignore[arg-type]
 
 
@@ -315,14 +346,20 @@ def collect_episode(
                 outcome = "error"
                 error_info = {"cls": type(exc).__name__, "msg": str(exc)}
 
-            # StickButton2D: harvest the observed failure. Observation-only -- every
-            # field below was computed by the acceptance check the refiner already ran.
-            if cfg.model_name == _STICK_BUTTON_MODEL_NAME and outcome == "fail":
+            # Harvest the observed failure (StickButton2D / Restock3D). Observation-only --
+            # every field was computed by the acceptance check the refiner already ran.
+            failure_metadata = None
+            if outcome == "fail":
                 # pylint: disable=import-outside-toplevel
-                from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
-                    failure_metadata,
-                )
-
+                if cfg.model_name == _STICK_BUTTON_MODEL_NAME:
+                    from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
+                        failure_metadata,
+                    )
+                elif cfg.model_name == _RESTOCK3D_MODEL_NAME:
+                    from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (  # pylint: disable=line-too-long
+                        failure_metadata,
+                    )
+            if failure_metadata is not None:
                 failures = failure_metadata(
                     trajectory_sampler,  # type: ignore[arg-type]
                     action_plan,
@@ -384,6 +421,11 @@ def collect_episode(
                 "stratum": slot_of(n_buttons),
                 "split": cfg.split,
                 "acyclic_pool": True,
+            }
+        elif cfg.model_name == _RESTOCK3D_MODEL_NAME:
+            gen_params = {
+                "stratum": int(cfg.model_kwargs["stratum"]),
+                "split": cfg.split,
             }
 
         provenance = ProvenanceBlock(

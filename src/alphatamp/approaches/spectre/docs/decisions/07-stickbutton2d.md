@@ -4,12 +4,78 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating"></a>
+## 2026-08-14 — Restock3D rebuilt on kinematic PyBullet: real-collision gating + front grasp
+
+<!--strip-->
+> **id** `2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating` ·
+> **status** active · **tracks** method, env-restock3d, evaluation, data ·
+> **supersedes** 2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric
+<!--/strip-->
+
+**Context.** The MuJoCo-direct Restock3D
+([2026-08-14](#2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric)) gated
+feasibility with a hand-written symbolic `place_gate` and used physics only for demos. Its demos
+exposed that a *dynamics* sim is the wrong substrate for a feasibility env: collisions are soft — the
+robot shoves blockers aside, and shelf places effectively teleport (the same inertness that killed
+ShelfObstruct3D). The user directed a rebuild on the **kinematic PyBullet** substrate that gates on
+**real PyBullet collisions**, not a toy geometric gate. Between the pivot and this build the user
+solved the blocker that stalled the first kinematic attempt (grasping a tall block and keeping it
+upright) and vendored it under `envs/restock3d/front-grasp-tall-block/`.
+
+**Decision.** Restock3D is rebuilt as a custom `ObjectCentricKinematic3DRobotEnv`. Feasibility is
+decided by real collision — the kinematic env reverts colliding moves and the pick/place controllers
+raise `TrajectorySamplingFailure` when motion planning finds no collision-free path; the refiner
+never gates. Load-bearing choices:
+- **One shelf, two vertical sections** (custom board builder; the stock `create_pybullet_shelf` only
+  does uniform spacing): a **tall section on the bottom** (surface z≈0.29, clearance 0.34) and a
+  **short section on top** (surface z≈0.64, clearance 0.15), both ceilinged (nothing open-top, a user
+  constraint). Side walls + a back panel make it read as a real cupboard. `Place(robot,obj,region)`
+  keeps its **no-`Clear`** precondition, so capacity/height stay invisible to A*.
+- **Front-grasp pick + translate-only place** (ported), so a tall block (0.24 m) stays upright
+  floor→shelf. That is the whole F3 mechanism: the upright block, taller than the 0.15 m short-cell
+  clearance, collides the board capping the short section during the place reach-in → real MP failure.
+  A tall block fits the 0.34 m tall section (with gripper headroom). Cubes keep the top-down pick +
+  analytic place; **height-adaptive dispatchers** (`RestockAdaptivePick/PlaceController`) select the
+  style per object so ONE Pick/Place operator drives both.
+- **F2+F3 lead; F1 is deferred.** F3 = held block collides the shelf structure, culprit-free,
+  `exhausted && !budget_exhausted` ⇒ `proves_failure()`. F2 = held object collides a movable resident
+  the plan placed in the region (self-inflicted, class-1). F1 (grasp obstruction) needs *relocatable*
+  goal-block blockers (non-goal clutter makes a cube permanently unpickable → unsolvable), a generator
+  redesign out of v1 scope; the machinery + probe are kept and tested one flag away.
+- Feasibility attribution is **observation-only** real-collision probes
+  (`instrumented_refiner.py`), never a decision — same schema as StickButton2D
+  (`refiner_metadata["failures"]`).
+
+The one engineering fix the front grasp needed: grasp a tall block at a **fixed reachable EE height
+(~0.13 m)**, not near its top — the arm's 45° reach envelope tops out ~0.16 m, so near-top grasping a
+0.24 m block puts the EE at ~0.23 m and IK/MP fail (the 0.127 m demo block grasped near-top happened
+to land at ~0.12 m).
+
+**Consequences.** A **Stage-0 gate** (4 cases: cube→both sections, block→tall, block→short-fails-F3)
+passes and was **video-approved by the user** after fixing three motion artifacts (arm folding
+through the base → further standoff 0.70–0.75 + base in the arm collision set; a teleporting base →
+densified base plans + more BiRRT shortcutting; barebones render → room background + cupboard walls).
+The `restock3d_v1` variant is wired end-to-end: `spectre/Restock3D-r{0..3}-v0` registered
+(`env_registry.register_restock3d_envs`), `DOMAINS["restock3d_v1"]=EMPTY_SPEC` (hint-tier; a proof
+`DomainSpec` for F3 is deferred with training), and `collect.py` restock branches build the models +
+`RestockRecordingSampler` and harvest F2/F3 evidence. The MuJoCo build is superseded and its dead
+modules (`geometry.py`, `refine.py`, task JSON) removed. **Deferred:** F1 + coverage/waste, full
+multi-seed collection → train → score, learned baselines (PIGINet/VLMPlan/LAZY), `compare_envs`
+`EnvSpec`, the physical-robot phase. Difficulty/collection numbers: `notebook/07`
+[2026-08-14](../notebook/07-stickbutton2d.md#2026-08-14-restock3d-kinematic-stage-0-gate-collection-smoke).
+
+---
+
 <a id="2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric"></a>
 ## 2026-08-14 — Restock3D — third environment: MuJoCo-direct env with a geometric feasibility gate
 
 <!--strip-->
 > **id** `2026-08-14-restock3d-third-environment-mujoco-direct-env-geometric` ·
-> **status** active · **tracks** method, evaluation, env-restock3d, data
+> **status** superseded · **tracks** method, evaluation, env-restock3d, data ·
+> **superseded_by** 2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating
+>
+> ⚠️ **SUPERSEDED** by [2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating](#2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating): the MuJoCo-direct build's demos showed dynamics is the wrong substrate (soft collisions, teleport places), so Restock3D was rebuilt on kinematic PyBullet with real-collision gating and a front grasp. The `geometry.place_gate` / `refine.evaluate_skeleton` design and its Config-B numbers below are historical — the live env gates on real collisions, not a symbolic walk.
 <!--/strip-->
 
 **Context.** SPECTRE needs a third, 3D/real-robot evaluation environment. ShelfObstruct3D was a

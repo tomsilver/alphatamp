@@ -4,6 +4,76 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-14-restock3d-kinematic-stage-0-gate-collection-smoke"></a>
+## 2026-08-14 — Restock3D kinematic Stage-0 gate + collection smoke
+
+<!--strip-->
+> **id** `2026-08-14-restock3d-kinematic-stage-0-gate-collection-smoke` · **status**
+> active · **tracks** method, env-restock3d, evaluation
+<!--/strip-->
+
+**What.** Rebuilt Restock3D on kinematic PyBullet (ADR
+[2026-08-14](../decisions/07-stickbutton2d.md#2026-08-14-restock3d-rebuilt-kinematic-pybullet-real-collision-gating))
+and drove it through: (a) a **Stage-0 gate** — the four core cases (cube→tall, cube→short,
+block→tall, block→short) via the real front-grasp / top-down controllers, rendered to mp4; (b) an
+end-to-end **collection smoke** (`collect_episode` on r2/r3 through the wired pipeline); (c)
+**solvability diagnostics** driving sequential multi-object stores.
+
+**Result.**
+- **Stage-0 gate PASS on all four, user-approved** after three motion-artifact fixes (arm folding
+  through the base → front-pick standoff 0.40–0.50 → 0.70–0.75 + base in the arm collision set; a
+  teleporting base → `remap_se2_pose_plan_to_constant_distance` + BiRRT `smooth_amt` 50 → 300;
+  barebones render → `realistic_bg=True` room + cupboard walls). F3 made unmistakable by tightening
+  the short-cell clearance 0.19 → 0.15 (block overhangs the cupboard top by ~0.09). Verified F3 is a
+  clean reach-in collision: `navigated=True`, pre-place MP fails, geometric ceiling-overlap `True`.
+- **Grasp-height fix (front pick):** the 0.24 m block is graspable only if the front grasp targets a
+  **fixed EE height ~0.13 m** (grip lower on the block), not near its top — the arm's 45° reach tops
+  out ~0.16 m, so a near-top grasp of a 0.24 m block puts the EE at ~0.23 m and IK/MP fail.
+- **Collection wiring works end-to-end** (no errors): pool-gen → per-skeleton refine → F2/F3
+  harvest. **The correct failure families appear:** r2 K_max=15 at a generous 160 s per-candidate
+  timeout gave **10 F2 (over-assignment) + 5 F3 (tall→short), first_success=None**. F2 requires a
+  *resident* — a prior *successful* place within the same skeleton — so **individual cube/block
+  placements DO refine**; the mechanism is real. But **no *full* 8-step r2 skeleton refined in the
+  first 15**, for two compounding reasons that are collection-tuning, not correctness: (i) the
+  capacity-blind hff interleaves over-assigning / wrong-section skeletons ahead of the feasible ones
+  (the intended high baseline-FP shape — but it means a feasible skeleton may sit beyond K_max=15),
+  and (ii) a fully-refinable skeleton needs all 8 steps to pass, so even a correct assignment fails if
+  one step's motion planning is flaky (≈`p_step^8`). A productive collection therefore needs a larger
+  K_max **and** more `num_sampling_attempts_per_step` (per-step retries) — both increase cost.
+- **Robustness fixes made along the way** (each keeps Stage-0 green): a well-spaced floor grid
+  (`generator._floor_spots`) so a tall block never spawns close enough to block a cube's grasp; base
+  nav ignores floor movables (consistent with `check_base_collisions=False`, so the wide base is not
+  boxed in by staging); cosmetic shelf walls made visual-only (they were spuriously blocking
+  off-centre placements); the *place* reach-in / lift excludes floor movables
+  (`_place_reach_collision_ids`) but keeps boards (F3) + shelf residents (F2).
+- **Standalone solvability diagnostics are unreliable** — a scratch rollout that did
+  `set_state(cur); sim.step(controller.step())` lets the controller's internal `set_state` overwrite,
+  stepping from the wrong state; the correct order (used by the refiner and the Stage-0 script) is
+  `u = step()` then `set_state(cur); sim.step(u)`. A second scratch bug: a *fresh* rng per attempt with
+  the controllers' fixed MP seed (0) gives no param variety and thus no feasible variation — the
+  shared *advancing* rng the Stage-0 gate uses is what varies feasibility. Trust the refiner /
+  Stage-0 harness, not ad-hoc scratch loops.
+- **r0/r1 ARE solvable, confirmed two ways** (2026-08-14, `restock3d_demos.py` + `restock3d_probe.py`).
+  Demos storing every object into a feasible region with 18 retries/store: **r0 4/5 seeds fully solved
+  (3/3 cubes)**, **r1 3/5 seeds fully solved (5/5 cubes)** — the partials are one store exhausting its
+  retries (the ~1/6 placement flakiness). The FP probe (short-circuit at the first refinable skeleton,
+  15 retries/step): **r0 baseline FP = 2, r1 = 6** (oracle FP = 0) — the naive hff order tries that
+  many over-assigning F2 skeletons before the first feasible one, and FP grows with the stratum. All
+  failures F2 (r0/r1 have no blocks, so no F3). So the earlier `first_success=None` was purely the
+  under-retried (`num_sampling=3`) collection config, not a mechanism gap.
+
+**Takeaway / next.** The env, controllers, refiner, and pipeline wiring are complete; the Stage-0
+mechanism gate is approved and stays green through all the robustness fixes; and the intended F2/F3
+evidence is produced. The remaining work to a *productive* collection (one with `first_success`
+values, i.e. a measurable baseline↔oracle FP gap) is **collection tuning + throughput**, not a
+mechanism gap: sweep K_max up until a feasible skeleton lands in-pool, raise
+`num_sampling_attempts_per_step` so an 8-step skeleton's per-step flakiness doesn't sink it, and run
+worker-parallel — each feasible candidate is ~120 s of real 3D MP. This is **deferred** (as the plan
+scoped full-scale collection) and is best paired with the training run. F1/coverage-waste, training,
+and learned baselines remain deferred.
+
+---
+
 <a id="2026-08-14-restock3d-env-built-baseline-oracle-fp-gap"></a>
 ## 2026-08-14 — Restock3D env built; baseline-oracle FP gap validated across strata r0-r3
 

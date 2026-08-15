@@ -276,6 +276,9 @@ DOMAINS: dict[str, DomainSpec] = {
     "dd2d_v4gen_shapeonly_scale07": _DD2D,
     # fresh un-shrunk control (collection-variance bound)
     "dd2d_v4gen_shapeonly_fresh": _DD2D,
+    # restock3d_v1: kinematic 3D restock. Hint-tier (EMPTY_SPEC) for v1 -- a proof-tier
+    # DomainSpec for F3 is deferred with training (F2+F3 lead; F1/coverage/waste deferred).
+    "restock3d_v1": EMPTY_SPEC,
 }
 
 

@@ -1,104 +1,107 @@
-"""Region geometry for Restock3D.
+"""Region geometry for the **kinematic** Restock3D (single multi-section shelf).
 
-Regions (``region_<shelf>_<idx>``) are 6-value local boxes on a cupboard shelf declared in the
-task JSON; they are NOT objects in the env state. The abstractor (``InRegion``) and the
-place-to-region controller need each region's world centre, and the geometric feasibility gate
-(F2 slot occupancy, F3 height) needs each region's footprint and its *cell clearance* (the
-vertical gap above the region's shelf surface). This module reconstructs all of that from the
-task config plus the cupboard's pose in the current state.
+A *region* is a single-object placement target on one **section** of the one shelf: section 0 is
+the **tall** section (bottom, large clearance — a tall block fits) and section 1 is the **short**
+section (top, small clearance — a tall block collides with the board capping it). Regions are NOT
+PyBullet bodies and NOT objects in the low-level state — they are pure metadata (world centre,
+footprint, the section's placement surface z, and the section's *cell clearance*, i.e. the vertical
+gap to the board above). The abstractor (``InRegion``) reads footprint + surface z; the
+region-parameterised place controller reads centre + surface z; feasibility itself is decided by
+real PyBullet collision (a tall block collides with the short-section ceiling), not by this
+metadata.
 
-Adapted from ``envs/shelf3d/region_geometry.py`` (same cupboard yaw transform), broadened to a
-``region_`` name filter and enriched with footprint half-extents + cell clearance. The cupboard
-transform (yaw ``theta`` about +z): local ``(lx, ly)`` -> world
-``(cx + cos*lx - sin*ly, cy + sin*lx + cos*ly)``.
+The shelf is a single body whose boards are placed at cumulative per-section gaps (:func:`section_surfaces`
+and :func:`board_center_zs` are the shared geometry, consumed by :mod:`kinematic_env` when it builds
+the boards and here when regions are laid out). Everything is **deterministic in the stratum** (no
+per-seed jitter) so the models factory and the collection env agree without threading the problem id.
+Names ``region_0_{i}`` (tall section) / ``region_1_{i}`` (short section) match the prior build so
+``compare``/downstream code is unchanged.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
-import numpy as np
-from spatialmath import UnitQuaternion
+# STRATA[stratum] = (n_small, n_tall, n_tall_regions, n_short_regions)
+from .generator import STRATA
 
-_CUPBOARD_NAME = "cupboard_1"
-_REGION_PREFIX = "region_"
+_TALL_SECTION, _SHORT_SECTION = 0, 1
 
 
 @dataclass(frozen=True)
 class RegionInfo:
-    """A shelf region: world centre, footprint, the shelf it sits on, and its cell
+    """A shelf region: world centre, footprint, the section it sits on, and its cell
     clearance."""
 
     name: str
-    shelf: int
-    center_xy: tuple[float, float]  # world (x, y) of the region box centre
+    shelf: int  # section index: 0 = tall (bottom), 1 = short (top)
+    center_xy: tuple[
+        float, float
+    ]  # world (x, y) of the region centre (object resting xy)
     half_xy: tuple[float, float]  # world-aligned footprint half-extents (x, y)
     cell_clearance: (
-        float  # vertical gap above the region's shelf surface (for F3 height gate)
+        float  # vertical gap above the section surface (F3 height reference)
     )
-    surface_z: float  # world z of the region's shelf surface (place height reference)
+    surface_z: float  # world z of the region's shelf placement surface
 
 
-def _cupboard_yaw(state, cupboard) -> float:
-    q = UnitQuaternion(
-        s=state.get(cupboard, "qw"),
-        v=(
-            state.get(cupboard, "qx"),
-            state.get(cupboard, "qy"),
-            state.get(cupboard, "qz"),
-        ),
-    )
-    return float(q.rpy()[2])
+def section_surfaces(config) -> list[tuple[float, float]]:
+    """``[(surface_z, clearance), ...]`` for section 0 (tall, bottom) then 1 (short, top).
 
-
-def load_region_infos(task_json_path: str, state) -> dict[str, RegionInfo]:
-    """World geometry of every ``region_*`` cupboard shelf region in the task JSON.
-
-    ``cell_clearance`` / ``surface_z`` come from the task JSON's ``region_meta`` block (written by
-    the generator: per-region cell clearance and shelf surface z), defaulting to a large clearance
-    and the region box's own z-floor when absent (so an un-annotated scene still loads).
+    Section 0's surface is ``bottom_surface_z``; section 1 sits one board-thickness above the tall
+    section's ceiling board. Both are read from the env ``config`` (``bottom_surface_z``,
+    ``section_clearances``, ``shelf_height``).
     """
-    cupboard = state.get_object_from_name(_CUPBOARD_NAME)
-    cx, cy = state.get(cupboard, "x"), state.get(cupboard, "y")
-    theta = _cupboard_yaw(state, cupboard)
-    ct, st = np.cos(theta), np.sin(theta)
+    t = config.shelf_height
+    surfaces: list[tuple[float, float]] = []
+    surf = config.bottom_surface_z
+    for clearance in config.section_clearances:
+        surfaces.append((float(surf), float(clearance)))
+        surf = surf + clearance + t  # next section's surface = this ceiling board's top
+    return surfaces
 
-    with open(task_json_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    meta = cfg.get("region_meta", {})
+
+def board_center_zs(config) -> list[float]:
+    """World z of each board's centre: one board below every section surface, plus a top board
+    capping the last (short) section — ``len(section_clearances) + 1`` boards total."""
+    t = config.shelf_height
+    surfaces = section_surfaces(config)
+    centers = [surf - t / 2 for surf, _ in surfaces]
+    last_surf, last_clear = surfaces[-1]
+    centers.append(last_surf + last_clear + t / 2)  # ceiling board of the top section
+    return [float(z) for z in centers]
+
+
+def _row_xs(n: int, center_x: float, pitch: float) -> list[float]:
+    """``n`` region centres evenly pitched about ``center_x`` (along the shelf width)."""
+    span = (n - 1) * pitch
+    x0 = center_x - span / 2
+    return [round(x0 + i * pitch, 4) for i in range(n)]
+
+
+def compute_region_infos(config, stratum: int) -> dict[str, RegionInfo]:
+    """World geometry of every region for ``stratum``, from the env ``config``.
+
+    Region centres are laid out along the shelf width (world x) at the shelf's front strip
+    (world y), on each section's placement surface (world z). Section 0 (tall) and section 1
+    (short) share the single shelf's (x, y); they differ in surface z and clearance.
+    """
+    _, _, n_tall_reg, n_short_reg = STRATA[stratum]
+    surfaces = section_surfaces(config)
+    sx, sy = config.shelf_pose.position[0], config.shelf_pose.position[1]
+    front_y = sy - config.region_front_offset  # front strip faces -y (robot side)
 
     infos: dict[str, RegionInfo] = {}
-    for name, r in cfg.get("regions", {}).items():
-        if r.get("target") != _CUPBOARD_NAME or "shelf" not in r:
-            continue
-        if not name.startswith(_REGION_PREFIX):
-            continue  # *_init_region are spawn-only, not planning objects
-        box = r["ranges"][0]  # [lx0, ly0, z0, lx1, ly1, z1]
-        lx = 0.5 * (box[0] + box[3])
-        ly = 0.5 * (box[1] + box[4])
-        hlx = 0.5 * abs(box[3] - box[0])
-        hly = 0.5 * abs(box[4] - box[1])
-        wx = cx + ct * lx - st * ly
-        wy = cy + st * lx + ct * ly
-        # yaw multiples of 90 deg swap x/y half-extents; use |cos|/|sin| to map generally.
-        half_x = abs(ct) * hlx + abs(st) * hly
-        half_y = abs(st) * hlx + abs(ct) * hly
-        rmeta = meta.get(name, {})
-        infos[name] = RegionInfo(
-            name=name,
-            shelf=int(r["shelf"]),
-            center_xy=(float(wx), float(wy)),
-            half_xy=(float(half_x), float(half_y)),
-            cell_clearance=float(rmeta.get("cell_clearance", 1.0)),
-            surface_z=float(rmeta.get("surface_z", box[2])),
-        )
+    for section, n_reg in ((_TALL_SECTION, n_tall_reg), (_SHORT_SECTION, n_short_reg)):
+        surf_z, clearance = surfaces[section]
+        xs = _row_xs(n_reg, sx, config.region_pitch)
+        for i, rx in enumerate(xs, start=1):
+            infos[f"region_{section}_{i}"] = RegionInfo(
+                name=f"region_{section}_{i}",
+                shelf=section,
+                center_xy=(float(rx), float(front_y)),
+                half_xy=(config.region_half_x, config.region_half_y),
+                cell_clearance=float(clearance),
+                surface_z=float(surf_z),
+            )
     return infos
-
-
-def shelf_surface_z_from_cube(state, movable_on_shelf) -> float:
-    """Shelf surface height read off a cube currently resting on that shelf
-    (fallback)."""
-    return float(
-        state.get(movable_on_shelf, "z") - state.get(movable_on_shelf, "bb_z") / 2
-    )

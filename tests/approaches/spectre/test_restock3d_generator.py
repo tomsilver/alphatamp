@@ -31,24 +31,19 @@ def test_sigma_definitions() -> None:
     assert spec.sigma_short == 4 + (2 - 1) - 3
 
 
-def test_build_task_config_structure() -> None:
-    cfg = G.build_task_config(G.build_spec(3, 3))
-    assert cfg["scene"] == "lab2"
-    assert cfg["fixtures"]["cupboard"]["cupboard_1"]["shelf_heights"] == [0.508, 0.254]
-    # every region_* has region_meta with a clearance + surface_z
-    region_names = [n for n in cfg["regions"] if n.startswith("region_")]
-    assert region_names
-    for name in region_names:
-        assert name in cfg["region_meta"]
-        assert "cell_clearance" in cfg["region_meta"][name]
-        assert "surface_z" in cfg["region_meta"][name]
-    # tall-cell regions have the large clearance, short-cell the small one
-    for name in region_names:
-        clr = cfg["region_meta"][name]["cell_clearance"]
-        assert clr in (G._TALL_CLEARANCE, G._SHORT_CLEARANCE)
-    # goal_objects lists every goal cube/block and goal_state stays EMPTY (kinder checker)
-    assert cfg["goal_state"] == []
-    assert len(cfg["goal_objects"]) == 4 + 2  # r3 = 4 small + 2 tall goal objects
+def test_goal_object_names() -> None:
+    # r3 = 4 small + 2 tall goal objects; helper lists them in cube-then-block order.
+    names = G.goal_object_names(G.build_spec(3, 3))
+    assert names == [f"cube_goal{i}" for i in range(1, 5)] + [
+        f"block_goal{i}" for i in range(1, 3)
+    ]
+
+
+def test_clutter_rings_first_cube() -> None:
+    # Strata with clutter (r2, r3) ring the first cube; r0/r1 have none.
+    assert not G.build_spec(0, 1).clutter_floor
+    spec = G.build_spec(0, 3)
+    assert len(spec.clutter_floor) == G._CLUTTER_PER_STRATUM[3]
 
 
 def test_problem_id_recovers_stratum() -> None:
