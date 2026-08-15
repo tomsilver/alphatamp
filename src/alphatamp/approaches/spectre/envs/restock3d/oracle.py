@@ -96,27 +96,48 @@ def build_skeleton(
     s0: RelationalAbstractState,
     assignment: list[tuple[str, str]],
     lifted_ops: dict[str, object],
+    blockers: Optional[dict[str, frozenset[str]]] = None,
 ) -> tuple[list[RelationalAbstractState], list[GroundOperator]]:
-    """Ground pick+place for each (obj, region) pair (FFD order) and STRIPS-progress the
-    abstract state to the interleaved ``(state_plan, action_plan)`` the refiner
-    consumes."""
+    """Ground the feasible skeleton and STRIPS-progress it to the interleaved
+    ``(state_plan, action_plan)`` the refiner consumes.
+
+    **Relocation phase first:** every clutter that blocks a goal's grasp (F1) is relocated to a
+    buffer up front (``Pick(clutter)+PlaceBuffer(clutter)``). Clutter is never a goal, so clearing it
+    before any goal pick is a valid order and makes each blocked goal's F1 satisfied. Then the normal
+    ``Pick+Place`` per (obj, region) pair (FFD order).
+    """
     pick = lifted_ops["pick"]
     place = lifted_ops["place"]
+    place_buffer = lifted_ops.get("place_buffer")
     robot = x0.get_object_from_name("robot")  # type: ignore[attr-defined]
     state_plan: list[RelationalAbstractState] = [s0]
     action_plan: list[GroundOperator] = []
     state = s0
+
+    def _apply(op: GroundOperator) -> None:
+        nonlocal state
+        ns_atoms = (state.atoms - op.delete_effects) | op.add_effects
+        state = RelationalAbstractState(ns_atoms, state.objects)
+        action_plan.append(op)
+        state_plan.append(state)
+
+    # Relocation phase: relocate each blocking clutter to a buffer before any goal is picked.
+    relocated: set[str] = set()
+    for clut in sorted({c for cs in (blockers or {}).values() for c in cs}):
+        assert (
+            place_buffer is not None
+        ), "PlaceBuffer operator missing but clutter is present"
+        obj = x0.get_object_from_name(clut)  # type: ignore[attr-defined]
+        _apply(pick.ground((robot, obj)))  # type: ignore[attr-defined]
+        _apply(place_buffer.ground((robot, obj)))  # type: ignore[attr-defined]
+        relocated.add(clut)
+
+    # Store phase.
     for obj_name, region_name in assignment:
         obj = x0.get_object_from_name(obj_name)  # type: ignore[attr-defined]
         region = Object(region_name, RegionType)
-        for op in (
-            pick.ground((robot, obj)),  # type: ignore[attr-defined]
-            place.ground((robot, obj, region)),  # type: ignore[attr-defined]
-        ):
-            ns_atoms = (state.atoms - op.delete_effects) | op.add_effects
-            state = RelationalAbstractState(ns_atoms, state.objects)
-            action_plan.append(op)
-            state_plan.append(state)
+        _apply(pick.ground((robot, obj)))  # type: ignore[attr-defined]
+        _apply(place.ground((robot, obj, region)))  # type: ignore[attr-defined]
     return state_plan, action_plan
 
 
@@ -143,9 +164,18 @@ def refine_oracle(
         goal_names = _restock_extras["goal_names"]
         lifted = {op.name: op for op in env_models.operators}
         assignment = solve_assignment(region_infos, goal_names)  # type: ignore[arg-type]
-        skeleton = build_skeleton(x0, s0, assignment, lifted)  # type: ignore[arg-type]
+        # Compute the F1 blockers (via grasp_blockers on the sim at x0) so the oracle relocates them
+        # before the blocked goals; empty on the no-clutter strata (r0/r2).
+        tables = build_tables(
+            region_infos,  # type: ignore[arg-type]
+            goal_names,  # type: ignore[arg-type]
+            sim=_restock_extras.get("sim"),
+            state=x0,
+        )
+        skeleton = build_skeleton(
+            x0, s0, assignment, lifted, blockers=tables.blockers  # type: ignore[arg-type]
+        )
         state_plan, action_plan = skeleton
-        tables = build_tables(region_infos, goal_names)  # type: ignore[arg-type]
         assert is_feasible_skeleton(
             action_plan, tables
         ), "oracle constructed an abstractly-infeasible skeleton"

@@ -71,6 +71,30 @@ _PLACE_JITTER = 0.015
 #: ``min_placement_dist`` so it is released, but not penetrating the board).
 _PLACE_Z_PAD = 3e-3
 
+#: Floor buffer zone for relocated F1 clutter: an empty band between the staging floor (goals/clutter
+#: rest at y <= ~0.42) and the shelf front (regions at y ~ 1.35), reachable by a top-down place. A cube
+#: resting here (floor height, xy in the zone) is abstracted ``OnBuffer`` -- off every goal's grasp --
+#: not ``OnFloor``, so ``Pick`` (precond ``OnFloor``) will not re-pick it. Buffers are controller-side
+#: placement spots, NOT abstract regions (a floor "region" at surface_z ~ 0 would be surface-z-matched
+#: and wrongly emit ``Stored``; see decisions/07 2026-08-15).
+BUFFER_SPOTS: list[tuple[float, float]] = [
+    (0.30, 0.70),
+    (0.60, 0.70),
+    (0.30, 0.95),
+    (0.60, 0.95),
+]
+_BUFFER_ZONE_X = (0.10, 0.80)
+_BUFFER_ZONE_Y = (0.55, 1.10)
+
+
+def in_buffer_zone(x: float, y: float) -> bool:
+    """Whether a floor xy lies inside the relocation buffer band (used by the abstractor to emit
+    ``OnBuffer`` instead of ``OnFloor``)."""
+    return (
+        _BUFFER_ZONE_X[0] <= x <= _BUFFER_ZONE_X[1]
+        and _BUFFER_ZONE_Y[0] <= y <= _BUFFER_ZONE_Y[1]
+    )
+
 
 #: Stock top-down grasp offset above the object centre (works for short objects).
 _STOCK_GRASP_Z = 0.02
@@ -89,8 +113,21 @@ def _arm_collision_ids(sim) -> set[int]:
 
 def _smooth_base_plan(plan, sim):
     """Densify an SE2 base plan to constant small steps so the base glides directly to the target
-    instead of teleporting between sparse motion-planner waypoints."""
-    return remap_se2_pose_plan_to_constant_distance(plan, sim.config.max_action_mag / 2)
+    instead of teleporting between sparse motion-planner waypoints.
+
+    The substrate's SE2 densifier interpolates rotation along the shortest arc, which for a plan whose
+    consecutive waypoints straddle the ``±π`` branch cut produces a value marginally outside
+    ``[-π, π]`` and trips ``SE2Pose``'s range assertion. That is purely a smoothing artefact -- the
+    raw waypoints are valid poses and the controller's per-step SE2 delta already takes the shortest
+    arc -- so on that boundary failure we fall back to the un-densified plan (coarser base steps, same
+    endpoints). Surfaced by the buffer place, whose base start/goal orientations can straddle the cut.
+    """
+    try:
+        return remap_se2_pose_plan_to_constant_distance(
+            plan, sim.config.max_action_mag / 2
+        )
+    except AssertionError:
+        return plan
 
 
 def _place_reach_collision_ids(sim, state) -> set[int]:
@@ -105,6 +142,28 @@ def _place_reach_collision_ids(sim, state) -> set[int]:
         mid = sim._object_name_to_pybullet_id(name)
         if mid != held and state.get_object_pose(name).position[2] > 0.2:
             ids.add(mid)
+    return ids
+
+
+def _base_nav_collision_ids(
+    sim, state, exclude: frozenset[str] = frozenset()
+) -> set[int]:
+    """Base-navigation obstacle set: shelf boards + floor-resting movables, minus ``exclude`` (the
+    object being approached or carried).
+
+    Previously the four ``get_base_plan`` call sites passed only ``shelf_structure_ids()``, so floor
+    clutter was invisible to both the base motion planner and (with ``check_base_collisions`` on) the
+    step-time reversion -- the mobile base drove straight through floor blocks. Including floor
+    movables here routes the base *around* them. A movable resting above the floor (z > 0.2) is a
+    shelf resident, out of the base's swept volume and already covered by the reach-in set, so only
+    floor-level movables count. ``exclude`` drops the pick/place target itself: nav must not avoid the
+    thing it is reaching for or carrying."""
+    ids = set(sim.shelf_structure_ids())
+    for name in sim.movable_names():
+        if name in exclude:
+            continue
+        if state.get_object_pose(name).position[2] < 0.2:
+            ids.add(sim._object_name_to_pybullet_id(name))
     return ids
 
 
@@ -130,7 +189,13 @@ class RestockPickController(GroundPickController):
                 target_pose, self._current_params[0], self._current_params[1]
             )
             base_plan = get_base_plan(
-                sim, target_base_pose, sim.shelf_structure_ids(), None, None
+                sim,
+                target_base_pose,
+                _base_nav_collision_ids(
+                    sim, self._current_state, frozenset({self.objects[1].name})
+                ),
+                None,
+                None,
             )
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
@@ -313,12 +378,14 @@ class RegionPlaceController(BasePlaceController):
             target_base_pose = get_target_robot_pose_from_parameters(
                 self._target_place_pose_se2, 0.8, np.pi / 2
             )
-            # Base nav ignores floor movables (the kinematic base may overlap them,
-            # check_base_collisions=False); the carried object still must clear the shelf.
+            # Base nav routes around floor movables (minus the carried object); the carried object
+            # still must clear the shelf (via held_object/held_tf).
             base_plan = get_base_plan(
                 self._sim,
                 target_base_pose,
-                self._sim.shelf_structure_ids(),
+                _base_nav_collision_ids(
+                    self._sim, self._current_state, frozenset({self.objects[1].name})
+                ),
                 grasped_object_id,
                 grasped_object_transform,
             )
@@ -338,25 +405,49 @@ class RegionPlaceController(BasePlaceController):
         raise ValueError("Invalid state")
 
 
-def get_base_plan(sim, target_base_pose, collision_bodies, held_object, held_tf):
+def get_base_plan(
+    sim, target_base_pose, collision_bodies, held_object, held_tf, allow_fallback=True
+):
     """Densified base motion plan to ``target_base_pose`` carrying the held object (or None).
 
     The plan is remapped to constant small steps so the base glides directly to the target instead
     of teleporting between sparse motion-planner waypoints.
-    """
-    plan = run_single_arm_mobile_base_motion_planning(
-        sim.robot,
-        sim.robot.base.get_pose(),
-        target_base_pose,
-        collision_bodies=collision_bodies,
-        seed=0,
-        held_object=held_object,
-        base_link_to_held_obj=held_tf,
-        hyperparameters=MotionPlanningHyperparameters(
-            birrt_smooth_amt=_BASE_SMOOTH_AMT
-        ),
-    )
-    return None if plan is None else _smooth_base_plan(plan, sim)
+
+    ``collision_bodies`` now includes floor movables (see ``_base_nav_collision_ids``) so the base
+    routes *around* floor clutter rather than driving through it. But the mobile base is wide
+    (~0.55x0.51 m) relative to the ~0.30 m floor-object spacing, so in a dense scene the base can be
+    geometrically boxed and the birrt returns no path. Rather than hard-fail the pick (which would
+    collapse solvability -- an empirical ~0% oracle certification, decisions/07 2026-08-15), we fall
+    back to planning against the *minimal* obstacle set (shelf boards only): the pre-fix behaviour
+    that lets the base still reach the target. Avoidance is therefore **best-effort** -- the base
+    avoids floor movables wherever a collision-free path exists and only reverts to a straight path
+    when boxed. Because the fallback path may overlap floor movables, step-time base-collision
+    enforcement (``Restock3DEnvConfig.check_base_collisions``) must stay OFF, or it would revert the
+    fallback moves and re-break navigation."""
+
+    def _plan(bodies):
+        plan = run_single_arm_mobile_base_motion_planning(
+            sim.robot,
+            sim.robot.base.get_pose(),
+            target_base_pose,
+            collision_bodies=bodies,
+            seed=0,
+            held_object=held_object,
+            base_link_to_held_obj=held_tf,
+            hyperparameters=MotionPlanningHyperparameters(
+                birrt_smooth_amt=_BASE_SMOOTH_AMT
+            ),
+        )
+        return None if plan is None else _smooth_base_plan(plan, sim)
+
+    plan = _plan(collision_bodies)
+    if plan is None and allow_fallback:
+        shelf_only = set(sim.shelf_structure_ids())
+        if (
+            set(collision_bodies) != shelf_only
+        ):  # avoid a pointless second identical plan
+            plan = _plan(shelf_only)
+    return plan
 
 
 def create_lifted_controllers(
@@ -416,7 +507,24 @@ def create_lifted_controllers(
             high=np.array([_PLACE_JITTER, _PLACE_JITTER]),
         ),
     )
-    return {"pick": pick, "place": place}
+
+    class BufferPlaceControllerInner(BufferPlaceController):
+        """BufferPlaceController bound to this problem's ``sim`` for the lifted controller."""
+
+        def __init__(self, objects):  # type: ignore[no-untyped-def]
+            super().__init__(objects, sim)
+
+    robot = Variable("?robot", Kinematic3DRobotType)
+    target = Variable("?target", Kinematic3DCuboidType)
+    place_buffer: LiftedParameterizedController = LiftedParameterizedController(
+        [robot, target],
+        BufferPlaceControllerInner,
+        Box(
+            low=np.array([-_PLACE_JITTER, -_PLACE_JITTER]),
+            high=np.array([_PLACE_JITTER, _PLACE_JITTER]),
+        ),
+    )
+    return {"pick": pick, "place": place, "place_buffer": place_buffer}
 
 
 # ==========================================================================================
@@ -549,7 +657,13 @@ class RestockFrontPickController(GroundPickController):
                 target_pose, self._current_params[0], self._current_params[1]
             )
             base_plan = get_base_plan(
-                sim, target_base_pose, sim.shelf_structure_ids(), None, None
+                sim,
+                target_base_pose,
+                _base_nav_collision_ids(
+                    sim, self._current_state, frozenset({self.objects[1].name})
+                ),
+                None,
+                None,
             )
             if base_plan is None:
                 raise TrajectorySamplingFailure("Base motion planning failed")
@@ -698,12 +812,14 @@ class RestockFrontPlaceController(BasePlaceController):
             target_base_pose = get_target_robot_pose_from_parameters(
                 self._target_place_pose_se2, _FRONT_PLACE_BASE_DISTANCE, np.pi / 2
             )
-            # Base nav ignores floor movables (kinematic base may overlap them); the carried block
-            # still must clear the shelf.
+            # Base nav routes around floor movables (minus the carried block); the carried block
+            # still must clear the shelf (via held_object/held_tf).
             base_plan = get_base_plan(
                 self._sim,
                 target_base_pose,
-                self._sim.shelf_structure_ids(),
+                _base_nav_collision_ids(
+                    self._sim, self._current_state, frozenset({self.objects[1].name})
+                ),
                 grasped_object_id,
                 grasped_object_transform,
             )
@@ -718,6 +834,118 @@ class RestockFrontPlaceController(BasePlaceController):
             return self.pre_place(collision_ids=reach_ids)
         if self._pre_place and not self._opened_gripper:
             return self.open_gripper()
+        if self._opened_gripper and not self._lifted:
+            return self.lift(collision_ids=reach_ids)
+        raise ValueError("Invalid state")
+
+
+# ==========================================================================================
+# Buffer place: relocate an F1 clutter cube to a free floor buffer spot (top-down place onto the
+# floor, symmetric to the top-down cube pick). Clears a cube goal's obstructed grasp so it can be
+# picked; the buffered cube is abstracted OnBuffer (off every grasp), not Stored.
+# ==========================================================================================
+
+#: Top-down pre-place back-off along the tool approach axis (tool -z == up for a top-down grasp).
+_BUFFER_PLACE_STANDOFF = 0.10
+#: Base standoff distance for the floor buffer place (same envelope as the top-down floor pick).
+_BUFFER_PLACE_BASE_DISTANCE = float(np.mean(MOVE_TO_TARGET_DISTANCE_BOUNDS))
+
+
+class BufferPlaceController(BasePlaceController):
+    """Top-down place of a (top-down-grasped) cube onto a free floor buffer spot.
+
+    Mirrors :class:`RestockFrontPlaceController`'s translate-only place (``ee = desired_object_pose .
+    grasp^-1``) but rests the cube FLAT on the floor at a chosen buffer spot instead of a shelf
+    region -- and because the cube was grasped TOP-DOWN, the derived EE pose places it top-down from
+    above. Registered for the ``PlaceBuffer(robot, target)`` operator (2 params, no region).
+    """
+
+    def __init__(self, objects: Sequence[Object], sim) -> None:
+        # BasePlaceController unpacks (robot, target, target_table); the buffer place has no table
+        # (it rests on the floor), so pass the target as an unused stand-in -- step() computes the
+        # buffer pose directly and never reads a target table.
+        robot, target = objects
+        super().__init__([robot, target, target], sim)
+
+    def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
+        del x
+        return rng.uniform(-_PLACE_JITTER, _PLACE_JITTER, size=2)
+
+    def reset(self, x: ObjectCentricState, params: Any) -> None:
+        self._current_params = params
+        self._current_plan = None
+        self._current_state = x
+
+    def terminated(self) -> bool:
+        return self._lifted
+
+    def _free_buffer_spot(self, state: ObjectCentricState) -> tuple[float, float]:
+        """First buffer spot not already occupied by another movable (>= 0.12 m away)."""
+        occupied = []
+        for name in self._sim.movable_names():
+            if name == self._target.name:
+                continue
+            pos = state.get_object_pose(name).position
+            occupied.append((pos[0], pos[1]))
+        for bx, by in BUFFER_SPOTS:
+            if all((bx - ox) ** 2 + (by - oy) ** 2 > 0.12**2 for ox, oy in occupied):
+                return bx, by
+        return BUFFER_SPOTS[0]
+
+    def step(self) -> np.ndarray:
+        assert self._current_state is not None
+        assert self._current_params is not None
+        assert isinstance(self._current_state, Kinematic3DObjectCentricState)
+
+        if self._current_plan is None:
+            self._sim.set_state(self._current_state)
+            grasped_object_id = self._sim._grasped_object_id
+            grasped_object_transform = self._sim._grasped_object_transform
+            assert grasped_object_transform is not None
+
+            bx, by = self._free_buffer_spot(self._current_state)
+            px, py = float(self._current_params[0]), float(self._current_params[1])
+            half = self._current_state.get_object_half_extents(self._target.name)
+            # Rest the cube flat on the FLOOR at the buffer spot; a cube is symmetric -> identity.
+            desired_object_z = float(half[2]) + _PLACE_Z_PAD
+            desired_object_pose = Pose(
+                (bx + px, by + py, desired_object_z), (0.0, 0.0, 0.0, 1.0)
+            )
+            # Translate-only from the ACTUAL (top-down) grasp -> the EE places top-down from above.
+            self._target_place_pose_world = multiply_poses(
+                desired_object_pose, grasped_object_transform.invert()
+            )
+            self._pre_place_pose_world = multiply_poses(
+                self._target_place_pose_world, Pose((0.0, 0.0, -_BUFFER_PLACE_STANDOFF))
+            )
+            self._target_place_pose_se2 = SE2Pose(bx + px, by + py, 0.0)
+            target_base_pose = get_target_robot_pose_from_parameters(
+                self._target_place_pose_se2, _BUFFER_PLACE_BASE_DISTANCE, np.pi / 2
+            )
+            base_plan = get_base_plan(
+                self._sim,
+                target_base_pose,
+                _base_nav_collision_ids(
+                    self._sim, self._current_state, frozenset({self._target.name})
+                ),
+                grasped_object_id,
+                grasped_object_transform,
+            )
+            if base_plan is None:
+                raise TrajectorySamplingFailure("Base motion planning failed")
+            self._current_plan = base_plan[1:]
+
+        # Avoid all env bodies except the held cube during the (empty-buffer-spot) descent.
+        reach_ids = _arm_collision_ids(self._sim) - {self._sim._grasped_object_id}
+        if not self._navigated:
+            return self.navigate()
+        if self._navigated and not self._pre_place:
+            return self.pre_place(collision_ids=reach_ids)
+        if self._pre_place and not self._opened_gripper:
+            return self.open_gripper()
+        # lift() already motion-plans the (now empty) arm back to HOME, so no separate retract phase
+        # is needed -- the same terminal phase the region place uses, leaving the next pick a clean
+        # start (arm home, gripper open, nothing grasped).
         if self._opened_gripper and not self._lifted:
             return self.lift(collision_ids=reach_ids)
         raise ValueError("Invalid state")

@@ -4,6 +4,75 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer"></a>
+## 2026-08-15 — Restock3D F1 clutter re-added: relocation buffer, best-effort base collision, r1-only recipe
+
+<!--strip-->
+> **id** `2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer` · **status**
+> active · **tracks** method, env-restock3d, evaluation, data
+<!--/strip-->
+
+**Context.** Restock3D v1 deliberately shipped without F1 grasp-obstruction clutter
+(`decisions/07` 2026-08-14: regions single-object, `blockers=∅`, no relocation), leading with F2
+(over-assignment) + F3 (tall-into-short). We now re-add F1 per `docs/restock3d_proposal.md` §2–4:
+movable clutter beside a goal so a top-down grasp collides, plus the relocation machinery that keeps
+instances feasible. A prerequisite bug was flagged: in demos **the mobile base drives through floor
+blocks** with no collision. Autonomous overnight run; numbers in
+[`notebook/07` 2026-08-15](../notebook/07-stickbutton2d.md#2026-08-15-restock3d-f1-clutter-build-mechanism-calibration).
+
+**Decision.**
+- **Base collision is best-effort at the planner, not enforced.** The mobile base footprint is
+  ~0.55×0.51 m vs ~0.30 m floor-object spacing, so `check_base_collisions=True` + floor movables in
+  the base-nav set collapses oracle certification to ~0% (the wide base is boxed by the dense floor).
+  Fix: `place_controller._base_nav_collision_ids` adds floor movables (minus the approached/carried
+  target) to every `get_base_plan` site; `get_base_plan` falls back to a shelf-only (straight) path
+  when the base is boxed; `check_base_collisions` stays **False** (step-time reversion is incompatible
+  with the fallback). The base avoids floor blocks where a collision-free path exists, else reverts to
+  the pre-fix behaviour. Full enforcement needs a navigable floor layout (deferred).
+- **F1 targets CUBE goals; clutter at +y (toward the shelf), gap ~0.07 m** (Gate-1 sweep). A cube's
+  top-down grasp is obstructed for a +y clutter at 0.05–0.10 m (reliably, clutter itself pickable, no
+  deadlock cycle); +x/−x never block a top-down grasp; a tall block's *front* grasp is not blockable
+  by side clutter. `grasp_blockers(sim, obj, state)` is factored out of `_probe_pick` as the single
+  source of truth (refiner probe + eager table + oracle agree).
+- **Relocation = a DD2D-style `PlaceBuffer(robot, target)` → `OnBuffer` + a controller-side floor
+  buffer zone** (`BUFFER_SPOTS`/`in_buffer_zone`), NOT abstract regions (a floor region at surface_z≈0
+  would surface-z-match and wrongly emit `Stored`). `BufferPlaceController` mirrors the local
+  `RegionPlaceController` (top-down place onto a free floor spot; `lift()` already returns the empty
+  arm to HOME). **The floor is registered as a placement surface**
+  (`ObjectCentricRestock3DEnv._get_surfaces_supporting_object`): the base env only released a grasped
+  object onto a *registered* surface (the shelf boards), so a floor buffer place never detached until
+  the floor was counted (object underside within `min_placement_dist` of z=0). Eager `blockers` map
+  (via `grasp_blockers`), a **T5** pick penalty, and an **order-aware** `is_feasible_skeleton` (clutter
+  cleared before a blocked pick); the oracle prepends a **relocation phase**.
+- **Deployed recipe = r1 clutter only (k=1); r3 no clutter.** See consequences.
+
+**Consequences.**
+- **F1 composes with F2 (r1) but not with F3 (r3) at the pool-generation level.** F1 grasp obstruction
+  is invisible to the abstract planner (like F2/F3), so the feasible **relocate-first** skeleton is
+  longer and *off the hff gradient*: the plain hff order buries it past K=200 (the pool is
+  **censored** on every cluttered problem — a catastrophic naive-order FP, the intended difficulty),
+  while the **oracle certifies 100%** (a feasible plan exists). Only the eager **T5** penalty surfaces
+  it — and only on r1 (eager first-feasible = 0). On r3 the F1+F3+relocation search does not enumerate
+  within budget (eager times out with 0 candidates). So r1 gets clutter (deployable pool = eager) and
+  **r3 stays F2+F3**. The deployed pool for the cluttered stratum **must be eager-generated** (the
+  plain pool has no feasible to rank). This is the DC1/DC3 pool-composition tension amplified.
+- **cap_r** (8/stratum, 100%): r0 12.4 / r1 18.3 / r2 21.3 / r3 28.2 s — clutter's relocation steps do
+  not blow up feasible-refinement time (~1 refiner call each). **K_max**: r0 3, r2 64 (plain, no
+  regression from the added `PlaceBuffer` operator); r1 plain censored, eager 0.
+- **Coverage/waste are non-degenerate on F1** and needed **no new computation code** (env-agnostic
+  `unified_evidence`): an F1 record names the clutter (class-1 culprit), the clutter is actionable via
+  `PlaceBuffer`, so it enters the culprit pool; a relocate-first candidate covers it (RP-3) and
+  relocating an unblamed clutter is unjustified waste (RP-4). `coverage_feats` was already plumbed
+  through `TrainConfig`/`dataset`/`model`.
+- **Deferred:** the full relocation-aware collection + SPECTRE training on the cluttered env; r3 F1
+  (needs a relocation-aware pool generator); step-time base-collision enforcement (needs a navigable
+  floor layout); learned baselines and the `compare_envs` EnvSpec.
+- Base-collision enforcement stays **off** as a standing constraint until a navigable layout lands;
+  coverage/waste remain **env-agnostic** (no per-environment code). Unratified session narrative:
+  [`docs/autonomous_restock3d_clutter_session.md`](../autonomous_restock3d_clutter_session.md).
+
+---
+
 <a id="2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget"></a>
 ## 2026-08-15 — Restock3D eager-validity heuristic, oracle solver, and budget/K_max calibration
 

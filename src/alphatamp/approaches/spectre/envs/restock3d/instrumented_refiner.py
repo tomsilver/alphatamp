@@ -54,6 +54,56 @@ _PROBE_LIFT = (
 _COLLISION_MARGIN = 1e-3
 
 
+def grasp_blockers(
+    sim, obj_name: str, state: ObjectCentricState
+) -> tuple[tuple[str, ...], bool]:
+    """Names of movables whose bodies the arm collides with at ``obj_name``'s grasp IK -- the
+    class-1 F1 culprits obstructing THIS object's grasp.
+
+    The grasp matches what the controller would actually use (front grasp for a tall block,
+    top-down for a cube via ``_target_uses_front``), so the blockers named are the ones that really
+    obstruct the grasp. Returns ``(blockers, reachable)``: ``reachable`` is False when the grasp IK
+    itself fails (the object is unreachable even ignoring clutter -> blockers unknown, empty).
+
+    This is the single source of truth shared by the refiner's F1 probe (:class:`_probe_pick`), the
+    eager-heuristic blockers table (``eager_tables.build_tables``) and the generator's blocking
+    graph, so all three agree on exactly what blocks a grasp.
+    """
+    sim.set_state(state.copy())
+    pcid = sim.physics_client_id
+    target_pose = state.get_object_pose(obj_name)
+    half_z = float(state.get(state.get_object_from_name(obj_name), "half_extent_z"))
+    grasp_tf = (
+        front_grasp_transform(half_z)
+        if _target_uses_front(state, obj_name)
+        else top_down_grasp_transform(half_z)
+    )
+    ee_pose = multiply_poses(target_pose, grasp_tf)
+    try:
+        joints = inverse_kinematics(
+            sim.robot.arm, ee_pose, validate=False, set_joints=True
+        )
+        sim.robot.arm.set_joints(joints)
+    except InverseKinematicsError:
+        return (), False  # unreachable grasp; blockers unknown but pick-side
+    p.performCollisionDetection(physicsClientId=pcid)
+    target_id = sim._object_name_to_pybullet_id(obj_name)
+    blockers = sorted(
+        name
+        for name in sim.movable_names()
+        if name != obj_name
+        and sim._object_name_to_pybullet_id(name) != target_id
+        and check_body_collisions(
+            sim.robot.arm.robot_id,
+            sim._object_name_to_pybullet_id(name),
+            pcid,
+            distance_threshold=_COLLISION_MARGIN,
+            perform_collision_detection=False,
+        )
+    )
+    return tuple(blockers), True
+
+
 @dataclass(frozen=True)
 class _Rejection:
     """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the family."""
@@ -231,42 +281,10 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
     def _probe_pick(
         self, state: ObjectCentricState, a: GroundOperator
     ) -> tuple[tuple[str, ...], str]:
-        obj = a.parameters[1]
-        self._sim.set_state(state.copy())
-        pcid = self._sim.physics_client_id
-        target_pose = state.get_object_pose(obj.name)
-        half_z = float(state.get(state.get_object_from_name(obj.name), "half_extent_z"))
-        # Match the grasp the controller would actually use (front for tall blocks, top-down for
-        # cubes) so the blockers named are the ones that really obstruct THIS object's grasp.
-        grasp_tf = (
-            front_grasp_transform(half_z)
-            if _target_uses_front(state, obj.name)
-            else top_down_grasp_transform(half_z)
-        )
-        ee_pose = multiply_poses(target_pose, grasp_tf)
-        try:
-            joints = inverse_kinematics(
-                self._sim.robot.arm, ee_pose, validate=False, set_joints=True
-            )
-            self._sim.robot.arm.set_joints(joints)
-        except InverseKinematicsError:
-            return (), "F1"  # unreachable grasp; blockers unknown but pick-side
-        p.performCollisionDetection(physicsClientId=pcid)
-        target_id = self._sim._object_name_to_pybullet_id(obj.name)
-        blockers = [
-            name
-            for name, mid in self._movable_ids().items()
-            if name != obj.name
-            and mid != target_id
-            and check_body_collisions(
-                self._sim.robot.arm.robot_id,
-                mid,
-                pcid,
-                distance_threshold=_COLLISION_MARGIN,
-                perform_collision_detection=False,
-            )
-        ]
-        return tuple(sorted(blockers)), "F1"
+        # Single source of truth for F1 blockers (see module-level ``grasp_blockers``), so the
+        # refiner probe, the eager blockers table and the generator blocking graph all agree.
+        blockers, _reachable = grasp_blockers(self._sim, a.parameters[1].name, state)
+        return blockers, "F1"
 
 
 def _deepest_rejection(

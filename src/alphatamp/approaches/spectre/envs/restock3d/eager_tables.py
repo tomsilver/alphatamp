@@ -44,6 +44,9 @@ class EagerTables:
     footprint: dict[str, float] = field(
         default_factory=dict
     )  # reserved for T4 (λ_o); unused at o=0
+    # goal object name -> the movable clutter that obstructs its top-down grasp (F1). Empty in the
+    # no-clutter strata (r0/r2). Computed from ``grasp_blockers`` on the sim (build_tables sim=...).
+    blockers: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def fits(self, obj_name: str, region_name: str) -> bool:
         """A cube fits any region; a tall block fits only a tall-section region."""
@@ -65,23 +68,48 @@ class EagerWeights:
     c: float = 8.0  # T2 capacity: region already occupied (single-object regions)
     r: float = 8.0  # T3 reservation: cube squats a still-needed tall-section region
     o: float = 0.0  # T4 crowding (soft); off — single-object regions make it degenerate
+    b: float = (
+        8.0  # T5 blockers: pick a goal whose F1 clutter is not yet relocated (> 2-step
+    )
+    #                relocation cost, so the eager order prefers relocating over eating the F1)
 
 
 def build_tables(
-    region_infos: dict[str, RegionInfo], goal_object_names: Iterable[str]
+    region_infos: dict[str, RegionInfo],
+    goal_object_names: Iterable[str],
+    sim=None,
+    state=None,
 ) -> EagerTables:
-    """Derive the eager tables from region geometry (section) + the goal object
-    names."""
+    """Derive the eager tables from region geometry (section) + the goal object names.
+
+    When both ``sim`` and ``state`` (the problem's initial state) are given, the F1 ``blockers`` map
+    is computed via ``grasp_blockers`` -- the SAME probe the refiner uses -- so the eager penalty /
+    feasibility exactly match what fails refinement. Omitting them keeps the no-clutter behaviour
+    (``blockers={}``) byte-identical. ``grasp_blockers`` sets ``sim`` to ``state`` itself, so the
+    models' scratch sim need not be pre-positioned.
+    """
+    goal_names = list(goal_object_names)
     tall_regions = frozenset(
         name for name, info in region_infos.items() if info.shelf == _TALL_SECTION
     )
     short_regions = frozenset(
         name for name, info in region_infos.items() if info.shelf != _TALL_SECTION
     )
-    tall_goal = frozenset(
-        n for n in goal_object_names if n.startswith(_TALL_OBJECT_PREFIX)
-    )
-    return EagerTables(tall_regions, short_regions, tall_goal)
+    tall_goal = frozenset(n for n in goal_names if n.startswith(_TALL_OBJECT_PREFIX))
+    blockers: dict[str, frozenset[str]] = {}
+    if sim is not None and state is not None:
+        from .instrumented_refiner import (  # local import: avoid import cycle
+            grasp_blockers,
+        )
+
+        names_present = set(state.get_object_names())
+        for goal in goal_names:
+            if goal not in names_present:
+                continue
+            gb, _reach = grasp_blockers(sim, goal, state)
+            if gb:
+                blockers[goal] = frozenset(gb)
+    return EagerTables(tall_regions, short_regions, tall_goal, blockers=blockers)
 
 
 def _regions_occupied(state: RelationalAbstractState) -> set[str]:
@@ -113,6 +141,19 @@ def make_penalty(
     """
 
     def penalty(action: GroundOperator, pre_state: RelationalAbstractState) -> float:
+        # T5 — pick a goal whose F1 clutter is still OnFloor (grasp obstructed). Penalising the
+        # direct pick makes the eager order prefer relocating the clutter first (Pick+PlaceBuffer,
+        # ~2 steps) over eating the F1 -- b > 2 * step-cost. Inert where blockers is empty (r0/r2).
+        if action.name == "pick":
+            blk = tables.blockers.get(action.parameters[1].name, frozenset())
+            if not blk:
+                return 0.0
+            on_floor = {
+                atom.objects[0].name
+                for atom in pre_state.atoms
+                if atom.predicate.name == "OnFloor"
+            }
+            return weights.b * sum(1 for c in blk if c in on_floor)
         if action.name != "place":
             return 0.0
         obj_name = action.parameters[1].name
@@ -146,15 +187,29 @@ def make_penalty(
 def is_feasible_skeleton(
     action_plan: Iterable[GroundOperator], tables: EagerTables
 ) -> bool:
-    """Classify feasible **without refining**: no tall->short, no region reused.
+    """Classify feasible **without refining** and **in order**: no tall->short (F3), no region
+    reused (F2), and every goal's F1 clutter cleared off the floor before that goal is picked.
 
-    Exact for the no-clutter v1 hardness sources (regions single-object, feasibility =
-    real collision at the region rest pose); residual refinement failures are
-    continuous-level sampler noise, not abstract-level infeasibility.
+    Exact for the kinematic hardness sources (regions single-object, feasibility = real collision):
+    F2/F3 are real collisions at the region rest pose, and F1 is a real arm-vs-clutter collision at
+    the grasp -- so a table-infeasible skeleton cannot refine (no false negatives). A blocker is
+    "cleared" once its cube is picked (Holding, then buffer/region -- off its floor blocking spot);
+    tracking picks in order makes a direct pick-before-relocate skeleton infeasible (F1) and a
+    relocate-first skeleton feasible.
     """
     occupied: set[str] = set()
+    cleared: set[str] = set()  # objects already picked (off the floor)
     for action in action_plan:
-        if action.name != "place":
+        if action.name == "pick":
+            obj_name = action.parameters[1].name
+            blk = tables.blockers.get(obj_name, frozenset())
+            if not blk.issubset(
+                cleared
+            ):  # F1: grasp obstructed, clutter not relocated first
+                return False
+            cleared.add(obj_name)
+            continue
+        if action.name != "place":  # place_buffer / anything else: no region constraint
             continue
         obj_name = action.parameters[1].name
         region_name = action.parameters[2].name

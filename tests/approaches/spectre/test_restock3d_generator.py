@@ -40,10 +40,16 @@ def test_goal_object_names() -> None:
 
 
 def test_clutter_rings_first_cube() -> None:
-    # Strata with clutter (r2, r3) ring the first cube; r0/r1 have none.
-    assert not G.build_spec(0, 1).clutter_floor
-    spec = G.build_spec(0, 3)
-    assert len(spec.clutter_floor) == G._CLUTTER_PER_STRATUM[3]
+    # r1 places one clutter cube +y of the first cube goal (F1); r0/r2/r3 have none
+    # (F1 composes with r1's F2 but not r3's F3 -- decisions/07 2026-08-15).
+    r1 = G.build_spec(0, 1)
+    assert len(r1.clutter_floor) == G._CLUTTER_PER_STRATUM[1] == 1
+    cx, cy = r1.small_floor[0]
+    clx, cly = r1.clutter_floor[0]
+    assert clx == round(cx + G._CLUTTER_DX, 4)
+    assert cly == round(cy + G._CLUTTER_DY, 4)  # +y at the calibrated blocking gap
+    for stratum in (0, 2, 3):
+        assert not G.build_spec(0, stratum).clutter_floor
 
 
 def test_problem_id_recovers_stratum() -> None:

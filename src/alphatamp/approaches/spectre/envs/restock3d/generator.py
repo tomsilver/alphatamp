@@ -104,12 +104,19 @@ def _floor_spots(n: int, rng: _Rng) -> list[tuple[float, float]]:
     return spots
 
 
-# Clutter blocks per stratum (ring a goal cube so a top-down grasp is obstructed -> F1). F1 is
-# DEFERRED from restock3d v1 (see kinematic_env.CLUTTER_PER_STRATUM); v1 runs with zero clutter.
-_CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+# Clutter blocks per stratum: one movable clutter cube next to the first cube goal so a top-down grasp
+# is obstructed (F1), relocated via a buffer to clear it. **r1 only** (Gate-3, decisions/07 2026-08-15):
+# F1 composes with r1's F2 (the eager order surfaces the relocate-first feasible at index 0, oracle-
+# solvable, plain order catastrophically censored = the intended difficulty), but NOT with r3's F3 --
+# the F1+F3+relocation abstract search is unenumerable (plain censored past K=200, eager times out with
+# 0 candidates), though the oracle certifies a feasible exists. r0 stays the ~0-FP floor; r2/r3 stay
+# F2+F3. ``CLUTTER_PER_STRATUM`` in kinematic_env MUST match these counts (specs vs positions).
+_CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 1, 2: 0, 3: 0}
 
-# Lateral offsets (world x, y) that ring a goal cube; the first ``n`` are used.
-_CLUTTER_RING = [(0.07, 0.0), (-0.07, 0.0), (0.0, 0.07), (0.0, -0.07)]
+# Clutter is placed at this world-frame offset from the blocked cube: +y (toward the shelf) at the
+# Gate-1-calibrated gap. A cube's top-down grasp is obstructed for a +y clutter at gap 0.05-0.10 m
+# (blocks reliably, clutter itself pickable, no deadlock cycle); +x/-x never block a top-down grasp.
+_CLUTTER_DX, _CLUTTER_DY = 0.0, 0.07
 
 
 def build_spec(seed: int, stratum: int) -> RestockSpec:
@@ -129,12 +136,13 @@ def build_spec(seed: int, stratum: int) -> RestockSpec:
     small_floor = all_floor[:n_small]
     tall_floor = all_floor[n_small : n_small + n_tall]
 
+    # One clutter cube per blocked goal, placed +y of the first k cube goals so their top-down grasp
+    # is obstructed (F1); the clutter is itself pickable (Gate-1 sweep) and relocated to a buffer.
     clutter_floor: list[tuple[float, float]] = []
     n_clutter = _CLUTTER_PER_STRATUM[stratum]
-    if n_clutter and small_floor:
-        cx, cy = small_floor[0]
-        for dx, dy in _CLUTTER_RING[:n_clutter]:
-            clutter_floor.append((round(cx + dx, 4), round(cy + dy, 4)))
+    for i in range(min(n_clutter, len(small_floor))):
+        cx, cy = small_floor[i]
+        clutter_floor.append((round(cx + _CLUTTER_DX, 4), round(cy + _CLUTTER_DY, 4)))
 
     return RestockSpec(
         stratum=stratum,

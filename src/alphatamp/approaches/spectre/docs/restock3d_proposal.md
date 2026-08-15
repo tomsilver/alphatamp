@@ -25,9 +25,17 @@ each gate names its fallback. The design is a hypothesis, not a commitment.
 > [`decisions/07` 2026-08-15](decisions/07-stickbutton2d.md#2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget)
 > / [`notebook/07` 2026-08-15](notebook/07-stickbutton2d.md#2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout).
 > The guide docs `restock3d_eager_heuristic_guide.md` / `restock3d_oracle_solver.md` describe the
-> full-clutter design; v1 realises their F2+F3 subset (regions single-object, `blockers=∅`, Pick
-> penalty inert, no relocation phase). Still deferred: F1/clutter/coverage-waste, the full
-> collection, learned baselines, the `compare_envs` EnvSpec.
+> full-clutter design; v1 realised their F2+F3 subset (regions single-object, `blockers=∅`, Pick
+> penalty inert, no relocation phase).
+> **F1 clutter re-added 2026-08-15** ([`decisions/07`](decisions/07-stickbutton2d.md#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer)):
+> movable clutter beside a cube goal (+y, gap ~0.07 m) obstructs its top-down grasp, relocated via a
+> `PlaceBuffer`→`OnBuffer` floor buffer; the eager table gets a T5 penalty + order-aware feasibility and
+> the oracle a relocation phase. Deployed on **r1 only** — F1 composes with r1's F2 but the F1+F3
+> relocate-first search on r3 does not enumerate within budget (oracle certifies it, no planner surfaces
+> it), so r3 stays F2+F3. Base collision is best-effort (planner-level, wide base vs dense floor);
+> coverage/waste verified non-degenerate on F1 (env-agnostic). Still deferred: the full relocation-aware
+> **collection + training**, **r3 F1** (relocation-aware pool generator), step-time base enforcement
+> (navigable floor), learned baselines, the `compare_envs` EnvSpec.
 
 ---
 

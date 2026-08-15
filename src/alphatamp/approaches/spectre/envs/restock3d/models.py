@@ -47,7 +47,7 @@ from relational_structs import (
 from relational_structs.spaces import ObjectCentricBoxSpace, ObjectCentricStateSpace
 
 from .kinematic_env import ObjectCentricRestock3DEnv, stratum_env_args
-from .place_controller import RegionType, create_lifted_controllers
+from .place_controller import RegionType, create_lifted_controllers, in_buffer_zone
 from .region_geometry import RegionInfo
 
 # Types.
@@ -60,6 +60,9 @@ Holding = Predicate("Holding", [RobotType, CubeType])
 OnFloor = Predicate("OnFloor", [CubeType])
 InRegion = Predicate("InRegion", [CubeType, RegionType])
 Stored = Predicate("Stored", [CubeType])
+# A cube relocated to the floor buffer zone (F1 clutter cleared out of a goal's grasp). Distinct from
+# OnFloor so Pick (precond OnFloor) will not re-pick it; distinct from Stored (not in a region).
+OnBuffer = Predicate("OnBuffer", [CubeType])
 
 _GRIPPER_OPEN_THRESHOLD = 0.01
 _FLOOR_Z_TOL = 0.1
@@ -128,7 +131,11 @@ class RestockAbstractor:
                 continue
             rest_z = state.get(cube, "pose_z") - state.get(cube, "half_extent_z")
             if rest_z < _FLOOR_Z_TOL:
-                atoms.add(GroundAtom(OnFloor, [cube]))
+                cx, cy = state.get(cube, "pose_x"), state.get(cube, "pose_y")
+                if in_buffer_zone(cx, cy):
+                    atoms.add(GroundAtom(OnBuffer, [cube]))
+                else:
+                    atoms.add(GroundAtom(OnFloor, [cube]))
 
         objects = {robot} | set(movables) | set(self._region_objs.values())
         return RelationalAbstractState(atoms, objects)
@@ -199,7 +206,7 @@ def build_restock3d_models(
 
     types = {RobotType, CubeType, RegionType}
     state_space = ObjectCentricStateSpace({RobotType, CubeType})
-    predicates = {HandEmpty, Holding, OnFloor, InRegion, Stored}
+    predicates = {HandEmpty, Holding, OnFloor, InRegion, Stored, OnBuffer}
 
     # Variable names must match the controllers' (LiftedSkill asserts equality).
     robot = Variable("?robot", RobotType)
@@ -227,11 +234,21 @@ def build_restock3d_models(
         },
         delete_effects={LiftedAtom(Holding, [robot, target])},
     )
+    # Relocate F1 clutter to a floor buffer (mirrors DD2D place-buffer): clears a cube's obstructed
+    # grasp. No region param; the controller picks a free buffer spot.
+    PlaceBufferOperator = LiftedOperator(
+        "place_buffer",
+        [robot, target],
+        preconditions={LiftedAtom(Holding, [robot, target])},
+        add_effects={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnBuffer, [target])},
+        delete_effects={LiftedAtom(Holding, [robot, target])},
+    )
 
     lifted = create_lifted_controllers(action_space, sim, region_infos)
     skills = {
         LiftedSkill(PickOperator, lifted["pick"]),
         LiftedSkill(PlaceOperator, lifted["place"]),
+        LiftedSkill(PlaceBufferOperator, lifted["place_buffer"]),
     }
 
     models = SesameModels(

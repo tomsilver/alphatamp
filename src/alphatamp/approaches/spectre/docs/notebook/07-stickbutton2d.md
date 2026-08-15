@@ -4,6 +4,52 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-15-restock3d-f1-clutter-build-mechanism-calibration"></a>
+## 2026-08-15 — Restock3D F1 clutter build: mechanism, calibration, pool-generation limits
+
+<!--strip-->
+> **id** `2026-08-15-restock3d-f1-clutter-build-mechanism-calibration` · **status**
+> active · **tracks** method, env-restock3d, evaluation, data
+<!--/strip-->
+
+**What.** Re-added F1 grasp-obstruction clutter + relocation to Restock3D (deferred in v1), fixed the
+base-drives-through-blocks bug first, re-ran calibration, and wired coverage/waste. Gated autonomous
+run (0 base → 1 blocking → 2 mechanism → 3 sweep → {4 cap, 5 K_max, 6 coverage} → 7). ADR:
+[`decisions/07` 2026-08-15](../decisions/07-stickbutton2d.md#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer).
+
+**Result (by gate).**
+- **G0 base collision.** Base footprint **0.55×0.51 m** (AABB) vs floor spacing **~0.30 m**.
+  `check_base_collisions=True` + floor movables in base-nav → oracle **r0 50% / r1 0% / r2 0% / r3 0%**
+  (wide base boxed). Best-effort (planner avoids floor movables + shelf-only fallback, flag **off**) →
+  **r0–r3 100%**. Base-nav demo: pre-fix shelf-only plan drives through **6–7/N** waypoints; primary
+  avoidance **refuses** on the short pick hops (no lateral room) so in dense scenes it falls back.
+- **G1 blocking.** Cube (top-down grasp): clutter **+y, gap 0.05–0.10 m** → clean F1 (named culprit,
+  clutter pickable, no cycle); +x/−x never block; gap 0.12 too far. Block (front grasp): **no** clean
+  F1 (side clutter doesn't obstruct; close clutter is itself blocked → cycle). → F1 targets cubes.
+- **G2 mechanism.** Oracle **certifies cluttered r1/r3 100%** (~1 call). Relocate→store demo PASS.
+  Two substrate bugs found+fixed: (1) SE2 base-plan smoothing trips `SE2Pose`'s ±π assertion → fall
+  back to raw waypoints; (2) **the floor was not a registered placement surface**, so a buffer place
+  never released the cube (`grasped` stuck, `finger 0.29`) — fixed by counting the floor in
+  `_get_surfaces_supporting_object`. 5 fast + 3 slow unit tests pass.
+- **G3 sweep** (r1/r3 × k=0..3 × 12, plain K=200 + eager K=50). r1 k=0 plain first-feasible mean
+  **34.3**; **every cluttered plain pool is censored** (0 feasible in top-200 — relocate-first plans are
+  off the hff gradient). Eager surfaces the feasible **only on r1** (first-feasible **0**, pool=200);
+  **r3 eager times out with 0 candidates** (F1+F3 unenumerable). Recipe = **r1=1, r3=0**. k≥2 also
+  OOMs the plain K=200 enumeration.
+- **G4 cap_r** (8/stratum, 100%): **12.4 / 18.3 / 21.3 / 28.2 s** (r0–r3) — clutter doesn't blow it up.
+- **G5 K_max**: r0 **3**, r2 **64** (plain, no regression from adding `PlaceBuffer`); r1 plain censored,
+  eager 0.
+- **G6 coverage/waste** (P4 probe): culprit-pool K={clutter}; **coverage** relocate-culprit **1.00** vs
+  direct **0.00** (RP-3); **waste** relocate-unblamed **1.00** vs relocate-culprit **0.50** (RP-4).
+  Non-degenerate, no new compute code.
+
+**Takeaway / next.** **F1 composes with F2 (r1) but not F3 (r3)** at the *pool-generation* level — the
+oracle certifies r3 clutter but no planner enumerates a feasible relocate-first plan within budget, so
+r3 stays F2+F3 and the deployed r1 pool must be **eager**. Deferred: the full relocation-aware
+collection + training, r3 F1 (relocation-aware generator), enforceable base collision (navigable floor).
+
+---
+
 <a id="2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout"></a>
 ## 2026-08-15 — Restock3D eager heuristic + oracle calibration: timeout & K_max estimates (autonomous)
 

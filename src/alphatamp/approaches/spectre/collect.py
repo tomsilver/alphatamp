@@ -147,7 +147,11 @@ def _make_plan_generator(
         region_infos: dict[str, RegionInfo]
         region_infos = _restock_extras["region_infos"]  # type: ignore[assignment]
         goal_names: list[str] = _restock_extras["goal_names"]  # type: ignore[assignment]
-        tables = build_tables(region_infos, goal_names)
+        # Pass the sim + this problem's initial state so build_tables computes the F1 blockers map
+        # via grasp_blockers -- the T5 penalty needs it on the clutter strata (r1/r3).
+        tables = build_tables(
+            region_infos, goal_names, sim=_restock_extras.get("sim"), state=x0
+        )
         return EagerValidityPlanGenerator(
             env_models.types,
             env_models.predicates,
@@ -272,15 +276,13 @@ def _failure_metadata_fn(
     """The env's observation-only failure-harvest fn (SB2D / Restock3D), else None."""
     # pylint: disable=import-outside-toplevel
     if model_name == _STICK_BUTTON_MODEL_NAME:
-        from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (  # pylint: disable=line-too-long
-            failure_metadata as sb_fm,
-        )
+        from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (
+            failure_metadata as sb_fm,)  # pylint: disable=line-too-long
 
         return sb_fm
     if model_name == _RESTOCK3D_MODEL_NAME:
         from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
-            failure_metadata as rs_fm,
-        )
+            failure_metadata as rs_fm,)
 
         return rs_fm
     return None

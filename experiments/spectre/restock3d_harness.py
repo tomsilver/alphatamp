@@ -122,6 +122,10 @@ def enumerate_pool(
         tables = build_tables(
             _restock_extras["region_infos"],  # type: ignore[arg-type]
             _restock_extras["goal_names"],  # type: ignore[arg-type]
+            sim=_restock_extras.get(
+                "sim"
+            ),  # F1 blockers for the clutter strata (r1/r3)
+            state=x0,
         )
         return pool, tables
     finally:

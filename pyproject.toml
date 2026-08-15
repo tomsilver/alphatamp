@@ -97,7 +97,7 @@ exclude = [
     # FP probe, difficulty table, oracle+K_max calibration). Sibling-module imports and
     # dynamic job tuples; excluded like shelf3d_difficulty.py / holdout_vs_full.py above.
     # The real collection entry point restock3d_collect.py stays type-checked.
-    "experiments/spectre/restock3d_(stage0|demos|probe|difficulty|harness|oracle|kmax)\\.py$",
+    "experiments/spectre/restock3d_(stage0|demos|probe|difficulty|harness|oracle|kmax|base_nav_demo|blocking_sweep|relocate_demo|clutter_sweep|coverage_probe|stage0)\\.py$",
     # Vendored DD2D environment (migrated from the envsearch repo, see
     # envs/dd2d/MIGRATION_DD2D.md). Excluded from strict mypy like lib/ vendoring;
     # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
@@ -144,5 +144,7 @@ module = [
     "sklearn.*",
     "shapely.*",
     "spatialmath.*",
+    # C-extension, no type stubs; imported directly by the restock3d real-collision probes.
+    "pybullet",
 ]
 ignore_missing_imports = true

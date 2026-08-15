@@ -51,11 +51,11 @@ from .region_geometry import (
 
 _SHELF_HEIGHT = 0.0127  # board thickness
 
-# Clutter blocks per stratum (ring a goal cube so a grasp is obstructed -> F1). F1 is DEFERRED from
-# restock3d v1 (F2+F3 lead): non-goal clutter that blocks a cube makes it permanently unpickable,
-# so a real F1 needs relocatable *goal-block* blockers (a generator redesign). The machinery is kept
-# one flag away; v1 runs with zero clutter.
-CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+# Clutter blocks per stratum: one movable clutter cube next to the first cube goal so a top-down grasp
+# is obstructed (F1), relocated to a floor buffer to clear it. **r1 only** -- F1+F3 (r3) is unenumerable
+# (Gate-3, decisions/07 2026-08-15). MUST match generator._CLUTTER_PER_STRATUM (this drives the object
+# SPECS; the generator drives their POSITIONS).
+CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 1, 2: 0, 3: 0}
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,12 @@ class Restock3DEnvConfig(Kinematic3DEnvConfig, metaclass=FinalConfigMeta):
     """Config for :class:`ObjectCentricRestock3DEnv`."""
 
     max_action_mag: float = 0.2
+    # Step-time base-collision enforcement stays OFF. The base motion PLANNER now routes around floor
+    # movables (place_controller._base_nav_collision_ids) with a fallback to a straight path when the
+    # wide base (~0.55 m) is boxed by the dense floor (~0.30 m spacing). That best-effort fallback may
+    # overlap floor movables, so step-time reversion would re-break navigation (empirically ~0% oracle
+    # certification). Avoidance is delivered by the planner, not by reverting steps. See decisions/07
+    # 2026-08-15; the proper enforceable fix is a navigable floor layout (generation tuning).
     check_base_collisions: bool = False
     realistic_bg: bool = True  # a real room backdrop, not the blank void
     gripper_open_threshold: float = 0.01
@@ -258,6 +264,22 @@ class ObjectCentricRestock3DEnv(
 
     def _get_surface_object_names(self) -> set[str]:
         return set(self._shelf_ids)
+
+    def _get_surfaces_supporting_object(self, object_id: int) -> set[int]:
+        """The base env registers only the shelf boards as placement surfaces, so an object placed on
+        the FLOOR (buffer relocation) would never satisfy the ungrasp condition and stay held. Count
+        the floor explicitly: an object whose underside is within ``min_placement_dist`` of ``z=0`` is
+        floor-supported (sentinel id ``-1``). Only the ungrasp check reads this, so grasping and shelf
+        placement are unaffected; the sentinel only fires when the gripper opens near the floor -- the
+        ``PlaceBuffer`` case -- letting the cube release onto a buffer spot. See decisions/07
+        2026-08-15 (F1 clutter re-added)."""
+        import pybullet as p  # local import; only needed here
+
+        supports = super()._get_surfaces_supporting_object(object_id)
+        aabb_min, _ = p.getAABB(object_id, physicsClientId=self.physics_client_id)
+        if aabb_min[2] <= self.config.min_placement_dist:
+            supports = supports | {-1}
+        return supports
 
     def _get_half_extents(self, object_name: str) -> tuple[float, float, float]:
         if object_name in self._half_extents:
