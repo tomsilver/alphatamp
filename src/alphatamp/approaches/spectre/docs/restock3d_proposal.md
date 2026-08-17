@@ -16,44 +16,110 @@ tagged:
 This document is deliberately **stage-gated**: no phase begins until its gate's probes pass, and
 each gate names its fallback. The design is a hypothesis, not a commitment.
 
-> **Build status (2026-08-15, autonomous).** The kinematic **no-clutter v1** (F2 over-assignment +
-> F3 tall-into-short; F1/clutter deferred) is built and Stage-0 approved. Since then: the
-> **eager-validity heuristic** (`astar_eager`, `envs/restock3d/eager_search.py` +
-> `eager_tables.py`), the **oracle solver** (`envs/restock3d/oracle.py`), and a real per-candidate
-> cap (`refine_cap.py`) are built; per-stratum **timeout** and **K_max** are calibrated. Numbers +
-> the eager-vs-plain pool-order finding:
-> [`decisions/07` 2026-08-15](decisions/07-stickbutton2d.md#2026-08-15-restock3d-eager-validity-heuristic-oracle-solver-budget)
-> / [`notebook/07` 2026-08-15](notebook/07-stickbutton2d.md#2026-08-15-restock3d-eager-heuristic-oracle-calibration-timeout).
-> The guide docs `restock3d_eager_heuristic_guide.md` / `restock3d_oracle_solver.md` describe the
-> full-clutter design; v1 realised their F2+F3 subset (regions single-object, `blockers=∅`, Pick
-> penalty inert, no relocation phase).
-> **F1 clutter re-added 2026-08-15** ([`decisions/07`](decisions/07-stickbutton2d.md#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer)):
-> movable clutter beside a cube goal (+y, gap ~0.07 m) obstructs its top-down grasp, relocated via a
-> `PlaceBuffer`→`OnBuffer` floor buffer; the eager table gets a T5 penalty + order-aware feasibility and
-> the oracle a relocation phase. Deployed on **r1 only** — F1 composes with r1's F2 but the F1+F3
-> relocate-first search on r3 does not enumerate within budget (oracle certifies it, no planner surfaces
-> it), so r3 stays F2+F3. Base collision is best-effort (planner-level, wide base vs dense floor);
-> coverage/waste verified non-degenerate on F1 (env-agnostic). Still deferred: the full relocation-aware
-> **collection + training**, **r3 F1** (relocation-aware pool generator), step-time base enforcement
-> (navigable floor), learned baselines, the `compare_envs` EnvSpec.
->
-> **⚠️ FULLY-LATERAL REBUILD 2026-08-17 (supersedes the base-collision + F1 decisions above)** —
-> [`decisions/07`](decisions/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision)
-> / [`notebook/07`](notebook/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only).
-> To make the base **collision-free for real** (it was phasing through floor blocks), the scene is
-> reorganised into three **disjoint x-bands** (buffer \| objects \| shelf, left→right): the front-grasp
-> standoff keeps the base **south** of every object, so it slides laterally in a clear corridor and never
-> crosses the field. **All picks now use the front grasp** (cubes too); **strict base collision is ON**
-> with **no fallback**; objects are **region-sampled** (0.6×0.6 band, 0.12 m exclusion radius, random
-> object-type order, axis-aligned) instead of a fixed grid. **F1 clutter is RETIRED** — a sweep showed
-> **no floor neighbour obstructs the front grasp at the grasp config** (front-grasp obstruction is only an
-> approach-path *reach-over*), so the ±x blocker plan cannot work; the depth **reach-over among goals** is
-> the difficulty instead (naive pick order fails refinement, the oracle's **south-to-north** order
-> succeeds). Buffer/relocation machinery kept **inert** (`CLUTTER=0`). Oracle certifies sampled r0–r3
-> **4/4**. Taxonomy = **F2 + F3 + reach-over**. Still deferred: eager `reach_blockers` relation + K_max
-> re-calibration, coverage/waste, learned baselines, collection/training.
+## Status — original proposal + as-built record
+
+This file is the **original implementation proposal (v0.1, 2026-08-13; §1–§9 below)** *plus* this
+**as-built record**. The implementation **diverged substantially** from the proposal; **where they
+disagree this section is authoritative** and §1–§9 are retained only as design *rationale/history*
+(see the banner at §1). Full ledger:
+[`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
+2026-08-14 → 2026-08-17.
+
+## As built (current — 2026-08-17)
+
+**Substrate.** Kinematic **PyBullet** (the MuJoCo/TidyBot substrate of §1–§3 was superseded
+2026-08-14; its dynamics were soft-collision/teleport). Feasibility is decided by **real PyBullet
+collision** — the base env reverts colliding moves, and the pick/place motion planners fail when no
+collision-free solution exists — never a symbolic gate.
+
+**Scene — fully-lateral, three disjoint x-bands** (2026-08-17). Left→right along world x: a **buffer
+band** (x∈[−1.35,−0.90], inert), an **object band** (x∈[−0.80,−0.20], y∈[0.60,1.20]), and one
+**shelf** at (0.4, 1.4) with a **tall section** (bottom; surface z 0.29, clearance 0.34) and a **short
+section** (top; surface z 0.64, clearance 0.15) built from cumulative board gaps. Each section's front
+strip carries **single-object regions** (`region_0_i` tall / `region_1_i` short; metadata, not
+bodies). The holonomic SE2 mobile base (~0.55×0.51 m) parks ~0.72 m south of a front-grasp target, so
+it stays **south (y≤~0.55) of every object (y≥0.60)**: it slides laterally in a clear southern corridor
+and **never crosses the object field** — this is what makes the base collision-free.
+
+**Grasp/place — front grasp for everything.** All picks (cubes *and* tall blocks) use the **front
+grasp** (45°, fingers on ±x faces); the top-down pick is retired. All region places are
+**translate-only** (EE derived from the recorded grasp), so an object keeps its axis-aligned floor
+orientation and lands **upright** — a tall block stays upright (→ F3), a cube lands flat (fixing an
+earlier 45° tilt from the analytic place). **Strict base-collision enforcement is ON** with the
+shelf-only phase-through fallback removed: a boxed base fails (an intended refinement failure) rather
+than phasing through.
+
+**Generation — region rejection sampling** (replaces the fixed grid). Objects are sampled uniformly in
+the 0.6×0.6 object band, each claiming a **0.12 m exclusion radius**; object types (cube vs tall block)
+are assigned in **random order**; poses are **axis-aligned** (only xy sampled); **deterministic in
+seed** with reseed-on-failure.
+
+**Operators / predicates** (`models.py`). Types: robot, cube (every movable), region (symbolic).
+Predicates `HandEmpty, Holding, OnFloor, InRegion(cube,region), Stored`. `Pick(robot,target)` (pre
+`HandEmpty∧OnFloor`); `Place(robot,target,region)` (pre `Holding` **only — no `Clear`**, so
+single-object capacity and cell height are invisible to the planner). Goal = `Stored(o)` for every goal
+object. `PlaceBuffer`/`OnBuffer` and the buffer machinery are present but **inert** (`CLUTTER=0`).
+
+**Strata** (`STRATA` = `(n_small, n_tall, n_tall_reg, n_short_reg)`):
+
+| stratum | cubes | tall blocks | tall reg | short reg | slack (σ_tall, σ_short) | driver |
+|---|---|---|---|---|---|---|
+| r0 | 3 | 0 | 2 | 5 | (2, 4) | slack floor, ~0 FP |
+| r1 | 5 | 0 | 1 | 4 | (1, 0) | **F2** — zero short-slack: 5 cubes → 5 single-object regions (a tight perfect matching) |
+| r2 | 3 | 1 | 2 | 4 | (1, 2) | **F3** + F2 (a tall block present) |
+| r3 | 4 | 2 | 3 | 5 | (1, 2) | **all** — F2 + F3 + reach-over; the hard tail |
+
+**Failure taxonomy = F2 + F3 + reach-over** (F1 retired):
+- **F2 (over-assignment).** Placing a second object into a single-object region collides the resident.
+  The abstraction permits it (no `Clear`), so the planner emits it; refinement rejects it. r1's
+  zero-slack perfect matching is pure F2.
+- **F3 (tall-into-short).** An upright tall block placed into a short-section region overhangs and hits
+  the capping board; culprit-free, `proves_failure`.
+- **Reach-over (new — replaces F1).** The front grasp reaches **north over anything nearer** than the
+  target, so a goal south of another (within a ~0.12 m lateral corridor, when a tall block is involved)
+  blocks the farther goal's pick until it is cleared. The naive pick order fails refinement; the
+  oracle's **south-to-north (nearest-first)** order succeeds — the "far is harder" difficulty. (A
+  calibration sweep confirmed **no floor neighbour obstructs the front grasp at the grasp config**,
+  which is exactly why the proposal's top-down/±x F1 clutter could not be realised and was retired.)
+
+**Solvers / classifiers.** The **oracle** (`oracle.py`) builds a feasible skeleton — south-to-north
+pick order + a valid object→region assignment — and refines it (certifies sampled r0–r3 **4/4**). The
+**eager heuristic** (`eager_tables.py`) folds F2/F3 + a geometric **`reach_blockers`** relation into A*
+action costs so the informed order front-loads a feasible skeleton (first-feasible index 0 on r0–r2).
+The **`is_feasible_skeleton`** classifier accepts a skeleton iff no F2 reuse / no F3 / no uncleared
+reach-blocker — a non-refinement proxy used for K_max.
+
+**Calibration (deferred-collection tools).**
+- Oracle certification: **r0–r3 4/4** on sampled scenes under strict collision + no fallback.
+- **K_max** (plain-hff first-feasible × 1.2, n=8): r0 4, r1 83, r2 208; **r3 unenumerable** (7/8
+  censored past K=200 — F2+F3+reach-over compose). The reach-over-aware eager surfaces the feasible at
+  index 0 on r0–r2.
+- **cap_r** (per-candidate cap ≈ max feasible oracle time × 1.2, small samples): ~24–65 s, ~2–3× v1
+  from strict collision + front-grasp refinement.
+
+**How this diverges from §1–§9.** MuJoCo/TidyBot → kinematic PyBullet; top-down pick (front grasp
+"abandoned" in §1.2) → **front grasp for every pick**; F1 grasp-obstruction clutter (the coverage/waste
+carrier) → **retired**, replaced by the depth **reach-over**; multi-slot capacity strips (§3.6) →
+**single-object regions**; Config A/B cell-layout probes (§3.3) → a fixed single-shelf tall/short
+geometry; forward floor-staging + cupboard → the **fully-lateral 3-band** layout.
+
+**Deferred / open.** **Coverage/waste** — with F1 retired their denominators are degenerate again
+(exactly the §1.2 starvation this env was meant to fix), so that rationale is **reopened, unresolved**;
+full **collection + SPECTRE training**; learned baselines (PIGINet / VLMPlan / LAZY) and the
+`compare_envs` EnvSpec; **r3 enumerability** (larger K or a staged generator); a **precise
+cumulative/depth reach-over corridor** (the current `reach_blockers` is a safe but conservative proxy);
+optional removal of the inert buffer machinery; the dynamic-MuJoCo / real-robot phases (§5 D/R).
 
 ---
+
+> **⚠️ §1–§9 are the ORIGINAL proposal (2026-08-13), largely SUPERSEDED — see "As built" above for
+> what was actually implemented.** They are retained as design rationale/history: *why* a third
+> environment (§1.1), *why* the failure classes were chosen, and the physical-shelf sizing the
+> real-robot phase will still need. Known-stale relative to the as-built: the MuJoCo/TidyBot substrate,
+> the top-down grasp and F1 grasp-obstruction clutter (§2, §3.5) — replaced by the front grasp + the
+> depth reach-over; the multi-slot capacity model (§3.6) — regions are single-object; the Config A/B
+> cell-layout probes (§3.3); and the coverage/waste-carrier rationale (§1.2, §2.3, RP-3/RP-4) — reopened
+> and unresolved now that F1 is retired. Read §1–§9 for intent, the As-built section for reality.
 
 ## 1. Background and rationale
 
