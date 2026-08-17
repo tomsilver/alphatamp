@@ -36,6 +36,22 @@ each gate names its fallback. The design is a hypothesis, not a commitment.
 > coverage/waste verified non-degenerate on F1 (env-agnostic). Still deferred: the full relocation-aware
 > **collection + training**, **r3 F1** (relocation-aware pool generator), step-time base enforcement
 > (navigable floor), learned baselines, the `compare_envs` EnvSpec.
+>
+> **⚠️ FULLY-LATERAL REBUILD 2026-08-17 (supersedes the base-collision + F1 decisions above)** —
+> [`decisions/07`](decisions/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision)
+> / [`notebook/07`](notebook/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only).
+> To make the base **collision-free for real** (it was phasing through floor blocks), the scene is
+> reorganised into three **disjoint x-bands** (buffer \| objects \| shelf, left→right): the front-grasp
+> standoff keeps the base **south** of every object, so it slides laterally in a clear corridor and never
+> crosses the field. **All picks now use the front grasp** (cubes too); **strict base collision is ON**
+> with **no fallback**; objects are **region-sampled** (0.6×0.6 band, 0.12 m exclusion radius, random
+> object-type order, axis-aligned) instead of a fixed grid. **F1 clutter is RETIRED** — a sweep showed
+> **no floor neighbour obstructs the front grasp at the grasp config** (front-grasp obstruction is only an
+> approach-path *reach-over*), so the ±x blocker plan cannot work; the depth **reach-over among goals** is
+> the difficulty instead (naive pick order fails refinement, the oracle's **south-to-north** order
+> succeeds). Buffer/relocation machinery kept **inert** (`CLUTTER=0`). Oracle certifies sampled r0–r3
+> **4/4**. Taxonomy = **F2 + F3 + reach-over**. Still deferred: eager `reach_blockers` relation + K_max
+> re-calibration, coverage/waste, learned baselines, collection/training.
 
 ---
 

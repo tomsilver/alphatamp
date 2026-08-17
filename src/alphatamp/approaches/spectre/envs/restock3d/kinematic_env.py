@@ -1,20 +1,22 @@
 """Kinematic PyBullet Restock3D environment (single multi-section shelf).
 
 A custom :class:`ObjectCentricKinematic3DRobotEnv` subclass: a floor staging area with
-heterogeneous movable objects (small cubes + tall blocks + clutter) at **scripted** poses, and a
-**single shelf** whose boards are placed to make a **tall section (bottom)** and a **short section
-(top)**. A tall block fits under the tall section but, kept upright by the front-grasp
-translate-only place, collides with the board capping the short section (F3). Feasibility is decided
-by real PyBullet collision (the base env reverts colliding moves; the pick/place controllers fail
-motion planning when no collision-free solution exists), NOT by a hand-written geometric gate.
+heterogeneous movable objects (small cubes + tall blocks + clutter) at **scripted**
+poses, and a **single shelf** whose boards are placed to make a **tall section
+(bottom)** and a **short section (top)**. A tall block fits under the tall section but,
+kept upright by the front-grasp translate-only place, collides with the board capping
+the short section (F3). Feasibility is decided by real PyBullet collision (the base env
+reverts colliding moves; the pick/place controllers fail motion planning when no
+collision-free solution exists), NOT by a hand-written geometric gate.
 
-Regions are placement targets (metadata in :mod:`region_geometry`), not PyBullet bodies, so they
-never look like solid shelf blocks. The shelf boards ARE solid collision bodies, which is what makes
-the height-mismatch failure (F3) real.
+Regions are placement targets (metadata in :mod:`region_geometry`), not PyBullet bodies,
+so they never look like solid shelf blocks. The shelf boards ARE solid collision bodies,
+which is what makes the height-mismatch failure (F3) real.
 
-The env is constructed from explicit ``object_specs`` + a ``pose_fn`` + ``region_infos`` so a
-Stage-0 probe can build arbitrary micro-scenes; :func:`stratum_env_args` builds them for a
-collection stratum, and :class:`Restock3DEnv` is the constant-object gym wrapper.
+The env is constructed from explicit ``object_specs`` + a ``pose_fn`` + ``region_infos``
+so a Stage-0 probe can build arbitrary micro-scenes; :func:`stratum_env_args` builds
+them for a collection stratum, and :class:`Restock3DEnv` is the constant-object gym
+wrapper.
 """
 
 from __future__ import annotations
@@ -51,11 +53,14 @@ from .region_geometry import (
 
 _SHELF_HEIGHT = 0.0127  # board thickness
 
-# Clutter blocks per stratum: one movable clutter cube next to the first cube goal so a top-down grasp
-# is obstructed (F1), relocated to a floor buffer to clear it. **r1 only** -- F1+F3 (r3) is unenumerable
-# (Gate-3, decisions/07 2026-08-15). MUST match generator._CLUTTER_PER_STRATUM (this drives the object
-# SPECS; the generator drives their POSITIONS).
-CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 1, 2: 0, 3: 0}
+# Clutter blocks per stratum -- **RETIRED, all 0** (decisions/07 2026-08-16). Under the unified FRONT
+# grasp a floor neighbour never obstructs a grasp at the grasp config (verified by sweep: grasp_blockers
+# empty for every +/-x/-y offset), so F1 grasp-obstruction clutter cannot be realised; the difficulty is
+# the depth REACH-OVER among goals instead (the front grasp reaches north over anything nearer, so a back
+# object is blocked until nearer ones are cleared -- naive order fails, south-to-north succeeds). The
+# clutter object SPECS + the buffer/relocation machinery are kept inert (one flag away). This drives the
+# object SPECS; generator._CLUTTER_PER_STRATUM drives their POSITIONS -- the two MUST match.
+CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
 
 
 @dataclass(frozen=True)
@@ -63,13 +68,14 @@ class Restock3DEnvConfig(Kinematic3DEnvConfig, metaclass=FinalConfigMeta):
     """Config for :class:`ObjectCentricRestock3DEnv`."""
 
     max_action_mag: float = 0.2
-    # Step-time base-collision enforcement stays OFF. The base motion PLANNER now routes around floor
-    # movables (place_controller._base_nav_collision_ids) with a fallback to a straight path when the
-    # wide base (~0.55 m) is boxed by the dense floor (~0.30 m spacing). That best-effort fallback may
-    # overlap floor movables, so step-time reversion would re-break navigation (empirically ~0% oracle
-    # certification). Avoidance is delivered by the planner, not by reverting steps. See decisions/07
-    # 2026-08-15; the proper enforceable fix is a navigable floor layout (generation tuning).
-    check_base_collisions: bool = False
+    # Step-time base-collision enforcement is ON (fully-lateral layout, decisions/07 2026-08-16). The
+    # object + buffer regions are disjoint x-bands to the -x of the shelf, and the front-grasp standoff
+    # (~0.72 m) keeps the base SOUTH (y <= ~0.55) of every object (y >= ~0.60), so the base never has to
+    # cross the object field to reach the shelf. The base motion planner routes laterally in that clear
+    # southern corridor, so strict enforcement no longer collapses solvability (the ~0% collapse was the
+    # old shelf-north layout where every place drove the base through the floor). The get_base_plan
+    # shelf-only fallback is removed (Gate C) so a genuinely boxed base fails instead of phasing through.
+    check_base_collisions: bool = True
     realistic_bg: bool = True  # a real room backdrop, not the blank void
     gripper_open_threshold: float = 0.01
 
@@ -102,21 +108,22 @@ class Restock3DEnvConfig(Kinematic3DEnvConfig, metaclass=FinalConfigMeta):
     clutter_half: tuple[float, float, float] = (0.025, 0.025, 0.05)
 
     def get_camera_kwargs(self) -> dict:
-        # Frame both the floor pick area (near the robot at the origin) and the shelf at
-        # (0.4, 1.4): centre on the midpoint of the action, 3/4 view, tilted down.
+        # Fully-lateral layout: frame the whole horizontal strip -- buffer band (x ~ -1.1), object
+        # region (x ~ -0.5), and the shelf at (0.4, 1.4) -- centred on the strip midpoint, 3/4 view,
+        # tilted down. Wider than the old forward-staging framing (decisions/07 2026-08-16).
         return {
-            "camera_target": (0.3, 0.7, 0.4),
-            "camera_yaw": 50,
-            "camera_distance": 2.8,
-            "camera_pitch": -25,
+            "camera_target": (-0.3, 0.85, 0.3),
+            "camera_yaw": 55,
+            "camera_distance": 3.4,
+            "camera_pitch": -28,
         }
 
 
 class Restock3DObjectCentricState(Shelf3DObjectCentricState):
     """A state in :class:`ObjectCentricRestock3DEnv`.
 
-    Subclasses ``Shelf3DObjectCentricState`` so the stock kinematic ``GroundPickController``
-    (which type-asserts that class) can be reused unchanged.
+    Subclasses ``Shelf3DObjectCentricState`` so the stock kinematic
+    ``GroundPickController`` (which type-asserts that class) can be reused unchanged.
     """
 
 
@@ -266,13 +273,17 @@ class ObjectCentricRestock3DEnv(
         return set(self._shelf_ids)
 
     def _get_surfaces_supporting_object(self, object_id: int) -> set[int]:
-        """The base env registers only the shelf boards as placement surfaces, so an object placed on
-        the FLOOR (buffer relocation) would never satisfy the ungrasp condition and stay held. Count
+        """The base env registers only the shelf boards as placement surfaces, so an
+        object placed on the FLOOR (buffer relocation) would never satisfy the ungrasp
+        condition and stay held.
+
+        Count
         the floor explicitly: an object whose underside is within ``min_placement_dist`` of ``z=0`` is
         floor-supported (sentinel id ``-1``). Only the ungrasp check reads this, so grasping and shelf
         placement are unaffected; the sentinel only fires when the gripper opens near the floor -- the
         ``PlaceBuffer`` case -- letting the cube release onto a buffer spot. See decisions/07
-        2026-08-15 (F1 clutter re-added)."""
+        2026-08-15 (F1 clutter re-added).
+        """
         import pybullet as p  # local import; only needed here
 
         supports = super()._get_surfaces_supporting_object(object_id)
@@ -364,7 +375,8 @@ def stratum_pose_fn(stratum: int) -> PoseFn:
 
 
 def stratum_env_args(stratum: int, config: Restock3DEnvConfig | None = None):
-    """The (object_specs, pose_fn, region_infos, config) tuple for a collection stratum."""
+    """The (object_specs, pose_fn, region_infos, config) tuple for a collection
+    stratum."""
     if config is None:
         config = Restock3DEnvConfig()
     return (

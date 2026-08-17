@@ -39,17 +39,26 @@ def test_goal_object_names() -> None:
     ]
 
 
-def test_clutter_rings_first_cube() -> None:
-    # r1 places one clutter cube +y of the first cube goal (F1); r0/r2/r3 have none
-    # (F1 composes with r1's F2 but not r3's F3 -- decisions/07 2026-08-15).
-    r1 = G.build_spec(0, 1)
-    assert len(r1.clutter_floor) == G._CLUTTER_PER_STRATUM[1] == 1
-    cx, cy = r1.small_floor[0]
-    clx, cly = r1.clutter_floor[0]
-    assert clx == round(cx + G._CLUTTER_DX, 4)
-    assert cly == round(cy + G._CLUTTER_DY, 4)  # +y at the calibrated blocking gap
-    for stratum in (0, 2, 3):
-        assert not G.build_spec(0, stratum).clutter_floor
+def test_region_sampling_exclusion_radius() -> None:
+    # Objects are region-sampled in the object band (fully-lateral layout, decisions/07 2026-08-16):
+    # every pair of goal objects is >= the exclusion radius apart, all inside the band, axis-aligned.
+    # No clutter is placed -- blockers were dropped (reach-over ordering is the difficulty; the front
+    # grasp is not obstructed by a floor neighbour at the grasp config).
+    import math
+
+    for stratum in G.STRATA:
+        for seed in range(5):
+            spec = G.build_spec(seed, stratum)
+            floor = spec.small_floor + spec.tall_floor
+            for i, a in enumerate(floor):
+                assert G._OBJECT_REGION_X[0] <= a[0] <= G._OBJECT_REGION_X[1]
+                assert G._OBJECT_REGION_Y[0] <= a[1] <= G._OBJECT_REGION_Y[1]
+                for b in floor[i + 1 :]:
+                    assert (
+                        math.hypot(a[0] - b[0], a[1] - b[1])
+                        >= G._EXCLUSION_RADIUS - 1e-9
+                    )
+            assert not spec.clutter_floor  # blockers dropped (reach-over-only)
 
 
 def test_problem_id_recovers_stratum() -> None:

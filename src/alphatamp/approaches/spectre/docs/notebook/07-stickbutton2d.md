@@ -4,6 +4,50 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only"></a>
+## 2026-08-17 — restock3d fully-lateral rebuild: oracle certifies, front-grasp-only, reach-over ordering
+
+<!--strip-->
+> **id**
+> `2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only` ·
+> **status** active · **tracks** method, env-restock3d, evaluation
+<!--/strip-->
+
+**What.** Rebuilt restock3d for true collision-free realism (base was phasing through floor blockers):
+fully-lateral disjoint x-bands (buffer | objects | shelf), front-grasp for all picks, strict base
+collision + no fallback, region rejection sampling. ADR:
+[`decisions/07` 2026-08-17](../decisions/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision).
+
+**Result.**
+- **Gate A — front-grasp for cubes+blocks:** Stage-0 **4/4** (cube→tall, cube→short, block→tall,
+  block→short still fails F3, ceiling overlap=True); relocate→store **PASS**. The existing
+  `front_grasp_transform` grips a cube fine (no calibration change). Only fix: `BufferPlaceController`
+  base standoff 0.52→0.72 (the top-down envelope folds the arm into its own base; documented `d≥0.70`).
+- **±x blocker calibration (the pivot):** swept a clutter cube AND a full-height block across the whole
+  neighbourhood of a target (dx,dy ∈ ±0.14 m) — `grasp_blockers` returns **empty at every offset**.
+  A floor neighbour never contacts the arm at the front-grasp config; front-grasp obstruction is only an
+  approach-path reach-over. ⇒ ±x sample-and-verify blockers can't work; user chose **reach-over ordering
+  only** (no clutter, no buffer).
+- **Gate B/C — layout + strict collision:** first oracle run r0/r1/r2 **3/3** but **r3 0/3** (timed out
+  at 200 s). Root cause: the grid stacked tall blocks in the back row with cubes in front of them, and
+  the front grasp reaches north *over* nearer objects → the naive talls-first order is reach-over-blocked.
+  Fixed by ordering the oracle store phase **south-to-north (nearest-first)** → **r3 3/3**. Full re-run,
+  all strata **3/3**: cap_r (max×1.2) r0 24.0 / r1 63.9 / r2 42.9 / r3 60.1 s.
+- **Gate D — region sampler:** oracle certifies **randomly-sampled** scenes **4/4 on every stratum**
+  (cap_r r0 56 / r1 65 / r2 57 / r3 60 s). Exclusion radius (0.12 m) respected, in-band, random object
+  types, deterministic.
+- **Tests:** fast restock3d suite 29 passed; slow suite 5 passed + 4 skipped (retired F1-clutter tests),
+  0 failed.
+
+**Takeaway / next.** The core (fully-lateral, collision-free, front-grasp-only, region-sampled) is done
+and oracle-certified; base phase-through resolved for real (strict collision, no fallback). cap_r is
+~2–3× v1 (strict collision + front-grasp refinement) — a re-calibration note. The reach-over is the
+new difficulty (naive order fails, south-to-north succeeds); **next**: a geometric `reach_blockers`
+relation in the eager so the pool/K_max see it, then K_max re-calibration. Buffer/relocation machinery
+kept inert (CLUTTER=0), F1 retired; taxonomy now F2 + F3 + reach-over.
+
+---
+
 <a id="2026-08-15-restock3d-f1-clutter-build-mechanism-calibration"></a>
 ## 2026-08-15 — Restock3D F1 clutter build: mechanism, calibration, pool-generation limits
 

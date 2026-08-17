@@ -4,6 +4,74 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision"></a>
+## 2026-08-17 — restock3d fully-lateral layout + front-grasp-only + strict collision + region sampler
+
+<!--strip-->
+> **id** `2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision`
+> · **status** active · **tracks** method, env-restock3d, evaluation, data
+> · **supersedes** the base-collision (best-effort) and F1-clutter decisions of
+> [2026-08-15](#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer)
+<!--/strip-->
+
+**Context.** Restock3D's mobile base **phased through floor blockers** on its way to the shelf:
+`check_base_collisions=False` and a shelf-only straight-line fallback in `get_base_plan` (the
+best-effort compromise of [2026-08-15](#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer)),
+because enabling strict collision on the *shelf-north* layout collapsed oracle certification to ~0% —
+every place drove the wide base (0.55×0.51 m) through the forward floor-staging area to reach the
+shelf at y=1.4. The user asked to fix this **structurally**. Numbers in
+[`notebook/07` 2026-08-17](../notebook/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only).
+
+**Decision.**
+- **Fully-lateral layout — three disjoint x-bands (buffer | objects | shelf, left→right).** The shelf
+  stays at (0.4, 1.4); the object sampling region (x∈[−0.80,−0.20], y∈[0.60,1.20]) and buffer band
+  (x∈[−1.35,−0.90]) move to the −x of the shelf. The front-grasp standoff (~0.72 m) keeps the base
+  **south** (y ≤ ~0.55) of every object (y ≥ 0.60), so it never crosses the object field: it slides
+  laterally in a clear southern corridor and reaches north into each target. Camera re-framed.
+- **Front grasp for ALL picks** (cubes too, `RestockAdaptivePickController._select` always front). The
+  front grasp parks the base south facing +y, which is what makes inter-target motion lateral; the
+  existing height-adaptive `front_grasp_transform` handles cubes with no calibration change (Stage-0
+  4/4). Place-side: `RegionAdaptivePlaceController` now uses the **translate-only** place for *every*
+  object (cubes too), because a front-grasped cube run through the old *analytic* cube place lands
+  **tilted 45°** — the analytic place reorients by `R_place @ R_grasp`, calibrated for a top-down grasp,
+  so the front grasp's Rx(−135°) leaks into the symmetric cube (measured euler [−135,0,180]); the
+  translate-only place preserves the axis-aligned floor orientation and lands the cube **upright**
+  (euler [0,0,0]). `BufferPlaceController`'s base standoff → the front envelope (0.52→0.72; the top-down
+  envelope folds the arm into its own base). `grasp_blockers` uses the front grasp unconditionally
+  (probe matches the controller).
+- **Strict base-collision enforcement ON** (`check_base_collisions=True`), the shelf-only fallback
+  **removed** (`get_base_plan` returns None when boxed → an intended refinement failure, never a
+  phase-through). Safe because the lateral corridor is provably clear.
+- **Region rejection sampling** replaces the fixed grid: objects sampled uniformly in the 0.6×0.6 band
+  with a 0.12 m exclusion radius, object types assigned in **random order**, axis-aligned, deterministic
+  in seed, reseed-on-failure. `generator._sample_positions`/`_rng_shuffle`/`build_spec`.
+- **South-to-north pick order.** In this layout the front grasp reaches north *over* anything nearer
+  than the target, so a back object is unreachable until the nearer ones are cleared. The oracle
+  (`build_skeleton`) and the demo now store **nearest-first** (ascending floor-y); the naive order hits
+  the reach-over and fails refinement — this is the "far is harder" difficulty.
+- **Intentional blockers DROPPED — reach-over ordering is the difficulty** (user decision). A calibration
+  sweep showed **no floor neighbour obstructs the front grasp at the grasp config** (grasp_blockers
+  empty for every ±x/±y offset in ±0.14 m, cube and full-height clutter alike): front-grasp obstruction
+  is purely an approach-path reach-over, which the final-config probe cannot see. So the ±x
+  sample-and-verify blocker plan cannot work; the depth reach-over among goals supplies the difficulty
+  instead. `CLUTTER_PER_STRATUM=0`; the F1 clutter / `PlaceBuffer`/`OnBuffer` / `BufferPlaceController`
+  relocation machinery is **kept inert** (one flag away), not removed.
+
+**Consequences.** Oracle certifies **all strata 4/4** on randomly-sampled scenes with strict collision
+and no fallback; the base moves laterally with **no phase-through** (the user's original concern is
+resolved for real, not best-effort). cap_r rises vs v1 (r0 56 / r1 65 / r2 57 / r3 60 s) from strict
+collision + front-grasp refinement — a re-calibration item. F1 grasp-obstruction is retired (the front
+grasp is not blockable by a floor neighbour); the failure taxonomy is now **F2 (over-assignment) + F3
+(tall-into-short) + reach-over ordering**. Follow-ups (open): the eager heuristic needs a geometric
+`reach_blockers` relation so the pool/K_max surface the south-to-north feasible order (the difficulty is
+otherwise invisible to the non-refinement proxy); K_max re-calibration; optional removal of the inert
+buffer machinery. Three retired F1-clutter slow tests are skipped (documented), not deleted. The
+`front-grasp-tall-block/` reference module (user-uploaded, showing a single front grasp handles both
+cube and tall block) is kept as reference but not imported — the deployed front grasp is the existing
+`place_controller` one.
+
+---
+
 <a id="2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer"></a>
 ## 2026-08-15 — Restock3D F1 clutter re-added: relocation buffer, best-effort base collision, r1-only recipe
 

@@ -71,25 +71,28 @@ _PLACE_JITTER = 0.015
 #: ``min_placement_dist`` so it is released, but not penetrating the board).
 _PLACE_Z_PAD = 3e-3
 
-#: Floor buffer zone for relocated F1 clutter: an empty band between the staging floor (goals/clutter
-#: rest at y <= ~0.42) and the shelf front (regions at y ~ 1.35), reachable by a top-down place. A cube
-#: resting here (floor height, xy in the zone) is abstracted ``OnBuffer`` -- off every goal's grasp --
-#: not ``OnFloor``, so ``Pick`` (precond ``OnFloor``) will not re-pick it. Buffers are controller-side
-#: placement spots, NOT abstract regions (a floor "region" at surface_z ~ 0 would be surface-z-matched
-#: and wrongly emit ``Stored``; see decisions/07 2026-08-15).
+#: Floor buffer zone for relocated F1 clutter: a disjoint x-band to the -x (LEFT) of the object
+#: sampling region (the fully-lateral layout -- buffer | objects | shelf, left to right; see
+#: decisions/07 2026-08-16). The base reaches it by sliding laterally along the southern corridor and
+#: front-placing from the south. A cube resting here (floor height, xy in the zone) is abstracted
+#: ``OnBuffer`` -- off every goal's grasp -- not ``OnFloor``, so ``Pick`` (precond ``OnFloor``) won't
+#: re-pick it. The zone is DISJOINT in x from the object region so a staged goal is never mis-labeled
+#: ``OnBuffer``. Buffers are controller-side placement spots, NOT abstract regions (a floor "region"
+#: at surface_z ~ 0 would be surface-z-matched and wrongly emit ``Stored``; see decisions/07
+#: 2026-08-15).
 BUFFER_SPOTS: list[tuple[float, float]] = [
-    (0.30, 0.70),
-    (0.60, 0.70),
-    (0.30, 0.95),
-    (0.60, 0.95),
+    (-1.15, 0.80),
+    (-1.00, 0.80),
+    (-1.15, 1.05),
+    (-1.00, 1.05),
 ]
-_BUFFER_ZONE_X = (0.10, 0.80)
-_BUFFER_ZONE_Y = (0.55, 1.10)
+_BUFFER_ZONE_X = (-1.35, -0.90)
+_BUFFER_ZONE_Y = (0.55, 1.25)
 
 
 def in_buffer_zone(x: float, y: float) -> bool:
-    """Whether a floor xy lies inside the relocation buffer band (used by the abstractor to emit
-    ``OnBuffer`` instead of ``OnFloor``)."""
+    """Whether a floor xy lies inside the relocation buffer band (used by the abstractor
+    to emit ``OnBuffer`` instead of ``OnFloor``)."""
     return (
         _BUFFER_ZONE_X[0] <= x <= _BUFFER_ZONE_X[1]
         and _BUFFER_ZONE_Y[0] <= y <= _BUFFER_ZONE_Y[1]
@@ -106,14 +109,14 @@ _GRIP_INSET = 0.015
 
 
 def _arm_collision_ids(sim) -> set[int]:
-    """Env collision bodies PLUS the robot's OWN mobile base (a separate PyBullet body nothing else
-    checks), so an arm plan cannot fold the elbow through the base."""
+    """Env collision bodies PLUS the robot's OWN mobile base (a separate PyBullet body
+    nothing else checks), so an arm plan cannot fold the elbow through the base."""
     return sim._get_collision_object_ids() | {sim.robot.base.robot_id}
 
 
 def _smooth_base_plan(plan, sim):
-    """Densify an SE2 base plan to constant small steps so the base glides directly to the target
-    instead of teleporting between sparse motion-planner waypoints.
+    """Densify an SE2 base plan to constant small steps so the base glides directly to
+    the target instead of teleporting between sparse motion-planner waypoints.
 
     The substrate's SE2 densifier interpolates rotation along the shortest arc, which for a plan whose
     consecutive waypoints straddle the ``±π`` branch cut produces a value marginally outside
@@ -131,11 +134,14 @@ def _smooth_base_plan(plan, sim):
 
 
 def _place_reach_collision_ids(sim, state) -> set[int]:
-    """Collision set for the place reach-in / lift: the shelf boards (F3) + any shelf-*resident*
-    movables (F2), but NOT floor movables. The held object travels UP to the shelf, away from the
-    staging area, so staging objects must not block the reach-in -- otherwise a dense multi-object
-    scene fails placements spuriously (nothing to do with region assignment). A movable resting above
-    the floor is a resident; one on the floor is staging."""
+    """Collision set for the place reach-in / lift: the shelf boards (F3) + any
+    shelf-*resident* movables (F2), but NOT floor movables.
+
+    The held object travels UP to the shelf, away from the staging area, so staging
+    objects must not block the reach-in -- otherwise a dense multi-object scene fails
+    placements spuriously (nothing to do with region assignment). A movable resting
+    above the floor is a resident; one on the floor is staging.
+    """
     held = sim._grasped_object_id
     ids = set(sim.shelf_structure_ids())
     for name in sim.movable_names():
@@ -148,16 +154,18 @@ def _place_reach_collision_ids(sim, state) -> set[int]:
 def _base_nav_collision_ids(
     sim, state, exclude: frozenset[str] = frozenset()
 ) -> set[int]:
-    """Base-navigation obstacle set: shelf boards + floor-resting movables, minus ``exclude`` (the
-    object being approached or carried).
+    """Base-navigation obstacle set: shelf boards + floor-resting movables, minus
+    ``exclude`` (the object being approached or carried).
 
-    Previously the four ``get_base_plan`` call sites passed only ``shelf_structure_ids()``, so floor
-    clutter was invisible to both the base motion planner and (with ``check_base_collisions`` on) the
-    step-time reversion -- the mobile base drove straight through floor blocks. Including floor
-    movables here routes the base *around* them. A movable resting above the floor (z > 0.2) is a
-    shelf resident, out of the base's swept volume and already covered by the reach-in set, so only
-    floor-level movables count. ``exclude`` drops the pick/place target itself: nav must not avoid the
-    thing it is reaching for or carrying."""
+    Previously the four ``get_base_plan`` call sites passed only
+    ``shelf_structure_ids()``, so floor clutter was invisible to both the base motion
+    planner and (with ``check_base_collisions`` on) the step-time reversion -- the
+    mobile base drove straight through floor blocks. Including floor movables here
+    routes the base *around* them. A movable resting above the floor (z > 0.2) is a
+    shelf resident, out of the base's swept volume and already covered by the reach-in
+    set, so only floor-level movables count. ``exclude`` drops the pick/place target
+    itself: nav must not avoid the thing it is reaching for or carrying.
+    """
     ids = set(sim.shelf_structure_ids())
     for name in sim.movable_names():
         if name in exclude:
@@ -168,7 +176,8 @@ def _base_nav_collision_ids(
 
 
 class RestockPickController(GroundPickController):
-    """Top-relative grasp pick: grasp near the object's top so a tall block is graspable.
+    """Top-relative grasp pick: grasp near the object's top so a tall block is
+    graspable.
 
     Identical to the stock ``GroundPickController`` except the grasp end-effector pose targets the
     object's top (``center + half_z - _GRIP_INSET``) instead of ``center + 0.02`` — the latter is
@@ -306,7 +315,8 @@ class RestockPickController(GroundPickController):
 
 
 class RegionPlaceController(BasePlaceController):
-    """Place the held object into a named region (centre + surface z from ``region_infos``)."""
+    """Place the held object into a named region (centre + surface z from
+    ``region_infos``)."""
 
     def __init__(
         self,
@@ -406,24 +416,25 @@ class RegionPlaceController(BasePlaceController):
 
 
 def get_base_plan(
-    sim, target_base_pose, collision_bodies, held_object, held_tf, allow_fallback=True
+    sim, target_base_pose, collision_bodies, held_object, held_tf, allow_fallback=False
 ):
-    """Densified base motion plan to ``target_base_pose`` carrying the held object (or None).
+    """Densified base motion plan to ``target_base_pose`` carrying the held object (or
+    None).
 
     The plan is remapped to constant small steps so the base glides directly to the target instead
     of teleporting between sparse motion-planner waypoints.
 
-    ``collision_bodies`` now includes floor movables (see ``_base_nav_collision_ids``) so the base
-    routes *around* floor clutter rather than driving through it. But the mobile base is wide
-    (~0.55x0.51 m) relative to the ~0.30 m floor-object spacing, so in a dense scene the base can be
-    geometrically boxed and the birrt returns no path. Rather than hard-fail the pick (which would
-    collapse solvability -- an empirical ~0% oracle certification, decisions/07 2026-08-15), we fall
-    back to planning against the *minimal* obstacle set (shelf boards only): the pre-fix behaviour
-    that lets the base still reach the target. Avoidance is therefore **best-effort** -- the base
-    avoids floor movables wherever a collision-free path exists and only reverts to a straight path
-    when boxed. Because the fallback path may overlap floor movables, step-time base-collision
-    enforcement (``Restock3DEnvConfig.check_base_collisions``) must stay OFF, or it would revert the
-    fallback moves and re-break navigation."""
+    ``collision_bodies`` includes floor movables (see ``_base_nav_collision_ids``) so the base routes
+    *around* floor objects. **No fallback:** in the fully-lateral layout the base approaches every
+    target from a clear southern corridor (objects/buffer are disjoint -x bands north of the corridor,
+    the shelf is reached from the south), so a collision-free path always exists on the feasible order.
+    A ``None`` therefore means the base is genuinely boxed -- an intended refinement failure -- not a
+    reason to phase through: the old shelf-only straight-line fallback (which could overlap floor
+    movables and forced ``check_base_collisions`` OFF) is removed (decisions/07 2026-08-16). Strict
+    step-time base-collision enforcement is now ON. ``allow_fallback`` is retained for call-site
+    compatibility but is inert.
+    """
+    del allow_fallback
 
     def _plan(bodies):
         plan = run_single_arm_mobile_base_motion_planning(
@@ -440,14 +451,7 @@ def get_base_plan(
         )
         return None if plan is None else _smooth_base_plan(plan, sim)
 
-    plan = _plan(collision_bodies)
-    if plan is None and allow_fallback:
-        shelf_only = set(sim.shelf_structure_ids())
-        if (
-            set(collision_bodies) != shelf_only
-        ):  # avoid a pointless second identical plan
-            plan = _plan(shelf_only)
-    return plan
+    return _plan(collision_bodies)
 
 
 def create_lifted_controllers(
@@ -455,9 +459,10 @@ def create_lifted_controllers(
 ) -> dict[str, LiftedParameterizedController]:
     """Height-adaptive lifted pick + region place controllers for Restock3D.
 
-    ONE Pick / ONE Place skill: the dispatchers select the front-grasp path for tall blocks and the
-    top-down / analytic path for cubes from the target height. The pick Box is the union of both
-    styles' bounds (sample_parameters dispatches to the style-appropriate range).
+    ONE Pick / ONE Place skill: the dispatchers select the front-grasp path for tall
+    blocks and the top-down / analytic path for cubes from the target height. The pick
+    Box is the union of both styles' bounds (sample_parameters dispatches to the style-
+    appropriate range).
     """
     del action_space
 
@@ -509,7 +514,8 @@ def create_lifted_controllers(
     )
 
     class BufferPlaceControllerInner(BufferPlaceController):
-        """BufferPlaceController bound to this problem's ``sim`` for the lifted controller."""
+        """BufferPlaceController bound to this problem's ``sim`` for the lifted
+        controller."""
 
         def __init__(self, objects):  # type: ignore[no-untyped-def]
             super().__init__(objects, sim)
@@ -569,15 +575,21 @@ _BASE_SMOOTH_AMT = 300
 
 
 def top_down_grasp_transform(half_z: float) -> Pose:
-    """Top-down grasp transform: near the object top for a tall object, stock offset for a short
-    one. Shared by the top-down pick and the refiner's F1 probe."""
+    """Top-down grasp transform: near the object top for a tall object, stock offset for
+    a short one.
+
+    Shared by the top-down pick and the refiner's F1 probe.
+    """
     grasp_z = max(_STOCK_GRASP_Z, float(half_z) - _GRIP_INSET)
     return Pose((0.0, 0.0, grasp_z), GRASP_TRANSFORM_TO_OBJECT.orientation)
 
 
 def front_grasp_transform(half_z: float) -> Pose:
-    """Front (45deg) grasp transform, landing the EE at a fixed reachable height (grip lower on a
-    tall block). Shared by the front pick and the refiner's F1 probe."""
+    """Front (45deg) grasp transform, landing the EE at a fixed reachable height (grip
+    lower on a tall block).
+
+    Shared by the front pick and the refiner's F1 probe.
+    """
     half_z = float(half_z)
     offset = _FRONT_GRASP_TARGET_EE_Z - half_z
     lim = max(0.0, half_z - _FRONT_GRIP_MARGIN)
@@ -840,15 +852,17 @@ class RestockFrontPlaceController(BasePlaceController):
 
 
 # ==========================================================================================
-# Buffer place: relocate an F1 clutter cube to a free floor buffer spot (top-down place onto the
-# floor, symmetric to the top-down cube pick). Clears a cube goal's obstructed grasp so it can be
-# picked; the buffered cube is abstracted OnBuffer (off every grasp), not Stored.
+# Buffer place: relocate an F1 clutter cube to a free floor buffer spot (FRONT translate-only place
+# onto the floor, symmetric to the unified front pick). Clears a target's obstructed grasp so it can
+# be picked; the buffered cube is abstracted OnBuffer (off every grasp), not Stored.
 # ==========================================================================================
 
-#: Top-down pre-place back-off along the tool approach axis (tool -z == up for a top-down grasp).
-_BUFFER_PLACE_STANDOFF = 0.10
-#: Base standoff distance for the floor buffer place (same envelope as the top-down floor pick).
-_BUFFER_PLACE_BASE_DISTANCE = float(np.mean(MOVE_TO_TARGET_DISTANCE_BOUNDS))
+#: Pre-place back-off along the grasp approach axis (tool -z); mirrors the front shelf place.
+_BUFFER_PLACE_STANDOFF = _FRONT_PLACE_STANDOFF
+#: Base standoff for the floor buffer place. Must match the FRONT-grasp envelope (>= 0.70): the
+#: closer top-down envelope (~0.525) folds the arm into its own base, so the place MP fails on a
+#: front-grasped cube. Same distance as the front floor pick / front shelf place.
+_BUFFER_PLACE_BASE_DISTANCE = float(np.mean(_FRONT_PICK_DISTANCE_BOUNDS))
 
 
 class BufferPlaceController(BasePlaceController):
@@ -880,7 +894,8 @@ class BufferPlaceController(BasePlaceController):
         return self._lifted
 
     def _free_buffer_spot(self, state: ObjectCentricState) -> tuple[float, float]:
-        """First buffer spot not already occupied by another movable (>= 0.12 m away)."""
+        """First buffer spot not already occupied by another movable (>= 0.12 m
+        away)."""
         occupied = []
         for name in self._sim.movable_names():
             if name == self._target.name:
@@ -972,20 +987,22 @@ def _target_uses_front(state: ObjectCentricState, target_name: str) -> bool:
 
 
 class RestockAdaptivePickController(GroundPickController):
-    """Front grasp for tall blocks, top-down grasp for cubes (chosen from the target height)."""
+    """Front grasp for tall blocks, top-down grasp for cubes (chosen from the target
+    height)."""
 
     def __init__(self, objects: Sequence[Object], sim) -> None:
         super().__init__(objects, sim)
         self._inner = None
 
     def _select(self, x: ObjectCentricState):
+        del x  # grasp style no longer depends on object height
         if self._inner is None:
-            cls = (
-                RestockFrontPickController
-                if _target_uses_front(x, self.objects[1].name)
-                else RestockPickController
-            )
-            self._inner = cls(self.objects, self._sim)
+            # Unified FRONT grasp for every pick (cubes + tall blocks). The front grasp parks the
+            # base SOUTH of the target facing +y and reaches north, which is what lets inter-target
+            # base motion stay lateral (the fully-lateral layout). The front grip height still
+            # adapts per object height inside ``front_grasp_transform``. (Top-down ``RestockPick
+            # Controller`` is retired from the dispatch but kept for reference.)
+            self._inner = RestockFrontPickController(self.objects, self._sim)
         return self._inner
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:
@@ -1005,7 +1022,15 @@ class RestockAdaptivePickController(GroundPickController):
 
 
 class RegionAdaptivePlaceController(BasePlaceController):
-    """Translate-only place for tall blocks, analytic front-orientation place for cubes."""
+    """Translate-only place for EVERY object (tall blocks + cubes).
+
+    Both are now FRONT-grasped (Gate A), so the translate-only place derives the EE from the actual
+    grasp and preserves the object's world orientation floor→shelf — a cube that was axis-aligned on
+    the floor lands **upright** on the shelf. (The analytic ``RegionPlaceController`` reoriented the
+    object by ``R_place @ R_grasp``; calibrated for a top-down grasp, it leaks the front grasp's 45°
+    into the symmetric cube and lands it tilted -- decisions/07 2026-08-17. Kept for reference, no
+    longer dispatched.)
+    """
 
     def __init__(
         self, objects: Sequence[Object], sim, region_infos: dict[str, RegionInfo]
@@ -1015,13 +1040,11 @@ class RegionAdaptivePlaceController(BasePlaceController):
         self._inner = None
 
     def _select(self, x: ObjectCentricState):
+        del x  # place style no longer depends on object height (all front-grasped)
         if self._inner is None:
-            cls = (
-                RestockFrontPlaceController
-                if _target_uses_front(x, self.objects[1].name)
-                else RegionPlaceController
+            self._inner = RestockFrontPlaceController(
+                self.objects, self._sim, self._region_infos
             )
-            self._inner = cls(self.objects, self._sim, self._region_infos)
         return self._inner
 
     def sample_parameters(self, x: ObjectCentricState, rng: np.random.Generator) -> Any:

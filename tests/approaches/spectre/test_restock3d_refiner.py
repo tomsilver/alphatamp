@@ -1,8 +1,10 @@
-"""F1/F2/F3 attribution tests for the kinematic Restock3D recording sampler (probe-level).
+"""F1/F2/F3 attribution tests for the kinematic Restock3D recording sampler (probe-
+level).
 
-Drives the real-collision probes directly on hand-built micro-scenes: F3 (tall block vs short-cell
-ceiling, culprit-free), F2 (place onto a region resident, resident named), F1 (grasp blocked by tight
-clutter, clutter named). Marked ``slow`` — needs PyBullet + kinder (F1 also uses IKFast).
+Drives the real-collision probes directly on hand-built micro-scenes: F3 (tall block vs
+short-cell ceiling, culprit-free), F2 (place onto a region resident, resident named), F1
+(grasp blocked by tight clutter, clutter named). Marked ``slow`` — needs PyBullet +
+kinder (F1 also uses IKFast).
 """
 
 from __future__ import annotations
@@ -38,7 +40,8 @@ def _blas_shim() -> None:
 
 
 def _scene(specs, poses):
-    """Build a micro-scene sim + a tall/short region + a probe-only recording sampler."""
+    """Build a micro-scene sim + a tall/short region + a probe-only recording
+    sampler."""
     pytest.importorskip("kinder")
     _blas_shim()
     from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
@@ -131,11 +134,16 @@ def test_f2_place_onto_resident() -> None:
     assert "cube_goal1" in culprits
 
 
+@pytest.mark.skip(
+    reason="F1 grasp-obstruction retired under the unified FRONT grasp (decisions/07 2026-08-16): "
+    "a floor neighbour does not collide the arm at the front-grasp config, so grasp_blockers returns "
+    "empty for every +/-x offset (verified by sweep). Front-grasp obstruction is an approach-path "
+    "reach-over, handled by south-to-north pick order, not by this final-config probe. Machinery kept "
+    "inert (CLUTTER=0)."
+)
 def test_f1_grasp_blocked_by_clutter() -> None:
-    # F1 (grasp obstruction) is DEFERRED from restock3d v1 (needs relocatable goal-block blockers,
-    # a generator redesign), but the probe machinery is kept + tested one flag away. TALL clutter
-    # (0.20 m) beside the cube collides the arm at the top-down grasp config (a short neighbour does
-    # not — the open fingers clear it), matching what actually blocks the descent MP.
+    # (retired) Under the old TOP-DOWN cube grasp, a tall clutter beside the cube collided the arm at
+    # the grasp config. The unified front grasp is not obstructed by a floor neighbour.
     specs = [
         ("cube_goal1", (0.025, 0.025, 0.025), (0.1, 0.5, 0.1, 1.0)),
         ("clutter1", (0.025, 0.025, 0.10), (0.3, 0.3, 0.3, 1.0)),

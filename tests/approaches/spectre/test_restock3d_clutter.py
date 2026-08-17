@@ -1,9 +1,9 @@
 """F1 clutter + relocation tests for the kinematic Restock3D.
 
-Fast pure-logic tests (order-aware ``is_feasible_skeleton``, T5 penalty polarity) use lightweight
-stand-in operators/atoms and need no simulator. Slow tests (marked) build the real r1 clutter scene
-and exercise ``grasp_blockers``, the ``OnBuffer`` abstraction, and the oracle's relocation skeleton
-through PyBullet + kinder (+ IKFast).
+Fast pure-logic tests (order-aware ``is_feasible_skeleton``, T5 penalty polarity) use
+lightweight stand-in operators/atoms and need no simulator. Slow tests (marked) build
+the real r1 clutter scene and exercise ``grasp_blockers``, the ``OnBuffer`` abstraction,
+and the oracle's relocation skeleton through PyBullet + kinder (+ IKFast).
 """
 
 from __future__ import annotations
@@ -24,15 +24,16 @@ from alphatamp.approaches.spectre.envs.restock3d.eager_tables import (
 
 
 def _op(name: str, *argnames: str) -> SimpleNamespace:
-    """A stand-in ground operator with the ``.name`` / ``.parameters[i].name`` shape the eager
-    table logic reads."""
+    """A stand-in ground operator with the ``.name`` / ``.parameters[i].name`` shape the
+    eager table logic reads."""
     return SimpleNamespace(
         name=name, parameters=[SimpleNamespace(name=a) for a in argnames]
     )
 
 
 def _state(*atoms: tuple[str, str]) -> SimpleNamespace:
-    """A stand-in abstract state: each atom is ``(predicate_name, object_name)`` (unary)."""
+    """A stand-in abstract state: each atom is ``(predicate_name, object_name)``
+    (unary)."""
     return SimpleNamespace(
         atoms=[
             SimpleNamespace(
@@ -53,7 +54,8 @@ _TABLES = EagerTables(
 
 
 def test_is_feasible_direct_pick_is_infeasible() -> None:
-    """A skeleton that picks a blocked goal without relocating its clutter first is F1-infeasible."""
+    """A skeleton that picks a blocked goal without relocating its clutter first is
+    F1-infeasible."""
     direct = [
         _op("pick", "robot", "cube_goal1"),
         _op("place", "robot", "cube_goal1", "region_1_1"),
@@ -84,7 +86,8 @@ def test_is_feasible_relocate_after_is_infeasible() -> None:
 
 
 def test_t5_penalty_polarity() -> None:
-    """T5 penalises picking a blocked goal while its clutter is OnFloor; zero once relocated."""
+    """T5 penalises picking a blocked goal while its clutter is OnFloor; zero once
+    relocated."""
     penalty = make_penalty(_TABLES, EagerWeights())
     pick_blocked = _op("pick", "robot", "cube_goal1")
     on_floor = _state(("OnFloor", "clutter1"))
@@ -96,7 +99,8 @@ def test_t5_penalty_polarity() -> None:
 
 
 def test_no_clutter_tables_are_inert() -> None:
-    """With empty blockers (r0/r2), the pick penalty is 0 and picks never gate feasibility."""
+    """With empty blockers (r0/r2), the pick penalty is 0 and picks never gate
+    feasibility."""
     tables = EagerTables(frozenset(), frozenset({"region_1_1"}), frozenset())
     penalty = make_penalty(tables, EagerWeights())
     assert penalty(_op("pick", "robot", "cube_goal1"), _state()) == 0.0
@@ -111,7 +115,17 @@ def test_no_clutter_tables_are_inert() -> None:
 
 # --------------------------------------------------------------------------------------------------
 # Slow integration tests: real r1 clutter scene through PyBullet + kinder.
+#
+# RETIRED (decisions/07 2026-08-16): under the fully-lateral layout + unified FRONT grasp, blockers
+# were dropped (reach-over ordering is the difficulty) so CLUTTER_PER_STRATUM=0 -- r1 has no
+# ``clutter1`` body, and the front grasp is not obstructed by a floor neighbour anyway. The buffer/
+# relocation machinery is kept inert (one flag away), so these three tests are skipped rather than
+# removed. The fast pure-logic eager tests above (is_feasible / T5 with hand-built blockers) still run.
 # --------------------------------------------------------------------------------------------------
+_RETIRED_CLUTTER = pytest.mark.skip(
+    reason="F1 clutter/relocation retired under the unified front grasp; CLUTTER=0, machinery inert "
+    "(decisions/07 2026-08-16)"
+)
 
 
 def _blas_shim() -> None:
@@ -150,9 +164,11 @@ def _r1_sim():
     return sim, x0, region_infos
 
 
+@_RETIRED_CLUTTER
 @pytest.mark.slow
 def test_grasp_blockers_names_clutter_no_cycle() -> None:
-    """The clutter obstructs cube_goal1's grasp (named), and is itself pickable (no cycle)."""
+    """The clutter obstructs cube_goal1's grasp (named), and is itself pickable (no
+    cycle)."""
     from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
         grasp_blockers,
     )
@@ -164,9 +180,11 @@ def test_grasp_blockers_names_clutter_no_cycle() -> None:
     assert reach_clut and "cube_goal1" not in gb_clut
 
 
+@_RETIRED_CLUTTER
 @pytest.mark.slow
 def test_abstractor_emits_onbuffer_not_stored() -> None:
-    """A cube relocated into the buffer zone abstracts OnBuffer (not OnFloor, not Stored)."""
+    """A cube relocated into the buffer zone abstracts OnBuffer (not OnFloor, not
+    Stored)."""
     from pybullet_helpers.geometry import Pose, set_pose
 
     from alphatamp.approaches.spectre.envs.restock3d.generator import (
@@ -190,9 +208,11 @@ def test_abstractor_emits_onbuffer_not_stored() -> None:
     assert "(Stored clutter1)" not in atoms
 
 
+@_RETIRED_CLUTTER
 @pytest.mark.slow
 def test_oracle_builds_feasible_relocation_skeleton() -> None:
-    """build_tables computes the F1 blockers and the oracle skeleton relocates them (feasible)."""
+    """build_tables computes the F1 blockers and the oracle skeleton relocates them
+    (feasible)."""
     import kinder
 
     from alphatamp.approaches.spectre.collect import _make_env_models, _restock_extras

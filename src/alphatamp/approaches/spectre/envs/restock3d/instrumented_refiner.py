@@ -42,9 +42,7 @@ from pybullet_helpers.inverse_kinematics import (
 from relational_structs import GroundAtom, GroundOperator, ObjectCentricState
 
 from .place_controller import (
-    _target_uses_front,
     front_grasp_transform,
-    top_down_grasp_transform,
 )
 from .region_geometry import RegionInfo
 
@@ -57,27 +55,26 @@ _COLLISION_MARGIN = 1e-3
 def grasp_blockers(
     sim, obj_name: str, state: ObjectCentricState
 ) -> tuple[tuple[str, ...], bool]:
-    """Names of movables whose bodies the arm collides with at ``obj_name``'s grasp IK -- the
-    class-1 F1 culprits obstructing THIS object's grasp.
+    """Names of movables whose bodies the arm collides with at ``obj_name``'s grasp IK
+    -- the class-1 F1 culprits obstructing THIS object's grasp.
 
-    The grasp matches what the controller would actually use (front grasp for a tall block,
-    top-down for a cube via ``_target_uses_front``), so the blockers named are the ones that really
-    obstruct the grasp. Returns ``(blockers, reachable)``: ``reachable`` is False when the grasp IK
-    itself fails (the object is unreachable even ignoring clutter -> blockers unknown, empty).
+    The grasp matches what the controller would actually use -- the **unified front
+    grasp** for every object (cube or tall block; the front grip height adapts per
+    object height inside ``front_grasp_transform``), so the blockers named are the ones
+    that really obstruct the grasp. Returns ``(blockers, reachable)``: ``reachable`` is
+    False when the grasp IK itself fails (the object is unreachable even ignoring
+    clutter -> blockers unknown, empty).
 
-    This is the single source of truth shared by the refiner's F1 probe (:class:`_probe_pick`), the
-    eager-heuristic blockers table (``eager_tables.build_tables``) and the generator's blocking
-    graph, so all three agree on exactly what blocks a grasp.
+    This is the single source of truth shared by the refiner's F1 probe
+    (:class:`_probe_pick`), the eager-heuristic blockers table
+    (``eager_tables.build_tables``) and the generator's blocking graph, so all three
+    agree on exactly what blocks a grasp.
     """
     sim.set_state(state.copy())
     pcid = sim.physics_client_id
     target_pose = state.get_object_pose(obj_name)
     half_z = float(state.get(state.get_object_from_name(obj_name), "half_extent_z"))
-    grasp_tf = (
-        front_grasp_transform(half_z)
-        if _target_uses_front(state, obj_name)
-        else top_down_grasp_transform(half_z)
-    )
+    grasp_tf = front_grasp_transform(half_z)
     ee_pose = multiply_poses(target_pose, grasp_tf)
     try:
         joints = inverse_kinematics(
@@ -106,7 +103,8 @@ def grasp_blockers(
 
 @dataclass(frozen=True)
 class _Rejection:
-    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the family."""
+    """One rejected sample: the step, its class-2 deviation, any class-1 culprits, the
+    family."""
 
     step: GroundOperator
     expected: frozenset[GroundAtom]
@@ -116,7 +114,8 @@ class _Rejection:
 
 
 class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
-    """Real-collision trajectory sampler that records every rejection with its blamed objects."""
+    """Real-collision trajectory sampler that records every rejection with its blamed
+    objects."""
 
     def __init__(
         self,
@@ -290,7 +289,8 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
 def _deepest_rejection(
     rejections: Sequence[_Rejection], action_plan: Sequence[GroundOperator]
 ) -> Optional[tuple[int, _Rejection]]:
-    """The rejection at the furthest step the refiner reached (backtracking retries shallow)."""
+    """The rejection at the furthest step the refiner reached (backtracking retries
+    shallow)."""
     best: Optional[tuple[int, _Rejection]] = None
     for rej in rejections:
         index = next((j for j, op in enumerate(action_plan) if op == rej.step), None)
@@ -317,10 +317,10 @@ def failure_metadata(
 ) -> list[dict]:
     """The ``refiner_metadata["failures"]`` payload for one failed candidate.
 
-    A class-1 record (F1 blockers / F2 residents) carries ``culprits`` and no deviation; a class-2
-    record carries the ``dev_added``/``dev_deleted`` deviation; an F3 record is culprit-free with an
-    empty deviation, and when the step exhausted without a budget cut it ``proves_failure()``. The
-    reduction keeps the deepest reached step.
+    A class-1 record (F1 blockers / F2 residents) carries ``culprits`` and no deviation;
+    a class-2 record carries the ``dev_added``/``dev_deleted`` deviation; an F3 record
+    is culprit-free with an empty deviation, and when the step exhausted without a
+    budget cut it ``proves_failure()``. The reduction keeps the deepest reached step.
     """
     deepest = _deepest_rejection(sampler.rejections, action_plan)
     if deepest is None:

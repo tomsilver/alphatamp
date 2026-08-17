@@ -101,10 +101,11 @@ def build_skeleton(
     """Ground the feasible skeleton and STRIPS-progress it to the interleaved
     ``(state_plan, action_plan)`` the refiner consumes.
 
-    **Relocation phase first:** every clutter that blocks a goal's grasp (F1) is relocated to a
-    buffer up front (``Pick(clutter)+PlaceBuffer(clutter)``). Clutter is never a goal, so clearing it
-    before any goal pick is a valid order and makes each blocked goal's F1 satisfied. Then the normal
-    ``Pick+Place`` per (obj, region) pair (FFD order).
+    **Relocation phase first:** every clutter that blocks a goal's grasp (F1) is
+    relocated to a buffer up front (``Pick(clutter)+PlaceBuffer(clutter)``). Clutter is
+    never a goal, so clearing it before any goal pick is a valid order and makes each
+    blocked goal's F1 satisfied. Then the normal ``Pick+Place`` per (obj, region) pair
+    (FFD order).
     """
     pick = lifted_ops["pick"]
     place = lifted_ops["place"]
@@ -132,8 +133,17 @@ def build_skeleton(
         _apply(place_buffer.ground((robot, obj)))  # type: ignore[attr-defined]
         relocated.add(clut)
 
-    # Store phase.
-    for obj_name, region_name in assignment:
+    # Store phase, ordered SOUTH-TO-NORTH by floor y (nearest-first). Under the fully-lateral layout
+    # every object is front-grasped from the south, so the arm reaches north over anything closer than
+    # the target; picking nearest-first clears each reach path (all closer objects are already stored),
+    # which is what makes a deep multi-object region feasible. Picking a far (north) object while a
+    # nearer one is still on the floor makes the reach-over collide -- a real refinement failure the
+    # naive plan order hits and the oracle avoids (decisions/07 2026-08-16).
+    store_order = sorted(
+        assignment,
+        key=lambda pr: x0.get_object_pose(pr[0]).position[1],  # type: ignore[attr-defined]
+    )
+    for obj_name, region_name in store_order:
         obj = x0.get_object_from_name(obj_name)  # type: ignore[attr-defined]
         region = Object(region_name, RegionType)
         _apply(pick.ground((robot, obj)))  # type: ignore[attr-defined]
