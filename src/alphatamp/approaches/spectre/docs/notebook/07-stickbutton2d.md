@@ -4,6 +4,46 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-17-restock3d-reach-blockers-reach-over-eager-relation"></a>
+## 2026-08-17 — restock3d reach_blockers (reach-over eager relation) + K_max re-calibration
+
+<!--strip-->
+> **id** `2026-08-17-restock3d-reach-blockers-reach-over-eager-relation` · **status**
+> active · **tracks** method, env-restock3d, evaluation
+<!--/strip-->
+
+**What.** Gate F of the fully-lateral rebuild
+([`decisions/07` 2026-08-17](../decisions/07-stickbutton2d.md#2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision)):
+give the eager heuristic a geometric **`reach_blockers`** relation so the pool/K_max see the reach-over
+difficulty (which the oracle already handles via south-to-north), and re-calibrate K_max.
+
+**Result.**
+- **Reach-corridor calibration (MP sweeps).** A single south neighbour rarely hard-blocks a front-pick
+  (cube-over-cube always clears; a lone south cube even clears a *tall* target at dy=0.30). What blocks
+  is **cumulative + involves a tall block**: reconstructing the dense grid-r3, `pick(tall_block)` with
+  both same-column cubes present fails **MMM** (3/3 MP-fail), clears to **GGG** once they're removed;
+  other-column cubes (dx=0.30) don't block. A tall block directly in-line (dx=0) blocks a *cube* target.
+- **Model.** `reach_blockers[B] = {A : A south of B by ≥0.03 m, |A.x−B.x| < 0.12 m, and (A or B is a
+  tall block)}` — a **conservative** proxy (over-forbids a lone-blocker case, but safe: south-to-north
+  always satisfies it; captures the real multi-object blocking). On grid-r3 it flags exactly each tall
+  block's two same-column cubes; `is_feasible_skeleton` then marks **talls-first False, south-to-north
+  True**. Wired into `eager_tables` (`build_tables` geometric compute, `is_feasible_skeleton` +
+  `make_penalty` union it with the F1 `blockers`).
+- **K_max (8 problems/stratum, plain hff vs eager first-feasible).** plain_ff_max / K_max_r:
+  **r0 3/4, r1 69/83, r2 173/208** (1/8 censored), **r3 95/114 (7/8 censored past 200)**. The
+  reach-over-aware **eager surfaces the feasible at index 0 on r0–r2** (eager_ff_all_zero=True);
+  **r3 is the hard tail** — eager_ff is 0 when found but censored past K=50 on the hard problems (the
+  oracle certifies r3, but F2+F3+reach-over combine so the pool rarely front-loads a feasible), the same
+  unenumerability v1 saw on r3, now with the reach-over constraint added.
+
+**Takeaway / next.** `reach_blockers` + K_max done; the eager works for r0–r2. Open: r3 is unenumerable
+within the pool cap (needs a larger K or a staged/relocation-aware generator — deferred with collection);
+the conservative corridor model over-states enumerability difficulty (a precise cumulative/depth model
+is a refinement). cap_r stands at r0 56 / r1 65 / r2 57 / r3 60 s (2–3× v1, strict collision +
+front-grasp). Fast tests 29 passed.
+
+---
+
 <a id="2026-08-17-restock3d-fully-lateral-rebuild-oracle-certifies-front-grasp-only"></a>
 ## 2026-08-17 — restock3d fully-lateral rebuild: oracle certifies, front-grasp-only, reach-over ordering
 

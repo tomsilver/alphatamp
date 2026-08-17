@@ -30,6 +30,17 @@ from .region_geometry import RegionInfo
 _TALL_SECTION = 0  # RegionInfo.shelf value for the tall (bottom) section
 _TALL_OBJECT_PREFIX = "block_goal"  # goal tall blocks; cubes are "cube_goal"
 
+# Reach-over corridor (fully-lateral layout, decisions/07 2026-08-17). The front grasp reaches NORTH
+# over anything nearer than the target, so a goal A obstructs another goal B's front-pick when A is
+# SOUTH of B within a lateral corridor -- and (calibrated by MP sweep) only when a TALL block is
+# involved: a cube-over-cube reach clears (the low cube grasp passes over a short south cube), while a
+# tall block directly in-line blocks a cube target, and any nearer object blocks a tall-block target
+# (its high 45deg reach sweeps the corridor). B must then be picked AFTER A is cleared (south-to-north).
+_REACH_LATERAL = 0.12  # |A.x - B.x| below which a south object is in B's reach corridor
+_REACH_Y_MARGIN = (
+    0.03  # A must be at least this far SOUTH of B to count (else side-by-side)
+)
+
 
 @dataclass(frozen=True)
 class EagerTables:
@@ -44,9 +55,13 @@ class EagerTables:
     footprint: dict[str, float] = field(
         default_factory=dict
     )  # reserved for T4 (λ_o); unused at o=0
-    # goal object name -> the movable clutter that obstructs its top-down grasp (F1). Empty in the
-    # no-clutter strata (r0/r2). Computed from ``grasp_blockers`` on the sim (build_tables sim=...).
+    # goal object name -> the movable clutter that obstructs its top-down grasp (F1). Empty under the
+    # unified front grasp (retired). Computed from ``grasp_blockers`` on the sim (build_tables sim=...).
     blockers: dict[str, frozenset[str]] = field(default_factory=dict)
+    # goal object name -> the OTHER goals south of it in the reach corridor (reach-over). B is
+    # front-pickable only after every reach_blockers[B] is cleared (picked). Computed geometrically
+    # from the initial object positions (build_tables state=...).
+    reach_blockers: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def fits(self, obj_name: str, region_name: str) -> bool:
         """A cube fits any region; a tall block fits only a tall-section region."""
@@ -82,11 +97,12 @@ def build_tables(
 ) -> EagerTables:
     """Derive the eager tables from region geometry (section) + the goal object names.
 
-    When both ``sim`` and ``state`` (the problem's initial state) are given, the F1 ``blockers`` map
-    is computed via ``grasp_blockers`` -- the SAME probe the refiner uses -- so the eager penalty /
-    feasibility exactly match what fails refinement. Omitting them keeps the no-clutter behaviour
-    (``blockers={}``) byte-identical. ``grasp_blockers`` sets ``sim`` to ``state`` itself, so the
-    models' scratch sim need not be pre-positioned.
+    When both ``sim`` and ``state`` (the problem's initial state) are given, the F1
+    ``blockers`` map is computed via ``grasp_blockers`` -- the SAME probe the refiner
+    uses -- so the eager penalty / feasibility exactly match what fails refinement.
+    Omitting them keeps the no-clutter behaviour (``blockers={}``) byte-identical.
+    ``grasp_blockers`` sets ``sim`` to ``state`` itself, so the models' scratch sim need
+    not be pre-positioned.
     """
     goal_names = list(goal_object_names)
     tall_regions = frozenset(
@@ -109,7 +125,40 @@ def build_tables(
             gb, _reach = grasp_blockers(sim, goal, state)
             if gb:
                 blockers[goal] = frozenset(gb)
-    return EagerTables(tall_regions, short_regions, tall_goal, blockers=blockers)
+
+    # Reach-over: geometric, from the initial object positions (needs ``state``, not ``sim``). A goal
+    # A obstructs B's front-pick reach when A is south of B in the lateral corridor and a tall block is
+    # involved (a cube-over-cube reach clears). See the corridor constants above.
+    reach_blockers: dict[str, frozenset[str]] = {}
+    if state is not None:
+        pos = {
+            n: state.get_object_pose(n).position
+            for n in goal_names
+            if n in set(state.get_object_names())
+        }
+        for b in goal_names:
+            if b not in pos:
+                continue
+            bx, by = pos[b][0], pos[b][1]
+            b_tall = b in tall_goal
+            rb = frozenset(
+                a
+                for a in goal_names
+                if a != b
+                and a in pos
+                and pos[a][1] < by - _REACH_Y_MARGIN
+                and abs(pos[a][0] - bx) < _REACH_LATERAL
+                and (b_tall or a in tall_goal)
+            )
+            if rb:
+                reach_blockers[b] = rb
+    return EagerTables(
+        tall_regions,
+        short_regions,
+        tall_goal,
+        blockers=blockers,
+        reach_blockers=reach_blockers,
+    )
 
 
 def _regions_occupied(state: RelationalAbstractState) -> set[str]:
@@ -145,7 +194,13 @@ def make_penalty(
         # direct pick makes the eager order prefer relocating the clutter first (Pick+PlaceBuffer,
         # ~2 steps) over eating the F1 -- b > 2 * step-cost. Inert where blockers is empty (r0/r2).
         if action.name == "pick":
-            blk = tables.blockers.get(action.parameters[1].name, frozenset())
+            # T5 (F1 clutter, retired/empty) + T6 (reach-over): both penalise picking a goal while a
+            # blocker of it is still OnFloor -- the F1 clutter must be relocated first, a reach-over
+            # goal must be stored first; either way pick the blocker before this goal (south-to-north).
+            name = action.parameters[1].name
+            blk = tables.blockers.get(name, frozenset()) | tables.reach_blockers.get(
+                name, frozenset()
+            )
             if not blk:
                 return 0.0
             on_floor = {
@@ -187,25 +242,31 @@ def make_penalty(
 def is_feasible_skeleton(
     action_plan: Iterable[GroundOperator], tables: EagerTables
 ) -> bool:
-    """Classify feasible **without refining** and **in order**: no tall->short (F3), no region
-    reused (F2), and every goal's F1 clutter cleared off the floor before that goal is picked.
+    """Classify feasible **without refining** and **in order**: no tall->short (F3), no
+    region reused (F2), and every goal picked only after its blockers (F1 clutter +
+    reach-over goals) are cleared off the floor.
 
-    Exact for the kinematic hardness sources (regions single-object, feasibility = real collision):
-    F2/F3 are real collisions at the region rest pose, and F1 is a real arm-vs-clutter collision at
-    the grasp -- so a table-infeasible skeleton cannot refine (no false negatives). A blocker is
-    "cleared" once its cube is picked (Holding, then buffer/region -- off its floor blocking spot);
-    tracking picks in order makes a direct pick-before-relocate skeleton infeasible (F1) and a
-    relocate-first skeleton feasible.
+    F2/F3 are **exact** (real collisions at the region rest pose). The **reach-over**
+    gate is a *conservative geometric proxy* (``reach_blockers`` from ``build_tables``):
+    the true blocking is cumulative/depth-dependent, so requiring every south-corridor
+    object cleared before a target may over-forbid a lone-blocker case (a possible false
+    negative) -- but it is safe (the south-to-north order always satisfies it) and
+    captures the real multi-object reach-over that fails refinement. A blocker is
+    "cleared" once the object is picked (Holding, off its floor spot), so tracking picks
+    in order makes a far-before-near skeleton infeasible and a nearest-first skeleton
+    feasible.
     """
     occupied: set[str] = set()
     cleared: set[str] = set()  # objects already picked (off the floor)
     for action in action_plan:
         if action.name == "pick":
             obj_name = action.parameters[1].name
-            blk = tables.blockers.get(obj_name, frozenset())
-            if not blk.issubset(
-                cleared
-            ):  # F1: grasp obstructed, clutter not relocated first
+            # F1 clutter (relocate first) + reach-over (store the nearer goal first). A pick is
+            # infeasible if any blocker of this goal has not yet been picked off the floor.
+            blk = tables.blockers.get(
+                obj_name, frozenset()
+            ) | tables.reach_blockers.get(obj_name, frozenset())
+            if not blk.issubset(cleared):
                 return False
             cleared.add(obj_name)
             continue

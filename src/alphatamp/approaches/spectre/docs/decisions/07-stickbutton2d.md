@@ -62,10 +62,16 @@ and no fallback; the base moves laterally with **no phase-through** (the user's 
 resolved for real, not best-effort). cap_r rises vs v1 (r0 56 / r1 65 / r2 57 / r3 60 s) from strict
 collision + front-grasp refinement — a re-calibration item. F1 grasp-obstruction is retired (the front
 grasp is not blockable by a floor neighbour); the failure taxonomy is now **F2 (over-assignment) + F3
-(tall-into-short) + reach-over ordering**. Follow-ups (open): the eager heuristic needs a geometric
-`reach_blockers` relation so the pool/K_max surface the south-to-north feasible order (the difficulty is
-otherwise invisible to the non-refinement proxy); K_max re-calibration; optional removal of the inert
-buffer machinery. Three retired F1-clutter slow tests are skipped (documented), not deleted. The
+(tall-into-short) + reach-over ordering**. A geometric **`reach_blockers`** relation was added to the
+eager (Gate F, [`notebook/07` 2026-08-17](../notebook/07-stickbutton2d.md#2026-08-17-restock3d-reach-blockers-reach-over-eager-relation)):
+`A` blocks `B` if `A` is south of `B` in a ~0.12 m lateral corridor with a tall block involved
+(MP-calibrated; conservative but safe). It correctly marks talls-first infeasible / south-to-north
+feasible, and the reach-over-aware eager surfaces the feasible at index 0 on r0–r2. **K_max re-measured**
+(plain hff first-feasible × 1.2): r0 4, r1 83, r2 208; **r3 remains the unenumerable hard tail** (7/8
+plain-censored past 200, some eager-censored past 50 — F2+F3+reach-over combine). Follow-ups (open):
+r3 enumerability (larger K or a staged generator, deferred with collection); a precise
+cumulative/depth corridor model; optional removal of the inert buffer machinery. Three retired
+F1-clutter slow tests are skipped (documented), not deleted. The
 `front-grasp-tall-block/` reference module (user-uploaded, showing a single front grasp handles both
 cube and tall block) is kept as reference but not imported — the deployed front grasp is the existing
 `place_controller` one.
