@@ -68,9 +68,16 @@ eager (Gate F, [`notebook/07` 2026-08-17](../notebook/07-stickbutton2d.md#2026-0
 (MP-calibrated; conservative but safe). It correctly marks talls-first infeasible / south-to-north
 feasible, and the reach-over-aware eager surfaces the feasible at index 0 on r0–r2. **K_max re-measured**
 (plain hff first-feasible × 1.2): r0 4, r1 83, r2 208; **r3 remains the unenumerable hard tail** (7/8
-plain-censored past 200, some eager-censored past 50 — F2+F3+reach-over combine). Follow-ups (open):
-r3 enumerability (larger K or a staged generator, deferred with collection); a precise
-cumulative/depth corridor model; optional removal of the inert buffer machinery. Three retired
+plain-censored past 200, some eager-censored past 50 — F2+F3+reach-over combine). **Coverage revived:**
+the reach-over pick failure is attributed by `reach_over_culprits` (`instrumented_refiner`, the
+`_blocks_reach` geometry shared with `reach_blockers`; family **F4**) to the un-cleared south
+blockers — class-1, actionable — so `coverage` is live with the **correct** polarity (south-to-north
+1.00 vs talls-first 0.00; opposite of F2's inversion), reopening the coverage half of the §1.2
+starvation the F1 retirement was thought to close; **waste stays degenerate** (reorder of goal-necessary
+picks, not a discretionary relocation — reviving it needs non-goal approach-corridor clutter, one flag
+away). Follow-ups (open): r3 enumerability (larger K or a staged generator, deferred with collection);
+a precise cumulative/depth corridor model; waste (approach-clutter); optional removal of the inert
+buffer machinery. Three retired
 F1-clutter slow tests are skipped (documented), not deleted. The
 `front-grasp-tall-block/` reference module (user-uploaded, showing a single front grasp handles both
 cube and tall block) is kept as reference but not imported — the deployed front grasp is the existing

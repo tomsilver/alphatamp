@@ -36,10 +36,21 @@ difficulty (which the oracle already handles via south-to-north), and re-calibra
   oracle certifies r3, but F2+F3+reach-over combine so the pool rarely front-loads a feasible), the same
   unenumerability v1 saw on r3, now with the reach-over constraint added.
 
-**Takeaway / next.** `reach_blockers` + K_max done; the eager works for r0–r2. Open: r3 is unenumerable
-within the pool cap (needs a larger K or a staged/relocation-aware generator — deferred with collection);
-the conservative corridor model over-states enumerability difficulty (a precise cumulative/depth model
-is a refinement). cap_r stands at r0 56 / r1 65 / r2 57 / r3 60 s (2–3× v1, strict collision +
+**Coverage revived (follow-on).** The reach-over also **revives coverage** — the failure mode F1
+retirement was thought to kill. A reach-over pick failure is now attributed by `reach_over_culprits`
+(`instrumented_refiner`; the shared `_blocks_reach` geometry, family **F4**) to the un-cleared south
+blockers — class-1, actionable culprits — so coverage is live with the **correct** polarity (opposite of
+F2, which inverts): south-to-north candidate coverage **1.00** vs talls-first **0.00**
+(`restock3d_coverage_probe.py`, rewritten from the F1 probe). **Waste stays degenerate** (the fix is a
+reorder of goal-necessary picks, no discretionary relocation; reviving it needs a non-goal
+approach-corridor clutter, one flag away). `reach_over_culprits` and the eager `reach_blockers` share
+one geometry source now (`_blocks_reach` in `instrumented_refiner`).
+
+**Takeaway / next.** `reach_blockers` + K_max + coverage done; the eager works for r0–r2 and coverage
+is live (reach-over). Open: r3 is unenumerable within the pool cap (needs a larger K or a
+staged/relocation-aware generator — deferred with collection); the conservative corridor model
+over-states enumerability difficulty (a precise cumulative/depth model is a refinement); waste needs
+approach-clutter. cap_r stands at r0 56 / r1 65 / r2 57 / r3 60 s (2–3× v1, strict collision +
 front-grasp). Fast tests 29 passed.
 
 ---

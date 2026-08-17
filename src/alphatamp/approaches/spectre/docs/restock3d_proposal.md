@@ -89,6 +89,20 @@ action costs so the informed order front-loads a feasible skeleton (first-feasib
 The **`is_feasible_skeleton`** classifier accepts a skeleton iff no F2 reuse / no F3 / no uncleared
 reach-blocker — a non-refinement proxy used for K_max.
 
+**Coverage/waste (coverage revived; waste still degenerate).** The §1.2 worry — a pure
+height/capacity twist starves coverage/waste — is now **half-answered by the reach-over**. A reach-over
+pick failure is attributed by `reach_over_culprits` (`instrumented_refiner`, the geometric
+`_blocks_reach` relation shared with the eager `reach_blockers` table) to the un-cleared **south
+blockers** — class-1, actionable culprits (each is a goal that gets stored). So **coverage is live with
+the CORRECT polarity**: a south-to-north candidate that stores the blockers before re-picking the
+target *covers* them — coverage **1.00** vs **0.00** for a talls-first candidate
+(`restock3d_coverage_probe.py`). This is the opposite of F2, where coverage *inverts* (§2.3 / RP-3),
+because here "touching" the culprit means **clearing** it, not creating the hazard. **Waste stays
+degenerate**: the reach-over fix is a *reorder of goal-necessary picks*, not a discretionary relocation,
+so the superfluous set is empty (waste ≡ 0 on every candidate). Reviving waste too needs a **non-goal
+approach-corridor clutter** — a tall block in a target's −y approach that must be relocated to the
+(inert) buffer — the option set aside when blockers were dropped, still one flag away.
+
 **Calibration (deferred-collection tools).**
 - Oracle certification: **r0–r3 4/4** on sampled scenes under strict collision + no fallback.
 - **K_max** (plain-hff first-feasible × 1.2, n=8): r0 4, r1 83, r2 208; **r3 unenumerable** (7/8
@@ -103,9 +117,9 @@ carrier) → **retired**, replaced by the depth **reach-over**; multi-slot capac
 **single-object regions**; Config A/B cell-layout probes (§3.3) → a fixed single-shelf tall/short
 geometry; forward floor-staging + cupboard → the **fully-lateral 3-band** layout.
 
-**Deferred / open.** **Coverage/waste** — with F1 retired their denominators are degenerate again
-(exactly the §1.2 starvation this env was meant to fix), so that rationale is **reopened, unresolved**;
-full **collection + SPECTRE training**; learned baselines (PIGINet / VLMPlan / LAZY) and the
+**Deferred / open.** **Waste** — degenerate under reach-over-only (see above); reviving it needs the
+non-goal approach-corridor clutter (still one flag away); coverage itself is **already revived**. Full
+**collection + SPECTRE training**; learned baselines (PIGINet / VLMPlan / LAZY) and the
 `compare_envs` EnvSpec; **r3 enumerability** (larger K or a staged generator); a **precise
 cumulative/depth reach-over corridor** (the current `reach_blockers` is a safe but conservative proxy);
 optional removal of the inert buffer machinery; the dynamic-MuJoCo / real-robot phases (§5 D/R).
@@ -118,8 +132,9 @@ optional removal of the inert buffer machinery; the dynamic-MuJoCo / real-robot 
 > real-robot phase will still need. Known-stale relative to the as-built: the MuJoCo/TidyBot substrate,
 > the top-down grasp and F1 grasp-obstruction clutter (§2, §3.5) — replaced by the front grasp + the
 > depth reach-over; the multi-slot capacity model (§3.6) — regions are single-object; the Config A/B
-> cell-layout probes (§3.3); and the coverage/waste-carrier rationale (§1.2, §2.3, RP-3/RP-4) — reopened
-> and unresolved now that F1 is retired. Read §1–§9 for intent, the As-built section for reality.
+> cell-layout probes (§3.3); and the F1 coverage/waste carrier (§1.2, §2.3, RP-3/RP-4) — the **reach-over
+> now carries coverage** (correct polarity, verified), but **waste is still degenerate** until a
+> non-goal approach-clutter is added. Read §1–§9 for intent, the As-built section for reality.
 
 ## 1. Background and rationale
 

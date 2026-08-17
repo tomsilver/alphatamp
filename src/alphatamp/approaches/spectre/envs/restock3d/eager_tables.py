@@ -30,16 +30,11 @@ from .region_geometry import RegionInfo
 _TALL_SECTION = 0  # RegionInfo.shelf value for the tall (bottom) section
 _TALL_OBJECT_PREFIX = "block_goal"  # goal tall blocks; cubes are "cube_goal"
 
-# Reach-over corridor (fully-lateral layout, decisions/07 2026-08-17). The front grasp reaches NORTH
-# over anything nearer than the target, so a goal A obstructs another goal B's front-pick when A is
-# SOUTH of B within a lateral corridor -- and (calibrated by MP sweep) only when a TALL block is
-# involved: a cube-over-cube reach clears (the low cube grasp passes over a short south cube), while a
-# tall block directly in-line blocks a cube target, and any nearer object blocks a tall-block target
-# (its high 45deg reach sweeps the corridor). B must then be picked AFTER A is cleared (south-to-north).
-_REACH_LATERAL = 0.12  # |A.x - B.x| below which a south object is in B's reach corridor
-_REACH_Y_MARGIN = (
-    0.03  # A must be at least this far SOUTH of B to count (else side-by-side)
-)
+# Reach-over corridor. The front grasp reaches NORTH over anything nearer than the target, so a goal A
+# obstructs another goal B's front-pick when A is SOUTH of B within a lateral corridor with a tall
+# block involved (a cube-over-cube reach clears; MP-calibrated). The corridor rule + constants live in
+# ``instrumented_refiner`` (``_blocks_reach``), shared with the refiner's reach-over culprit
+# attribution so the eager table and the failure records agree (decisions/07 2026-08-17).
 
 
 @dataclass(frozen=True)
@@ -131,6 +126,10 @@ def build_tables(
     # involved (a cube-over-cube reach clears). See the corridor constants above.
     reach_blockers: dict[str, frozenset[str]] = {}
     if state is not None:
+        from .instrumented_refiner import (  # local import: shared reach-over geometry
+            _blocks_reach,
+        )
+
         pos = {
             n: state.get_object_pose(n).position
             for n in goal_names
@@ -139,16 +138,13 @@ def build_tables(
         for b in goal_names:
             if b not in pos:
                 continue
-            bx, by = pos[b][0], pos[b][1]
             b_tall = b in tall_goal
             rb = frozenset(
                 a
                 for a in goal_names
                 if a != b
                 and a in pos
-                and pos[a][1] < by - _REACH_Y_MARGIN
-                and abs(pos[a][0] - bx) < _REACH_LATERAL
-                and (b_tall or a in tall_goal)
+                and _blocks_reach(pos[a], a in tall_goal, pos[b], b_tall)
             )
             if rb:
                 reach_blockers[b] = rb

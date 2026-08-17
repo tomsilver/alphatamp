@@ -7,8 +7,13 @@ candidate genuinely fails by real PyBullet collision. On each rejection the reco
 collision probe** (``getClosestPoints`` / ``check_body_collisions``) purely to *attribute* the
 failure — it never changes the accept/reject decision (observation-only):
 
-* **F1 grasp obstruction** (pick) — the arm at the grasp IK collides with adjacent floor clutter;
-  those blockers are class-1 *pre-existing* culprits.
+* **F1 grasp obstruction** (pick) — the arm at the grasp IK collides with a floor neighbour. Retired
+  under the unified front grasp (a neighbour never touches the arm at the front-grasp config), but the
+  probe is kept wired; those blockers are class-1 *pre-existing* culprits.
+* **F4 reach-over** (pick) — the grasp is reachable at the final config but a nearer object blocks the
+  diagonal approach path (invisible to the F1 final-config probe); attributed geometrically by
+  ``reach_over_culprits`` to the un-cleared south blockers — class-1, actionable, feeding coverage with
+  the correct polarity (decisions/07 2026-08-17).
 * **F2 crowding** (place) — the held block, at the region's resting pose, collides with a resident
   the plan already placed there; those residents are class-1 *self-inflicted* culprits.
 * **F3 height mismatch** (place) — the held block, lifted just clear of the surface, collides only
@@ -42,6 +47,7 @@ from pybullet_helpers.inverse_kinematics import (
 from relational_structs import GroundAtom, GroundOperator, ObjectCentricState
 
 from .place_controller import (
+    _FRONT_GRASP_MIN_HALF_Z,
     front_grasp_transform,
 )
 from .region_geometry import RegionInfo
@@ -50,6 +56,30 @@ _PROBE_LIFT = (
     0.006  # lift the held object this far clear of the surface before the F3 probe
 )
 _COLLISION_MARGIN = 1e-3
+
+# Reach-over corridor (fully-lateral layout, decisions/07 2026-08-17). The front grasp reaches NORTH
+# over anything nearer than the target, so object A obstructs B's front-pick when A is SOUTH of B in a
+# lateral corridor with a tall block involved (a cube-over-cube reach clears; MP-calibrated). These
+# constants + ``_blocks_reach`` are the single source shared by the eager ``reach_blockers`` table and
+# the refiner's reach-over culprit attribution (``reach_over_culprits`` / ``_probe_pick``).
+REACH_LATERAL = 0.12  # |A.x - B.x| below which a south object is in B's reach corridor
+REACH_Y_MARGIN = (
+    0.03  # A must be at least this far SOUTH of B to count (else side-by-side)
+)
+_FLOOR_Z_MAX = (
+    0.2  # an object with centre-z below this is still on the floor (not shelf-stored)
+)
+
+
+def _blocks_reach(a_pos, a_tall: bool, b_pos, b_tall: bool) -> bool:
+    """Whether object A (world ``a_pos``, tall iff ``a_tall``) obstructs object B's
+    (``b_pos``, ``b_tall``) front-pick reach -- A south of B in the lateral corridor, a
+    tall block involved."""
+    return (
+        a_pos[1] < b_pos[1] - REACH_Y_MARGIN
+        and abs(a_pos[0] - b_pos[0]) < REACH_LATERAL
+        and (a_tall or b_tall)
+    )
 
 
 def grasp_blockers(
@@ -99,6 +129,42 @@ def grasp_blockers(
         )
     )
     return tuple(blockers), True
+
+
+def reach_over_culprits(
+    sim, obj_name: str, state: ObjectCentricState
+) -> tuple[str, ...]:
+    """Movables still on the floor that obstruct ``obj_name``'s front-pick **reach** --
+    the class-1 culprits of a reach-over pick failure (what a south-to-north order must
+    clear first).
+
+    The front grasp reaches north over anything nearer than the target, so a grasp can be feasible at
+    the final config (``grasp_blockers`` empty) yet fail motion planning because a nearer object is in
+    the diagonal approach path. That approach-path collision is invisible to the final-config
+    ``grasp_blockers`` probe, so it is attributed here **geometrically** -- the same corridor rule the
+    eager ``reach_blockers`` table uses (``_blocks_reach``), evaluated on the CURRENT (failure) state so
+    only un-cleared floor blockers are named. These culprits are movable and actionable (each is a goal
+    that gets stored, or a relocatable clutter), so they feed the class-1 coverage channel with the
+    correct polarity: a candidate that stores/relocates the blocker before re-picking the target covers
+    it (decisions/07 2026-08-17).
+    """
+    b = state.get_object_from_name(obj_name)
+    b_pos = state.get_object_pose(obj_name).position
+    b_tall = float(state.get(b, "half_extent_z")) >= _FRONT_GRASP_MIN_HALF_Z
+    out: list[str] = []
+    for name in sim.movable_names():
+        if name == obj_name:
+            continue
+        pos = state.get_object_pose(name).position
+        if pos[2] >= _FLOOR_Z_MAX:  # already shelf-stored -> not a floor blocker
+            continue
+        a_tall = (
+            float(state.get(state.get_object_from_name(name), "half_extent_z"))
+            >= _FRONT_GRASP_MIN_HALF_Z
+        )
+        if _blocks_reach(pos, a_tall, b_pos, b_tall):
+            out.append(name)
+    return tuple(sorted(out))
 
 
 @dataclass(frozen=True)
@@ -280,10 +346,18 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
     def _probe_pick(
         self, state: ObjectCentricState, a: GroundOperator
     ) -> tuple[tuple[str, ...], str]:
-        # Single source of truth for F1 blockers (see module-level ``grasp_blockers``), so the
-        # refiner probe, the eager blockers table and the generator blocking graph all agree.
-        blockers, _reachable = grasp_blockers(self._sim, a.parameters[1].name, state)
-        return blockers, "F1"
+        # F1 grasp obstruction: a movable collides the arm at the final grasp config (``grasp_blockers``,
+        # the single source of truth shared with the eager table + generator). Retired under the front
+        # grasp (a floor neighbour never touches the arm there) but kept wired.
+        target = a.parameters[1].name
+        blockers, _reachable = grasp_blockers(self._sim, target, state)
+        if blockers:
+            return blockers, "F1"
+        # F4 reach-over: the grasp is reachable at the final config but a nearer object blocks the
+        # diagonal approach path (invisible to grasp_blockers). Attribute it to the geometric reach
+        # blockers so the failure carries class-1 culprits and feeds coverage (decisions/07 2026-08-17).
+        reach = reach_over_culprits(self._sim, target, state)
+        return reach, "F4"
 
 
 def _deepest_rejection(
