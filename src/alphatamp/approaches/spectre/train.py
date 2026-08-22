@@ -100,6 +100,13 @@ class TrainConfig:
     # emits one per failed *sample*, which lets one unlucky candidate contribute
     # hundreds of tokens; §6.1 defines a record per failing *query*.
     aggregate_records: bool = False
+    # Emit proof-tier ∧ provable records into the token stream (default True = the
+    # historical holdout at `dataset.build_record_arrays`). The learned-pathway
+    # workstream (docs/failed_records_fix.md P-1) sets this False so a tokens-only arm
+    # sees the certificate-grade records (DD2D `retrieve`) the `dead`/`coverage` scalars
+    # already read via `unified_evidence`. Emission-only (no submodule); the deployed
+    # scalars-on recipe leaves it True, where the holdout is near-harmless de-duplication.
+    record_holdout: bool = True
     # Separate cross-attention channel for evidence (EvidenceCrossAttentionScorer).
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
@@ -267,6 +274,7 @@ class SpectreDataset(Dataset):
             repeat_feats=self.cfg.repeat_feats,
             regroup_feats=self.cfg.regroup_feats,
             state_delta=self.cfg.use_state_delta,
+            record_holdout=self.cfg.record_holdout,
             scene_3d=self.cfg.scene_3d,
             pointset_feats=_ps,
             use_pca_feats=_pca,
@@ -359,6 +367,7 @@ def deployed_val_fp(
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
+    record_holdout: bool = True,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -385,6 +394,7 @@ def deployed_val_fp(
             repeat_feats=repeat_feats,
             regroup_feats=regroup_feats,
             state_delta=state_delta,
+            record_holdout=record_holdout,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -595,6 +605,7 @@ def run_training(
                 repeat_feats=cfg.repeat_feats,
                 regroup_feats=cfg.regroup_feats,
                 state_delta=cfg.use_state_delta,
+                record_holdout=cfg.record_holdout,
             )
 
         fp = _val_fp(model)
@@ -744,6 +755,13 @@ def main(argv=None) -> int:
         help="one record token per (schema, args) instead of per failed sample",
     )
     ap.add_argument(
+        "--no-record-holdout",
+        action="store_true",
+        help="feed proof-tier AND provable records into the token stream instead of "
+        "dropping them (docs/failed_records_fix.md P-1: the corrected tokens-only "
+        "baseline). Default keeps the historical holdout.",
+    )
+    ap.add_argument(
         "--state-delta",
         action="store_true",
         help="each record token also carries s_j as the delta from s_0 (§6.1): which "
@@ -849,6 +867,7 @@ def main(argv=None) -> int:
         select_budget=a.select_budget,
         overlap_mode=a.overlap_mode,
         aggregate_records=a.aggregate_records,
+        record_holdout=not a.no_record_holdout,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,

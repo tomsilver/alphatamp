@@ -670,6 +670,7 @@ def build_record_arrays(
     spec: DomainSpec,
     aggregate: bool = False,
     state_delta: bool = False,
+    record_holdout: bool = True,
 ) -> list[RecordArray]:
     """Failure records of the tried candidates, as ``(schema_id, args, culprits,
     scalars)``.
@@ -680,6 +681,15 @@ def build_record_arrays(
     large, so prefer longer plans"), which measurably wrecked the easy strata in v2.2
     until the tiers were split. What reaches the net is evidence the deduction could
     *not* use.
+
+    ``record_holdout`` (default ``True`` = current behavior) gates that exclusion. The
+    learned-pathway workstream (``docs/failed_records_fix.md`` P-1) sets it ``False`` to
+    feed the proof-tier ∧ provable records — on DD2D the certificate-grade ``retrieve``
+    failures, whose signal the ``dead``/``coverage`` scalars already carry via the
+    separate ``unified_evidence`` path — into the token stream for the first time, so a
+    tokens-only arm is measured against the records it withheld, not a handicapped
+    baseline. The deployed scalars-on config leaves it ``True`` (there the holdout is
+    near-harmless de-duplication).
 
     Scalars are ``[j/L, log1p(effort)/10, exhausted, effort_is_total]``. The last is not
     decoration: backfilled records report whole-attempt effort while instrumented ones
@@ -707,7 +717,11 @@ def build_record_arrays(
         if aggregate:
             cand_records = _aggregate_per_query(cand_records)
         for rec in cand_records:
-            if spec.axioms_for(rec.schema).proof_tier() and rec.proves_failure():
+            if (
+                record_holdout
+                and spec.axioms_for(rec.schema).proof_tier()
+                and rec.proves_failure()
+            ):
                 continue  # handled structurally by demotion, not learned
             row: RecordArray = (
                 int(vocab.operators.get(rec.schema, 0)),
@@ -750,6 +764,7 @@ def build_example(
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
+    record_holdout: bool = True,
     scene_3d: bool = False,
     pointset_feats: bool = False,
     use_pca_feats: bool = False,
@@ -1093,7 +1108,14 @@ def build_example(
 
     records = (
         build_record_arrays(
-            canon, ctx, tags, vocab, spec, aggregate_records, state_delta
+            canon,
+            ctx,
+            tags,
+            vocab,
+            spec,
+            aggregate_records,
+            state_delta,
+            record_holdout,
         )
         if (ctx and not hide)
         else []

@@ -4,6 +4,51 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-record-holdout-flag-p1-holdout-inert"></a>
+## 2026-08-22 — record-holdout flag P1 holdout inert
+
+<!--strip-->
+> **id** `2026-08-22-record-holdout-flag-p1-holdout-inert` · **status** active ·
+> **tracks** method, evaluation, env-dd2d, data
+<!--/strip-->
+
+**Context.** The learned-pathway workstream (`docs/failed_records_fix.md`) needs to make the
+failure-record *tokens* carry learnable signal, so the deployed scalars are scaffolding rather than
+need-to-have. Its first probe (P-1) targets the *certificate-record token holdout*: the filter in
+`dataset.build_record_arrays` that drops every record with `proof_tier(schema) ∧ proves_failure()`
+before it becomes a token. The doc's hypothesis C4a held that this holdout withheld certificate-grade
+records from the token stream (on DD2D, "~92 % blameless-provable"), so a tokens-only arm was scored
+against a handicapped baseline. Two things needed settling: (a) is a tokens-only arm even
+*expressible* without the holdout confound, and (b) is the effect real.
+
+**Decision.** Gate the holdout behind an emission flag **`record_holdout`** (default `True` = current
+behavior byte-for-byte; CLI `--no-record-holdout`). It is threaded through `build_record_arrays` →
+`build_example` → `SpectreDataset.__getitem__` / `deployed_val_fp` / `deployed_rollout_traced`, and —
+because the deploy-kwargs dict is splatted into `build_example` *and* `deployed_rollout_traced` — uses
+**one name across the whole splat surface** and is round-tripped in `inference.load_checkpoint` with
+`cfg.get("record_holdout", True)` (so a pre-key checkpoint keeps the historical holdout; only a model
+trained with `--no-record-holdout` deploys without it). The deployed scalars-on recipe leaves it
+`True`. A read-only census test (`tests/approaches/spectre/test_record_holdout.py`) measures the
+token delta per env-variant and asserts it — with a synthetic proof-tier `DomainSpec` as a positive
+control for the wiring.
+
+**Consequences.** **The holdout is empirically inert on every current collection** (token delta 0 on
+dd2d_v4 / stickbutton2d_v1 / restock3d_v3; positive control drops 600/692). On dd2d_v4 every failure
+record is `pick` or `place-buffer` (neither proof-tier); `retrieve` is the only proof-tier DD2D
+schema and never appears as a failing step (dd2d_v3 identical). SB2D / restock3d_v3 declare only
+`step_certificate`, so `proof_tier()` is False there. **C4a is ruled out** and P-1's "corrected
+baseline" is a no-op on dd2d_v4 — the existing `abl_only_records` arm (13.70 FP, ~23 % of the
+15.77→6.68 gap) already is it; no retrain. Standing consequences: (1) the tokens-only inertness is
+real → the workstream targets **C1 (content) + C2 (pooled query / no step-join)**, the bar being the
+50 % headline gate, not zero; (2) the `record_holdout` flag stays as the honest control and a CI
+guard — it only becomes load-bearing on a future collection whose *failing* steps are proof-tier
+(e.g. DD2D `retrieve` failures), which the census test's `delta==0` assertion will flag; (3) the doc's
+C4a box overstated the DD2D delta by conflating `proof_tier` (the holdout predicate) with the
+`step_certificate`/`blame==∅` census that drives `repeat`. Full numbers + record-population census in
+[`notebook 2026-08-22`](../notebook/07-stickbutton2d.md#2026-08-22-failure-record-token-holdout-inert-all-collections).
+
+---
+
 <a id="2026-08-22-adaptive-feature-isolation-ablation-repeat-activated-dd2d"></a>
 ## 2026-08-22 — Adaptive-feature isolation ablation + repeat activated on DD2D/SB2D
 

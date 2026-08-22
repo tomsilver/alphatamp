@@ -4,6 +4,57 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-failure-record-token-holdout-inert-all-collections"></a>
+## 2026-08-22 — Failure-record token holdout inert on all collections — P-1 corrected baseline is a no-op (C4a ruled out)
+
+<!--strip-->
+> **id** `2026-08-22-failure-record-token-holdout-inert-all-collections` · **status**
+> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d, env-restock3d
+<!--/strip-->
+
+**What.** First step of the learned-pathway workstream (`docs/failed_records_fix.md`, P-1): the
+failure-record **tokens** are near-inert, and hypothesis **C4a** blamed the *certificate-record
+token holdout* — the filter in `dataset.build_record_arrays` that drops every record satisfying
+`proof_tier(schema) ∧ proves_failure()` from the token stream (`proof_tier = monotone ∧ local ∧
+exact`). The doc predicted a *large* held-out-token delta on DD2D (its C4a box cited a "~92 %
+blameless-provable" census), so a tokens-only arm would have been scored against records it never
+saw. I put the holdout behind a flag — `record_holdout` (default `True` = current behavior;
+`--no-record-holdout`), threaded through `build_example` / `SpectreDataset` / `deployed_val_fp` /
+`deployed_rollout_traced` and **round-tripped in `inference.load_checkpoint`** so a model deploys
+under exactly what it trained with — and wrote a read-only census
+(`tests/approaches/spectre/test_record_holdout.py`): count tokens with the filter on vs off per
+env-variant, plus a positive control (a *synthetic* `DomainSpec` declaring `place-buffer`
+proof-tier). ADR:
+[`decisions 2026-08-22`](../decisions/07-stickbutton2d.md#2026-08-22-record-holdout-flag-p1-holdout-inert).
+
+**Result.** **The holdout is empirically inert on every current collection** — token delta (off −
+on) is **0** on dd2d_v4, stickbutton2d_v1 and restock3d_v3. The positive control drops 600/692
+tokens (the flag works; the *data* has no qualifying records). Direct census of the record
+population (40 dd2d_v4 train episodes, 105 821 records): every record is `pick` or `place-buffer`,
+**zero `retrieve`** — and `proof_tier` is empty (`pick`/`place-buffer` are not proof-tier;
+`retrieve` **is** the only proof-tier DD2D schema but **never appears as a failing step**). dd2d_v3
+is identical (no `retrieve` records). So the doc's C4a premise was wrong: it conflated `proof_tier`
+(the holdout predicate) with the `step_certificate` / `blame==∅` ~92 % census (which drives
+`repeat`, not the holdout). SB2D / restock3d_v3 declare only `step_certificate`, so `proof_tier()`
+is False and the holdout was never active there either. Rung-0 anchors (dd2d_v4, seed 0, adaptive,
+from the compare caches): floor `abl_floor` **15.77** → tokens-only `abl_only_records` **13.70** →
+scalars-on ceiling `abl_all` **6.68** → deployed 6.04. Tokens-only closes **(15.77−13.70)/(15.77−6.68)
+= ~23 %** of the floor→ceiling gap (the −2.07 already in the 2026-08-22 ablation entry).
+
+**Takeaway.** **C4a is ruled out** — the tokens-only −2 is *not* a records-withheld artifact, so the
+"corrected P-1 baseline" is a **no-op on dd2d_v4** (the existing `abl_only_records` arm already *is*
+it) and the retrain P-1 registered is unnecessary. The token inertness is real and the diagnosis
+sharpens to **C1 (content gap)** + **C2 (pooled evidence query, no step-level join)** — exactly what
+Phase 2's rung-1 enrichment + minimal step-join target. Records are not *fully* inert (they capture
+~2 FP / 23 % standalone), so the bar the enrichment must clear is the **50 %** headline gate, not
+zero. The `record_holdout` flag is kept (correct, checkpoint-safe, `strict=True`) as the honest
+control and CI guard; it becomes load-bearing only on a future collection whose failing steps *are*
+proof-tier (e.g. DD2D `retrieve` failures) — the census test asserts `delta==0` and will flag that.
+⚠️ 1 seed (dev); deployed §1 DD2D rows are pre-point-set-upgrade. Next: P-2 sufficiency audit at
+rung 0, then rung-1 enrichment.
+
+---
+
 <a id="2026-08-22-single-feature-isolation-ablation-dd2d-sb2d-restock3d"></a>
 ## 2026-08-22 — Single-feature isolation ablation (DD2D/SB2D/restock3d_v3) + repeat transfer
 

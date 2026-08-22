@@ -197,6 +197,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         "repeat_feats",
         "regroup_feats",
         "state_delta",
+        "record_holdout",
     }
     # the deployed arm: jaccard overlap, coverage on, both columns
     assert deploy["overlap_mode"] == "jaccard"
@@ -204,6 +205,8 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     assert deploy["aggregate_records"] is True
     assert deploy["coverage_mode"] == "both"
     assert deploy["state_delta"] is False
+    # emission-only, defaults to the historical holdout (P-1 flips it off explicitly)
+    assert deploy["record_holdout"] is True
     # repeat/regroup default off for a checkpoint trained without them (this arm)
     assert deploy["repeat_feats"] is False
     assert deploy["regroup_feats"] is False

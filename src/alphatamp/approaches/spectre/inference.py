@@ -150,6 +150,11 @@ def load_checkpoint(
         # scorer Linear cares about, and it is recomputed above from the same flags.
         "repeat_feats": bool(cfg.get("repeat_feats")),
         "regroup_feats": bool(cfg.get("regroup_feats")),
+        # Emitted-only: whether the tensorizer drops proof-tier ∧ provable records from
+        # the token stream. `.get(..., True)` keeps every pre-key checkpoint on the
+        # historical holdout, so only a model trained with `--no-record-holdout` deploys
+        # without it (docs/failed_records_fix.md P-1).
+        "record_holdout": bool(cfg.get("record_holdout", True)),
         # Architectural *and* emitted: the encoder needs the submodules and the
         # tensorizer
         # needs to produce the arrays, so it appears in both places -- exactly as
@@ -214,6 +219,7 @@ def deployed_rollout_traced(
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
+    record_holdout: bool = True,
     suppress_records: bool = False,
     zero_scene_cols: frozenset[str] = frozenset(),
     refine_cap_s: Optional[float] = None,
@@ -309,6 +315,7 @@ def deployed_rollout_traced(
             repeat_feats=repeat_feats,
             regroup_feats=regroup_feats,
             state_delta=state_delta,
+            record_holdout=record_holdout,
             scene_3d=scene_3d,
             pointset_feats=_ps_feats,
             use_pca_feats=_ps_pca,
