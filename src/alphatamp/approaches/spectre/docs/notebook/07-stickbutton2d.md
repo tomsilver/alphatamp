@@ -4,6 +4,61 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-p-2-sufficiency-audit-rung-0-compiled"></a>
+## 2026-08-22 — P-2 sufficiency audit at rung 0 — compiled scalars recoverable from tokens (C1 largely ruled out)
+
+<!--strip-->
+> **id** `2026-08-22-p-2-sufficiency-audit-rung-0-compiled` · **status** active ·
+> **tracks** method, evaluation, env-dd2d, env-restock3d
+<!--/strip-->
+
+**What.** `docs/failed_records_fix.md` P-2: is each compiled `cand_overlap` scalar (coverage,
+waste, repeat, regroup) a *function of the record tokens* a model reads, or does its computation
+consume inputs the tokens dropped (hypothesis C1, content gap)? Built
+`experiments/spectre/failed_records_sufficiency.py` (read-only): hold one episode fixed (scene,
+init/goal atoms, every candidate skeleton constant), vary only the failure context `F`; for a fixed
+candidate `c`, its token input is `token_bag(F)` and its scalar is a function of `(records(F), c,
+scene)`. Enumerate every singleton context `{i}` (`i` a failed candidate), group by the aggregated
+`token_bag` (schema + role tag-sets + rounded scalars — exactly what a `RecordEncoder` token
+carries), and within a same-token group flag any candidate whose scalar disagrees = **a collision =
+proof of insufficiency**. Report per-scalar collisions alongside the value distribution (nonzero %,
+distinct values) so a 0-collision verdict is read against whether the scalar even varies. 20 train
+episodes each, dd2d_v4 + restock3d_v3.
+
+**Result.** **No collisions on any scalar that varies** → *consistent-with-sufficient* everywhere;
+the doc's registered "regroup insufficient at rung 0" is **falsified**.
+
+| variant | scalar | checked | collisions | nonzero% | distinct | verdict |
+|---|---|---|---|---|---|---|
+| dd2d_v4 | coverage | 25400 | 0 | 24.6% | 5 | sufficient |
+| dd2d_v4 | waste | 25400 | 0 | 73.8% | 5 | sufficient |
+| dd2d_v4 | repeat | 25400 | 0 | 5.4% | 2 | sufficient |
+| dd2d_v4 | regroup | 25400 | 0 | 0.0% | 1 | CONSTANT (vacuous — DD2D declares no `grouping_certificate`) |
+| restock3d_v3 | coverage | 2160 | 0 | 14.0% | 5 | sufficient |
+| restock3d_v3 | waste | 2160 | 0 | 0.0% | 1 | CONSTANT (F3 blameless → empty culprit pool → waste abstains) |
+| restock3d_v3 | repeat | 2160 | 0 | 45.0% | 2 | sufficient |
+| restock3d_v3 | **regroup** | 2160 | **0** | 0.84% | 2 | **sufficient** (varies, no collision) |
+
+**Takeaway.** **C1 (content gap) is largely ruled out for the compiled scalars** — the information
+each one needs is already recoverable from the record tokens. The registered-prediction miss is
+mechanistic: `regroup`'s "seating chart" is `{failed step} ∪ {establishing step of each culprit}`,
+and under the **no-un-store invariant** (each object placed once — asserted across the codebase) a
+culprit's establishing step is the unique `place(culprit)`, so the chart is **redundant with the
+tokenized culprit tags**; nothing about it is missing from the stream. Combined with P-0 (the
+evidence cross-attention query is the *pooled* candidate embedding, so step-level joins are not
+representable), the diagnosis shifts to **C2 (architecture — the join is present in the inputs but
+attention can't compute it)** and **C3 (learnability from ~500 episodes)**. Consequence for Phase 2:
+rung-1's value is **not** adding missing facts but re-representing the present ones in an
+attention-joinable form (shared-encoder evidence steps) plus the minimal step-join that makes the
+join representable at all — P-4 (teachability) then separates C2 from C3. ⚠️ "consistent-with-
+sufficient" is absence-of-collision over a 20-episode sample, not a proof; `regroup`/`repeat` are
+sparse (0.8–45% nonzero) so the hunt is better-powered on coverage/waste. Next: build rung-1 +
+step-join, re-run this audit (acceptance: unchanged/still sufficient), then P-4.
+
+---
+
+---
+
 <a id="2026-08-22-failure-record-token-holdout-inert-all-collections"></a>
 ## 2026-08-22 — Failure-record token holdout inert on all collections — P-1 corrected baseline is a no-op (C4a ruled out)
 
