@@ -519,3 +519,24 @@ rollout performance — they are diagnostics only; never optimize for them.
   [`decisions/07` 2026-08-03](decisions/07-stickbutton2d.md#2026-08-03-sb2d-2b-wall-clock-breakdown-parity-dd2d).
   Cost-weighted PL — training the ranker to minimize expected wall-clock — remains the
   loss-level version, still deferred.)*
+- **Learned pathway from raw failure evidence (2026-08-22).** A workstream asking whether the
+  adaptive signal the *compiled* scalars (coverage/waste/repeat) carry can instead be **learned**
+  from the raw failure-record tokens, so the typed features become training-time scaffolding rather
+  than a need-to-have (the "wins are hand-engineering" objection). Four probes narrowed the cause of
+  the tokens' near-inertness: **P-1** ruled out the certificate-record token holdout (empirically
+  inert on every collection — C4a out); **P-2** found the FP-relevant scalars *recoverable* from the
+  tokens (C1 content gap out for coverage/waste/repeat; `regroup` is a genuine but ~0–1%, FP-irrelevant
+  exception — its establishing-step schema is dropped); **P-0** found the evidence cross-attention query
+  is the **pooled** candidate, so a step-level join is not representable (C2). The fix
+  (`--record-mode steps` / `--step-join`, additive + flag-gated, off byte-identical) and a 1-seed
+  dd2d_v4 sweep show the lever is **architecture, not content**: enriching the token content is inert
+  (`fr_steps` −0.04, CI incl. 0), while a pre-pooling per-step candidate×evidence join over the raw
+  record tokens (`fr_join`) is the only CI-clean arm (−1.80 [−3.52, −0.16]), lifting raw-evidence
+  gap-closure **23%→43%** with no compiled scalars — clearing the ≥25% proceed gate but not the 50%
+  headline gate. So ~half of the deployed win is recoverable by a generic attention join over raw
+  evidence. The deployed scalars-on method is **unchanged** (this is a parallel probe). ⚠️ 1 seed;
+  `fr_steps_join` (enrichment + join) regressed, unexplained (likely attention dilution). Next: 3-seed
+  `fr_join`, P-4 teachability (C3 vs C2 for the residual gap), step-join + scalars-on (additive?). See
+  [`decisions/07` 2026-08-22](decisions/07-stickbutton2d.md#2026-08-22-step-join-lever-content-enrichment-inert)
+  and [`notebook/07` 2026-08-22](notebook/07-stickbutton2d.md#2026-08-22-rung-1-result-step-join-over-record-tokens);
+  full plan in `docs/failed_records_fix.md`.

@@ -4,6 +4,65 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-rung-1-result-step-join-over-record-tokens"></a>
+## 2026-08-22 — Rung-1 result — step-join over record tokens is the lever, content enrichment inert (C2 confirmed, fixable)
+
+<!--strip-->
+> **id** `2026-08-22-rung-1-result-step-join-over-record-tokens` · **status** active ·
+> **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** First learned-pathway result (docs/failed_records_fix.md F-A/F-B2). Built the rung-1
+evidence-step pathway (per failed attempt: a failed-step token + each culprit's establishing step,
+embedded by the **shared** CandidateEncoder so a failed `place_short(b)` ≡ the current candidate's
+`place_short(b)`) and the **StepJoin** (candidate per-step tokens cross-attend over the evidence
+memory *before* the PMA pool — the C2 fix for the pooled evidence query P-0 found). All additive /
+zero-init / flag-gated (off byte-identical; 505 fast tests + `test_rung1_steps.py`). Trained a 4-arm
+sweep on dd2d_v4, **1 seed (dev)**, on the `abl_only_records` backbone (jaccard + pointset + atoms +
+ma5, no compiled coverage/waste/repeat), isolating the two increments: `--record-mode steps`
+(content enrichment) and `--step-join` (architecture). ADR:
+[`decisions 2026-08-22`](../decisions/07-stickbutton2d.md#2026-08-22-step-join-lever-content-enrichment-inert). Anchors
+(same test set, seed 0): floor `abl_floor` **15.77**, ceiling `abl_all` **6.68** (gap 9.09).
+
+**Result.** Test n=100, uncensored deployed FP; paired bootstrap over problems vs `fr_summary`
+(the rung-0 tokens-only baseline, retrained as the matched control), * = 95% CI excludes 0.
+gap-closure = (15.77 − FP) / 9.09.
+
+| arm | increment | ALL | s1 | s2 | s3 | Δ vs summary | gap-closure |
+|---|---|---|---|---|---|---|---|
+| `fr_summary` | rung-0 (records, pooled query) | 13.64 | 11.76 | 18.56 | 24.24 | — | 23% |
+| `fr_steps` | + enriched evidence steps | 13.60 | 13.72 | 17.16 | 23.52 | −0.04 [−2.30, +2.60] | 24% |
+| **`fr_join`** | + step-join (over summary tokens) | **11.84** | 9.40 | 16.52 | 21.44 | **−1.80 [−3.52, −0.16]\*** | **43%** |
+| `fr_steps_join` | + enriched steps **and** join | 14.37 | 6.72 | 19.40 | 31.36 | +0.73 [−2.28, +3.48] | 15% |
+
+- `fr_summary` 13.64 ≈ the cached `abl_only_records` 13.70 → the retrained control reproduces (GPU noise).
+- **Content enrichment is inert.** `fr_steps` = −0.04 (CI includes 0): richer tokens under the pooled
+  query change nothing — the model cannot reach the extra content. Direct confirmation of **C2** (and
+  consistent with P-2: the content was already recoverable, so *adding* it does nothing).
+- **The step-join is the lever.** `fr_join` = −1.80 (CI excludes 0), the only significant arm. It
+  nearly **doubles** the raw-evidence gap-closure (23% → 43%) with **no compiled coverage/waste/repeat**
+  — a pre-pooling per-step candidate×evidence attention extracts ~43% of what the hand-compiled
+  programs capture, purely from raw record tokens. Improves every non-trivial stratum (s1 11.76→9.40,
+  s2 18.56→16.52, s3 24.24→21.44).
+- **Enriched steps + join is worse than join alone** (`fr_steps_join` +0.73, ns; s3 blows to 31.36
+  while s1 drops to 6.72). Most likely the larger evidence-step memory (failed + establishing steps)
+  dilutes the step-join's attention (the rung-2 SNR risk, one rung early), or 1-seed optimization noise.
+
+**Takeaway.** The failure-record inertness is an **architecture** problem, not a content one: the
+information is present (P-2) and enriching it is inert (`fr_steps`), while a one-line reordering —
+letting candidate *steps* attend over the record tokens before pooling — is what unlocks it
+(`fr_join`, −1.80, 23%→43% gap-closure). This clears the doc's **≥25% proceed gate** but not the **50%
+headline gate**, on the summary-token step-join alone. So the deployed method's win need not be
+attributed to the compiled scalars as hand-engineering: ~half of it is recoverable by a generic
+attention join over raw evidence. ⚠️ **1 seed** (fr_join's −1.80 rests on a paired-over-problems CI,
+not cross-seed); the `fr_steps_join` regression is unexplained and may be noise. Next: (1) 3-seed
+confirmation of `fr_join`; (2) diagnose `fr_steps_join` (attention-mass audit / cap the evidence-step
+memory); (3) P-4 teachability to price how much of the remaining floor→ceiling gap is C3 (learnability)
+vs C2 (needs a sharper join); (4) the combined `step-join + scalars-on` rung — does the join *add* to
+the deployed ceiling, or is it substitutive?
+
+---
+
 <a id="2026-08-22-p-2-sufficiency-audit-rung-0-compiled"></a>
 ## 2026-08-22 — P-2 sufficiency audit at rung 0 — compiled scalars recoverable from tokens (C1 largely ruled out)
 
@@ -26,7 +85,10 @@ distinct values) so a 0-collision verdict is read against whether the scalar eve
 episodes each, dd2d_v4 + restock3d_v3.
 
 **Result.** **No collisions on any scalar that varies** → *consistent-with-sufficient* everywhere;
-the doc's registered "regroup insufficient at rung 0" is **falsified**.
+the doc's registered "regroup insufficient at rung 0" was **not reproduced empirically** — but see
+the ⚠️ below: the audit is badly underpowered for `regroup`, and the doc's *structural* claim that
+`regroup` is not computable from the current stream is in fact **correct** (a real content gap the
+sparse empirical test missed).
 
 | variant | scalar | checked | collisions | nonzero% | distinct | verdict |
 |---|---|---|---|---|---|---|
@@ -39,21 +101,26 @@ the doc's registered "regroup insufficient at rung 0" is **falsified**.
 | restock3d_v3 | repeat | 2160 | 0 | 45.0% | 2 | sufficient |
 | restock3d_v3 | **regroup** | 2160 | **0** | 0.84% | 2 | **sufficient** (varies, no collision) |
 
-**Takeaway.** **C1 (content gap) is largely ruled out for the compiled scalars** — the information
-each one needs is already recoverable from the record tokens. The registered-prediction miss is
-mechanistic: `regroup`'s "seating chart" is `{failed step} ∪ {establishing step of each culprit}`,
-and under the **no-un-store invariant** (each object placed once — asserted across the codebase) a
-culprit's establishing step is the unique `place(culprit)`, so the chart is **redundant with the
-tokenized culprit tags**; nothing about it is missing from the stream. Combined with P-0 (the
-evidence cross-attention query is the *pooled* candidate embedding, so step-level joins are not
-representable), the diagnosis shifts to **C2 (architecture — the join is present in the inputs but
-attention can't compute it)** and **C3 (learnability from ~500 episodes)**. Consequence for Phase 2:
-rung-1's value is **not** adding missing facts but re-representing the present ones in an
-attention-joinable form (shared-encoder evidence steps) plus the minimal step-join that makes the
-join representable at all — P-4 (teachability) then separates C2 from C3. ⚠️ "consistent-with-
-sufficient" is absence-of-collision over a 20-episode sample, not a proof; `regroup`/`repeat` are
-sparse (0.8–45% nonzero) so the hunt is better-powered on coverage/waste. Next: build rung-1 +
-step-join, re-run this audit (acceptance: unchanged/still sufficient), then P-4.
+**Takeaway.** **C1 (content gap) is ruled out for the FP-relevant scalars (coverage / waste /
+repeat)** — the information each needs *is* recoverable from the record tokens (no collision, and they
+carry most of the signal). It is **not** ruled out for `regroup`: `regroup`'s "seating chart" is
+`{failed step} ∪ {establishing step of each culprit}`, and the establishing step is `place_?(culprit)`
+**with its schema** (`place_tall` vs `place_short`) taken from the *failed* candidate's plan — the
+culprit tag is tokenized but that establishing-step **schema is not**, so the doc's "provably not
+computable" is structurally **correct**. The audit missed it because `regroup` is vanishingly sparse
+(≡0 on DD2D, which declares no `grouping_certificate`; 0.84% nonzero on v3), so "0 collisions in 20
+episodes" is underpowered, not a refutation. But `regroup` is a ~0–1% feature on these envs, so its
+genuine content gap does not move FP. Combined with P-0 (the evidence query is the *pooled* candidate,
+so step-level joins are not representable), the diagnosis for the scalars that matter is **C2
+(architecture — the join is present in the inputs but attention can't compute it)** and **C3
+(learnability from ~500 episodes)**. Consequence for Phase 2: rung-1's value is twofold — (a) for
+coverage/waste/repeat, re-representing the *present* content in an attention-joinable form; (b) for
+`regroup`, it is the one thing that *closes* the real content gap (the establishing-step schema), so it
+is kept flag-gated for domains where grouping matters, even though it is FP-irrelevant here. The
+minimal step-join is what makes the join representable at all; P-4 then separates C2 from C3.
+⚠️ "consistent-with-sufficient" is absence-of-collision over a 20-episode sample, not a proof;
+`regroup`/`repeat` are sparse (0.8–45% nonzero) so the hunt is far better-powered on coverage/waste.
+Next: build rung-1 + step-join, re-run this audit, then P-4.
 
 ---
 

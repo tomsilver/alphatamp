@@ -4,6 +4,57 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-step-join-lever-content-enrichment-inert"></a>
+## 2026-08-22 — step-join is the lever content enrichment inert
+
+<!--strip-->
+> **id** `2026-08-22-step-join-lever-content-enrichment-inert` · **status** active ·
+> **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**Context.** The learned-pathway workstream asks whether a model can *learn* SPECTRE's
+adaptive-reordering signal from raw failure-record tokens, so the compiled scalars (coverage/waste/
+repeat) are scaffolding rather than need-to-have. Three prior probes narrowed the cause of the tokens'
+inertness: P-1 ruled out the certificate holdout (C4a), P-2 showed the compiled scalars are already
+*recoverable* from the tokens (C1 content gap largely ruled out), and the P-0 audit found the evidence
+cross-attention query is the **pooled** candidate embedding — so a step-level candidate×evidence join
+is not representable (C2). Two candidate fixes were built (additive, flag-gated, off byte-identical):
+`record_mode="steps"` (enrich the token *content* with shared-encoder evidence steps) and
+`use_step_join` (a pre-pooling StepJoin so candidate *step* tokens attend over the evidence memory
+before the PMA pool — the C2 fix). A 1-seed dd2d_v4 sweep isolated each on the `abl_only_records`
+backbone (no compiled scalars).
+
+**Decision.** **The architecture fix (StepJoin), not content enrichment, is the lever — adopt the
+step-join as the learned-pathway direction and drop content enrichment as a standalone rung.**
+Evidence (test n=100, paired bootstrap over problems vs the rung-0 baseline `fr_summary` 13.64;
+floor 15.77, ceiling 6.68): content enrichment `fr_steps` = **−0.04 [−2.30, +2.60]** (inert — the
+pooled query cannot reach the richer content, confirming C2); the step-join `fr_join` = **−1.80
+[−3.52, −0.16]** (the only CI-clean arm), lifting raw-evidence gap-closure **23% → 43%** with no
+compiled coverage/waste/repeat; and enriched-steps-plus-join `fr_steps_join` = **+0.73 [−2.28, +3.48]**
+(worse than join alone). See
+[`notebook 2026-08-22`](../notebook/07-stickbutton2d.md#2026-08-22-rung-1-result-step-join-over-record-tokens).
+
+**Consequences.** (1) The failure-record inertness is an **architecture** limitation, not a content
+one — a generic per-step attention join over raw record tokens recovers ~half of what the hand-compiled
+programs capture, so the deployed win is not purely hand-engineering. (2) Clears the doc's **≥25%
+proceed gate** (43%) but not the **50% headline gate**, on the summary-token join alone → proceed, but
+the headline is not yet earned. (3) The rung-1 evidence-step enrichment is **demoted, not removed**:
+inert alone and harmful combined with the join *as-is* (likely attention dilution from the larger
+memory — the rung-2 SNR risk, one rung early). It is **kept flag-gated** deliberately — off costs
+nothing (byte-identical, `strict=True`); it is the one thing that closes `regroup`'s genuine content
+gap (the establishing-step *schema*, which the summary tokens drop — the doc's "provably not
+computable" is structurally correct, P-2's "sufficient" was underpowered on that ~0–1% feature); and
+the dilution is plausibly fixable (cap / lean the memory). So it stays available per the
+build-then-disable convention and is a live rung-2 follow-up, not the headline direction.
+(4) **Standing caveat: 1 seed** —
+`fr_join`'s −1.80 rests on a paired-over-problems CI, not cross-seed variance; a 3-seed confirmation is
+required before this is a paper number, and `fr_steps_join`'s regression is unexplained. Next rungs:
+3-seed `fr_join`; an attention-mass audit of `fr_steps_join`; P-4 teachability (is the residual
+floor→ceiling gap C3-learnability or C2-needs-a-sharper-join); and the combined step-join+scalars-on
+rung (additive vs substitutive with the deployed ceiling).
+
+---
+
 <a id="2026-08-22-record-holdout-flag-p1-holdout-inert"></a>
 ## 2026-08-22 — record-holdout flag P1 holdout inert
 
