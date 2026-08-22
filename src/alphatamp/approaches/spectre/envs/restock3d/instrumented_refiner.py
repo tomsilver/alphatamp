@@ -56,6 +56,11 @@ _PROBE_LIFT = (
     0.006  # lift the held object this far clear of the surface before the F3 probe
 )
 _COLLISION_MARGIN = 1e-3
+# v2 continuous packing: an already-stored object is a "resident" of a section iff its
+# underside sits within this tolerance of that section's placement surface. Distinguishes
+# section residents (bottom ~ surface_z, ~0.29+) from floor objects (bottom ~ 0) and from
+# residents of the *other* section (a different surface_z).
+_RESIDENT_Z_TOL = 0.05
 
 # Reach-over corridor (fully-lateral layout, decisions/07 2026-08-17). The front grasp reaches NORTH
 # over anything nearer than the target, so object A obstructs B's front-pick when A is SOUTH of B in a
@@ -189,12 +194,15 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         sim,
         region_infos: dict[str, RegionInfo],
         robot_name: str = "robot",
+        section_height_cutoffs: Optional[dict[str, float]] = None,
         **kwargs: object,
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._sim = sim
         self._region_infos = region_infos
         self._robot_name = robot_name
+        # v3 arm-insertion cutoffs {section_key: max full-height}; None -> v2 behaviour unchanged.
+        self._section_cutoffs = section_height_cutoffs
         self.rejections: list[_Rejection] = []
 
     def clear(self) -> None:
@@ -275,8 +283,13 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         self, state: ObjectCentricState, a: GroundOperator
     ) -> tuple[tuple[str, ...], str]:
         try:
-            if a.name == "place":
+            if a.name == "place":  # v1 discrete-region place (3-arg)
                 return self._probe_place(state, a)
+            if a.name in (
+                "place_tall",
+                "place_short",
+            ):  # v2 continuous-section place (2-arg)
+                return self._probe_place_v2(state, a)
             if a.name == "pick":
                 return self._probe_pick(state, a)
         except BaseException:  # noqa: BLE001  (a probe must never change the decision)
@@ -342,6 +355,90 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         if shelf_hit:
             return (), "F3"
         return (), "C2"
+
+    def _probe_place_v2(
+        self, state: ObjectCentricState, a: GroundOperator
+    ) -> tuple[tuple[str, ...], str]:
+        """V2 continuous-section place attribution (``place_tall``/``place_short``).
+
+        F3 (height) is unchanged from v1 -- the section's ceiling board spans the whole
+        band, so a single centre probe still detects a too-tall block. F2 (crowding) is
+        redesigned: continuous packing spreads residents across the wide band, so the v1
+        single-centre-point overlap misses them. Instead, once the object is confirmed to
+        FIT this section height-wise (no shelf hit), a failed place is "no free x remains",
+        whose class-1 culprits are the section's **residents** -- the objects the prefix
+        already stored on this band, which collectively crowded the placement out.
+        """
+        _, obj = a.parameters  # v2 place ops are (robot, target); no region arg
+        sec_key = "section_0" if a.name == "place_tall" else "section_1"
+        info = self._region_infos.get(sec_key)
+        if info is None:
+            return (), "C2"
+        # v3 arm-insertion F3 (Phase 3, decisions/07 2026-08-20): the section's board clearance sits
+        # ~0.10 m ABOVE the arm-insertion cutoff, so a block in (cutoff, clearance] FITS under the
+        # board (the block-vs-board test below would miss it) yet the arm cannot thread it in and the
+        # real rollout fails MP. Attribute it here as a provable, culprit-free F3 -- matching the
+        # analytic ``feasibility_v3`` classifier so collection labels and real-refiner records agree
+        # (Gate G1). Guarded by ``_section_cutoffs``; None (v2) leaves the old behaviour byte-identical.
+        if self._section_cutoffs is not None:
+            full_h = 2.0 * float(
+                state.get(state.get_object_from_name(obj.name), "half_extent_z")
+            )
+            cutoff = self._section_cutoffs.get(sec_key)
+            if cutoff is not None and full_h > cutoff + 1e-9:
+                return (), "F3"
+        self._sim.set_state(state.copy())
+        pcid = self._sim.physics_client_id
+        held_id = self._sim._object_name_to_pybullet_id(obj.name)
+        half_z = float(state.get(state.get_object_from_name(obj.name), "half_extent_z"))
+        saved = get_pose(held_id, pcid)
+        # Centre-of-band probe: bottom on the board, top penetrating the ceiling iff the
+        # block is too tall for this section (F3).
+        probe_pose = Pose(
+            (
+                info.center_xy[0],
+                info.center_xy[1],
+                info.surface_z + half_z + _PROBE_LIFT,
+            )
+        )
+        set_pose(held_id, probe_pose, pcid)
+        p.performCollisionDetection(physicsClientId=pcid)
+        shelf_hit = any(
+            check_body_collisions(
+                held_id,
+                sid,
+                pcid,
+                distance_threshold=_COLLISION_MARGIN,
+                perform_collision_detection=False,
+            )
+            for sid in self._sim.shelf_structure_ids()
+        )
+        set_pose(held_id, saved, pcid)
+        if shelf_hit:
+            return (
+                (),
+                "F3",
+            )  # too tall for this section -- culprit-free, proves_failure()
+        residents = self._section_residents(state, info, exclude=obj.name)
+        if residents:
+            return tuple(sorted(residents)), "F2"
+        return (), "C2"
+
+    def _section_residents(
+        self, state: ObjectCentricState, info: RegionInfo, exclude: str
+    ) -> list[str]:
+        """Movables already resting on ``info``'s placement surface (excluding
+        ``exclude``)."""
+        out: list[str] = []
+        for name in self._sim.movable_names():
+            if name == exclude:
+                continue
+            pose = state.get_object_pose(name)
+            half_z = float(state.get(state.get_object_from_name(name), "half_extent_z"))
+            bottom = float(pose.position[2]) - half_z
+            if abs(bottom - info.surface_z) < _RESIDENT_Z_TOL:
+                out.append(name)
+        return out
 
     def _probe_pick(
         self, state: ObjectCentricState, a: GroundOperator
@@ -427,8 +524,13 @@ def make_recording_sampler(
     sim,
     region_infos: dict[str, RegionInfo],
     robot_name: str = "robot",
+    section_height_cutoffs: Optional[dict[str, float]] = None,
 ) -> RestockRecordingSampler:
-    """Construct the real-collision recording sampler."""
+    """Construct the real-collision recording sampler.
+
+    ``section_height_cutoffs`` (v3 only) enables the arm-insertion F3 attribution in
+    ``_probe_place_v2``; leave None for v2 to keep the block-vs-board behaviour unchanged.
+    """
     return RestockRecordingSampler(
         controller_generator=controller_generator,
         transition_function=transition_function,
@@ -437,4 +539,5 @@ def make_recording_sampler(
         sim=sim,
         region_infos=region_infos,
         robot_name=robot_name,
+        section_height_cutoffs=section_height_cutoffs,
     )

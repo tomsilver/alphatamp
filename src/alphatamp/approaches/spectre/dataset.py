@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import torch
@@ -67,7 +67,42 @@ __all__ = [
     "collate",
     "sample_context",
     "build_record_arrays",
+    "compute_point_feats",
+    "pointset_emission",
+    "atom_emission",
 ]
+
+
+def pointset_emission(cfg, scene_3d: bool) -> tuple[bool, bool, int]:
+    """``(pointset_feats, use_pca_feats, edgeconv_k)`` for :func:`build_example`.
+
+    Reads the five PointSetEncoder switches off any cfg-like object (a ``TrainConfig``
+    or a ``SpectreConfig`` -- the field names match), so training, validation-selection
+    and deployment all derive the tensorizer's emission from one place and can never
+    desync. ``edgeconv_k=0`` resolves to 4 (2D) / 6 (3D).
+    """
+    pointset = bool(
+        cfg.use_pca_feats or cfg.use_edgeconv or cfg.use_point_sab or cfg.pma_seeds > 1
+    )
+    k = cfg.edgeconv_k or (6 if scene_3d else 4)
+    return pointset, bool(cfg.use_pca_feats), int(k)
+
+
+def atom_emission(cfg) -> tuple[bool, bool]:
+    """``(emit_init_atoms, emit_goal_atoms)`` for :func:`build_example`.
+
+    Reads the atom-input switches off any cfg-like object (a ``TrainConfig`` or a
+    ``SpectreConfig`` -- the field names match), so training, validation-selection and
+    deployment all derive the tensorizer's emission from one place and can never desync
+    (the same discipline as :func:`pointset_emission`). ``atom_mode == "off"`` (the
+    default) emits neither, so the config-off tensorizer is byte-unchanged.
+    """
+    on = getattr(cfg, "atom_mode", "off") == "profiles"
+    return (
+        on and bool(getattr(cfg, "use_init_atoms", True)),
+        on and bool(getattr(cfg, "use_goal_atoms", True)),
+    )
+
 
 #: One atom of a state delta, as ``(predicate id, argument tags)``.
 DeltaAtomArray = tuple[int, list[int]]
@@ -105,6 +140,166 @@ def resample_ring(
     return out.astype(np.float32)
 
 
+def sample_point_cloud(
+    points: Sequence[tuple[float, float, float]], p: int = N_BOUNDARY_POINTS
+) -> np.ndarray:
+    """Fixed-size ``(p, 3)`` point cloud from a stored 3D point set (pad/truncate to p).
+
+    The 3D analogue of :func:`resample_ring`: the point-set encoder pools symmetrically,
+    so order does not matter and no arc-length parameterisation applies -- we only
+    guarantee a fixed count. Restock3D stores exactly ``p`` points, so this is a no-op
+    there.
+    """
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"expected an (n, 3) point cloud, got shape {pts.shape}")
+    if len(pts) == p:
+        return pts
+    if len(pts) > p:
+        return pts[:p]
+    return pts[np.arange(p) % len(pts)]
+
+
+def _rot90_ccw(n: np.ndarray) -> np.ndarray:
+    """Rotate each 2D vector 90° CCW: ``(x, y) -> (-y, x)`` (shape ``(P, 2)``)."""
+    return np.stack([-n[:, 1], n[:, 0]], axis=1)
+
+
+def _shapely_inside(boundary: Sequence[tuple[float, float]]):
+    """Inside-test closure over the *source* polygon (2D, tensorizer-time only).
+
+    Rebuilds the ``shapely`` polygon from the stored exterior ring -- the polygon never
+    enters the model input, so this is a tensorizer-only oracle (doc §2.3). shapely is
+    imported lazily so the config-off 2D path takes on no new import.
+    """
+    from shapely.geometry import Point, Polygon  # lazy: off path never imports
+
+    poly = Polygon(boundary)
+    if not poly.is_valid:
+        poly = poly.buffer(0)  # heal any self-touching concave ring
+
+    def _inside(q: np.ndarray) -> bool:
+        return bool(poly.contains(Point(float(q[0]), float(q[1]))))
+
+    return _inside
+
+
+def _box_inside(pts: np.ndarray):
+    """Inside-test closure for an axis-aligned box centered at the item-frame origin
+    (3D).
+
+    Restock3D objects are convex boxes centered at the origin, so the half-extents are
+    ``|p|_max`` over the cloud and an exact analytic inside test needs nothing beyond
+    the stored point set (the doc's sensor-viewpoint oracle is unavailable -- no camera
+    is recorded). See docs/decisions 2026-08-18.
+    """
+    half = np.abs(np.asarray(pts, dtype=np.float64)).max(axis=0)
+
+    def _inside(q: np.ndarray) -> bool:
+        return bool(np.all(np.abs(np.asarray(q, dtype=np.float64)) <= half))
+
+    return _inside
+
+
+def compute_point_feats(
+    pts: np.ndarray,
+    inside_fn,
+    k: int,
+    scene_3d: bool,
+    use_pca_feats: bool,
+    *,
+    validate: bool = False,
+    eps: float = 1e-9,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-point differential features + Euclidean kNN indices for one object's points.
+
+    ``pts`` is ``(P, d)`` with ``d in {2, 3}``, item frame, centroid ~ origin. Returns
+    ``(point_feats (P, C_pt), knn_idx (P, k) int64)``. Everything is order-free
+    (Euclidean kNN, PCA, the inside test, the quadric fit), so the deployed path never
+    uses ring order -- see doc §2. With ``use_pca_feats=False`` the features are just the
+    coordinates (``C_pt = d``) and ``knn_idx`` is still computed so an EdgeConv graph
+    exists.
+
+    - 2D (``C_pt=6``): ``[x, y, n_x, n_y, κ̂, f]`` -- oriented normal, signed curvature,
+      PCA flatness ``λ2/(λ1+λ2)``.
+    - 3D (``C_pt=8``): ``[x, y, z, n_x, n_y, n_z, f, 0]`` -- oriented normal, Pauly
+      surface variation ``λ3/Σλ``; no signed curvature (a later column, doc §2.4).
+    """
+    pts = np.asarray(pts, dtype=np.float64)
+    p_count, d = pts.shape
+    k = int(min(max(k, 1), p_count))
+
+    # --- kNN (§2.1): self included (distance 0 sorts first), so the k-set doubles as
+    # the PCA neighborhood and the EdgeConv graph. Stable sort => deterministic on input.
+    diff = pts[:, None, :] - pts[None, :, :]  # (P, P, d)
+    d2 = (diff * diff).sum(-1)  # (P, P)
+    knn_idx = np.argsort(d2, axis=1, kind="stable")[:, :k]  # (P, k)
+    nn_d2 = np.take_along_axis(d2, knn_idx, axis=1)  # (P, k)
+    if k > 1:
+        hbar = np.sqrt(np.maximum(nn_d2[:, 1:], 0.0)).mean(axis=1)  # mean non-self dist
+    else:
+        hbar = np.zeros(p_count)
+    hbar = np.maximum(hbar, eps)
+
+    if not use_pca_feats:
+        return pts.astype(np.float32), knn_idx.astype(np.int64)
+
+    # --- local PCA frame (§2.2): batched eigendecomposition of the neighbor covariance.
+    nbr = pts[knn_idx]  # (P, k, d)
+    cen = nbr - nbr.mean(axis=1, keepdims=True)
+    cov = np.einsum("pki,pkj->pij", cen, cen) / max(k, 1)  # (P, d, d)
+    evals, evecs = np.linalg.eigh(
+        cov
+    )  # ascending eigenvalues; evecs[:, :, i] <-> evals[i]
+    normal = evecs[:, :, 0].copy()  # smallest-variance direction
+    if scene_3d:
+        f = evals[:, 0] / (
+            evals.sum(axis=1) + eps
+        )  # Pauly surface variation ∈ [0, 1/3]
+    else:
+        f = evals[:, 0] / (evals[:, 0] + evals[:, 1] + eps)  # flatness ∈ [0, 0.5]
+
+    # duplicate-point / degenerate fallback (§2.2): tiny largest eigenvalue.
+    valid = evals[:, -1] > eps
+    if validate:
+        assert bool(valid.all()), "degenerate PCA neighborhood on clean sim data"
+    if not valid.all():
+        bad = ~valid
+        f = np.where(bad, 0.0, f)
+        default_n = np.zeros(d)
+        default_n[0] = 1.0
+        normal[bad] = default_n
+
+    # --- orientation (§2.3): flip the normal outward via the inside test on p + ε·n.
+    if inside_fn is not None:
+        q = pts + (0.5 * hbar)[:, None] * normal
+        flip = np.array([inside_fn(q[i]) for i in range(p_count)], dtype=bool)
+        normal[flip] *= -1.0
+
+    if not scene_3d:
+        # Consistent tangent from the oriented normal (§2.3), not ring winding.
+        tangent = _rot90_ccw(normal)  # (P, 2)
+        # --- signed curvature (§2.4): quadric v ≈ b·u + a·u², κ = -2a, κ̂ = tanh(κ·h̄).
+        rel = nbr - pts[:, None, :]  # (P, k, 2)
+        u = np.einsum("pki,pi->pk", rel, tangent)
+        v = np.einsum("pki,pi->pk", rel, normal)
+        design = np.stack([u, u * u], axis=-1)  # (P, k, 2)
+        ata = np.einsum("pki,pkj->pij", design, design) + eps * np.eye(2)[None]
+        atv = np.einsum("pki,pk->pi", design, v)
+        coef = np.linalg.solve(ata, atv)  # (P, 2) = [b, a]
+        kappa = -2.0 * coef[:, 1]
+        khat = np.where(valid, np.tanh(kappa * hbar), 0.0)
+        feats = np.concatenate(
+            [pts, normal, khat[:, None], f[:, None]], axis=1
+        )  # (P, 6)
+    else:
+        feats = np.concatenate(
+            [pts, normal, f[:, None], np.zeros((p_count, 1))], axis=1
+        )  # (P, 8)
+
+    return feats.astype(np.float32), knn_idx.astype(np.int64)
+
+
 @dataclasses.dataclass
 class SpectreExample:
     """Per-episode numpy/py arrays before collation."""
@@ -128,6 +323,17 @@ class SpectreExample:
     overlap: (
         list  # [subset⊆blocked (sound demotion), jaccard-with-failed] per candidate
     )
+    # PointSetEncoder inputs (doc pointset_encoder_upgrade.md); None on the config-off
+    # path so the byte-unchanged v1 tensorizer emits exactly what it did before.
+    point_feats: Optional[np.ndarray] = None  # (N, P, C_pt) per-point features
+    knn_idx: Optional[np.ndarray] = None  # (N, P, k) int64 Euclidean-kNN indices
+    # init/goal atom profiles (doc spectre_atom_input_guide.md); None on the config-off
+    # path (atom_mode="off"). ``pred`` is the vocab id +1 (0 = pad); ``arg_tags`` are
+    # object tags in the scene tag namespace (0 = PAD_TAG). Init and goal kept separate.
+    init_atom_pred: Optional[np.ndarray] = None  # (A_i,) int64
+    init_atom_arg_tags: Optional[np.ndarray] = None  # (A_i, M) int64
+    goal_atom_pred: Optional[np.ndarray] = None  # (A_g,) int64
+    goal_atom_arg_tags: Optional[np.ndarray] = None  # (A_g, M) int64
 
 
 def _glob_feats(ex: SpectreExample) -> np.ndarray:
@@ -140,7 +346,8 @@ def _glob_feats(ex: SpectreExample) -> np.ndarray:
 
 
 def _collate_base(examples: list[SpectreExample], max_arity: int) -> SpectreBatch:
-    """Pad + stack per-episode examples into a ``SpectreBatch`` (record fields unset)."""
+    """Pad + stack per-episode examples into a ``SpectreBatch`` (record fields
+    unset)."""
     b = len(examples)
     n = max(len(e.obj_tags) for e in examples)
     k = max(len(e.op_ids) for e in examples)
@@ -158,9 +365,68 @@ def _collate_base(examples: list[SpectreExample], max_arity: int) -> SpectreBatc
     assert all(
         e.obj_rel.shape[-1] == d_rel for e in examples
     ), "obj_rel width differs within a batch"
+    # Point/pose widths likewise come from the examples, not the literal 2/3: the 2D
+    # boundary-ring path emits (P, 2) + (3,), the Restock3D point cloud (P, 3) + (4,).
+    # One collator serves both; a batch shares a builder and therefore a width.
+    point_dim = examples[0].obj_boundary.shape[-1] if examples else 2
+    pose_dim = examples[0].obj_pose.shape[-1] if examples else 3
+    assert all(
+        e.obj_boundary.shape[-1] == point_dim for e in examples
+    ), "obj_boundary point_dim differs within a batch"
+    assert all(
+        e.obj_pose.shape[-1] == pose_dim for e in examples
+    ), "obj_pose pose_dim differs within a batch"
+    # PointSet per-point features / kNN are trailing-nullable, emitted only when the
+    # encoder upgrade is on. Widths (C_pt, k) come from the examples, same discipline as
+    # point_dim/pose_dim above; config-off leaves both None and the batch is unchanged.
+    _pf0 = examples[0].point_feats if examples else None
+    point_feats: Optional[np.ndarray] = None
+    knn_idx: Optional[np.ndarray] = None
+    if _pf0 is not None:
+        c_pt = _pf0.shape[-1]
+        assert all(
+            e.point_feats is not None and e.point_feats.shape[-1] == c_pt
+            for e in examples
+        ), "point_feats C_pt differs within a batch"
+        point_feats = np.zeros((b, n, p, c_pt), np.float32)
+        _kn0 = examples[0].knn_idx
+        if _kn0 is not None:
+            kdim = _kn0.shape[-1]
+            assert all(
+                e.knn_idx is not None and e.knn_idx.shape[-1] == kdim for e in examples
+            ), "knn_idx k differs within a batch"
+            knn_idx = np.zeros((b, n, p, kdim), np.int64)
+    # init/goal atom profiles (doc spectre_atom_input_guide.md): trailing-nullable,
+    # emitted only when atom_mode="profiles". Init and goal are gated independently, so
+    # each pair may be present or None on its own. Widths (A, M) come from the examples,
+    # same discipline as point_feats; config-off leaves all four None.
+    _ai0 = examples[0].init_atom_pred if examples else None
+    _aia0 = examples[0].init_atom_arg_tags if examples else None
+    _ag0 = examples[0].goal_atom_pred if examples else None
+    _aga0 = examples[0].goal_atom_arg_tags if examples else None
+    init_atom_pred: Optional[np.ndarray] = None
+    init_atom_arg_tags: Optional[np.ndarray] = None
+    goal_atom_pred: Optional[np.ndarray] = None
+    goal_atom_arg_tags: Optional[np.ndarray] = None
+    if _ai0 is not None and _aia0 is not None:
+        a_i = max(
+            (len(e.init_atom_pred) for e in examples if e.init_atom_pred is not None),
+            default=0,
+        )
+        m_i = _aia0.shape[-1]
+        init_atom_pred = np.zeros((b, a_i), np.int64)
+        init_atom_arg_tags = np.zeros((b, a_i, m_i), np.int64)
+    if _ag0 is not None and _aga0 is not None:
+        a_g = max(
+            (len(e.goal_atom_pred) for e in examples if e.goal_atom_pred is not None),
+            default=0,
+        )
+        m_g = _aga0.shape[-1]
+        goal_atom_pred = np.zeros((b, a_g), np.int64)
+        goal_atom_arg_tags = np.zeros((b, a_g, m_g), np.int64)
     obj_tags = np.zeros((b, n), np.int64)
-    obj_boundary = np.zeros((b, n, p, 2), np.float32)
-    obj_pose = np.zeros((b, n, 3), np.float32)
+    obj_boundary = np.zeros((b, n, p, point_dim), np.float32)
+    obj_pose = np.zeros((b, n, pose_dim), np.float32)
     obj_rel = np.zeros((b, n, d_rel), np.float32)
     obj_is_goal = np.zeros((b, n), np.float32)
     obj_mask = np.zeros((b, n), bool)
@@ -190,6 +456,26 @@ def _collate_base(examples: list[SpectreExample], max_arity: int) -> SpectreBatc
         obj_rel[bi, :no] = e.obj_rel
         obj_is_goal[bi, :no] = e.obj_is_goal
         obj_mask[bi, :no] = True
+        if point_feats is not None and e.point_feats is not None:
+            point_feats[bi, :no] = e.point_feats
+            if knn_idx is not None and e.knn_idx is not None:
+                knn_idx[bi, :no] = e.knn_idx
+        if (
+            init_atom_pred is not None
+            and init_atom_arg_tags is not None
+            and e.init_atom_pred is not None
+            and e.init_atom_arg_tags is not None
+        ):
+            init_atom_pred[bi, : len(e.init_atom_pred)] = e.init_atom_pred
+            init_atom_arg_tags[bi, : len(e.init_atom_pred)] = e.init_atom_arg_tags
+        if (
+            goal_atom_pred is not None
+            and goal_atom_arg_tags is not None
+            and e.goal_atom_pred is not None
+            and e.goal_atom_arg_tags is not None
+        ):
+            goal_atom_pred[bi, : len(e.goal_atom_pred)] = e.goal_atom_pred
+            goal_atom_arg_tags[bi, : len(e.goal_atom_pred)] = e.goal_atom_arg_tags
         aux_nec[bi, :no] = e.aux_necessary
         aux_rel[bi, :no] = e.aux_relevant
         glob[bi] = _glob_feats(e)
@@ -236,6 +522,16 @@ def _collate_base(examples: list[SpectreExample], max_arity: int) -> SpectreBatc
         fact_tier_ids=t(fact_tier) if fmax else None,
         fact_arg_tags=t(fact_arg) if fmax else None,
         fact_mask=t(fact_mask) if fmax else None,
+        point_feats=t(point_feats) if point_feats is not None else None,
+        knn_idx=t(knn_idx) if knn_idx is not None else None,
+        init_atom_pred=t(init_atom_pred) if init_atom_pred is not None else None,
+        init_atom_arg_tags=(
+            t(init_atom_arg_tags) if init_atom_arg_tags is not None else None
+        ),
+        goal_atom_pred=t(goal_atom_pred) if goal_atom_pred is not None else None,
+        goal_atom_arg_tags=(
+            t(goal_atom_arg_tags) if goal_atom_arg_tags is not None else None
+        ),
     )
 
 
@@ -338,6 +634,34 @@ def _delta_arrays(delta, tags: dict[str, int], vocab: Vocab, arity: int) -> Delt
     return (_role(delta.added), _role(delta.deleted))
 
 
+def _atom_profile_arrays(
+    atoms, tags: dict[str, int], vocab: Vocab, arity: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """One atom set as ``(pred ids (A,), arg tags (A, arity))`` for the
+    AtomProfileEncoder.
+
+    Mirrors :func:`_delta_arrays`: the predicate id carries the same **+1 shift** (vocab
+    reserves 0 for ``<OOV>`` while the embedding reserves 0 for padding, so an unknown
+    predicate stays distinct from an empty slot), and object arguments bind to the
+    episode-local ``tags`` namespace with the same guarded lookup used everywhere the
+    tag join could meet a non-object arg. Atoms are ``sorted`` so the emitted arrays are
+    deterministic across runs (the atom set is a ``frozenset``); the encoder's scatter-
+    sum is order-invariant, so ordering never changes a logit. A 0-ary atom (e.g.
+    handempty) stays in-array with a real predicate id and an all-PAD arg row -- the
+    encoder routes it to the global term by detecting that empty row.
+    """
+    rows = sorted(
+        atoms, key=lambda a: (a.predicate.name, tuple(e.name for e in a.entities))
+    )
+    pred = np.zeros(len(rows), dtype=np.int64)
+    argt = np.zeros((len(rows), arity), dtype=np.int64)  # 0 = PAD_TAG
+    for i, atom in enumerate(rows):
+        pred[i] = int(vocab.predicates.get(atom.predicate.name, {"idx": 0})["idx"]) + 1
+        names = [tags[e.name] for e in atom.entities if e.name in tags][:arity]
+        argt[i, : len(names)] = names
+    return pred, argt
+
+
 def build_record_arrays(
     episode: EpisodeRecord,
     context_f: frozenset[int],
@@ -423,7 +747,15 @@ def build_example(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    repeat_feats: bool = False,
+    regroup_feats: bool = False,
     state_delta: bool = False,
+    scene_3d: bool = False,
+    pointset_feats: bool = False,
+    use_pca_feats: bool = False,
+    edgeconv_k: int = 0,
+    emit_init_atoms: bool = False,
+    emit_goal_atoms: bool = False,
 ) -> tuple[SpectreExample, list[RecordArray]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
@@ -485,17 +817,85 @@ def build_example(
 
     n_obj = len(geo.objects)
     obj_tags = np.array([tags[o.name] for o in geo.objects], dtype=np.int64)
-    obj_boundary = np.stack([resample_ring(list(o.boundary)) for o in geo.objects])
-    obj_pose = np.array(
-        [[o.pose[0] / scale, o.pose[1] / scale, o.pose[2]] for o in geo.objects],
-        dtype=np.float32,
-    )
+    if scene_3d:
+        # 3D path: the analytic point cloud + an (x, y, z, yaw) pose. Restock3D populates
+        # ``point_cloud``/``pose_z`` on every object; a 2D episode reaching here under
+        # ``scene_3d`` is a config/data mismatch, so fail loudly rather than lift a flat
+        # footprint to z=0 silently.
+        clouds = []
+        for o in geo.objects:
+            if o.point_cloud is None:
+                raise ValueError(
+                    f"scene_3d=True but object {o.name!r} has no point_cloud "
+                    "(train a 2D env without --scene-3d)."
+                )
+            clouds.append(sample_point_cloud(o.point_cloud))
+        obj_boundary = np.stack(clouds)
+        obj_pose = np.array(
+            [
+                [
+                    o.pose[0] / scale,
+                    o.pose[1] / scale,
+                    (o.pose_z or 0.0) / scale,
+                    o.pose[2],
+                ]
+                for o in geo.objects
+            ],
+            dtype=np.float32,
+        )
+    else:
+        obj_boundary = np.stack([resample_ring(list(o.boundary)) for o in geo.objects])
+        obj_pose = np.array(
+            [[o.pose[0] / scale, o.pose[1] / scale, o.pose[2]] for o in geo.objects],
+            dtype=np.float32,
+        )
     obj_is_goal = np.array(
         [1.0 if o.name in goal_objs else 0.0 for o in geo.objects], dtype=np.float32
     )
     rel = np.zeros((n_obj, D_REL), dtype=np.float32)
     for i, o in enumerate(geo.objects):
         rel[i] = [o.area, *_sin_cos(o.pose[2])]
+
+    # --- PointSetEncoder per-point features (doc pointset_encoder_upgrade.md) ------
+    # Computed from the same point set that feeds ``obj_boundary`` plus an inside-test
+    # oracle (2D: the source polygon; 3D: the origin-centered box). Gated so the
+    # config-off path skips it and ``obj_boundary``/``obj_pose`` above stay unchanged.
+    point_feats: Optional[np.ndarray] = None
+    knn_idx: Optional[np.ndarray] = None
+    if pointset_feats:
+        _k = edgeconv_k if edgeconv_k > 0 else (6 if scene_3d else 4)
+        pf_list: list[np.ndarray] = []
+        kn_list: list[np.ndarray] = []
+        for i, o in enumerate(geo.objects):
+            pts_i = obj_boundary[i]
+            if use_pca_feats:
+                inside = _box_inside(pts_i) if scene_3d else _shapely_inside(o.boundary)
+            else:
+                inside = None
+            pf_i, kn_i = compute_point_feats(pts_i, inside, _k, scene_3d, use_pca_feats)
+            pf_list.append(pf_i)
+            kn_list.append(kn_i)
+        point_feats = np.stack(pf_list)
+        knn_idx = np.stack(kn_list)
+
+    # --- init/goal atom profiles (doc spectre_atom_input_guide.md) ----------
+    # Emitted as (pred id, arg tags) per atom, mirroring the state-delta idiom; the model
+    # scatter-sums each atom onto the object tokens it mentions. Read off the canonical
+    # atoms (``canon``), so atom object names share the ``tags`` namespace with the scene
+    # and candidate tokens. Off ⇒ None, leaving the config-off tensorizer byte-unchanged.
+    _atom_arity = max(vocab.max_predicate_arity, 1)
+    init_atom_pred: Optional[np.ndarray] = None
+    init_atom_arg_tags: Optional[np.ndarray] = None
+    goal_atom_pred: Optional[np.ndarray] = None
+    goal_atom_arg_tags: Optional[np.ndarray] = None
+    if emit_init_atoms:
+        init_atom_pred, init_atom_arg_tags = _atom_profile_arrays(
+            canon.initial_abstract_state.atoms, tags, vocab, _atom_arity
+        )
+    if emit_goal_atoms:
+        goal_atom_pred, goal_atom_arg_tags = _atom_profile_arrays(
+            canon.goal_atoms, tags, vocab, _atom_arity
+        )
 
     # --- candidate tokens ---------------------------------------------------
     op_ids: list[list[int]] = []
@@ -569,11 +969,25 @@ def build_example(
     # it without changing any shape.
     want_coverage = want_cov and coverage_mode in ("both", "coverage")
     want_waste = want_cov and coverage_mode in ("both", "waste")
-    n_ov = N_OVERLAP_COV if want_cov else 2
+    # `repeat` (F3 exact-step certificate) and `regroup` (F2 seating-chart) append two
+    # more columns after the coverage pair, gated by their own flags and zeroed the same
+    # way. Trailing-additive: the width grows only when a flag is on, so an older
+    # checkpoint (flags absent) reconstructs at its original width and loads. Both are
+    # the learned-feature analogue of the P2 oracle certificates (docs/adaptivity_probe_
+    # plan_restock3d_v3.md): `repeat` fires on a blameless, exhausted failure of a
+    # `step_certificate` schema (restock3d F3); `regroup` on a culprit-bearing record's
+    # seating chart (restock3d F2).
+    want_repeat = repeat_feats
+    want_regroup = regroup_feats
+    want_rr = want_repeat or want_regroup
+    n_ov = 2 + (2 if want_cov else 0) + (2 if want_rr else 0)
     overlap = [[0.0] * n_ov for _ in range(k)]
     _uni_records: list = []
     _uni_pool: frozenset = frozenset()
     _uni_universal: frozenset = frozenset()
+    _rr_repeat_steps: set = set()  # exact (schema, canon-args) certificates (repeat)
+    _rr_charts: list = []  # seating charts: list[frozenset[(schema, args)]]
+    _cand_step_sets: list = []  # per-candidate set of (schema, canon-args) steps
     if ctx and not hide:
         blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
         failed = [subsets[f] for f in ctx]
@@ -593,6 +1007,47 @@ def build_example(
                 for n in _unified_blame(r)
                 if n in actionable and n not in _uni_universal
             )
+        if want_rr:
+            _cand_step_sets = [
+                {
+                    (op.name, tuple(p.name for p in op.parameters))
+                    for op in skel.operator_seq
+                }
+                for skel in canon.skeleton_pool
+            ]
+            for f in ctx:
+                seq_f = [
+                    (op.name, tuple(p.name for p in op.parameters))
+                    for op in canon.skeleton_pool[f].operator_seq
+                ]
+                for r in records_for_candidate(canon, f, spec):
+                    t = min(max(int(r.step_index), 0), len(seq_f) - 1)
+                    failed_step = seq_f[t]
+                    # `blame == empty` = neither a class-1 culprit nor a class-2 deviation
+                    # witness: an intrinsic dead step, not a means-failure and not F2.
+                    blame_empty = not r.culprits and not r.dev_blame
+                    if (
+                        want_repeat
+                        and spec.axioms_for(r.schema).step_certificate
+                        and r.proves_failure()
+                        and blame_empty
+                    ):
+                        _rr_repeat_steps.add(failed_step)
+                    if (
+                        want_regroup
+                        and r.culprits
+                        and spec.axioms_for(r.schema).grouping_certificate
+                    ):
+                        # Seating chart = the failed step + each culprit's establishing
+                        # step (the last prefix step naming it). Sound in v3: no un-store
+                        # op, so co-occurrence implies final co-residency.
+                        chart = {failed_step}
+                        for c in r.culprits:
+                            for u in range(t - 1, -1, -1):
+                                if c in seq_f[u][1]:
+                                    chart.add(seq_f[u])
+                                    break
+                        _rr_charts.append(frozenset(chart))
         for i, si in enumerate(subsets):
             dead = 1.0 if any(si <= b for b in blocked) else 0.0
             jaccard = max(
@@ -619,6 +1074,20 @@ def build_example(
                 row += [
                     _cov if want_coverage else 0.0,
                     _wst if want_waste else 0.0,
+                ]
+            if want_rr:
+                steps_i = _cand_step_sets[i]
+                row += [
+                    (
+                        (1.0 if (_rr_repeat_steps & steps_i) else 0.0)
+                        if want_repeat
+                        else 0.0
+                    ),
+                    (
+                        (1.0 if any(ch <= steps_i for ch in _rr_charts) else 0.0)
+                        if want_regroup
+                        else 0.0
+                    ),
                 ]
             overlap[i] = row
 
@@ -648,6 +1117,12 @@ def build_example(
             farg,
             prior,
             overlap,
+            point_feats,
+            knn_idx,
+            init_atom_pred,
+            init_atom_arg_tags,
+            goal_atom_pred,
+            goal_atom_arg_tags,
         ),
         records,
     )

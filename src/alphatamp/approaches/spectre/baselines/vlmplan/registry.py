@@ -26,10 +26,10 @@ def make_adapter(
 ) -> EnvAdapter:
     """The generation-side adapter for a collection.
 
-    ``image_source`` selects StickButton2D's scene render: ``"schematic"`` (the
-    spectre-drawn vector render, the default) or ``"kinder_labeled"`` (kinder's own
-    environment pixels with Set-of-Mark object labels overlaid). It is ignored for DD2D,
-    whose custom labeled renderer is already the environment's canonical picture.
+    ``image_source`` selects StickButton2D's scene render: ``"schematic"`` (the spectre-
+    drawn vector render, the default) or ``"kinder_labeled"`` (kinder's own environment
+    pixels with Set-of-Mark object labels overlaid). It is ignored for DD2D, whose
+    custom labeled renderer is already the environment's canonical picture.
     """
     if env_variant.startswith("stickbutton2d"):
         # pylint: disable=import-outside-toplevel
@@ -40,6 +40,11 @@ def make_adapter(
             image_width_px=image_width_px,
             image_source=image_source,
         )
+    if env_variant.startswith("restock3d"):
+        # pylint: disable=import-outside-toplevel
+        from .restock_adapter import RestockAdapter
+
+        return RestockAdapter(with_images=with_images, image_width_px=image_width_px)
     # pylint: disable=import-outside-toplevel
     from .dd2d_adapter import DD2DAdapter
 
@@ -60,6 +65,11 @@ def make_labeler_factory(
         from .sb2d_label import SB2DOffPoolLabeler
 
         return lambda: SB2DOffPoolLabeler(memo_path)
+    if env_variant.startswith("restock3d"):
+        # pylint: disable=import-outside-toplevel
+        from .restock_adapter import RestockOffPoolLabeler
+
+        return lambda: RestockOffPoolLabeler(memo_path)
     # pylint: disable=import-outside-toplevel
     from .score import OffPoolLabeler
 

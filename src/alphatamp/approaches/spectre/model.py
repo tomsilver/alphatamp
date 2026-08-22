@@ -36,6 +36,7 @@ from alphatamp.approaches.spectre.encoders import (
     D_REL,
     D_TAG,
     MAX_TAGS_DEFAULT,
+    AtomProfileEncoder,
     AuxHead,
     CandidateEncoder,
     CrossAttentionScorer,
@@ -70,8 +71,8 @@ class RecordEncoder(nn.Module):
 
     Replaces `FactEncoder`'s hand-built type vocabulary with the domain's own operator
     schemas, and finally consumes the scalars v2.2 harvested and then dropped on the
-    floor (`Fact.scalars` never reached the tensorizer). No tier embedding: only
-    hint-tier evidence ever entered the network, so it was a constant column.
+    floor (`Fact.scalars` never reached the tensorizer). No tier embedding: only hint-
+    tier evidence ever entered the network, so it was a constant column.
     """
 
     def __init__(
@@ -235,9 +236,15 @@ class EvidenceCrossAttentionScorer(CrossAttentionScorer):
         fact_tok: Optional[Tensor] = None,
         fact_mask: Optional[Tensor] = None,
         prior: Optional[Tensor] = None,
+        glob_extra: Optional[Tensor] = None,
     ) -> Tensor:
         b, k, _ = cand_emb.shape
-        glob = self.glob_proj(glob_feats).unsqueeze(1)
+        # `glob_extra` carries the 0-ary init/goal atom profile (zero-init), so `None`
+        # reduces this to the pre-atom-input `glob_proj(glob_feats)` exactly.
+        glob = self.glob_proj(glob_feats)
+        if glob_extra is not None:
+            glob = glob + glob_extra
+        glob = glob.unsqueeze(1)
         memory = torch.cat([scene_tok, glob], dim=1)
         key_pad = torch.cat(
             [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
@@ -289,8 +296,10 @@ older object-set ratio, which was removed. This line only labels the column vect
 
 @dataclass(frozen=True)
 class SpectreConfig:
-    """Architecture switches. Every v3 feature defaults **off**, so the default config
-    reproduces deployed v2.2 exactly (D-8).
+    """Architecture switches.
+
+    Every v3 feature defaults **off**, so the default config reproduces deployed v2.2
+    exactly (D-8).
 
     ``n_prior_feats`` is retained only so a pre-v3 checkpoint that *was* trained with
     the short-first prior still loads for comparison. The deployed dd2d_v3 model has it
@@ -310,6 +319,27 @@ class SpectreConfig:
     # (see ``encoders.D_REL``). Persisted, because it changes ``scene.rel_proj``'s shape;
     # a checkpoint is bound to the width it was trained on (docs/decisions 2026-08-08).
     d_rel: int = D_REL
+    # Scene point/pose widths. Default 2/3 reproduce the 2D boundary-ring + (x,y,theta)
+    # path byte-for-byte (DD2D/SB2D); Restock3D opts into 3/4 (a 3D point cloud + (x,y,z,
+    # yaw) pose). Persisted, because they change ``FootprintEncoder``'s and
+    # ``SceneEncoder``'s input Linear shapes; a checkpoint is bound to them. See
+    # docs/decisions 2026-08-18.
+    point_dim: int = 2
+    pose_dim: int = 3
+    # --- PointSetEncoder upgrade switches (doc pointset_encoder_upgrade.md) ---
+    # All default off / seeds=1, so the default config still builds the v1
+    # FootprintEncoder and reproduces the deployed state dict byte-for-byte (D-8).
+    # ``use_pca_feats`` /
+    # ``edgeconv_k`` also change what the tensorizer *emits* (C_pt / knn), so both are
+    # persisted; the other three change submodule shapes. Any switch on (or pma_seeds>1)
+    # selects ``PointSetEncoder`` instead of ``FootprintEncoder``.
+    use_pca_feats: bool = False  # per-point normal/curvature/flatness columns
+    use_edgeconv: bool = False  # one DGCNN EdgeConv interaction layer
+    use_point_sab: bool = (
+        False  # optional global SAB over the point set (off by default)
+    )
+    pma_seeds: int = 1  # MultiSeedPMA seeds (1 == single-seed pool width)
+    edgeconv_k: int = 0  # kNN degree; 0 == resolve by dim (4 in 2D, 6 in 3D)
     # --- v3 feature switches (added by later gates; all no-ops here) ---
     use_records: bool = False  # G6: role-separated FailureRecord tokens
     use_necessity: bool = False  # G8: necessity head + its candidate features
@@ -329,6 +359,17 @@ class SpectreConfig:
     # backstop if one ever moves under a checkpoint.
     n_predicates: int = 0
     max_pred_arity: int = 0
+    # --- atom-input switches (doc spectre_atom_input_guide.md) ---
+    # ``atom_mode="profiles"`` selects the ``AtomProfileEncoder`` submodule: it injects
+    # per-object init/goal atom profiles (additive, zero-init) into scene tokens, plus a
+    # 0-ary global term into the scorer's global token. Default "off" builds nothing new,
+    # so the state dict is byte-identical to a pre-atom checkpoint (D-8). "tokens" is
+    # reserved for Rung B (not built). ``use_init_atoms``/``use_goal_atoms`` only gate
+    # emission + zero a profile half, so they never change the state dict. Sized from the
+    # same ``n_predicates``/``max_pred_arity`` the record delta uses.
+    atom_mode: str = "off"
+    use_init_atoms: bool = True
+    use_goal_atoms: bool = True
 
 
 class SpectreModel(nn.Module):
@@ -349,7 +390,17 @@ class SpectreModel(nn.Module):
         self.cfg = cfg or SpectreConfig()
         c = self.cfg
         # Scene width comes from the config: the anchor-free ``[area, sinθ, cosθ]``.
-        self.scene = SceneEncoder(c.max_tags, c.dropout_p, d_rel=c.d_rel)
+        self.scene = SceneEncoder(
+            c.max_tags,
+            c.dropout_p,
+            d_rel=c.d_rel,
+            point_dim=c.point_dim,
+            pose_dim=c.pose_dim,
+            use_pca_feats=c.use_pca_feats,
+            use_edgeconv=c.use_edgeconv,
+            use_point_sab=c.use_point_sab,
+            pma_seeds=c.pma_seeds,
+        )
         self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
         scorer_cls = (
@@ -372,6 +423,26 @@ class SpectreModel(nn.Module):
             if c.use_records
             else None
         )
+        # Built last (after every other submodule), so a config-off model keeps its exact
+        # init draws and an ``atom_mode="profiles"`` model is functionally identical to
+        # off at step 0 (the AtomProfileEncoder injections are zero-init). "tokens" is
+        # Rung B and not built.
+        if c.atom_mode == "tokens":
+            raise NotImplementedError(
+                "atom_mode='tokens' (Rung B, per-atom tokens) is reserved but not "
+                "built; see docs/spectre_atom_input_guide.md"
+            )
+        self.atoms = (
+            AtomProfileEncoder(
+                c.n_predicates,
+                c.max_pred_arity,
+                c.max_tags,
+                c.use_init_atoms,
+                c.use_goal_atoms,
+            )
+            if c.atom_mode == "profiles"
+            else None
+        )
         if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
             raise NotImplementedError(
                 "necessity conditioning was cut from v3 (decisions.md 2026-07-26): D2 "
@@ -386,7 +457,13 @@ class SpectreModel(nn.Module):
         Logits are ``-inf`` at unavailable candidates (pads, and during a rollout the
         already-tried ones), so ``argmax`` is the next attempt.
         """
-        scene_tok = self.scene(batch)
+        # Atom profiles (doc spectre_atom_input_guide.md): zero when off/absent, so the
+        # config-off path is `self.scene(batch)` / no `glob_extra` -- byte-identical.
+        atom_obj_add: Optional[Tensor] = None
+        atom_glob_add: Optional[Tensor] = None
+        if self.atoms is not None:
+            atom_obj_add, atom_glob_add = self.atoms(batch)
+        scene_tok = self.scene(batch, atom_obj_add=atom_obj_add)
         cand_emb = self.cands(batch)
         # Evidence memory: v3 record tokens when enabled, else the legacy fact tokens.
         # Never both -- they encode the same failures, so stacking them would
@@ -432,6 +509,7 @@ class SpectreModel(nn.Module):
             fact_tok,
             fact_mask,
             prior,
+            glob_extra=atom_glob_add,
         )
         avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
         logits = logits.masked_fill(~avail, float("-inf"))

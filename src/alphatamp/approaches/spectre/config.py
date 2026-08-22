@@ -89,6 +89,14 @@ class CollectionConfig:
     plan_generator: Literal["closed_form", "heuristic_search", "astar_eager"] = (
         "closed_form"
     )
+    # ``refiner_mode`` selects how each candidate is labelled. ``"real"`` (default) runs
+    # kinder's BacktrackingRefiner (real motion planning) and measures the wall-clock.
+    # ``"analytic"`` (Restock3D-v3 only) labels each skeleton with the pure-geometry
+    # ``feasibility_v3.classify_skeleton`` -- no motion planning -- and SYNTHESIZES the
+    # wall-clock: a fail costs the full ``refinement_timeout_s`` (= r_cap); a success costs
+    # ``U[0.6,0.8]*r_cap``. The EpisodeRecord is otherwise byte-identical to a real run, so
+    # every downstream stage works unchanged. Pinned into ``config_hash``.
+    refiner_mode: Literal["real", "analytic"] = "real"
     refinement_seed_rule: str = "v1_blake2b_problem_skeleton"
     collect_instrumentation: bool = False
     state_path_depth: Literal["s0_sL_only", "full"] = "s0_sL_only"

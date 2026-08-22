@@ -59,10 +59,17 @@ for seed in "${SEEDS[@]}"; do
     # --select-window 5 (2026-08-08): the narrowed-input model is higher-variance, so the
     # deployed recipe widens the val-selection window (ma3 -> ma5) to select reliably; the
     # TrainV3Config default stays 3. See docs/decisions 2026-08-08.
+    # 2026-08-19: the PointSetEncoder upgrade + AtomProfileEncoder are switched ON in the
+    # deployed recipe (--use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4
+    # --atom-mode profiles); class defaults stay off. --atom-mode profiles adds an `_atoms`
+    # checkpoint-dir suffix, so the frozen SB2D numbers predate this and the scoring stage
+    # below will need its --arm dir names reconciled when this retrain lands.
     python -u -m alphatamp.approaches.spectre.train \
       --env $ENV_VARIANT --seed "$seed" --epochs 30 --num-workers 3 \
       --overlap-mode jaccard --coverage-feats --coverage-mode "$arm" \
       --aggregate-records --evidence-attn --state-delta --select-window 5 \
+      --use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 \
+      --atom-mode profiles \
       ${suffix:+--out-suffix "$suffix"} \
       > "$LOG_DIR/sb2d_train${suffix}_s$seed.log" 2>&1 &
     pids+=($!)

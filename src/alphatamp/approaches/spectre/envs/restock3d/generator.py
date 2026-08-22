@@ -145,6 +145,24 @@ def _sample_positions(
 # kept inert (one flag away). MUST match kinematic_env.CLUTTER_PER_STRATUM.
 _CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
 
+# v2 SPECTRE strata: the (n_tall x n_short) configs the v2 collection uses. Committed here
+# -- NOT runtime-injected -- so config_hash + git_sha pin the recipe (the collection carries
+# the stratum key in ``model_kwargs``). Keys 10-15 avoid clobbering r0-r3, which the oracle /
+# kmax / sweep still use. Recipe tuple = (n_small, n_tall, n_tall_regions, n_short_regions);
+# n_small = n_short (only n_small/n_tall are load-bearing for v2's continuous packing).
+# 10-13 are the pilot's symmetric 1x1..4x4; 14/15 are the full collection's asymmetric
+# 3x4 (n_tall=3,n_short=4) and 4x3 (n_tall=4,n_short=3).
+STRATA_V2_PILOT: dict[int, tuple[int, int, int, int]] = {
+    10: (1, 1, 1, 1),
+    11: (2, 2, 2, 2),
+    12: (3, 3, 3, 3),
+    13: (4, 4, 4, 4),
+    14: (4, 3, 3, 4),  # 3x4: n_tall=3, n_short=4
+    15: (3, 4, 4, 3),  # 4x3: n_tall=4, n_short=3
+}
+STRATA.update(STRATA_V2_PILOT)
+_CLUTTER_PER_STRATUM.update({k: 0 for k in STRATA_V2_PILOT})
+
 # Clutter is placed this far (centre-to-centre) off a target cube's +/-x face -- the front-grasp
 # obstruction zone. CALIBRATION PENDING (Gate D ±x sweep); a placeholder that puts the clutter close
 # enough to touch the target's exclusion radius without physically overlapping it.

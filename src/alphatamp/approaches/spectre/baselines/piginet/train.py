@@ -411,6 +411,12 @@ def _build_domain(args):
         # Factory picks the crop source by variant: kinder-rendered PNGs for
         # `stickbutton2d_v1_kinder`, the schematic rasteriser otherwise.
         return make_sb2d_domain(args.data_root, args.env_variant)
+    if args.domain == "restock3d":
+        from .restock_adapter import make_restock_domain
+
+        # Crops are the env's own oblique render (reconstructed from the seed), so a tall
+        # block is visually distinct from a cube -- the F3 signal a footprint crop loses.
+        return make_restock_domain(args.data_root, args.env_variant)
     from .dd2d_adapter import DD2DDomain
 
     return DD2DDomain(args.data_root)
@@ -424,7 +430,7 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--domain",
         default="dd2d",
-        choices=("dd2d", "stickbutton2d"),
+        choices=("dd2d", "stickbutton2d", "restock3d"),
         help="which environment's adapter supplies the vocabulary, the value "
         "normalisers and the split. Defaults to dd2d, so every pre-2026-08-01 command "
         "line trains exactly what it trained before.",

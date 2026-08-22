@@ -5,7 +5,49 @@ from __future__ import annotations
 import numpy as np
 from _fixtures import build_toy_episode
 
-from alphatamp.approaches.spectre.canonicalize import canonicalize_episode
+from alphatamp.approaches.spectre.canonicalize import (
+    _remap_refiner_metadata,
+    canonicalize_episode,
+)
+
+
+def test_class1_deviation_none_is_preserved_not_coerced_to_empty() -> None:
+    """A class-1 record (``dev_added``/``dev_deleted`` == None, populated culprits) must
+    keep its ``None`` through canonicalization.
+
+    ``None`` is the class-1-vs-class-2 discriminator (``UnifiedRecord.is_class_1 ==
+    (deviation is None)``). Coercing it to ``[]`` re-types the record as class-2-with-
+    empty-deviation, whose ``blame`` is the (empty) collateral deviation rather than the
+    culprits -- silently emptying the culprit pool and zeroing coverage/waste.
+    Regression for the restock3d_v3 F2/F4 coverage bug.
+    """
+    meta = {
+        "failures": [
+            {  # class 1 (restock3d F2/F4 shape): culprits present, deviation None
+                "schema": "place_short",
+                "step_index": 3,
+                "args": ["robot", "obj_goal5"],
+                "culprits": ["obj_goal1", "obj_goal2"],
+                "dev_added": None,
+                "dev_deleted": None,
+            },
+            {  # class 2 (SB2D shape): real deviation list, must still be remapped
+                "schema": "press",
+                "step_index": 1,
+                "args": ["robot", "button0"],
+                "culprits": [],
+                "dev_added": [["Pressed", ["button0"]]],
+                "dev_deleted": [],
+            },
+        ]
+    }
+    out = _remap_refiner_metadata(meta, mapping={})  # empty map: names pass through
+    c1, c2 = out["failures"]
+    assert c1["dev_added"] is None and c1["dev_deleted"] is None
+    assert c1["culprits"] == ["obj_goal1", "obj_goal2"]
+    # class-2 deviation stays a list (empty [] stays [], real list remapped in place)
+    assert c2["dev_added"] == [["Pressed", ["button0"]]]
+    assert c2["dev_deleted"] == []
 
 
 def _atom_strs(ep) -> set[str]:

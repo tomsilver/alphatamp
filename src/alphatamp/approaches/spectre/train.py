@@ -50,8 +50,10 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from alphatamp.approaches.spectre.dataset import (
+    atom_emission,
     build_example,
     collate,
+    pointset_emission,
     sample_context,
 )
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
@@ -105,6 +107,20 @@ class TrainConfig:
     # Which of the pair the net sees, by zeroing the other column: both | coverage |
     # waste. They have only ever been measured together, so this isolates them.
     coverage_mode: str = "both"
+    # `repeat` overlap column: the F3 exact-step certificate veto (fires on a candidate
+    # containing the exact failed step of a blameless, exhausted failure of a
+    # `step_certificate` schema). The deployed restock3d_v3 feature (2026-08-21): it
+    # revived an otherwise-inert adaptivity, adaptive 3.13 vs the coverage-only 12.18,
+    # ~97% of the P2 oracle ceiling. Additive + trailing (off reproduces the prior state
+    # dict); inert where no schema is `step_certificate` (DD2D/SB2D). See
+    # docs/adaptivity_probe_plan_restock3d_v3.md.
+    repeat_feats: bool = False
+    # DEPRECATED, off by default, do NOT enable -- to be removed in a later refactor.
+    # `regroup` = F2 seating-chart co-occurrence; the P2 decomposition priced it at ~1% of
+    # the headroom and the retrain confirmed it adds nothing over `repeat` on v3
+    # (+repeat+regroup 3.19 ≈ +repeat 3.13). Gated by `grouping_certificate` so it stays
+    # inert (not wrong-polarity) on DD2D/SB2D, but it is not part of any deployed recipe.
+    regroup_feats: bool = False
     # §6.1's `s_j`: each record token also carries the abstract state at its failing
     # step,
     # as the delta from s_0 (which atoms the prefix added, which it deleted).
@@ -115,6 +131,30 @@ class TrainConfig:
     # fails to load rather than scoring the un-narrowed model. See docs/decisions
     # 2026-08-08.
     d_rel: int = D_REL
+    # 3D scene representation (Restock3D): emit an analytic point cloud + (x,y,z,yaw)
+    # pose instead of the 2D boundary ring + (x,y,theta). Drives both what
+    # ``build_example`` emits (``scene_3d``) and the model's ``point_dim``/``pose_dim``
+    # (3/4 vs 2/3), so data and encoder widths agree. Default OFF keeps DD2D/SB2D
+    # byte-identical. See docs/decisions 2026-08-18.
+    scene_3d: bool = False
+    # PointSetEncoder upgrade switches (doc pointset_encoder_upgrade.md). All default off
+    # / seeds=1 so the default recipe stays byte-identical (the v1 FootprintEncoder
+    # path). ``use_pca_feats``/``edgeconv_k`` also change what ``build_example`` emits
+    # (C_pt / knn), so all five are persisted via ``asdict(cfg)`` and mapped into
+    # ``SpectreConfig`` at both train and load time. See docs/decisions 2026-08-18.
+    use_pca_feats: bool = False
+    use_edgeconv: bool = False
+    use_point_sab: bool = False
+    pma_seeds: int = 1
+    edgeconv_k: int = 0  # 0 -> resolve by dim (4 in 2D, 6 in 3D)
+    # Atom-input switches (doc spectre_atom_input_guide.md). ``atom_mode="profiles"``
+    # feeds the init-state + goal atoms to the model (per-object profiles). Changes both
+    # what ``build_example`` emits and the architecture, so all three are persisted via
+    # ``asdict(cfg)`` and mapped into ``SpectreConfig`` at train and load time. Default
+    # "off" keeps every env byte-identical.
+    atom_mode: str = "off"
+    use_init_atoms: bool = True
+    use_goal_atoms: bool = True
     # Failure-context mass. v2.2's defaults put ~35% of examples at |F|=0 and dropped
     # evidence from 30% of the rest, so >half of training carries no evidence -- while a
     # deployed rollout sees |F|=0 exactly ONCE per episode and |F|>0 for every attempt
@@ -128,6 +168,11 @@ class TrainConfig:
     # training, exactly as the proposal's "train s0-s2, deploy s3" protocol (§7.4 A4)
     # requires.
     train_strata: tuple[int, ...] = ()
+    # The env_variant being trained. Only needed so the ``train_strata`` filter decodes a
+    # problem id with the RIGHT banding: ``restock3d_v2`` bands five strata per split, not
+    # the shared four, so ``_keep`` must route its ``stratum_of`` through the v2 decoder.
+    # Persisted as metadata; default matches ``--env``.
+    env: str = "dd2d_v4"
     # Weight averaging for lower-variance deployment. "none" | "ema". This is a training
     # *process* lever, not an input or architecture switch: it changes which weights are
     # saved, never what the model contains or what `build_example` emits. OFF ("none")
@@ -173,7 +218,7 @@ class SpectreDataset(Dataset):
         self._paths = [
             p
             for p in list_episodes(split_dir)
-            if _keep(load_episode(p), cfg.train_strata)
+            if _keep(load_episode(p), cfg.train_strata, cfg.env)
         ]
 
     @property
@@ -203,6 +248,8 @@ class SpectreDataset(Dataset):
             p_empty=self.cfg.p_empty,
             p_drop_facts=self.cfg.p_drop_facts,
         )
+        _ps, _pca, _k = pointset_emission(self.cfg, self.cfg.scene_3d)
+        _ai, _ag = atom_emission(self.cfg)
         example, records = build_example(
             episode,
             self.vocab,
@@ -217,7 +264,15 @@ class SpectreDataset(Dataset):
             aggregate_records=self.cfg.aggregate_records,
             coverage_feats=self.cfg.coverage_feats,
             coverage_mode=self.cfg.coverage_mode,
+            repeat_feats=self.cfg.repeat_feats,
+            regroup_feats=self.cfg.regroup_feats,
             state_delta=self.cfg.use_state_delta,
+            scene_3d=self.cfg.scene_3d,
+            pointset_feats=_ps,
+            use_pca_feats=_pca,
+            edgeconv_k=_k,
+            emit_init_atoms=_ai,
+            emit_goal_atoms=_ag,
         )
         if not self.cfg.use_records:
             records = []
@@ -263,7 +318,7 @@ def _claim_out_dir(out_dir: Path) -> None:
     atexit.register(lambda: marker.unlink(missing_ok=True))
 
 
-def _keep(ep, strata: tuple[int, ...]) -> bool:
+def _keep(ep, strata: tuple[int, ...], env_variant: str | None = None) -> bool:
     """``_trainable`` plus the optional G9 stratum restriction on the training split."""
     if not _trainable(ep):
         return False
@@ -271,7 +326,7 @@ def _keep(ep, strata: tuple[int, ...]) -> bool:
         return True
     from alphatamp.approaches.spectre.compare import stratum_of
 
-    return stratum_of(int(ep.provenance.problem_id)) in strata
+    return stratum_of(int(ep.provenance.problem_id), env_variant) in strata
 
 
 def _make_collate(max_arity: int, max_pred_arity: int = 1):
@@ -301,6 +356,8 @@ def deployed_val_fp(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    repeat_feats: bool = False,
+    regroup_feats: bool = False,
     state_delta: bool = False,
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
@@ -325,6 +382,8 @@ def deployed_val_fp(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
+            repeat_feats=repeat_feats,
+            regroup_feats=regroup_feats,
             state_delta=state_delta,
         )
         fps.append(float(attempts) - 1.0)
@@ -431,10 +490,25 @@ def run_training(
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
             n_overlap_feats=(
-                (N_OVERLAP_COV if cfg.coverage_feats else 2) if cfg.use_overlap else 0
+                (
+                    2
+                    + (2 if cfg.coverage_feats else 0)
+                    + (2 if (cfg.repeat_feats or cfg.regroup_feats) else 0)
+                )
+                if cfg.use_overlap
+                else 0
             ),
             n_prior_feats=0,
             d_rel=cfg.d_rel,
+            point_dim=3 if cfg.scene_3d else 2,
+            pose_dim=4 if cfg.scene_3d else 3,
+            use_pca_feats=cfg.use_pca_feats,
+            use_edgeconv=cfg.use_edgeconv,
+            use_point_sab=cfg.use_point_sab,
+            pma_seeds=cfg.pma_seeds,
+            # Raw (0 = auto): the model reads k from the runtime knn tensor, and
+            # ``pointset_emission`` resolves 0 -> dim-default the same at train & deploy.
+            edgeconv_k=cfg.edgeconv_k,
             max_tags=cfg.max_tags,
             dropout_p=cfg.dropout_p,
             use_records=cfg.use_records,
@@ -443,6 +517,9 @@ def run_training(
             use_state_delta=cfg.use_state_delta,
             n_predicates=len(vocab.predicates),
             max_pred_arity=vocab.max_predicate_arity,
+            atom_mode=cfg.atom_mode,
+            use_init_atoms=cfg.use_init_atoms,
+            use_goal_atoms=cfg.use_goal_atoms,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -515,6 +592,8 @@ def run_training(
                 aggregate_records=cfg.aggregate_records,
                 coverage_feats=cfg.coverage_feats,
                 coverage_mode=cfg.coverage_mode,
+                repeat_feats=cfg.repeat_feats,
+                regroup_feats=cfg.regroup_feats,
                 state_delta=cfg.use_state_delta,
             )
 
@@ -642,6 +721,18 @@ def main(argv=None) -> int:
         "zeroed (shape unchanged). Only meaningful with --coverage-feats",
     )
     ap.add_argument(
+        "--repeat-feats",
+        action="store_true",
+        help="append the `repeat` overlap column: a per-candidate veto firing on a "
+        "blameless, exhausted failure of a `step_certificate` schema (restock3d F3)",
+    )
+    ap.add_argument(
+        "--regroup-feats",
+        action="store_true",
+        help="DEPRECATED (do not use; to be removed): the `regroup` F2 seating-chart "
+        "column. Adds nothing over --repeat-feats on v3 (~1%% of headroom); off by default",
+    )
+    ap.add_argument(
         "--evidence-attn",
         action="store_true",
         help="give evidence its own cross-attention channel instead of making it "
@@ -693,6 +784,54 @@ def main(argv=None) -> int:
             "widen for a jitterier model"
         ),
     )
+    ap.add_argument(
+        "--scene-3d",
+        action="store_true",
+        help="3D point-cloud scene representation (Restock3D); default 2D footprint",
+    )
+    ap.add_argument(
+        "--use-pca-feats",
+        action="store_true",
+        help="PointSetEncoder: per-point normal/curvature/flatness features",
+    )
+    ap.add_argument(
+        "--use-edgeconv",
+        action="store_true",
+        help="PointSetEncoder: one DGCNN EdgeConv interaction layer",
+    )
+    ap.add_argument(
+        "--use-point-sab",
+        action="store_true",
+        help="PointSetEncoder: optional global SAB over the point set (off by default)",
+    )
+    ap.add_argument(
+        "--pma-seeds",
+        type=int,
+        default=TrainConfig.pma_seeds,
+        help="PointSetEncoder: MultiSeedPMA seeds (1 == single-seed pool)",
+    )
+    ap.add_argument(
+        "--edgeconv-k",
+        type=int,
+        default=TrainConfig.edgeconv_k,
+        help="PointSetEncoder: kNN degree (0 = auto: 4 in 2D, 6 in 3D)",
+    )
+    ap.add_argument(
+        "--atom-mode",
+        choices=["off", "profiles"],
+        default=TrainConfig.atom_mode,
+        help="atom input: 'profiles' feeds init-state + goal atoms to the model",
+    )
+    ap.add_argument(
+        "--no-init-atoms",
+        action="store_true",
+        help="with --atom-mode profiles: drop the initial-abstract-state atoms",
+    )
+    ap.add_argument(
+        "--no-goal-atoms",
+        action="store_true",
+        help="with --atom-mode profiles: drop the goal atoms",
+    )
     ap.add_argument("--out-suffix", default="")
     a = ap.parse_args(argv)
 
@@ -713,20 +852,34 @@ def main(argv=None) -> int:
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,
+        repeat_feats=a.repeat_feats,
+        regroup_feats=a.regroup_feats,
         use_state_delta=a.state_delta,
         p_empty=a.p_empty,
         p_drop_facts=a.p_drop_facts,
         train_strata=tuple(a.train_strata),
+        env=a.env,
         weight_avg=a.weight_avg,
         ema_decay=a.ema_decay,
         ema_start_epoch=a.ema_start_epoch,
         select_window=a.select_window,
+        scene_3d=a.scene_3d,
+        use_pca_feats=a.use_pca_feats,
+        use_edgeconv=a.use_edgeconv,
+        use_point_sab=a.use_point_sab,
+        pma_seeds=a.pma_seeds,
+        edgeconv_k=a.edgeconv_k,
+        atom_mode=a.atom_mode,
+        use_init_atoms=not a.no_init_atoms,
+        use_goal_atoms=not a.no_goal_atoms,
     )
     sub = "checkpoints_spectre"
     if a.no_records:
         sub += "_norec"
     if a.no_overlap:
         sub += "_noov"
+    if a.atom_mode != "off":
+        sub += "_atoms"
     sub += a.out_suffix
     out = root / sub / a.env / f"seed_{a.seed}"
     res = run_training(

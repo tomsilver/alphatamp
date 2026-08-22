@@ -11,18 +11,29 @@ that imports the kinder packages** (`kindergarden`, `kinder_models`, and optiona
 it** — the same face that was down on the floor is down on the shelf. See
 `demo_videos/front_shelf3d_{skills,planner}.mp4` for the target result.
 
+**Two object sizes are supported.** The original calibration targets a **tall block**
+(`0.05×0.05×0.127 m`). A second calibration targets a **short 5 cm cube**
+(`0.05×0.05×0.05 m`) — same 45° front grasp, just grasping the cube's center instead of its
+top — found by a parameter sweep and verified 12/12 across seeds. See `SWEEP_FINDINGS.md` and
+`demo_videos/front_shelf3d_small_cube.mp4`. Everything below applies to both; the short-cube
+specifics are called out in §6.
+
 ---
 
 ## 1. Files in this folder
 
 | File | Role |
 |---|---|
-| `front_grasp_skills.py` | The two controllers (`FrontGroundPickController`, `FrontGroundPlaceController`) + `create_front_lifted_controllers` + all tunable constants. **Self-contained** — needs no changes to `kinder_models`. |
-| `shelf3d_front.py` | The bilevel-planning **env-model builder** `create_bilevel_planning_models(...)` (predicates, operators, abstractor, goal, transition) + `TALL_BLOCK_HALF_EXTENTS`. |
-| `demo_front_shelf3d.py` | Produces two mp4 demos (direct controllers + SeSamE planner). |
-| `test_shelf3d_front.py` | Regression test: pick→place reaches the goal and the block stays upright. |
+| `front_grasp_skills.py` | The two controllers (`FrontGroundPickController`, `FrontGroundPlaceController`) + `create_front_lifted_controllers` + the `front_grasp_transform(...)` helper + tunable constants (incl. the short-cube calibration `SMALL_CUBE_FRONT_GRASP_TRANSFORM`). **Self-contained** — needs no changes to `kinder_models`. |
+| `shelf3d_front.py` | The bilevel-planning **env-model builder** `create_bilevel_planning_models(...)` (predicates, operators, abstractor, goal, transition) + `TALL_BLOCK_HALF_EXTENTS`. Accepts optional `grasp_transform` / `pick_distance_bounds` overrides. |
+| `shelf3d_front_small.py` | Thin **short-cube** builder — wraps `shelf3d_front` with the 5 cm cube config + short-cube grasp. `SMALL_CUBE_HALF_EXTENTS`. |
+| `demo_front_shelf3d.py` | Tall-block demo: two mp4s (direct controllers + SeSamE planner). |
+| `demo_front_shelf3d_small.py` | Short-cube demo: one mp4 concatenating several seeds. |
+| `test_shelf3d_front.py` | Tall-block regression test (pick→place reaches goal, block upright). |
+| `test_shelf3d_front_small.py` | Short-cube regression test (2 seeds, upright). |
+| `SWEEP_FINDINGS.md` | How the short-cube calibration was found (sweep design, results, chosen values). |
 | `kinder_models_hook.md` | **Optional** alternative (Option B): a small patch to `kinder_models` if you'd rather not use the self-contained pick. |
-| `demo_videos/` | Reference result videos. |
+| `demo_videos/` | Reference result videos (tall block + `front_shelf3d_small_cube.mp4`). |
 
 ---
 
@@ -63,6 +74,11 @@ Lines to change (search for the `# --- Change ... ---` markers):
 - `demo_front_shelf3d.py` and `test_shelf3d_front.py`:
   `from shelf3d_front import TALL_BLOCK_HALF_EXTENTS, create_bilevel_planning_models`
   → `from your_pkg.front_grasp.shelf3d_front import ...`
+- `shelf3d_front_small.py`: `import shelf3d_front` +
+  `from front_grasp_skills import SMALL_CUBE_FRONT_GRASP_TRANSFORM, SMALL_CUBE_PICK_DISTANCE_BOUNDS`
+  → your package paths.
+- `demo_front_shelf3d_small.py` and `test_shelf3d_front_small.py`:
+  `from shelf3d_front_small import ...` → your package path.
 
 ---
 
@@ -149,15 +165,22 @@ The derivation (worth understanding before you re-tune):
 
 | Constant | Meaning / when to re-tune |
 |---|---|
-| `FRONT_GRASP_TRANSFORM_TO_OBJECT` | Grasp orientation (above) + object-frame offset. The `+0.057` z-offset grasps near the block **top** (at 45° the gripper can't dip below ~z=0.12 without the fingers hitting the floor). Raise/lower for a shorter/taller block. |
-| `TALL_BLOCK_HALF_EXTENTS` (in `shelf3d_front.py`) | `(0.025, 0.025, 0.0635)` → 0.05×0.05×0.127 m. The 5 cm grasp width is well within the 8.5 cm 2F-85 stroke. |
+| `FRONT_GRASP_TRANSFORM_TO_OBJECT` | Tall-block grasp: orientation (above) + object-frame offset. The `+0.057` z-offset grasps near the block **top** (at 45° the gripper can't dip below ~z=0.12 without the fingers hitting the floor). |
+| `front_grasp_transform(pitch, grip_height, backoff)` | **Helper** to build a grasp transform for any object size. `pitch` = degrees from vertical (0 = top-down, 45 = tall-block, 90 = horizontal); `grip_height` = contact height above the object center; `backoff` = how far the tool sits behind the contact along the approach. Orientation is a pure `Rx`, so the fingers stay on the ±x faces at every pitch. |
+| `SMALL_CUBE_FRONT_GRASP_TRANSFORM`, `SMALL_CUBE_PICK_DISTANCE_BOUNDS` | The **short-cube** calibration = `front_grasp_transform(45, 0.0, 0.02)` + `(0.70, 0.75)`. Same 45° orientation and standoff as the tall block; grasps the cube **center** (grip_height 0) because it is short. |
+| `TALL_BLOCK_HALF_EXTENTS` / `SMALL_CUBE_HALF_EXTENTS` (in the builders) | `(0.025,0.025,0.0635)` → 0.05×0.05×0.127 m; `(0.025,0.025,0.025)` → 0.05³ m. Both have a 5 cm ±x grasp width, well within the 8.5 cm 2F-85 stroke. |
 | `TARGET_LAYER` | Which shelf board to place on (1 = lowest that satisfies the goal). |
-| `FRONT_PICK_DISTANCE_BOUNDS`, `FRONT_PICK_ROT_BOUNDS` | Where the base parks to pick (facing +y toward the block). |
+| `FRONT_PICK_DISTANCE_BOUNDS`, `FRONT_PICK_ROT_BOUNDS` | Where the base parks to pick (facing +y toward the block). Distance ≥ 0.70 keeps the arm off its own mobile base. |
 | `PLACE_STANDOFF`, `PLACE_BASE_DISTANCE` | Pre-place standoff (backs off along the approach axis so the block settles from above-front) and base standoff at the shelf. |
 
-If you change the **block size** or **shelf geometry**, re-check: the grasp z-offset (so the
-fingers clear the floor and the marker overlaps the block), and `TARGET_LAYER` /
-`desired_object_z` (so the block rests within the 5 mm release tolerance of the board).
+**Retargeting to a new object size** (what the short-cube support does, see `SWEEP_FINDINGS.md`):
+sweep `front_grasp_transform`'s `pitch` × `grip_height` and the standoff, scoring the full
+pick→place across several seeds. Watch the two coupled constraints: **pitch too vertical** →
+can't insert into the shelf cell; **pitch too horizontal / grasp too low** → IK-infeasible or
+fingers through the floor. Then call `create_front_lifted_controllers(..., grasp_transform=T,
+pick_distance_bounds=b)` (or pass them through `shelf3d_front.create_bilevel_planning_models`).
+Also re-check `desired_object_z` uses `block_half_extents[2]` (it does) so the object rests
+within the 5 mm release tolerance of the board.
 
 ---
 
@@ -166,13 +189,17 @@ fingers clear the floor and the marker overlaps the block), and `TARGET_LAYER` /
 From your package directory (imports resolved), in the env with the kinder packages:
 
 ```bash
-# both demo videos (seed 123):
+# tall block — both demo videos (seed 123):
 python demo_front_shelf3d.py
 #   -> front_shelf3d_skills.mp4  (controllers driven directly)
 #   -> front_shelf3d_planner.mp4 (SeSamE planner)
 
-# regression test:
-pytest test_shelf3d_front.py
+# short 5 cm cube — one video concatenating several seeds:
+python demo_front_shelf3d_small.py --seeds 0 42 7 --out demo_videos
+#   -> demo_videos/front_shelf3d_small_cube.mp4
+
+# regression tests:
+pytest test_shelf3d_front.py test_shelf3d_front_small.py
 ```
 
 Expected: the task reaches the goal (`OnFixture(cube0, shelf)` + `HandEmpty(robot)`), the

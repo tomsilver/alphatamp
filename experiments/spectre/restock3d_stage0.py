@@ -148,9 +148,11 @@ def _resting_in_region(state, name: str, half_z: float, info: RegionInfo) -> boo
 def _ceiling_collision_slide(
     sim, info: RegionInfo, block_name: str, frames: list, n: int = 30
 ) -> bool:
-    """Show WHY case 4 fails, as a SMOOTH motion (not a teleport): slide the upright block from the
-    cell opening straight into the short section at rest height; its top jams against the ceiling
-    board before it can enter. Freezes on contact. Returns whether the ceiling collision occurred.
+    """Show WHY case 4 fails, as a SMOOTH motion (not a teleport): slide the upright
+    block from the cell opening straight into the short section at rest height; its top
+    jams against the ceiling board before it can enter.
+
+    Freezes on contact. Returns whether the ceiling collision occurred.
     """
     pcid = sim.physics_client_id
     bid = sim._object_name_to_pybullet_id(block_name)

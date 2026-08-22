@@ -3,7 +3,10 @@
 *Consolidates the 2026-07-31 design discussion.*
 
 > **Status: IMPLEMENTED AND DEPLOYED (2026-07-31).** `unified_evidence.py` implements this
-> spec; `TrainV3Config.unified_coverage` defaults to `True`. Measured on dd2d_v4 (n=100,
+> spec and is the **sole, unconditional** coverage/waste path — there is no toggle. (The old
+> `unified_coverage` flag on the then-`TrainV3Config` was retired when the legacy
+> `S(c) = args \ goal_objects` path was removed in the 2026-08-12 publication refactor, commit
+> `37b477c`; `TrainV3Config` is now `TrainConfig`.) Measured on dd2d_v4 (n=100,
 > 3 seeds, uncensored): **5.78 ± 0.10 against the previous deployed 7.44 ± 0.76 — −1.66 FP,
 > 95% CI [−2.71, −0.71]**, every seed beating every baseline seed. ADR:
 > [`decisions.md` 2026-07-31](decisions/06-v3-performance.md#2026-07-31-unified-coverage-waste-is-the-deployed-definition).

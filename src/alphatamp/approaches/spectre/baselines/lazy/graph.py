@@ -53,18 +53,20 @@ class LazyNodeData(Data):
 
 @dataclass(frozen=True)
 class FeatureSpec:
-    """Fixed feature layout derived from the train vocab."""
+    """Fixed feature layout derived from the train vocab.
+
+    ``geom_dim`` is 8 by default -- ``(x, y, sinθ, cosθ, w, h, area, concave)`` -- and 9
+    for Restock3D v2, which appends a normalized object **height** so the GAT sees the
+    F3 axis (a cube and a tall block share a 2D footprint and differ only in height).
+    Each env trains its own GAT, so the input dim is env-specific; DD2D/SB2D stay at 8.
+    """
 
     n_types: int
     nullary: tuple[str, ...]  # ordered nullary predicate names
     unary: tuple[str, ...]  # ordered unary predicate names
     n_preds: int  # full predicate vocab width (edge one-hot via pred_idx)
     max_arity: int
-
-    @property
-    def geom_dim(self) -> int:
-        """Geometry feature width: (x, y, sinθ, cosθ, w, h, area, concave)."""
-        return 8
+    geom_dim: int = 8
 
     @property
     def node_dim(self) -> int:
@@ -77,8 +79,11 @@ class FeatureSpec:
         return self.n_preds + 1 + 3
 
 
-def build_feature_spec(vocab: Vocab) -> FeatureSpec:
-    """Derive the fixed feature layout from a frozen vocab."""
+def build_feature_spec(vocab: Vocab, geom_dim: int = 8) -> FeatureSpec:
+    """Derive the fixed feature layout from a frozen vocab.
+
+    ``geom_dim`` selects the geometry width (8 default; 9 = +height, for Restock3D v2).
+    """
     nullary, unary = [], []
     for name, info in vocab.predicates.items():
         if name == "<OOV>":
@@ -93,6 +98,7 @@ def build_feature_spec(vocab: Vocab) -> FeatureSpec:
         unary=tuple(sorted(unary)),
         n_preds=len(vocab.predicates),
         max_arity=int(vocab.max_operator_arity),
+        geom_dim=geom_dim,
     )
 
 
@@ -104,7 +110,7 @@ class EpisodeGraphCtx:
     obj_index: dict[str, int]
     type_onehot: np.ndarray  # [N, n_types]
     goal_flag: np.ndarray  # [N]
-    geom: np.ndarray  # [N, 8] normalized (x, y, sinθ, cosθ, w, h, area, concave)
+    geom: np.ndarray  # [N, geom_dim] normed (x,y,sinθ,cosθ,w,h,area,concave[,height])
     pose: np.ndarray  # [N, 3] raw (x, y, θ) for edge transforms
     frame: tuple[float, float]
 
@@ -131,7 +137,7 @@ def build_episode_ctx(
         [1.0 if nm in goal_names else 0.0 for nm in obj_names], dtype=np.float32
     )
 
-    geom = np.zeros((n, 8), dtype=np.float32)
+    geom = np.zeros((n, spec.geom_dim), dtype=np.float32)
     pose = np.zeros((n, 3), dtype=np.float32)
     fw, fh = float(frame_extent[0]), float(frame_extent[1])
     sm = np.asarray(shape_max, dtype=np.float32)
@@ -146,7 +152,7 @@ def build_episode_ctx(
             ring = np.asarray(g.boundary, dtype=np.float32)
             w = float(ring[:, 0].max() - ring[:, 0].min()) if len(ring) else 0.0
             h = float(ring[:, 1].max() - ring[:, 1].min()) if len(ring) else 0.0
-            geom[i] = (
+            geom[i, :8] = (
                 x / fw,
                 y / fh,
                 math.sin(th),
@@ -156,6 +162,12 @@ def build_episode_ctx(
                 float(g.area) / sm[2],
                 float(g.concave) / sm[3],
             )
+            # Restock3D v2: 9th feature = normalized object height (the F3 axis: cube vs
+            # tall block share a footprint, differ only here). ``shape_max[4]`` is the
+            # height normalizer; a footprint-only object (no height) stays 0.
+            if spec.geom_dim > 8 and len(sm) > 4:
+                height = float(getattr(g, "height", 0.0) or 0.0)
+                geom[i, 8] = height / sm[4]
     return EpisodeGraphCtx(
         obj_names=obj_names,
         obj_index=obj_index,

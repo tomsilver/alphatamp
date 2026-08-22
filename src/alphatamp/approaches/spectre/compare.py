@@ -121,14 +121,28 @@ SPLIT_BAND = 1_000_000
 STRATUM_BAND = SPLIT_BAND // 4
 
 
-def stratum_of(seed: int) -> int:
+def stratum_of(seed: int, env_variant: str | None = None) -> int:
     """Min-feasible-subset stratum (0..3) from a DD2D problem seed, any split.
 
     Taking the seed modulo the split band makes this split-agnostic. On the **test**
     split (seeds in [1M, 2M)) it is identical to the earlier test-only formula
     ``(seed - 1_000_000) // 250_000``, so every published number is unchanged; on train
     and val that formula returned negative or saturated strata.
+
+    ``env_variant`` routes a collection that does not use the shared 4-stratum banding to
+    its own decoder. ``restock3d_v2`` bands **five** strata per split
+    (``strata_v2.V2_STRATUM_BAND = SPLIT_BAND // 5``), so the default arithmetic would
+    collapse its 2x2 and 3x3 sections into one stratum -- it is delegated to
+    ``strata_v2.stratum_of`` (0..4, no clamp). ``None`` / any DD2D/SB2D variant keeps the
+    historical 4-stratum path byte-for-byte.
     """
+    if env_variant is not None and env_variant.startswith("restock3d_v2"):
+        # Local import breaks the strata_v2 <-> compare import cycle (strata_v2 imports
+        # SPLIT_BAND from here at module load).
+        from alphatamp.approaches.spectre.envs.restock3d.strata_v2 import (
+            stratum_of as _v2_stratum_of,)
+
+        return _v2_stratum_of(int(seed))
     return min(3, (int(seed) % SPLIT_BAND) // STRATUM_BAND)
 
 

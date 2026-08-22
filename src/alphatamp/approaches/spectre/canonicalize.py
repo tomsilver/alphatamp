@@ -206,11 +206,23 @@ def _remap_refiner_metadata(meta: dict, mapping: dict[str, Object]) -> dict:
             if isinstance(n, str)
         ]
 
-    def _rename_atoms(atoms) -> list[list]:
-        """``[[predicate, [arg, ...]], ...]`` with the arguments renamed in place."""
+    def _rename_atoms(atoms) -> "list[list] | None":
+        """``[[predicate, [arg, ...]], ...]`` with the arguments renamed in place.
+
+        ``None`` is preserved (never coerced to ``[]``): ``dev_added``/``dev_deleted``
+        being ``None`` is the class-1-vs-class-2 discriminator
+        (``UnifiedRecord.is_class_1 == (deviation is None)``). Coercing ``None`` →
+        ``[]`` silently re-types a class-1 culprit record (e.g. restock3d's F2/F4, which
+        store ``dev_added=None`` with a populated ``culprits`` list) into a class-2
+        record with an *empty* deviation, whose ``blame`` is the (empty) collateral
+        deviation rather than the culprits -- dropping the culprit pool ``K`` and
+        zeroing coverage/waste.
+        """
+        if atoms is None:
+            return None
         return [
             [pair[0], _rename(pair[1])]
-            for pair in (atoms or [])
+            for pair in atoms
             if isinstance(pair, (list, tuple)) and len(pair) == 2
         ]
 

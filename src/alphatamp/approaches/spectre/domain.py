@@ -70,6 +70,42 @@ class QueryAxioms:
     exact: bool = False
     """A *completed* run of this query is exhaustive, not a sampled approximation."""
 
+    step_certificate: bool = False
+    """Whether a *blameless, run-to-exhaustion* failure of this schema certifies the
+    step is infeasible in **any** context -- an intrinsic dead-step, not a context-
+    dependent means-failure.
+
+    Read *only* by the ``repeat`` overlap feature (``dataset.build_example``); it does
+    NOT touch :meth:`proof_tier`, so declaring it leaves the ``dead`` column, the
+    demotion path, and the record-token holdout byte-unchanged. Semantically it overlaps
+    with ``proof_tier`` (both assert intrinsic infeasibility -- restock3d's F3, a too-
+    tall block hitting the short-section ceiling, satisfies both), but they gate
+    different machinery, so keeping them separate is what lets ``repeat`` be a clean
+    additive increment. The ``blame == empty`` guard is applied per record (against the
+    observation), which is what excludes a *culprit-bearing* failure of the same schema
+    (restock3d's F2 crowding) -- proven load-bearing: exact-vetoing an F2 step kills
+    real successes (docs/adaptivity_probe_plan_restock3d_v3.md, P2b).
+    """
+
+    grouping_certificate: bool = False
+    """Whether a candidate that re-assembles a *culprit-bearing* failure's seating chart
+    (the failed step + each culprit's establishing step) necessarily **reproduces** that
+    failure -- so ``regroup`` may fire on it.
+
+    Gates *only* the **deprecated** ``regroup`` feature (off by default, to be removed), so
+    it is currently inert everywhere the deployed recipe runs. Kept declared on v3 to
+    document the sound-here/wrong-polarity-on-DD2D distinction below.
+
+    Read *only* by the ``regroup`` overlap feature. This is env/semantics-specific and
+    must be declared, not assumed: in restock3d the culprits are *residents* whose co-
+    presence **causes** the crowding failure (re-assembly ⟹ the same capacity violation),
+    so it holds; on DD2D the culprits are grasp *blockers* one **wants** to stage (staging
+    *resolves* the failure), so re-assembly flags the *solution* and the signal is wrong-
+    polarity -- caught by the Stage-2 pre-check (docs/adaptivity_probe_plan_restock3d_v3.md
+    §5.2: DD2D regroup 11.6% feasible-when-1). Undeclared (the default) ⇒ ``regroup``
+    inert, which is the graceful-degradation direction.
+    """
+
     def proof_tier(self) -> bool:
         """Whether a *completed, exhausted* failure of this query licenses demotion.
 
@@ -238,18 +274,76 @@ class DomainSpec:
 #: ++ retrieve`` costs
 #: exactly ``3n + 1`` calls -- measured to hold for 85.76% of dd2d_v3 retrieve failures,
 #: which are therefore provably un-resampled.
+#:
+#: ``place-buffer`` carries ``step_certificate=True`` **as an intentional negative-transfer
+#: stress test** for the ``repeat`` feature (ablation ADR 2026-08-21), NOT because it is a
+#: sound certificate. The firing census (``ablation_repeat_census.py``) shows it is the
+#: *only* DD2D schema on which ``repeat`` fires at all -- ``retrieve``/``pick`` failures
+#: always carry culprits/dev_blame, so they are never ``blame_empty`` -- but a
+#: ``place-buffer`` failure is a **means-failure** (the buffer is full *given the current
+#: staging order*; a candidate that stages fewer objects first succeeds), so vetoing every
+#: candidate that re-uses the step is unsound: 44.6% of feasible candidates get flagged
+#: (leakage), vs ~0% on restock3d's genuine F3 certificate. It is read ONLY by ``repeat``
+#: (proof_tier stays False -- ``monotone``/``local``/``exact`` are absent -- so ``dead``,
+#: demotion and the token holdout are byte-unchanged, and the DEPLOYED DD2D model, which is
+#: trained with no ``--repeat-feats``, never reads it). The whole point of the ``abl_only_
+#: repeat``/``abl_all`` DD2D arms is to *measure* that this restock-shaped certificate does
+#: not transfer to a packing domain.
 _DD2D = DomainSpec(
     axioms={
         "retrieve": QueryAxioms(monotone=True, local=True, exact=True),
         "pick": QueryAxioms(),
-        "place-buffer": QueryAxioms(),
+        "place-buffer": QueryAxioms(step_certificate=True),
     },
     min_calls_per_schema={"pick": 1, "place-buffer": 2, "retrieve": 1},
+)
+
+#: StickButton2D. EMPTY_SPEC in every way except a ``step_certificate`` declaration on the
+#: four **press** schemas -- the terminal-manipulation analogue of restock3d's
+#: ``place_{tall,short}`` (a press that provably, blamelessly fails is "this button cannot
+#: be pressed from here"). Added for the ``repeat`` ablation (ADR 2026-08-21). The firing
+#: census shows the press set fires on ~55% of candidates with ~10.9% leakage of feasible
+#: candidates -- markedly *more* sound than DD2D's packing (44.6%) but still not the ~0% of
+#: restock's F3, so it too is a transfer probe, not a proven certificate. ``monotone``/
+#: ``local``/``exact`` stay False (proof_tier False; ``dead``/demotion/token-holdout
+#: unchanged), and coverage/waste/record paths never read the axioms, so the deployed SB2D
+#: model (no ``--repeat-feats``) is byte-unchanged. ``PlaceStick``/``Pick*`` are intermediate
+#: transport steps, not the goal manipulation, so they are left undeclared.
+_SB2D_PRESS_SCHEMAS = (
+    "StickPressButtonFromNothing",
+    "RobotPressButtonFromNothing",
+    "StickPressButtonFromButton",
+    "RobotPressButtonFromButton",
+)
+_SB2D = DomainSpec(
+    axioms={s: QueryAxioms(step_certificate=True) for s in _SB2D_PRESS_SCHEMAS},
 )
 
 #: An environment that declares nothing. Everything is hint-tier and the ranker must
 #: learn from evidence alone -- the "learning is the floor" control.
 EMPTY_SPEC = DomainSpec()
+
+#: restock3d_v3. Identical to EMPTY_SPEC except it declares the two place schemas as
+#: ``step_certificate``: a blameless, exhausted failure of ``place_tall``/``place_short``
+#: (restock3d's F3 -- a too-tall block hitting the section ceiling) is an intrinsic dead
+#: step, dead in any context, so the ``repeat`` feature may veto every candidate
+#: containing that exact step. ``monotone``/``local``/``exact`` are deliberately left
+#: False, so ``proof_tier()`` is False and the ``dead`` column, demotion, and token
+#: holdout are byte-unchanged from the EMPTY_SPEC baseline (the F2/coverage/regroup
+#: channel keeps flowing). The ``blame == empty`` per-record guard excludes F2 (crowding,
+#: culprit-bearing) failures of the same schema. `pick` (reach-over F4) is culprit-bearing
+#: and so is never a certificate -- left undeclared. See docs/adaptivity_probe_plan_
+#: restock3d_v3.md 2026-08-21.
+_RESTOCK3D_V3 = DomainSpec(
+    axioms={
+        # F3 (blameless) -> repeat; F2 (residents co-cause crowding) -> regroup.
+        "place_tall": QueryAxioms(step_certificate=True, grouping_certificate=True),
+        "place_short": QueryAxioms(step_certificate=True, grouping_certificate=True),
+        # reach-over pick: culprit-bearing but the blockers have no establishing step and
+        # a different pick order clears them, so neither certificate holds.
+        "pick": QueryAxioms(),
+    },
+)
 
 DOMAINS: dict[str, DomainSpec] = {
     "dd2d_v2": _DD2D,
@@ -279,6 +373,24 @@ DOMAINS: dict[str, DomainSpec] = {
     # restock3d_v1: kinematic 3D restock. Hint-tier (EMPTY_SPEC) for v1 -- a proof-tier
     # DomainSpec for F3 is deferred with training (F2+F3 lead; F1/coverage/waste deferred).
     "restock3d_v1": EMPTY_SPEC,
+    # restock3d_v2_pilot: continuous-packing v2 SPECTRE pilot. Hint-tier is the honest
+    # start (learning is the floor); a proof-tier F3 spec can follow once training is up.
+    "restock3d_v2_pilot": EMPTY_SPEC,
+    # restock3d_v2: the full continuous-packing v2 collection. Hint-tier, same as the pilot.
+    "restock3d_v2": EMPTY_SPEC,
+    # restock3d_v3: per-object widths + heights near the cutoff. Declares place_tall/
+    # place_short as `step_certificate` for the F3 `repeat` feature (2026-08-21); proof_tier
+    # stays False, so `dead`/demotion/token-holdout are unchanged vs the EMPTY_SPEC baseline.
+    "restock3d_v3": _RESTOCK3D_V3,
+    # StickButton2D. Was EMPTY_SPEC (fell through spec_for's default); now declares the
+    # press schemas as `step_certificate` for the `repeat` ablation (ADR 2026-08-21). All
+    # SB2D collections share the same operator contract, so every variant maps to `_SB2D`;
+    # the kinder-rendered / holdout variants reuse the same episodes' provenance.
+    "stickbutton2d_v1": _SB2D,
+    "stickbutton2d_v1_kinder": _SB2D,
+    "stickbutton2d_v1_kinder_holdout_b5": _SB2D,
+    "stickbutton2d_v1_holdout_b5": _SB2D,
+    "stickbutton2d_v2": _SB2D,
 }
 
 

@@ -36,6 +36,42 @@ from typing import IO
 REPO = Path(__file__).resolve().parents[2]
 LOG_DIR = REPO / "data" / "spectre" / "logs"
 
+#: Shared backbone for the adaptive-feature ablation (2026-08-21): the deployed recipe
+#: minus every failure-conditioned feature -- jaccard overlap kept as the constant backbone,
+#: plus the point-set-encoder upgrade, atom profiles and the ma5 selector. Each ablation arm
+#: adds exactly one feature on top, trained from scratch (not train-all-then-disable), so a
+#: feature that looks inert is not being masked by another compensating for it.
+_ABL_BACKBONE = (
+    "--overlap-mode jaccard --use-pca-feats --use-edgeconv --use-point-sab "
+    "--pma-seeds 4 --atom-mode profiles --select-window 5"
+)
+
+
+def _ablation_arms(extra: str = "") -> dict[str, str]:
+    """The six ablation arms (``extra`` = env-specific backbone add, e.g. ``" --scene-3d"``).
+
+    ``abl_floor`` is the Δ reference (jaccard backbone only); ``abl_all`` is the
+    current-architecture "all adaptive features on" (the stale DD2D/SB2D deployed
+    checkpoints predate the point-set upgrade, so nothing is reused). ``repeat`` fires on
+    DD2D/SB2D via the ``domain.py`` ``step_certificate`` declarations (place-buffer / press
+    schemas). Run ONE seed at a time (``--seeds 0``, then ``--seeds 1`` / ``2``) so each
+    seed lands in ``checkpoints_spectre[_norec]_atoms_<arm>/<env>/seed_<n>/`` -- a multi-seed
+    sweep would instead suffix ``_s<n>`` onto the dir name and split the seeds apart.
+    """
+    bb = _ABL_BACKBONE + extra
+    return {
+        "abl_floor": f"{bb} --no-records",
+        "abl_only_cov": f"{bb} --coverage-feats --coverage-mode coverage --no-records",
+        "abl_only_waste": f"{bb} --coverage-feats --coverage-mode waste --no-records",
+        "abl_only_repeat": f"{bb} --repeat-feats --no-records",
+        "abl_only_records": f"{bb} --aggregate-records --evidence-attn --state-delta",
+        "abl_all": (
+            f"{bb} --coverage-feats --coverage-mode both --repeat-feats "
+            "--aggregate-records --evidence-attn --state-delta"
+        ),
+    }
+
+
 #: Named sweeps. Each entry is ``name -> extra CLI args for train.py``.
 #: G6 holds ``cand_overlap`` out of *both* the record and no-record arms, so the
 #: evidence increment is not measured against a bar contaminated by the same
@@ -118,10 +154,21 @@ PRESETS: dict[str, dict[str, str]] = {
     # baseline (5.92 vs 5.78, CI includes 0) and collapses the variance -- see
     # docs/decisions 2026-08-08. The `TrainConfig` default stays 3 so the frozen
     # baseline's provenance is untouched; the deployed recipe opts in here.
+    # 2026-08-19: the PointSetEncoder upgrade and the AtomProfileEncoder are switched ON
+    # in the deployed recipe (`--use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4
+    # --atom-mode profiles`). The `SpectreConfig`/`TrainConfig` defaults stay off so the
+    # config-off equivalence tests and old-checkpoint strict loads remain valid -- the
+    # deployed recipe opts in here, exactly like every other feature flag above. NOTE:
+    # `--atom-mode profiles` makes `train.py` append an `_atoms` suffix to the checkpoint
+    # dir, so the frozen 5.78/6.29 numbers predate this change and a retrain is pending;
+    # reconcile the downstream `spectre_score.py`/`compare.py` checkpoint-dir names when
+    # that retrain lands. `--scene-3d` is intentionally NOT here (Restock3D-only widening).
     "v3final": {
         "v3final": (
             "--overlap-mode jaccard --coverage-feats "
-            "--aggregate-records --evidence-attn --state-delta --select-window 5"
+            "--aggregate-records --evidence-attn --state-delta --select-window 5 "
+            "--use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 "
+            "--atom-mode profiles"
         ),
     },
     # EMA weight-averaging arm of the deployed config, to recover the domain-agnostic
@@ -196,6 +243,13 @@ PRESETS: dict[str, dict[str, str]] = {
             "--aggregate-records --evidence-attn --state-delta"
         ),
     },
+    # Single-feature-isolation ablation (2026-08-21) -- one preset per environment because
+    # restock3d_v3 adds `--scene-3d` to the backbone and DD2D/SB2D do not. Run per env with a
+    # single seed:  --preset ablation_dd2d --env dd2d_v4 --seeds 0  (SB2D trains under
+    # `--env stickbutton2d_v1`; SPECTRE is image-free). See the ablation ADR / repeat census.
+    "ablation_dd2d": _ablation_arms(),
+    "ablation_sb2d": _ablation_arms(),
+    "ablation_restock": _ablation_arms(" --scene-3d"),
 }
 
 

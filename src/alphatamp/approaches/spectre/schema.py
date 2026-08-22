@@ -32,17 +32,17 @@ Outcome = Literal["success", "fail", "error"]
 class ProvenanceBlock:
     """Per-episode provenance, pipeline spec §5.3.
 
-    ``scene_latent`` is populated only by environments whose refinement is
-    governed by an externally-sampled per-episode latent (currently:
-    RoutedTransport2D, where it carries ``(blocked_color, blocked_grasp)``).
-    For the kinder envs it stays ``None`` and round-trips unchanged.
+    ``scene_latent`` is populated only by environments whose refinement is governed by
+    an externally-sampled per-episode latent (currently: RoutedTransport2D, where it
+    carries ``(blocked_color, blocked_grasp)``). For the kinder envs it stays ``None``
+    and round-trips unchanged.
 
     ``gen_params`` (v3, trailing-nullable like the v2.2.1 geometry layer) records the
     generator/refiner arguments an episode was produced under. It exists so provenance
-    is auditable rather than inferred -- omitting it is what forced the
-    "reconstruct, don't regenerate" rule (``decisions.md`` 2026-07-19). It is an **audit
-    trail, never a model input**: it carries ``stratum``, which is the answer, and
-    nothing in the dataset/tensorizer path reads ``ProvenanceBlock``.
+    is auditable rather than inferred -- omitting it is what forced the "reconstruct,
+    don't regenerate" rule (``decisions.md`` 2026-07-19). It is an **audit trail, never
+    a model input**: it carries ``stratum``, which is the answer, and nothing in the
+    dataset/tensorizer path reads ``ProvenanceBlock``.
     """
 
     problem_id: int
@@ -103,6 +103,18 @@ class ObjectGeometry:
     area: float
     concave: bool
     is_target: bool = False
+    # 3D extension (optional; ``None`` for 2D envs, so DD2D/SB2D records are byte-
+    # unchanged). Restock3D populates these ALONGSIDE the 2D ``pose``/``boundary`` -- a 2D
+    # consumer keeps reading the footprint, a 3D consumer reads the point cloud + z. The
+    # point cloud is analytic (an axis-aligned box sampled from ground-truth half-extents),
+    # not sensed. See docs/decisions 2026-08-18 (restock3d_v2 3D representation).
+    point_cloud: Optional[tuple[tuple[float, float, float], ...]] = (
+        None  # surface points, item frame, centroid at 0
+    )
+    pose_z: Optional[float] = (
+        None  # world z; with ``pose`` (x, y, theta) => full 3D pose
+    )
+    height: Optional[float] = None  # full z extent (2*half_z) -- the F3-critical scalar
 
 
 @dataclass(frozen=True)
@@ -126,8 +138,11 @@ class SceneGeometry:
 
 @dataclass(frozen=True)
 class Fact:
-    """One typed post-mortem fact (proposal §6.4). ``args`` are pre-canonical object
-    names (the witness set); ``tier`` is the proof/hint split."""
+    """One typed post-mortem fact (proposal §6.4).
+
+    ``args`` are pre-canonical object names (the witness set); ``tier`` is the
+    proof/hint split.
+    """
 
     fact_type: str
     args: tuple[str, ...]

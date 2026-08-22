@@ -429,6 +429,66 @@ rollout performance — they are diagnostics only; never optimize for them.
   is testable here once a low-level baseline is stood up. Label caveat: DD2D's
   Day-1 labeler marks non-area-proven negatives as *marginal*, so no
   label-dependent number until its negative certificate lands.
+- **Restock3D — the third (bespoke, 3D) comparison environment (2026-08-19).**
+  Restock3D (`restock3d_v2`, kinematic PyBullet) stores tall blocks + short cubes onto a
+  shelf; feasibility is decided by **real PyBullet collision** and hinges on relational
+  structure the abstraction captures — **reach-over** (a nearer object blocks the front-grasp
+  of a farther one, so the store order must go far-first) and **F3** (a tall block in the
+  short section hits the ceiling) — plus a height axis (cube vs block share a 2D footprint,
+  so SPECTRE's scene input is a **full 3D point cloud** and it now also ingests the initial
+  abstract state + goal atoms). It is now wired into the DD2D/SB2D comparison
+  (`compare_methods.py`), scoped to the collected sections — as of 2026-08-20 **2×2 + 3×3 +
+  4×3 at 3 seeds** (3×4 + 4×4 still collecting). **All three learned rankers crush the naive
+  planner order** (astar 8.78 ALL FP vs LAZY 0.19, SPECTRE 1.44, PIGINet 1.96). Two signals
+  now that the crowded **4×3** stratum is in: (i) **LAZY dominates** (4×3 paired Δ −3.57 vs
+  SPECTRE, CI excludes 0); (ii) **the §0 representation advantage begins to appear** — SPECTRE
+  edges PIGINet at 4×3 (4.2 vs 6.0, paired Δ −1.8) — **but the CI still includes 0** [−3.87,
+  +0.10] (n=10, wide seed spread), so it is suggestive, not established; the easy 2×2/3×3 are
+  tied. **Adaptivity stays inert** (SPECTRE-static ties SPECTRE-adaptive on every stratum).
+  Whether the SPECTRE > PIGINet edge becomes significant awaits 3×4/4×4 + more seeds. See
+  [`decisions/07` 2026-08-19](decisions/07-stickbutton2d.md#2026-08-19-restock3d-added-third-comparison-environment-v2)
+  / [`notebook/07` 2026-08-20](notebook/07-stickbutton2d.md#2026-08-20-restock3d-4x3-stratum-added-3-strata).
+  *(⚠️ 2026-08-20: **restock3d_v2 is being retired as too easy** — LAZY sits near-oracle, so the
+  env can't separate the methods. Direction pivots to **restock3D-v3**, which makes block
+  *selection* matter by varying block **x-widths** and **heights near the short/tall cutoff**. A
+  pre-build **calibration study** mapped the current env's pick/place envelope — tall-section
+  height 0.05–0.23 m, **short section cube-only** (gripper-limited, flagged for a v3 clearance
+  change), width capped by the ~92 mm finger aperture, packing edge gap ≥60 mm, and the production
+  height-adaptive grasp kept. Findings: [`docs/restock3d_v3_calibration.md`](restock3d_v3_calibration.md)
+  and [`notebook/07` 2026-08-20](notebook/07-stickbutton2d.md#2026-08-20-restock3d-v3-calibration-pick-place-envelope).
+  **v3 is now BUILT through the three pre-collection gates (2026-08-20):** additive per-object-dims env
+  (`feasibility_v3`/`generator_v3`/`strata_v3`/`place_controller_v3`/`models_v3`, env_variant
+  `restock3d_v3`, re-balanced (0.27, 0.22)), collected via an **analytic refinability classifier** (pure
+  geometry, no MP) whose labels are byte-compatible with the real refiner. Gates cleared: G3 hard strata
+  defeat both greedy hand-rules 100% (culprits spread across 8–9 objects); G2 static ceiling 1.00 clear /
+  ~0.88 near-threshold (not saturated); **G1 analytic↔real agreement ~100% under a label-aware budget**
+  (infeasible 53/53, feasible confirmed) — after correcting a flat-10 s-cap artifact (real v3 refinement
+  needs ~40 s/candidate, so the eval budget must be ≥~60 s). v2 stays frozen as the negative control.
+  Deferred to the collection pass: the real collection, training, and the comparison wiring. ADR:
+  [`decisions/07` 2026-08-20](decisions/07-stickbutton2d.md#2026-08-20-restock3d-v3-per-object-dims-analytic-collection).)*
+  **v3 SYNTHETIC comparison — the §0 crossover appears decisively (2026-08-21).** A fully synthetic
+  dataset (analytic labels + synthesized wall-clock; `refiner_mode="analytic"`) of 400/100/100 over
+  n=6/7/8/9 was collected and SPECTRE/PIGINet/LAZY trained at 3 seeds. **The low-level predictor
+  PIGINet ≈ the naive planner order** (38.11 ± 1.01 ≈ astar 38.41 ALL FP), while both abstract rankers
+  beat them **~3.4×** (SPECTRE 11.11 ± 0.98, LAZY 11.79 ± 0.08). Paired SPECTRE−PIGINet **−27.00
+  [−32.97, −21.41]**, *growing with crowding* (s2 −43, s3 −48). This is far stronger than v2 (PIGINet
+  1.96 ≈ SPECTRE 1.44) because v3 difficulty is capacity/height/**selection** — relational structure
+  the abstraction (+3D point cloud +atoms) encodes but oblique silhouettes do not; PIGINet's crops are
+  *real* here (a robot-in-`object_crops` bug that had silently zeroed restock PIGINet's image channel
+  for v2 *and* v3 was fixed). **SPECTRE ≈ LAZY** (both abstract; tied). **⚠️ Read as an upper bound**,
+  not a real-refiner result: the analytic labels are the exact geometric feasibility function (no MP
+  noise), which favours the geometry-encoding representation; a real-refiner audit slice would price
+  how much of the −27 survives. ADR/notebook
+  [`decisions/07`](decisions/07-stickbutton2d.md#2026-08-20-restock3d-v3-synthetic-dataset-analytic-refiner-collection)
+  / [`notebook/07` 2026-08-21](notebook/07-stickbutton2d.md#2026-08-20-restock3d-v3-synthetic-dataset-collection-spectre).)*
+  *(⚠️ 2026-08-21: the "**adaptivity is inert**" reading above was **overturned** — it was an evidence-
+  language mismatch masked by a bug. A canonicalize bug had zeroed coverage/waste on v3; fixing it
+  recovered nothing (coverage speaks *ordering*, worth ~1%), but the **F3 exact-step certificate
+  `repeat`** — the blameless height mass coverage can never see, 74% of the oracle headroom — dropped
+  **SPECTRE-adaptive 12.18 → 3.13** (−9.06 paired, ~97% of the P2 ceiling), now decisively ahead of
+  LAZY 11.79 / PIGINet 38.11. Purely adaptive (static unchanged); `regroup` (F2, ~1%) deprecated.
+  `repeat` is a `step_certificate`-gated overlap column, inert on DD2D/SB2D (graceful degradation). See
+  [`decisions/07` 2026-08-21](decisions/07-stickbutton2d.md#2026-08-21-restock3d-v3-adaptivity-revived-coverage-canonicalize).)*
 - **PIGINet's SB2D pixel source is now kinder-native.** The low-level comparator
   on StickButton2D previously read a *schematic* crop (each object drawn as a lone
   polygon on a blank background); for the representation contrast to be fair, PIGINet

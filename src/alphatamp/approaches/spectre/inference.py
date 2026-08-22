@@ -1,13 +1,14 @@
 """The SPECTRE deployed ranker: a purely learned listwise re-ranker over the pool.
 
-The loop is the deployment story in five lines: score the pool with the failures observed
-so far, mask the already-tried candidates, try the argmax, observe the outcome, stop on
-the first success. Nothing outside the network touches the ordering — proof-tier demotion
-was cut from the method on 2026-07-30 (``decisions.md``); v3 is a purely learned ranker.
+The loop is the deployment story in five lines: score the pool with the failures
+observed so far, mask the already-tried candidates, try the argmax, observe the outcome,
+stop on the first success. Nothing outside the network touches the ordering — proof-
+tier demotion was cut from the method on 2026-07-30 (``decisions.md``); v3 is a purely
+learned ranker.
 
 The per-step trace exists because the comparison cache stores it: persisting the raw
-logits lets the analysis notebook show what the ranker thought at every step without ever
-running inference at load time.
+logits lets the analysis notebook show what the ranker thought at every step without
+ever running inference at load time.
 """
 
 from __future__ import annotations
@@ -20,7 +21,12 @@ from typing import Optional
 import numpy as np
 import torch
 
-from alphatamp.approaches.spectre.dataset import build_example, collate
+from alphatamp.approaches.spectre.dataset import (
+    atom_emission,
+    build_example,
+    collate,
+    pointset_emission,
+)
 from alphatamp.approaches.spectre.domain import DomainSpec, spec_for
 from alphatamp.approaches.spectre.encoders import D_REL
 from alphatamp.approaches.spectre.model import (
@@ -81,7 +87,15 @@ def load_checkpoint(
         max_arity=vocab.max_operator_arity,
         cfg=SpectreConfig(
             n_overlap_feats=(
-                (N_OVERLAP_COV if cfg.get("coverage_feats") else 2)
+                (
+                    2
+                    + (2 if cfg.get("coverage_feats") else 0)
+                    + (
+                        2
+                        if (cfg.get("repeat_feats") or cfg.get("regroup_feats"))
+                        else 0
+                    )
+                )
                 if cfg.get("use_overlap")
                 else 0
             ),
@@ -91,6 +105,23 @@ def load_checkpoint(
             # below is the backstop -- a wrong width fails to load rather than silently
             # scoring the un-narrowed model.
             d_rel=int(cfg.get("d_rel", D_REL)),
+            # Scene point/pose widths are bound to the checkpoint via its ``scene_3d``
+            # flag (3/4 for a Restock3D point cloud, else the 2D 2/3). ``strict=True``
+            # below is the backstop: a wrong width fails to load rather than silently
+            # feeding a 3D-trained encoder 2D tensors. Older checkpoints: no key -> 2D.
+            point_dim=3 if cfg.get("scene_3d") else 2,
+            pose_dim=4 if cfg.get("scene_3d") else 3,
+            # PointSetEncoder switches (doc pointset_encoder_upgrade.md). They select the
+            # PointSetEncoder submodule over v1's FootprintEncoder, so `strict=True` is
+            # the backstop. Older checkpoints have no keys -> all off / seeds=1 -> the v1
+            # path loads byte-identically. ``use_pca_feats``/``edgeconv_k`` also change
+            # what ``build_example`` emits; they are threaded into the tensorizer from
+            # ``model.cfg`` in ``deployed_rollout_traced`` via ``pointset_emission``.
+            use_pca_feats=bool(cfg.get("use_pca_feats")),
+            use_edgeconv=bool(cfg.get("use_edgeconv")),
+            use_point_sab=bool(cfg.get("use_point_sab")),
+            pma_seeds=int(cfg.get("pma_seeds", 1)),
+            edgeconv_k=int(cfg.get("edgeconv_k", 0)),
             max_tags=int(cfg.get("max_tags", 32)),
             dropout_p=0.0,
             use_records=bool(cfg.get("use_records")),
@@ -99,6 +130,14 @@ def load_checkpoint(
             use_state_delta=bool(cfg.get("use_state_delta")),
             n_predicates=len(vocab.predicates),
             max_pred_arity=vocab.max_predicate_arity,
+            # Atom-input switches (doc spectre_atom_input_guide.md). They select the
+            # AtomProfileEncoder submodule, so `strict=True` is the backstop. Older
+            # checkpoints have no key -> "off" -> nothing built -> byte-identical load.
+            # Emission is threaded into the tensorizer from `model.cfg` in
+            # `deployed_rollout_traced` via `atom_emission`, like the pointset switches.
+            atom_mode=str(cfg.get("atom_mode", "off")),
+            use_init_atoms=bool(cfg.get("use_init_atoms", True)),
+            use_goal_atoms=bool(cfg.get("use_goal_atoms", True)),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)
@@ -107,6 +146,10 @@ def load_checkpoint(
         "aggregate_records": bool(cfg.get("aggregate_records")),
         "coverage_feats": bool(cfg.get("coverage_feats")),
         "coverage_mode": str(cfg.get("coverage_mode", "both")),
+        # Emitted-only (no architectural submodule): the width is the single point the
+        # scorer Linear cares about, and it is recomputed above from the same flags.
+        "repeat_feats": bool(cfg.get("repeat_feats")),
+        "regroup_feats": bool(cfg.get("regroup_feats")),
         # Architectural *and* emitted: the encoder needs the submodules and the
         # tensorizer
         # needs to produce the arrays, so it appears in both places -- exactly as
@@ -121,14 +164,14 @@ class Trace:
 
     ``step_scores`` are the **raw** model logits, before the tried-mask. Raw on purpose:
     the tried sentinels would swamp a rendered score column, and the effective row is
-    exactly reconstructible from ``order``. Entries for candidates already in the failure
-    context come back ``-inf`` from the model's own availability mask, so at step ``t``
-    the non-finite entries are exactly ``order[:t]``; a JSON serialiser must map them to
-    ``null``.
+    exactly reconstructible from ``order``. Entries for candidates already in the
+    failure context come back ``-inf`` from the model's own availability mask, so at
+    step ``t`` the non-finite entries are exactly ``order[:t]``; a JSON serialiser must
+    map them to ``null``.
 
-    ``step_dead`` is retained as an always-empty ``[]`` per step so the stored cache JSON
-    schema is unchanged; proof-tier demotion was cut from the method (2026-07-30), so no
-    candidate is ever demoted.
+    ``step_dead`` is retained as an always-empty ``[]`` per step so the stored cache
+    JSON schema is unchanged; proof-tier demotion was cut from the method (2026-07-30),
+    so no candidate is ever demoted.
     """
 
     order: list[int]
@@ -168,6 +211,8 @@ def deployed_rollout_traced(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    repeat_feats: bool = False,
+    regroup_feats: bool = False,
     state_delta: bool = False,
     suppress_records: bool = False,
     zero_scene_cols: frozenset[str] = frozenset(),
@@ -215,6 +260,18 @@ def deployed_rollout_traced(
     """
     model.eval()
     spec = spec or spec_for(episode.provenance.env_variant)
+    # The scene representation is a property of the checkpoint: a model with a 3D scene
+    # encoder (``point_dim == 3``) must be fed 3D examples. Derived from the model's own
+    # persisted config so inference cannot desync from what the weights expect.
+    scene_3d = getattr(model.cfg, "point_dim", 2) == 3
+    # PointSetEncoder emission (doc pointset_encoder_upgrade.md): derived from the
+    # model's own config so the tensorizer produces exactly the per-point features/kNN
+    # the weights were trained on. Older checkpoints -> (False, False, k): nothing sent.
+    _ps_feats, _ps_pca, _ps_k = pointset_emission(model.cfg, scene_3d)
+    # Atom-input emission (doc spectre_atom_input_guide.md): derived from the model's own
+    # config so the tensorizer emits exactly the atoms the weights were trained on. Older
+    # checkpoints -> (False, False): nothing sent.
+    _emit_init, _emit_goal = atom_emission(model.cfg)
     n_candidates = len(episode.skeleton_pool)
 
     def _stops(o) -> bool:
@@ -249,7 +306,15 @@ def deployed_rollout_traced(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
+            repeat_feats=repeat_feats,
+            regroup_feats=regroup_feats,
             state_delta=state_delta,
+            scene_3d=scene_3d,
+            pointset_feats=_ps_feats,
+            use_pca_feats=_ps_pca,
+            edgeconv_k=_ps_k,
+            emit_init_atoms=_emit_init,
+            emit_goal_atoms=_emit_goal,
         )
         # Records are passed at deployment too, not just in training. Omitting them here
         # would deploy a records-trained model blind to its own evidence -- the train/

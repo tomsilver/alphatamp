@@ -40,9 +40,12 @@ per se — is what buys the ordering.
 **The results are literal about this** (§10.4): SPECTRE and the static rankers solve the *same*
 episodes on the first attempt (the first attempt separates them not at all); the entire margin
 appears **after the first observed failure**. SPECTRE beats both the failure-blind static baselines
-and the other adaptive learned baseline (LAZY) on the DD2D packing domain. It is evaluated on two
-environments — **DD2D** (Drawer-Declutter 2D, a packing/retrieval domain) and **StickButton2D**
-(SB2D, a tool-use button-pressing domain) — with a 3-line per-environment contract (§7).
+and the other adaptive learned baseline (LAZY) on the DD2D packing domain. It is evaluated on
+**DD2D** (Drawer-Declutter 2D, a packing/retrieval domain) and **StickButton2D** (SB2D, a tool-use
+button-pressing domain), with a 3-line per-environment contract (§7); a **third environment,
+Restock3D** (a 3D / kinematic-PyBullet shelf-restocking domain, §7b), is wired end-to-end and in
+**data collection** — it exercises the same contract with a 3D point-cloud representation (no
+head-to-head numbers yet).
 
 *(Secondary, not the thesis: SPECTRE reads an abstract, object-centric representation rather than
 low-level pixels — which is how PIGINet enters as the low-level comparator. On DD2D the abstract
@@ -56,8 +59,10 @@ Given a pool of `K` candidate skeletons and the set `F` of failures observed so 
 SPECTRE scores every candidate and the deployed rollout tries them in descending score, updating `F`
 after each failure. Three modules, trained jointly (d = 64 throughout):
 
-- **Φ, per-candidate encoding** — a `SceneEncoder` over the initial abstract state's objects (§4) and
-  a `CandidateEncoder` over the skeleton's operator sequence.
+- **Φ, per-candidate encoding** — a `SceneEncoder` over the initial abstract state's objects (§4;
+  each object read through a point-set descriptor — a 2D boundary ring or a 3D point cloud — plus
+  its **initial-state and goal atom profiles**) and a `CandidateEncoder` over the skeleton's operator
+  sequence.
 - **Ψ, failure evidence** — a `RecordEncoder` turns each observed failure into a token; the culprits
   those failures blame become the `coverage`/`waste` overlap features (§6).
 - **σ, scorer** — an `EvidenceCrossAttentionScorer`: candidates cross-attend over the scene tokens and,
@@ -75,9 +80,29 @@ the ranker (it is not rollout-aligned). The within-length bucket key is `DomainS
 
 `SpectreModel(SpectreConfig)` (`model.py`) composes, over a `SpectreBatch` (`encoders.py`):
 
-- **`SceneEncoder`** (`self.scene`) — per object `[tag embedding; 32-point boundary descriptor pooled
-  by PMA; pose; obj_rel; obj_is_goal]` → SAB×2 (§4). Point-set boundary encoding (`FootprintEncoder`)
-  is concave-safe.
+- **`SceneEncoder`** (`self.scene`) — per object `[tag embedding; point-set descriptor; pose; obj_rel;
+  obj_is_goal]` → SAB×2 (§4). The point-set descriptor comes from one of two interchangeable modules,
+  chosen by config (`use_pointset = use_pca_feats or use_edgeconv or use_point_sab or pma_seeds > 1`):
+  the v1 **`FootprintEncoder`** (a PMA over per-point coordinate embeddings, concave-safe) when every
+  switch is off, or the upgraded **`PointSetEncoder`** (deployed, §4) — `lift(C_pt→32→64)` → one DGCNN
+  **EdgeConv** interaction layer → a point-set **SAB** → **multi-seed PMA** (4 seeds) →
+  `Linear(64·seeds→32)`. Exactly one submodule is built, so config-off adds no `state_dict` keys and
+  old checkpoints load `strict=True`. The descriptor width `D_DESCRIPTOR = 32` is frozen for both. The
+  encoder is dimension-generic — the same code path serves a 2D boundary ring (`point_dim = 2`) and a
+  3D surface cloud (`point_dim = 3`, Restock3D). When `atom_mode = "profiles"` the per-object atom
+  profile from the `AtomProfileEncoder` is **added into** each scene token before the SABs (§4).
+- **`AtomProfileEncoder`** (`self.atoms`, built when `atom_mode == "profiles"`) — turns the **initial
+  abstract state** and the **goal atoms** into per-object *atom profiles*. For each object it
+  scatter-**sums** `pred_emb(pred_id) + slot_emb(arg_slot)` (`D_ATOM = 32`) over every atom naming that
+  object at that argument position; the init and goal profiles are computed **separately** ("true now"
+  vs "wanted") and concatenated. Nullary atoms (e.g. `handempty`) pool to a **global** term added to
+  the scorer's global memory token. It is order-invariant (a sum, not attention — a per-atom-token
+  attention channel is the reserved-but-unbuilt `atom_mode = "tokens"`, "Rung B"). Both output
+  projections are **zero-initialized**, so a freshly built `"profiles"` model is functionally identical
+  to `"off"` at step 0. It is injected into the scene tokens (not a new token stream or attention
+  channel), so it is complementary to `obj_is_goal` — carrying the goal's *predicate identity and
+  argument roles* (`On(a,b) ≠ On(b,a)`) and the *entire initial abstract state*, which the binary flag
+  discards.
 - **`CandidateEncoder`** (`self.cands`) — per step `[operator embedding + learned position + projected
   argument tags]` → PMA.
 - **`RecordEncoder`** (`self.records`, built when `use_records`) — one observed failure → one token,
@@ -108,21 +133,30 @@ the ranker (it is not rollout-aligned). The within-length bucket key is `DomainS
 | `EvidenceCrossAttentionScorer` (separate evidence channel) | **yes** |
 | observed `coverage`/`waste` on `cand_overlap`; `dead` dropped from the net | **yes** — carries the result (§6, §9) |
 | record `state_delta` (`s_j − s_0`) | **yes** — a tie on DD2D, deployed to complete the record schema at no porting cost (§10.5) |
+| `PointSetEncoder` (`use_pca_feats` + `use_edgeconv` + `use_point_sab` + `pma_seeds = 4`) | **yes** — enabled 2026-08-19 (retrain pending, §10) |
+| `AtomProfileEncoder` (`atom_mode = "profiles"`, init + goal atoms) | **yes** — enabled 2026-08-19 (retrain pending, §10) |
 | `FactEncoder`, `AuxHead` | built, **untrained** |
 
-The deployed model is **324311 parameters**; `inference.load_checkpoint` rebuilds it and returns the
-deploy-time switches that change what `dataset.build_example` *emits* (`overlap_mode`,
-`aggregate_records`, `coverage_feats`, `coverage_mode`, `state_delta`) — read off the checkpoint, never
-from the caller, so a model is never scored on a feature it was not trained on.
+The pre-enablement deployed model was **324311 parameters**; the PointSetEncoder (with SAB + 4-seed
+PMA) and the AtomProfileEncoder add parameters, so the current recipe's count is larger and is fixed
+once the pending retrain lands (§10). `inference.load_checkpoint` rebuilds the model from the saved
+config and reads back every architecture switch off the checkpoint (never from the caller): the
+point-set switches (`scene_3d` → `point_dim`/`pose_dim`, `use_pca_feats`, `use_edgeconv`,
+`use_point_sab`, `pma_seeds`, `edgeconv_k`) and the atom switches (`atom_mode`, `use_init_atoms`,
+`use_goal_atoms`) are baked into `SpectreConfig`; the emission-only switches that change what
+`dataset.build_example` *emits* (`overlap_mode`, `aggregate_records`, `coverage_feats`,
+`coverage_mode`, `state_delta`) are returned alongside. Old checkpoints lacking any of these keys
+resolve to all-off / 2D via the `.get` defaults, so a model is never scored on a feature it was not
+trained on.
 
 ---
 
 ## 4. The input surface — domain-agnostic by design
 
-The scene inputs were **narrowed to domain-agnostic columns** so the same encoder serves both
-environments without target-specific privilege ([`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)).
-Per object, `SceneEncoder` reads `[obj_tags, boundary(32-pt ring), pose(x/scale, y/scale, θ),
-obj_rel, obj_is_goal]`, where:
+The scene inputs were **narrowed to domain-agnostic columns** so the same encoder serves every
+environment without target-specific privilege ([`decisions/07` 2026-08-08](decisions/07-stickbutton2d.md#2026-08-08-domain-agnostic-scene-inputs-goal-replaces-target)).
+Per object, `SceneEncoder` reads `[obj_tags, point-set descriptor, pose(x/scale, y/scale, θ),
+obj_rel, obj_is_goal]` (plus, when `atom_mode = "profiles"`, an added atom profile — below), where:
 
 - **`obj_rel` = the width-3 anchor-free triple `[area, sin θ, cos θ]`** (`D_REL = 3`), not a
   target-anchored vector. The DD2D-specific offsets **`(dx, dy, distance-to-target, area-ratio-to-target)`**
@@ -135,6 +169,40 @@ obj_rel, obj_is_goal]`, where:
 An inference-time probe priced the removal at **Δ 0.00 FP** on both deployed models — the dropped
 columns were inference-inert, not information the ranker used. The narrowing raised across-seed
 variance, recovered by widening the selection window (§8).
+
+**The point-set descriptor (deployed upgrade, `PointSetEncoder`).** Each object's outline is no longer
+a bag of raw coordinates. The tensorizer (`compute_point_feats`) builds a per-point feature vector
+`[coords ; oriented normal ; bending ; flatness]` from the point set alone — a Euclidean kNN graph
+(`knn_idx`, k = 4 in 2D / 6 in 3D), a local-PCA frame giving the surface normal (sign-disambiguated
+outward by an inside test — Shapely `contains` in 2D, an away-from-origin box test in 3D), 2D **signed
+curvature** `κ̂ = tanh(κ·h̄)` (convex `> 0`, reflex `< 0`) or 3D **surface variation**
+`λ₃/Σλ`. `C_pt` is **6 in 2D** `[x, y, nₓ, n_y, κ̂, f]` and **8 in 3D** `[x, y, z, nₓ, n_y, n_z, f, 0]`.
+The `PointSetEncoder` lifts these per-point, runs one **EdgeConv** interaction layer over the fixed kNN
+graph (`msg = mlp[hᵢ ; hⱼ − hᵢ]`, max-aggregated, zero-init residual), a point **SAB**, and a **4-seed
+PMA** to the 32-d descriptor. Two new batch fields carry it — `point_feats (B,N,P,C_pt)` and
+`knn_idx (B,N,P,k)` — both trailing-nullable (older pickles load with them `None` and take the v1
+`FootprintEncoder` path). *(Rationale + the design deviations from `docs/pointset_encoder_upgrade.md` —
+default `pma_seeds`, 3D `edgeconv_k = 6`, box-test orientation — are in
+[`decisions/07` 2026-08-18](decisions/07-stickbutton2d.md#2026-08-18-pointsetencoder-upgrade-per-point-differential-features-edgeconv).)*
+
+**The 3D point cloud (Restock3D).** A cube and a tall block share a 2D footprint and differ only in
+**height** — the F3 axis (§7b) a footprint is blind to — so 3D objects are represented by a point
+cloud, not a boundary ring. `ObjectGeometry` gained optional `point_cloud` / `pose_z` / `height` (all
+`None` on the 2D envs, which therefore pickle byte-unchanged); `scene_geometry.object_point_cloud`
+samples an analytic 32-point axis-aligned-box surface whose z-extent scales with the object's height.
+The 3D cloud reuses the existing `obj_boundary` tensor at shape `(B,N,P,3)` (there is no separate
+`point_cloud` batch field), and the encoder widens through `point_dim 2→3` / `pose_dim 3→4`, derived at
+load time from the checkpoint's `scene_3d` flag. Collection always writes the 3D geometry for
+Restock3D; `--scene-3d` is a **training** flag that decides whether to consume the third dimension.
+
+**Atom profiles (deployed, `AtomProfileEncoder`).** With `atom_mode = "profiles"` the model reads the
+**initial abstract state atoms** and the **goal atoms** (§3): per object, `pred_emb + slot_emb`
+scatter-summed over the atoms naming it (init and goal pooled separately, `D_ATOM = 32`), added into the
+scene token; nullary atoms become a global term. Four trailing-nullable batch fields carry them
+(`init_atom_pred` / `init_atom_arg_tags` / `goal_atom_pred` / `goal_atom_arg_tags`), gated independently
+by `use_init_atoms` / `use_goal_atoms`. This corrects the earlier design where the abstract `s₀` was not
+tokenized at all: `s₀` and `g` now reach the ranker both through the per-object `obj_is_goal` flag and
+through these profiles, which additionally carry predicate identity and argument-slot order.
 
 The **`cand_overlap`** feature block is width **4**: `[dead, jaccard, coverage, waste]` (`N_OVERLAP_COV`).
 `dead` and `jaccard` are cheap set-overlap signals against the failed set; `coverage`/`waste` are the
@@ -273,6 +341,46 @@ column and (b) which proof-tier records are held out of the learned token stream
 records, all `retrieve`). "Learning is the floor" is the deployed configuration, not a fallback — an
 `EMPTY_SPEC` environment (like SB2D) runs the full learned method.
 
+## 7b. Restock3D — the third environment (3D, in progress)
+
+Restock3D is the third evaluation environment and the first **3D** one: a kinematic-PyBullet shelf
+domain where a mobile-base arm must store floor-staged **small cubes** and **tall blocks** onto a shelf
+with a **tall/bottom section** (high ceiling) and a **short/top section** (low ceiling). Feasibility is
+**real PyBullet collision** — the refiner runs the actual pick/place motion planners and fails when no
+collision-free solution exists; the instrumentation is observation-only, probing a rejected sample
+purely to *attribute* it (§5's invariant, here `getClosestPoints` witnesses). Three failure modes make
+the refinement order matter — exactly the property SPECTRE needs:
+
+- **F3 (height mismatch):** an upright tall block placed into the *short* section collides the shelf
+  board above with no movable involved — culprit-free and exhausted, so it `proves_failure()`. This is
+  the F3 axis a 2D footprint cannot see, and the reason 3D objects carry a **point cloud** (§4).
+- **F2 (crowding):** the held object at its resting pose collides a resident the plan already stored on
+  that band; the residents are class-1 self-inflicted culprits (a candidate that over-packs a section
+  fails once it runs out of free x).
+- **Reach-over ("far is harder"):** the front grasp reaches **north** over anything nearer, so a
+  *southern* object obstructs the diagonal approach to a *northern* one even when the northern grasp is
+  reachable at its final config. The base slides laterally in a clear southern corridor for free; only
+  northward reach is costly, so the naive order fails and a **south-to-north** store order clears it.
+
+The deployed **v2 continuous-packing** variant reframes placement as geometric packing rather than
+discrete region assignment: two place operators `place_tall` / `place_short` with **identical abstract
+effects** `add {HandEmpty, Stored}` (the section choice lives only in the operator identity and is
+validated by real collision — `place_short` on a tall block → F3), predicates `{HandEmpty, Holding,
+OnFloor, Stored}` (no `?region`; `Stored` is purely geometric section membership), and **uniform x-band
+sampling** across the section. The pool is generated by a **geometry-guided plan-generation prior**
+(`GeometryGuidedRestockPlanGenerator`): a nearest-first pick cost `1 + λ·|{unpicked OnFloor closer than
+o}|` (λ = 1, distance = northward reach `y`), so a plan's total penalty equals its Kendall-τ inversion
+count against the south-to-north oracle order and A* emits the oracle pick order first. It generates the
+oracle plan in **~150–275× fewer enumeration attempts** than geometry-blind hFF (aggregate over
+replicates; per-problem indices are `PYTHONHASHSEED`-dependent). Collection is **5 banding strata** —
+2×2 / 3×3 / 3×4 / 4×3 / 4×4 (`n_tall × n_short`) — at sizes **175 / 60 / 60 = 295** (train/val/test),
+run as sequential per-stratum jobs to bound RAM.
+
+**Status: mid-collection.** Only the light strata are collected so far; there is **no full trained
+checkpoint and no head-to-head comparison number** for Restock3D yet, and a `compare_envs` `EnvSpec`,
+the learned-baseline full runs (PIGINet, LAZY), and the VLMPlan arm are **deferred**. It is included
+here as the 3D representation testbed the point-cloud path and the atom profiles were built for.
+
 ---
 
 ## 8. Training and selection
@@ -281,7 +389,13 @@ records, all `retrieve`). "Learning is the floor" is the deployed configuration,
 dropout 0.1, weight decay 5e-4, within-length weight 1.0, tag-permutation augmentation on.
 
 **Deployed recipe** (`spectre_sweep.py --preset v3final`): `--overlap-mode jaccard --coverage-feats
---aggregate-records --evidence-attn --state-delta --select-window 5`.
+--aggregate-records --evidence-attn --state-delta --select-window 5 --use-pca-feats --use-edgeconv
+--use-point-sab --pma-seeds 4 --atom-mode profiles`. The last five flags (the PointSetEncoder upgrade
+and the atom profiles) were switched **on 2026-08-19**; the class defaults stay off so the config-off
+equivalence tests and old-checkpoint loads remain valid, and the SB2D twin in `sb2d_finalize.sh`
+carries the same flags. `--atom-mode profiles` appends an `_atoms` suffix to the checkpoint dir, so the
+downstream `spectre_score.py` / `compare.py` dir references are reconciled when the retrain lands. The
+§10 numbers **predate** this enablement (retrain pending).
 
 **Selection is uncensored deployed-val-FP** over the whole 100-episode val split, on a moving average
 of the last **5** epochs (`--select-window 5`). The window was widened from the default 3 because the
@@ -324,6 +438,12 @@ Uncensored deployed FP, test n=100. Lower is better; mean ± across-seed std (3 
 methods; a single deterministic run — no ± — for astar and VLMPlan). Numbers are the current
 `compare_methods.py` caches; render any environment with `SPECTRE_COMPARE_ENV=<key> python
 experiments/spectre/compare_methods.py`.
+
+> **⚠️ These numbers predate the 2026-08-19 enablement of the PointSetEncoder upgrade and the atom
+> profiles (§3, §8).** They were measured under the prior deployed config (v1 `FootprintEncoder`,
+> `atom_mode = "off"`). A retrain of the DD2D/SB2D deployed models under the new recipe is **pending**;
+> the tables below are the last measured results and are the yardsticks the retrain will be read
+> against.
 
 ### 10.1 DD2D — `dd2d_v4` (strata s0…s3 = size of the minimum feasible subset)
 
@@ -404,6 +524,14 @@ SPECTRE_COMPARE_ENV=dd2d python experiments/spectre/compare_methods.py          
 matched-settings and not comparable to the §10.1 headline (which uses the unified definition). Do not
 cross-quote them.
 
+### 10.7 Restock3D — no results yet
+
+The third environment (§7b) is **in data collection**; there is no full trained checkpoint and no
+comparison row for it. What exists is the end-to-end path (3D collection, the `--scene-3d` train
+widening, an `restock3d_v2_pilot` smoke-train) and the geometry-guided plan-generation prior's measured
+enumeration advantage (§7b). A `compare_envs` `EnvSpec` and the learned-baseline / VLMPlan arms are
+deferred, so Restock3D is not part of the headline tables.
+
 ---
 
 ## 11. Known limitations
@@ -423,3 +551,8 @@ cross-quote them.
    substantially a generalization number rather than a like-for-like stratum result.
 5. **DD2D generation is `PYTHONHASHSEED`-dependent**, so no collection is bit-reproducible across
    processes.
+6. **The §10 numbers predate the 2026-08-19 PointSetEncoder / atom-profile enablement** (§3, §8): the
+   deployed recipe now switches those on, but the DD2D/SB2D retrain under it is pending, so the current
+   FP figures are the prior-config yardsticks rather than the deployed model's numbers.
+7. **Restock3D has no results yet** (§7b, §10.7) — it is mid-collection, so the 3D representation and
+   the point-cloud path are demonstrated end-to-end but not yet evaluated head-to-head.

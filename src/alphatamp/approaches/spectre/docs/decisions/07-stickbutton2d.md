@@ -1,16 +1,813 @@
 # SPECTRE Decisions — StickButton2D as a second environment
 
-3 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
+4 entries, 2026-08-01 .. (OPEN — new entries go here). Newest first.
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-22-adaptive-feature-isolation-ablation-repeat-activated-dd2d"></a>
+## 2026-08-22 — Adaptive-feature isolation ablation + repeat activated on DD2D/SB2D
+
+<!--strip-->
+> **id** `2026-08-22-adaptive-feature-isolation-ablation-repeat-activated-dd2d` ·
+> **status** active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d,
+> env-restock3d
+<!--/strip-->
+
+**Context.** SPECTRE beats the baselines on all three evaluation environments, but the
+*mechanism* was unattributed: the failure-conditioned signal is a bundle of hand-crafted
+columns (`coverage`/`waste`/`repeat`, over a `jaccard`/`cand_overlap` backbone) plus the
+per-failure record-token stream, and the deployed model turns them all on at once. Separately,
+`repeat` — the F3 step-certificate that
+[`2026-08-21`](#2026-08-21-restock3d-v3-adaptivity-revived-coverage-canonicalize) made
+load-bearing on restock3d_v3 — is architecturally **inert on DD2D/SB2D** (no schema declares
+`step_certificate`), and that entry explicitly deferred "`repeat` on DD2D's proof-tier
+`retrieve`." We want (a) a per-feature, per-environment attribution and (b) to activate `repeat`
+retroactively on DD2D/SB2D and measure whether the certificate transfers.
+
+**Decision.**
+1. **Isolation-ablation protocol.** Six arms — `floor` (jaccard backbone only), `+coverage`,
+   `+waste`, `+repeat`, `+records` (deployed pathway `--aggregate-records --evidence-attn
+   --state-delta`), `all` — **trained from scratch, one feature at a time** (not
+   trained-together-then-disabled, so a feature that looks inert cannot be masked by another
+   compensating). The jaccard backbone is held constant, so each Δ is that feature's **marginal
+   lift over jaccard**. `all` is the current-architecture "all features on"; the DD2D/SB2D
+   deployed checkpoints predate the point-set-encoder upgrade and are **not reused**. 1 seed for
+   now (2 deferred; the cache/§4.3 are seed-extensible). Rendered as `compare_methods.py` §4.3,
+   gated by `EnvSpec.has_ablations` (now on for the three main-results envs only). Presets
+   `ablation_{dd2d,sb2d,restock}` (`spectre_sweep.py`); arms registered via
+   `precompute_dd2d_cache._ISOLATION_ARMS_BY_VARIANT`; CLI report twin `ablation_report.py`.
+2. **`repeat` activated on DD2D/SB2D from stored episodes — no re-rollout.** `repeat` is emitted
+   at tensorization from stored `FailureRecord` fields (`schema`, `proves_failure`,
+   `culprits`/`dev_blame`), so activation is a `domain.py` `step_certificate` declaration plus a
+   retrain over the *existing* raw episodes — no refinement is re-run. **DD2D declares
+   `place-buffer`**, NOT `retrieve` (the schema the prior entry named): the firing census
+   (`ablation_repeat_census.py`) shows `retrieve`/`pick` failures are *always* culprit-bearing →
+   never `blame==∅` → `repeat` would be vacuous; `place-buffer` is the only schema it fires on.
+   **SB2D declares the four button-press schemas.** Both are **intentional transfer probes, not
+   sound certificates**: unlike restock3d's F3 (an intrinsic dead step, ~0% leakage), these are
+   means-failures the ordering resolves, and the census prices the unsoundness as **44.6% of
+   feasible DD2D candidates flagged, 10.9% on SB2D**. `step_certificate` is read *only* by
+   `repeat` (`proof_tier` stays False), so `dead`/demotion/token-holdout and every deployed
+   (no-`--repeat-feats`) checkpoint are byte-unchanged.
+
+**Consequences.** Full table in
+[`notebook 2026-08-22`](../notebook/07-stickbutton2d.md#2026-08-22-single-feature-isolation-ablation-dd2d-sb2d-restock3d)
+(Δ vs `floor`, paired bootstrap over problems, * = 95 % CI excludes 0):
+- **DD2D** (floor 15.77): **coverage/waste carry it** — waste **−9.13\***, coverage −6.87\*;
+  **records inert** as a standalone marginal (−2.07, n.s.); `all` −9.09\* ≈ waste alone.
+- **SB2D** (floor 2.38): **`repeat` is the *only* significant single feature** (−0.79\***,
+  concentrated at b5); coverage/waste/records all n.s.; `all` −1.07\*.
+- **restock3d_v3** (floor 12.60): **`repeat` dominates** (−9.59\*); coverage/waste/records inert;
+  `all` −9.33\*.
+- **Headline (the transfer question):** despite being an *unsound hard-veto* (high leakage),
+  **`repeat` transfers as a net-positive *learned* feature on both DD2D (−4.42\*) and SB2D
+  (−0.79\*)** — leakage ≠ net harm, because `repeat` is a learned column the model down-weights,
+  not a veto that removes candidates. "The certificate is unsound here" (about a hard veto) and
+  "the feature helps here" (about a learned signal) are both true and not in tension. So the
+  soundness census bounds a *veto*, and does not predict a *feature*'s usefulness.
+- **Validation:** `all` reproduces the deployed adaptive within noise on every env (DD2D 6.68 vs
+  6.04, SB2D 1.31 vs 1.59, **restock 3.27 vs 3.13**), confirming the fresh single-seed arms are a
+  faithful current-architecture rebuild.
+- **Caveats:** 1 seed (`±` deferred); restock3d_v3 is analytic-synthetic (magnitudes are an upper
+  bound). The §1/§2 **DD2D/SB2D deployed rows are stale** (pre-point-set-upgrade) — a full refresh
+  is deferred; read §4.3 internally, not against §1.
+- **Deferred:** 2 more seeds per arm; a real-refiner audit on restock; `repeat` on DD2D's
+  `retrieve` is now known **vacuous** (place-buffer used instead), so that prior deferral is
+  resolved-as-moot.
+
+---
+
+<a id="2026-08-21-restock3d-v3-adaptivity-revived-coverage-canonicalize"></a>
+## 2026-08-21 — restock3d_v3 adaptivity revived: coverage canonicalize bug + repeat F3 certificate feature
+
+<!--strip-->
+> **id** `2026-08-21-restock3d-v3-adaptivity-revived-coverage-canonicalize` ·
+> **status** active · **tracks** method, evaluation, env-restock3d
+<!--/strip-->
+
+**Context.** On the analytic-synthetic v3 dataset SPECTRE's adaptive increment was **inert**
+(adaptive ≈ static; [`notebook` 2026-08-20](../notebook/07-stickbutton2d.md#2026-08-20-restock3d-v3-synthetic-dataset-collection-spectre)).
+The probe suite (P0–P4, [`notebook` 2026-08-21](../notebook/07-stickbutton2d.md#2026-08-21-restock3d-v3-adaptivity-revived-repeat-f3))
+found two things. (1) A **bug**: `canonicalize._remap_refiner_metadata` coerced v3's F2/F4
+`dev_added=None`/`dev_deleted=None` to `[]`, re-typing the records from class-1 (culprits) to
+class-2-with-empty-deviation, so `unified_evidence.blame` read the empty collateral deviation and
+discarded the culprits → the culprit pool `K` was empty → **coverage/waste were identically 0** on v3.
+(2) An **oracle ceiling**: a certificate re-ranker takes FP_static 11.05 → **2.81** (75% headroom),
+of which the **F3 exact-step certificate carries 74%** and the F2 seating-chart ~1% — and F3 is
+*blameless*, so coverage (which keys off culprits) can never see it.
+
+**Decision.**
+1. **Fix the bug** (correctness): `_rename_atoms` preserves `None` (the class-1-vs-2 discriminator)
+   instead of coercing to `[]`. v3-specific by construction (DD2D omits the `dev_added` key; SB2D
+   stores a real list) — both byte-unchanged. Regression test added.
+2. **Add `repeat`** (the deployed lever): a per-candidate overlap column that fires on a candidate
+   containing the exact failed step of a **blameless, exhausted failure of a `step_certificate`
+   schema** (the F3 height certificate). Scope is env-agnostic: `step_certificate ∧ proves_failure ∧
+   blame==∅`. A **dedicated `QueryAxioms.step_certificate` flag** gates it — *not* `proof_tier`, which
+   also drives the `dead` column and the record-token holdout, so reusing it would perturb the
+   baseline and strip F2 from the token stream. v3's `place_tall`/`place_short` declare it;
+   `proof_tier` stays False so `dead`/demotion/tokens are byte-unchanged. The `blame==∅` gate is
+   load-bearing (exact-vetoing a culprit-bearing F2 step killed 263 real successes in the oracle).
+3. **`regroup` is DEPRECATED** (F2 seating-chart, gated by a sibling `grouping_certificate` flag):
+   the P2 decomposition priced it at ~1% and the retrain confirmed it adds nothing over `repeat`;
+   kept off-by-default, to be removed in a later refactor.
+4. **Deploy `--repeat-feats` alone** as the v3 recipe (`checkpoints_spectre_atoms_repeat`; the
+   `compare_cache` `spectre3` override and `restock3d_v3_train.sh` repointed).
+
+**Consequences.** ⚠️ *Analytic-synthetic — magnitudes are an upper bound; the ordering is the finding.*
+The bug fix alone **recovers nothing** (adaptive−static −0.09, inert; +1.1 FP worse than the knockout)
+— confirming the pre-registered ([`docs/adaptivity_fix_only_prereg.md`](../adaptivity_fix_only_prereg.md))
+prediction that reviving the ~1% F2/ordering channel could not help. **`repeat` revives adaptivity
+decisively**: adaptive **12.18 → 3.13** (−9.06 [−11.28, −6.95] paired), **~97% of the P2 ceiling**,
+purely adaptive (static unchanged ~12, leakage-clean). On v3 SPECTRE+repeat 3.13 now leads
+LAZY 11.79 and PIGINet 38.11 decisively (was ≈ LAZY at 11.11). Both features **gracefully degrade**:
+`repeat` inert where no schema is `step_certificate` (DD2D/SB2D); `grouping_certificate` prevents
+`regroup` from firing wrong-polarity on DD2D (the §5.2 pre-check caught it at 42% fire / 11.6%
+feasible-when-1 before the gate). **Standing:** the "inert adaptivity" was an evidence-*language*
+mismatch (v3's decision is grouping/assignment; the load-bearing signal is the blameless F3
+certificate, not the ordering coverage/waste encode), not an adaptivity ceiling. **Invariant added:**
+`canonicalize` must preserve `None` in `dev_added`/`dev_deleted` — it is the class discriminator.
+Deferred: real-refiner audit slice; `repeat` on DD2D's proof-tier `retrieve`; removing `regroup`.
+
+---
+
+<a id="2026-08-20-restock3d-v3-synthetic-dataset-analytic-refiner-collection"></a>
+## 2026-08-20 — restock3d_v3 synthetic dataset: analytic-refiner collection + 3-method comparison
+
+<!--strip-->
+> **id** `2026-08-20-restock3d-v3-synthetic-dataset-analytic-refiner-collection` ·
+> **status** active · **tracks** method, env-restock3d, data, evaluation, baselines
+<!--/strip-->
+
+**Context.** v3 was built through the pre-collection gates (previous entry) but not collected. We
+want the SPECTRE/PIGINet/LAZY comparison on v3 **without** v2's multi-day real-refiner collection.
+The gates already established that the analytic classifier's labels are byte-compatible with the
+real refiner's (G1: agreement ~100%). So we collect a **fully synthetic** dataset: real geometry +
+analytic labels, evaluated on those same labels. This is a pipeline / representation probe, **not** a
+real-refiner result — the real refiner stays the future paper-eval instrument.
+
+**Decision.**
+1. **Analytic collection is a `CollectionConfig.refiner_mode` flag** (`"real"` default, `"analytic"`
+   opt-in), added additively so every existing collection is byte-unchanged and the real path stays
+   reachable (config_hash pins the method). In `collect.collect_episode`, `analytic` mode skips the
+   PyBullet sampler/refiner entirely and labels each skeleton with `feasibility_v3.classify_skeleton`
+   (pure geometry), populating `refiner_metadata["failures"]` exactly as the real harvest does.
+2. **Synthetic per-candidate wall-clock**, since analytic labelling has no real time: a **fail** costs
+   the full `r_cap` (= `refinement_timeout_s`); a **success** costs `U[0.6,0.8]·r_cap`, drawn from a
+   seed-keyed `random.Random` so it is deterministic. Written to the one field every §2b consumer
+   reads (`OutcomeRecord.refinement_wall_clock_s`). **These times are not measurements** — §2b on v3
+   is synthetic and must be read as such.
+3. **Budgets/sizes** (`strata_v3`): K_max **40/60/150/200**, r_cap **50/70/90/110 s**, sizes **100/25/25**
+   per stratum over n=6/7/8/9 (= **400/100/100**). K_max ≈ 2.5–3× the geometry-prior FP mean so each
+   kept problem comfortably has its feasible skeleton in the pool; same budgets carry to a future real
+   eval. Collected by `restock3d_v3_collect.py` (+ `restock3d_v3_run_all.sh`, one stratum/process),
+   geometry-prior pool + reject-resample top-up + census; kept iff ≥1 analytically-feasible candidate.
+4. **Coverage/waste were verified live and correct on the analytic path** (not assumed). The analytic
+   culprits match the real refiner **by construction** — F4 reach-over via the *shared* `_blocks_reach`
+   (the "correct-polarity" attribution), F2 crowding = level residents, F3 culprit-free — and the
+   env-agnostic `coverage_and_waste` pipeline builds a non-empty culprit pool (`obj_goal*` are
+   `actionable`, not `universal`), varies 0→1 across candidates with the right polarity, and abstains
+   at |F|=0 (leakage invariant). *Signal-strength caveat:* v3 difficulty is capacity/height-driven, so
+   F3 (culprit-free, feeds the record-token channel not coverage) dominates and the sharp reach-over F4
+   is rare (~1/367 episodes) — coverage/waste are correct but carry less than in v2.
+5. **PIGINet gets a v3 scene-reconstruction path** (`oracle_v3.build_v3_bundle`, deterministic
+   `reset(seed)`) + a v3-aware `crops`/`_config_scales` branch; LAZY's v2-tuned geometry normalizers
+   were widened to the v3 envelope (width 0.08 / height 0.17). SPECTRE is env-agnostic (deployed
+   `--scene-3d --atom-mode profiles` recipe). Comparison wiring = one `RESTOCK3D_V3` EnvSpec + three
+   `precompute_dd2d_cache` keys; `compare.stratum_of` needs no edit (v3 rides the shared 4-band).
+
+**Consequences.**
+- **A pre-existing latent bug surfaced and was fixed:** `render.object_crops` crashed on the mobile
+  robot (its base has no `pose_x`), and the PIGINet adapter swallowed the exception → **restock3D
+  PIGINet's crops were silently empty for BOTH v2 and v3**, i.e. its designed height-via-image signal
+  was a dead all-zero channel. `object_crops` now skips un-poseable objects, so v3 PIGINet sees the
+  real per-block oblique silhouettes. v2's *published* numbers stand (cached; not rebuilt) but were
+  measured on that dead channel — flagged for any future v2 cache rebuild. Separately, rebuilding a
+  PyBullet reconstruction env **per problem** leaked ~0.14 GB/env and OOM-killed PIGINet's CLIP-cache
+  build over v3's 600 episodes; the adapter now **reuses one bundle per stratum** (reset per seed),
+  bounding the build at ~1.8 GB (was climbing past 38 GB).
+- **Collector memory:** the n=9 K_max=200 full-pool A* enumeration peaks ~8–9 GB/worker; a single
+  high-concurrency job OOM'd the box. Fixed with per-stratum sequential jobs (workers 16/12/6/4) and
+  an **outer refill loop** so a memory-watchdog pause that drains all inflight resumes instead of
+  silently shortfalling.
+- The full comparison (FP **and** §2b) runs on synthetic labels; results + caveats live in the
+  notebook entry of the same date. `refiner_mode`, the collector, `oracle_v3`, and the EnvSpec are the
+  new surface; v2 and the real-refiner path are untouched.
+
+---
+
+<a id="2026-08-20-restock3d-v3-per-object-dims-analytic-collection"></a>
+## 2026-08-20 — restock3D v3: per-object-dims env + analytic-collection classifier, built through gates
+
+<!--strip-->
+> **id** `2026-08-20-restock3d-v3-per-object-dims-analytic-collection` · **status**
+> active · **tracks** method, env-restock3d, evaluation, data, baselines
+<!--/strip-->
+
+**Context.** `restock3d_v2` proved too easy — LAZY sits near-oracle, so the env cannot separate the
+methods or exhibit the §0 representation advantage. Root causes: uniform block widths make blocks
+interchangeable (no selection problem) and heights are trivially discriminable. Separately, v2's
+real-refiner collection is slow (1–3 days).
+
+**Decision.**
+1. **v3 is additive; v2 frozen as the negative control.** New modules + a new `restock3d_v3`
+   env_variant; no deployed v2 path changes. v3 varies **per-object widths** (~U[0.02, 0.08], capped
+   below the ~92 mm finger aperture) and **heights sampled near the short/tall cutoff**, on the
+   re-balanced **(0.27, 0.22)** partition (calibrated cutoffs short ≤ 0.12, tall ≤ 0.17).
+2. **One arithmetic source of truth** (`feasibility_v3.py`): capacity formula
+   `Σw + 0.06(n−1) + 2·0.04 ≤ 0.50`, height cutoffs, split enumeration, greedy hand-rules, and the
+   `classify_skeleton` analytic classifier — imported by the generator, the classifier, and the gates
+   (never re-derived). Its failure dicts are byte-compatible with the real refiner's `failure_metadata`,
+   so analytic labels flow through the SPECTRE downstream unchanged.
+3. **Analytic labeling for collection; real refiner for eval; measured agreement (G1).** Collection
+   labels candidates with `classify_skeleton` (no MP); the real refiner stays the paper-eval instrument.
+4. **Real-refiner F3 parity.** v3's cutoffs are arm-insertion-limited ~0.10 m below the board, so a
+   block in (cutoff, clearance] fits under the board yet fails MP; the probe gained an optional cutoff
+   (v3 only) stamping a provable culprit-free F3 there — v2 byte-identical when the cutoff is None.
+5. **Generator accepts on measured difficulty** (≥1 feasible split, fill band, ρ band, and hard strata:
+   both greedy rules pick an infeasible split — the no-universal-rule property, benchmark construction
+   like DD2D's min-feasible-subset strata). 4 strata n=6/7/8/9 on the **shared 4-band** — so
+   `compare.stratum_of`/`train._keep` need no routing edit (deliberately avoiding v2's 5th-stratum case).
+
+**Consequences.** Gates cleared (2026-08-20): calibration build-skip 0% with a clean ρ gradient
+(0.172/0.109/0.012/0.006); G3 both-greedy-fail 100% with culprits across 8–9 objects; G2 static ceiling
+1.00 clear / ~0.88 near-threshold (not saturated); **G1 analytic↔real agreement 100%
+(32/32 clean pilot: TP 1, TN 31, 0 FP; combined feasible ⟹ success 3/3, infeasible ⟹ fail 84/84) under
+a label-aware budget**. A first G1 pass read TP=0 only because a flat **10 s/candidate** cap starved the
+real side: a feasible 6-object v3 plan
+needs **~40 s** of real MP, so the real-refiner **eval budget must be ≥~60 s/candidate** (the 10 s-cap
+trap; the strata_v3 r_cap placeholders 45–80 s are in range). Env byte-verified end-to-end through
+`collect_episode`. **Deferred to the collection pass:** the real collection (analytic labels + 5% audit),
+training, and the comparison wiring (compare_envs EnvSpec, precompute cache, PIGINet v3 scene
+reconstruction). LAZY needs no edit (`startswith("restock3d")` already selects geom_dim 9). Pre-registered
+eval predictions: SPECTRE-static beats both greedy hand-rules on the hard strata; adaptive − static
+CI-clean positive (the v2→v3 headline — same world, different blocks); SPECTRE-adaptive ≤ LAZY.
+
+---
+<a id="2026-08-19-restock3d-added-third-comparison-environment-v2"></a>
+## 2026-08-19 — restock3D added as third comparison environment (v2 5-stratum decoder routed to shared consumers; 2x2+3x3 only, 3 seeds)
+
+<!--strip-->
+> **id** `2026-08-19-restock3d-added-third-comparison-environment-v2` · **status**
+> active · **tracks** evaluation, tooling, env-restock3d, baselines, method
+<!--/strip-->
+
+**Context.** restock3d_v2 (the 3D packing env) had a collected dataset and ported baselines but
+was **not wired into the comparison layer** (`compare_envs.py` / `compare.py` /
+`precompute_dd2d_cache.py` had zero restock references — the `compare_envs` EnvSpec was the
+standing deferred item). Two structural obstacles blocked a pure "add an EnvSpec" onboarding:
+(1) restock3d_v2 bands **five** strata per split (`strata_v2.V2_STRATUM_BAND = SPLIT_BAND // 5`),
+but the shared `compare.stratum_of` is 4-stratum (`min(3, … // 250_000)`), so it maps **both**
+2×2 (band 0) and 3×3 (band [200k,400k)→0) to stratum 0 — silently collapsing the two sections;
+(2) only the 2×2/3×3 sections are collected (the crowded 4×3/3×4/4×4 strata are mid-collection in
+a separate session), with a few crowded stragglers on disk that must not leak into the tables.
+
+**Decision.** Onboard restock3D as the third comparison environment, scoped to **2×2 + 3×3
+(banding strata {0,1}), 3 seeds**, deferring §4 ablations and VLMPlan. (PIGINet gains a real
+seed axis here — `piginet_s{seed}` + a `{seed}`-templated `_PIGINET_PATHS` cache path; the CLIP
+cache is checkpoint-independent so all seeds share one.)
+- **Route the shared consumers to the v2 decoder.** `compare.stratum_of` gained an optional
+  `env_variant`; when it starts with `restock3d_v2` it delegates to `strata_v2.stratum_of` (0..4,
+  no clamp), else the historical 4-stratum path is byte-identical (DD2D/SB2D unaffected). Threaded
+  `env_variant` into every consumer that recomputes a stratum from a pid: the SPECTRE training
+  filter (`train.py:_keep`, via a new persisted `TrainConfig.env`), LAZY (`lazy/dataset.py`
+  `load_structs`), PIGINet (`piginet/dataset.py:_pid_stratum`, picked up from the domain's
+  `env_variant`), the cache stamper, and the notebook §5. This is the documented
+  "route shared consumers to the v2 decoder" follow-up, done for the consumers this touches.
+- **Restrict to {0,1} at train and eval.** Training uses `--train-strata 0 1` / `--keep-strata
+  0,1` (now correct under the v2 decoder); the cache builder filters test episodes to `{0,1}`
+  (`_STRATA_KEEP_BY_VARIANT`, applied in every writer + `_count_test_problems` so `N_PROBLEMS`
+  and `_dir_complete` match — 30, not 32) so the notebook's per-stratum table and its
+  stratum-blind "ALL" both contain only the two sections.
+- **Registry wiring.** New `RESTOCK3D` `EnvSpec` (`stratum_labels={0:"2×2",1:"3×3"}`,
+  `has_timing=True`, `has_ablations=False`), a **sim-free** `render_scene_from_geometry`
+  (matplotlib top-down from the stored `scene_geometry` — "reconstruct, never regenerate", no
+  PyBullet in the notebook; tall vs short shown by colour), a `pick/place_tall/place_short`
+  plan-label, and precompute entries: `_PIGINET_PATHS` (domain `restock3d`),
+  `_V3_ARM_OVERRIDES["restock3d_v2"]={"spectre3":"checkpoints_spectre_atoms"}` (the `--atom-mode
+  profiles` checkpoint dir), and `_REFINE_CAP_S["restock3d_v2"]=50.0`.
+- **Refine cap = 50 s**, chosen from the strata-{0,1} test data by the DD2D/SB2D principle: it
+  sits just above every problem's fastest-feasible (max 45.1 s → `_feasibility_at_risk(50)==0`,
+  0 censored) while cutting ~60 % of candidate refines (the 70–78 s budget-exhausting dead-ends).
+
+**Consequences.**
+- restock3D renders in `compare_methods.py` with §1/§2 FP, §2b wall-clock, §2c head-to-head, §3
+  survival, §5 visualizer; §4/§6 hidden. Numbers + caveats in the paired
+  [notebook entry](../notebook/07-stickbutton2d.md#2026-08-19-restock3d-onboarded-comparison-spectre-piginet-lazy).
+- **Two SPECTRE cache/inference bugs fixed while onboarding** (both would have bitten any future
+  scene_3d/atom env, not just restock): `cache_spectre3`'s **warmup + static-context**
+  `build_example` calls did not thread the 3D point-cloud / atom emission from `model.cfg` (only
+  the adaptive `deployed_rollout_traced` path did), so a `point_dim==3` model got `point_feats=
+  None` and crashed — now both paths derive `pointset_emission`/`atom_emission` from the
+  checkpoint; and `cache_lazy` built its feature spec with the default `geom_dim=8` instead of
+  `domain.geom_dim` (restock3d = 9, the height feature), which would have desynced the eval graph
+  from the trained model.
+- **Result (onboarding, 3 seeds, {0,1}, n=30):** all learned methods crush the naive planner
+  order (astar 6.23 ALL FP) — LAZY 0.09 ± 0.04 (best), SPECTRE 0.50 ± 0.09 ≈ PIGINet 0.51 ± 0.04,
+  static ≈ adaptive. No separation on the two easy symmetric strata; the 1-seed draw's SPECTRE
+  0.47 < PIGINet 0.57 lead dissolved into seed noise at 3 seeds — a caution against a 1-seed
+  ordering. **Update 2026-08-20 (scope now {0,1,3}, cap 50 → 55 s):** the 4×3 crowded stratum
+  landed, retrained + re-cached at 3 strata × 3 seeds. It sharpens the story — **SPECTRE edges
+  PIGINet at 4×3** (4.2 vs 6.0, paired Δ −1.8 CI [−3.87, +0.10], the first hint of the §0
+  representation crossover but CI still includes 0), **LAZY dominates** (4×3 Δ −3.57 CI [−5.93,
+  −1.63]), adaptivity still inert. Numbers + CIs in
+  [notebook/07 2026-08-20](../notebook/07-stickbutton2d.md#2026-08-20-restock3d-4x3-stratum-added-3-strata).
+  The keep-set + refine-cap track the collected strata; 3×4/4×4 + VLMPlan still pending.
+- **Invariant reinforced:** a 5-stratum (or any non-4-stratum) collection is **not** a
+  pure-additive EnvSpec — its banding must be routed through its own `stratum_of` in every shared
+  consumer (training filter, cache stamper, notebook) before the per-stratum tables are correct.
+
+---
+
+<a id="2026-08-19-restock3d-v2-collection-sequential-per-stratum-jobs"></a>
+## 2026-08-19 — restock3d v2 collection: sequential per-stratum jobs + halved heavy strata
+
+<!--strip-->
+> **id** `2026-08-19-restock3d-v2-collection-sequential-per-stratum-jobs` · **status**
+> active · **tracks** env-restock3d, data, evaluation, tooling
+<!--/strip-->
+
+**Context.** Even after the RAM-sized re-size to 11 workers ([2026-08-19 concurrency
+ADR](#2026-08-19-restock3d-v2-collection-ram-sized-concurrency-round-robin)), the single mixed
+job is memory-bound on the all-heavy tail (~3.6–3.9 days) and its per-worker peak is **hard to
+predict** because the running set mixes block counts (2×2 ≈1.4 GB … 4×4 ≈4 GB) — the round-robin
+schedule smooths but does not bound the peak, so worker sizing must assume the worst block count
+for every worker. The mid-run monitoring did, however, confirm the 11-worker peak was *safe*
+(freeRAM bottomed ~19 GB) and **validated the extrapolated heavy budgets** (feasible solves land
+under r_cap: 3×4 worst 71 s/80, 4×3 60 s, 4×4 77 s/90).
+
+**Decision.** Replace the one mixed job with **sequential, gated, single-stratum jobs** and cut
+the crowded strata:
+1. **One process per banding stratum**, run in `SEQUENTIAL_ORDER=(0,1,3,2,4)` (2×2, 3×3, 4×3,
+   3×4, 4×4), each blocking until done (`restock3d_v2_run_all.sh`). A single-stratum job has one
+   block count → a **uniform, predictable per-worker peak**, and a fresh process **fully reclaims
+   memory** before the next job measures free RAM. This is the property mixing lacked.
+2. **Per-stratum worker sizing** `min(0.85·CPU, 0.85·freeRAM / PER_WORKER_GB[stratum])`,
+   **floor-guarded** (never leaves < `mem_floor+3` GB free) — so light strata run fast (2×2≈27,
+   3×3≈15 workers) and crowded strata stay capped (≈10). `PER_WORKER_GB={0:1.7,1:3.0,2:4.5,3:4.5,
+   4:4.5}` are conservative upper bounds, validated live by a new `wRSSmax` heartbeat field.
+3. **Halve the three crowded strata to 25/10/10** (light stay 50/15/15): `strata_v2.SIZES`,
+   per-stratum, replacing the uniform `PER_CONFIG`. Dataset = **175/60/60 = 295** (was 250/75/75).
+4. **Resume pre-scan**: the collector seeds each cell from on-disk episodes, so a completed cell
+   submits nothing and an interrupted heavy stratum doesn't re-pay rejected refinements.
+Budgets (`BUDGETS`), the generator, the recipe keys, `_config`/`collect_episode` and the episode
+schema are **unchanged**, so episodes from the earlier mixed run (24 on disk, all 5 strata) stay
+consistent and are retained/resumed.
+
+**Consequences.** Est. **~1.5 days** (was ~3.6–3.9), with RAM predictable by construction and
+the desktop-crash risk removed (predictable peak + floor guard + watchdog). The dataset is
+**uneven** (light 80 each, heavy 45 each) — every downstream consumer (vocab, train, dataset,
+LAZY, PIGINet) iterates `list_episodes` and is count-agnostic, so this is safe; the only edit
+needed downstream was the collector's per-cell target (one line). The reduced heavy volume is a
+deliberate power-for-speed trade the user chose. `PER_CONFIG` is kept as documentation only.
+**Supersedes the round-robin single-job schedule** from the concurrency ADR (the watchdog and
+resume machinery carry over). Deferred/unchanged: the `compare.stratum_of` (4-band) vs
+`strata_v2.stratum_of` (5-band) mis-bucketing of the *optional* `--train-strata` filter — it
+does not touch the default train/vocab path.
+
+---
+
+<a id="2026-08-19-spectre-atom-input-rung-initial-abstract-state"></a>
+## 2026-08-19 — SPECTRE atom-input (Rung A): initial abstract state + goal atoms as model input
+
+<!--strip-->
+> **id** `2026-08-19-spectre-atom-input-rung-initial-abstract-state` · **status**
+> active · **tracks** method, env-dd2d, env-stickbutton2d, env-restock3d, evaluation
+<!--/strip-->
+
+**Context.** SPECTRE did **not** consume the initial abstract state or the goal atoms as
+first-class symbolic inputs (verified by code, not docs). The goal survived only as a
+per-object binary `obj_is_goal` flag (`domain.goal_objects` discards the predicate/relation,
+keeping only *which objects* are named; consumed at `encoders.py`), and the initial abstract
+state was **never tokenized** — `CandidateEncoder` encodes each skeleton from its operator
+program alone (op ids + position + arg tags). `initial_abstract_state.atoms` / `goal_atoms`
+entered only as the derived `coverage`/`waste` scalars, and only under `coverage_feats` with a
+non-empty failure context (`|F|>0`); at the first attempt they contributed nothing. The design
+guide `docs/spectre_atom_input_guide.md` proposes giving the model the atoms directly. Three
+integration points were verified first: the predicate vocab **already walks init + goal
+predicates** (`vocab.py` `_record_state` on `initial_abstract_state`, and the goal loop), so no
+builder change; canonicalization renames atoms and scene objects through **one shared mapping**,
+so atom object-names equal the `geo.objects` names that key `tags` (I5 + `collect._collect_all_objects`
+guarantee every atom entity has a tag) — the tag-join is safe; and **all three envs already
+persist** both fields, so this is a tensorize-time + model change with **no re-collection**.
+Arities to handle are 0/1/2 (DD2D unary + 0-ary `handempty`; restock3d_v2 strictly unary; SB2D
+goal unary but **init** 2-ary `RobotAboveButton`/`StickAboveButton` + 0-ary `AboveNoButton`).
+
+**Decision.** Build **Rung A only** (object-centric atom profiles); reserve Rung B
+(`atom_mode="tokens"`, per-atom-token cross-attention) as a `NotImplementedError` — no current
+env has *binding-critical* same-predicate ≥2-ary init/goal atoms, so Rung A suffices and Rung B
+could not even be validated here. A new `AtomProfileEncoder` (`encoders.py`) sums
+`predEmb[p] + slotEmb[k]` over every atom naming object *o* at slot *k*, **separately** for init
+and goal (guide D4), sum-pooled (atom count is information) with the slot embedding keeping
+`On(a,b)≠On(b,a)`. It reuses the state-delta `(pred_id, arg_tags)` idiom (`+1` OOV-shift, the
+`PAD_TAG=0` object-tag namespace, the guarded `[tags[a] for a in args if a in tags]` join).
+**Injection is additive and zero-initialized** (mirroring the record `delta_proj` and the D-8
+discipline): per-object profiles go into the `SceneEncoder` token *between* its projection Linear
+and LayerNorm (pre-SAB, so object-object attention conditions on atoms); **0-ary atoms route to
+the scorer's existing global summary token** via a new optional `glob_extra` kwarg on both
+scorers — chosen over widening `glob_feats` (would re-randomize `glob_proj`) or adding a real
+memory token (would feed `AuxHead` an extra token). Config-off (`atom_mode="off"`, the default)
+builds no new module and is byte-identical; `use_init_atoms`/`use_goal_atoms` only zero a profile
+half and never change the state dict. Emission is derived from a single `atom_emission(cfg)`
+helper (mirroring `pointset_emission`) at train, val-selection and deploy, so a model is never
+scored on a feature it wasn't trained on; `load_checkpoint` reads `atom_mode` off the checkpoint
+(older checkpoints → "off" → strict load unchanged). Scope: code + tests + smoke-verify; the full
+2-arm FP evaluation is deferred (same shape as the PointSetEncoder task).
+
+**Consequences.** SPECTRE can now *see* the init-state atoms and goal literals as soft,
+learnable per-object context — the input surface a reviewer can be shown as an ablation, and the
+prerequisite for domains whose goal is not object-flag-summarizable. **No collection change / no
+re-collection** for any env. Config-off is byte-identical (D-8 preserved; the equivalence,
+state-delta and pointset tests stay green). New tests `tests/approaches/spectre/test_atom_input.py`
+(off-equivalence, zero-init no-op, atom-set permutation invariance, arg-slot sensitivity +
+predicate binding, 0-ary→global-only, augmentation consistency, OOV predicate, object-order
+invariance, checkpoint round-trip, collate shapes) all pass; full suite 453 passed. Smoke-trained
+`--atom-mode profiles` on **DD2D** (unary+0-ary), **SB2D** (2-ary init + 0-ary global route) and
+**restock3d_v2** (3D `--scene-3d`, unary) — each produced `best.pt`, round-tripped through
+`load_checkpoint` (`model.atoms` present, `atom_mode="profiles"`) and ran a real deployed rollout.
+**Deviations from the guide** (registered): 0-ary atoms routed via `glob_extra` (not a widened
+`glob_feats`); masks derived from `pred != 0` rather than emitted; 0-ary atoms folded into the
+shared per-atom array (model splits them out), so the batch carries the guide's index trio with no
+extra mask fields. **Registered predictions** (guide P1/P2): DD2D and SB2D are honest **nulls**
+($s_0$ is a function of geometry the model already ingests, and this codebase's own history shows
+the net under-uses symbolic tokens when a richer signal is present) — the payoff case (guide P3)
+is a future domain with heterogeneous ≥2-ary goal predicates, which would need Rung B.
+**Deferred:** the 2-arm `baseline-static` vs `+atoms-static` FP comparison + probes, and Rung B.
+See [`notebook/07` 2026-08-19](../notebook/07-stickbutton2d.md#2026-08-19-spectre-atom-input-rung-built-smoke-verified).
+
+---
+
+<a id="2026-08-19-restock3d-v2-collection-ram-sized-concurrency-round-robin"></a>
+## 2026-08-19 — restock3d v2 collection: RAM-sized concurrency, round-robin, watchdog
+
+<!--strip-->
+> **id** `2026-08-19-restock3d-v2-collection-ram-sized-concurrency-round-robin` ·
+> **status** active · **tracks** env-restock3d, data, evaluation, tooling
+<!--/strip-->
+
+**Context.** The first full restock3d_v2 collection launch (2026-08-18 night, budgets from the
+same-day re-check) ran `--workers 28` (0.9×CPU) with the heaviest strata scheduled first, and
+**OOM-killed the entire user session** at 76 min (0/400 kept) — `systemd-oomd`/kernel OOM at 85%
+of the **59 GB** RAM, taking gnome-shell + the terminal with it. Post-mortem: refinement was fine
+(`err=0`, no tracebacks); the cause was resource sizing — 28 PyBullet workers × ~2 GB anon-RSS on
+the crowded strata exceeded RAM, and heaviest-first meant every worker was at its memory peak
+together with nothing completed. Concurrency here is **RAM-bound**, and the box is 59 GiB usable,
+not the 64 assumed. (Post-mortem + probe numbers: [`notebook/07`
+2026-08-19](../notebook/07-stickbutton2d.md#2026-08-19-restock3d-v2-collection-oom-post-mortem-ram-sized).)
+
+**Decision.** The dataset spec and per-stratum budgets (`strata_v2.BUDGETS`, 250/75/75) are
+**unchanged**; only the collector's *operational* parameters change:
+1. **`--workers` is RAM-sized**, not CPU-sized: `min(0.9·CPU, (avail−reserve)/_PER_WORKER_GB)`.
+   **CORRECTED MID-RUN (see Consequences): `_PER_WORKER_GB` 2.8 → 4.0, giving ~11 workers, not 16.**
+   The 2.8 estimate (from a short-r_cap probe) was too low; the live crowded-strata peak is ~4 GB.
+2. **Round-robin submission** across (split, stratum) cells. The ProcessPoolExecutor is FIFO, so
+   interleaving makes the running set a **mix** of strata — memory ramps smoothly and a crowded
+   problem starts early (the de-risking heaviest-first wanted, minus the spike). It does **not**
+   reduce the worst-case peak: the run's tail is unavoidably all-heavy (only crowded strata remain,
+   ~88% of the core-hours), so the worker count is still sized for `workers × heavy_peak`.
+3. **Memory watchdog**: free RAM < `--mem-floor-gb` (6) pauses new submissions until it recovers;
+   < `--mem-critical-gb` (3) halts. Safe because the collection is **resumable** — each kept episode
+   is written immediately and a relaunch skips existing files.
+4. **Per-stratum ETA** in the heartbeat (global mean misprices a 13 min vs 100 min stratum mix),
+   plus `freeRAM=XGB`.
+
+**Consequences.** The 16-worker relaunch (2.8 GB/worker estimate) **had to be re-sized to 11
+mid-run.** Live at t+90 min: workers mean **2.99 GB / max 3.62 GB at ~candidate 67 of 75 and still
+climbing** → per-problem peak ~**4 GB** (the `bpg` scratchpad accumulates every sampled state across
+all 75 candidates, so memory scales with `K_max × r_cap × samples`; the earlier 1.74 GB probe used
+r_cap=15, ~5× less sampling). Two compounding facts made 16 unsafe: (a) the peak is ~4 GB, not 2 GB,
+and (b) the **FIFO pool grows heavy-concurrency toward `workers`** — freed light workers pull the
+next queued (heavy) tasks, so the tail runs `workers` heavy problems at once. 16 × 4 GB = 64 GB >
+59 GB = a **guaranteed tail OOM**. Caught at freeRAM 10 GB (before the watchdog had to fire), killed
+both pids, and relaunched at **`--workers 11`** (11 × 4 GB = 44 GB → ~15 GB free even all-heavy),
+resuming the 10 kept episodes from disk. **The collection is ~3.6–3.9 days at 11 workers, not the
+~1.5–2 days quoted at 16** — the memory constraint, not CPU, sets the floor. Levers for a shorter
+run: trimmed crowded-strata budgets (offered, declined — would *also* lower per-problem memory,
+compounding a speedup) or bounding `bpg` (shared-substrate change, out of scope). The watchdog is
+the backstop (no repeat desktop crash). All changes are launch-config in `restock3d_v2_collect.py`;
+`strata_v2`, generator, schema untouched. **Standing rule: size this collector's workers by
+RAM / ~4 GB-heavy-peak, never `0.9·CPU`.**
+
+---
+
+<a id="2026-08-18-restock3d-v2-full-collection-5-stratum-protocol"></a>
+## 2026-08-18 — Restock3D v2 full collection: 5-stratum protocol + banding fix + LAZY height
+
+<!--strip-->
+> **id** `2026-08-18-restock3d-v2-full-collection-5-stratum-protocol` · **status**
+> active · **tracks** method, env-restock3d, data, evaluation, baselines
+<!--/strip-->
+
+**Context.** The v2 3D pipeline was pilot-verified (four symmetric 1×1..4×4 configs,
+`restock3d_v2_pilot`). Time to collect the real dataset. The user specified **five strata by
+tall/short count — 2×2, 3×3, 3×4, 4×3, 4×4** — at 50 train / 15 val / 15 test each
+(250/75/75), following the DD2D/SB2D protocol (refine all `K_max` candidates from the
+geometry-guided generator non-short-circuiting, reject-resample `num_success==0`, **no oracle
+in collection**), and asked whether their proposed per-stratum budgets (K_max 20/40/100/100/100,
+r_cap 40/55/65/75) held up against the earlier calibration. Two facts overturned those numbers
+(see the paired notebook entry): the sweep's Table B timed `refine_skeleton_v2` (the oracle
+certifier — short-circuiting), but **collection uses `BacktrackingRefiner`**, which is slower on
+feasible skeletons and where **infeasible candidates do not fail fast** (backtracking re-descends
+→ each burns ≈ r_cap, so per-problem cost ≈ K_max × r_cap); and the pilot's own records give the
+real collection-path feasible-solve tail (3×3 up to 60 s vs Table B's 45 s), so 55/65/75 would
+mislabel the slowest feasible skeletons as negatives.
+
+**Decision.** (1) **Budgets = `strata_v2.BUDGETS`**: K_max **20/40/75/75/75**, r_cap
+**40/70/80/90 s** (3×4 and 4×3 share 80). K_max=75 (not 100) on the crowded strata — Table A's
+raw per-seed oracle-index capture rates show 100 is wasted on 3×4 (a lone uncapturable 178
+outlier) and 4×4 (max index 71); 75 matches 100 everywhere but one extra 4×3 resample, at ~25%
+less wall-clock. r_caps raised to clear the pilot's measured feasible tail with margin.
+(2) **Fix the banding collision.** `compare.STRATUM_BAND = SPLIT_BAND//4` fits only four strata;
+a fifth makes `problem_id("train",4,0)` collide with `problem_id("val",0,0)` (duplicate env
+seeds + overwritten records). Those constants are shared by DD2D/SB2D/v1, so `strata_v2` gets a
+**local `V2_STRATUM_BAND = SPLIT_BAND//5`** and its own `stratum_of` (returns 0..4, no clamp);
+routing the shared analysis/training consumers to it is deferred (vocab-build does not stratify).
+(3) **Two new committed recipe keys** `14: (4,3,3,4)` (3×4) and `15: (3,4,4,3)` (4×3) in
+`generator.STRATA_V2_PILOT` (+ `kinematic_env.CLUTTER_PER_STRATUM`, `env_registry` gym ids and a
+`restock3d_v2` aug-policy/domain entry). (4) **Collector** (`restock3d_v2_collect.py`) gains a
+`--test` split, per-stratum budget lookup, and a **dynamic top-up loop** (keep `target` tasks in
+flight per cell until `target` kept, hard draw cap trips a SHORTFALL) with per-stratum
+yield/feasible-timing heartbeats and a census that trims each cell to the first `target` kept in
+index order — so any per-config yield self-corrects (4×4 is ~40–55% packable) and the dataset is
+exact + reproducible. (5) **LAZY height widening** (`geom_dim` 8→9): the restock graph appends a
+normalized object height so the GAT sees the F3 axis (cube 0.21 vs tall 1.0); DD2D/SB2D stay at 8
+(each env trains its own GAT, so the width is env-specific and the checkpoint self-describes via
+its stored `node_dim`).
+
+**Consequences.** The collection is a **~20–30 h run at ~29 workers (~800 core-hours)**,
+dominated by the three 7–8-object strata and 4×4 resampling (each rejected 4×4 draw still burns
+a full pool). Scope for this task is **collect + vocab + LAZY widening + a low-epoch smoke-train
+of all three trainable methods** (readiness gate; VLMPlan deferred — billed backend). All four
+methods are otherwise variant-agnostic (SPECTRE `--env restock3d_v2 --scene-3d --use-pca-feats
+--use-edgeconv`; PIGINet `--domain restock3d --env-variant restock3d_v2`; LAZY `--env-variant
+restock3d_v2`), and the PointSetEncoder upgrade is entirely tensorization-time, so **collection
+stores nothing new**. Verified before launch: 5-stratum banding is injective/round-trips, the
+two new gym ids register and build (7 objects each), the geometry generator emits clean
+all-`place_tall` feasible skeletons for both asymmetric configs, failure attribution is
+config-agnostic (pilot shows clean F3-proof negatives), and the LAZY 9-dim height column
+populates. Supersedes nothing; the pilot (`restock3d_v2_pilot`) and v1 collections stay frozen.
+
+---
+
+<a id="2026-08-18-pointsetencoder-upgrade-per-point-differential-features-edgeconv"></a>
+## 2026-08-18 — PointSetEncoder upgrade — per-point differential features + EdgeConv + multi-seed PMA
+
+<!--strip-->
+> **id** `2026-08-18-pointsetencoder-upgrade-per-point-differential-features-edgeconv`
+> · **status** active · **tracks** method, env-dd2d, env-stickbutton2d, env-restock3d,
+> evaluation
+<!--/strip-->
+
+**Context.** The per-object geometry encoder was `FootprintEncoder` (`encoders.py`): a
+shared per-point MLP over the raw point set → single-seed PMA pool → `Linear(64→32)`. Two
+gaps (design doc `docs/pointset_encoder_upgrade.md`): (1) *information* — ring adjacency is
+discarded at tensorization, so area/curvature are not well-posed functions of the input;
+(2) *inductive bias* — PMA-over-φ(points) with no interaction stage caps the encoder at
+weighted low-order moments. The fix must be additive (config-off byte-identical to v1, for
+D-8 checkpoint compat), dimension-generic (serve 2D DD2D/SB2D and 3D restock3d_v2), and must
+not force a re-collection.
+
+**Decision.** Add a config-selected `PointSetEncoder` alongside the untouched
+`FootprintEncoder`: `lift(C_pt→32→64) → [EdgeConv×1] → [SAB] → MultiSeedPMA(seeds) →
+Linear(64·seeds→32)`, output width `D_DESCRIPTOR=32` unchanged so the scene-token concat
+(76) and D-8 compat hold. Per-point differential features are computed **in the tensorizer**
+(`dataset.compute_point_feats`) from the already-stored geometry + an inside-test oracle: 2D
+`C_pt=6` `[x,y,nx,ny,κ̂,f]` (Euclidean kNN → local PCA frame → outward normal via
+`Polygon(o.boundary).contains` → signed curvature by quadric fit, `κ̂=tanh(κ·h̄)`); 3D
+`C_pt=8` `[x,y,z,nx,ny,nz,f,0]` (Pauly surface variation, no signed curvature). Five
+independently-switchable, checkpoint-persisted flags: `use_pca_feats`, `use_edgeconv`,
+`use_point_sab`, `pma_seeds`, `edgeconv_k`; the tensorizer emits `point_feats`/`knn_idx` as
+trailing-nullable `SpectreBatch` fields only when the upgrade is on, so config-off is
+byte-unchanged. Emission is derived from the checkpoint's own config at deploy
+(`pointset_emission` off `model.cfg`), never the caller. **Three deliberate deviations from
+the doc:** (a) config-off equivalence is achieved by *module selection* (config-off builds
+`self.footprint`, the real v1 — exact T1), not a degenerate `PointSetEncoder`; (b) EdgeConv
+keeps the doc's residual `LayerNorm(h + out_proj(agg))` with `out_proj` zero-init, so T7 is
+**relaxed** to "zeroed `out_proj` ⇒ output = `LayerNorm(h)`" (message branch provably inert)
+rather than an exact identity nesting; (c) the doc's 3D sensor-viewpoint orientation oracle
+is unavailable (no camera recorded), so restock3d uses **away-from-origin** — exact for the
+convex, origin-centered analytic boxes. `pma_seeds` defaults to **1** (not the doc's deployed
+4) so the default config stays byte-identical; the deployed sweep preset turns the switches on.
+
+**Consequences.** All three collection pipelines are compatible with **no collector/schema
+change and no re-collection** — features are tensorizer-time from stored `boundary`/`point_cloud`;
+DD2D reconstructs its Shapely polygon from the stored ring, SB2D likewise (convex), restock3d
+uses the origin-centered box. Config-off is provably byte-identical (default `SpectreConfig`
+builds only `scene.footprint`; the full 428-test spectre suite stays green, `test_v3_equivalence`'s
+successor loads a real checkpoint `strict=True`). A new `test_pointset_encoder.py` implements
+T1–T7 (T7 relaxed) + a checkpoint round-trip + config-off additivity (21 tests). Smoke-verified
+end-to-end on all three envs (2-epoch train → `best.pt` → `load_checkpoint` `strict=True` → rollout):
+DD2D, SB2D (2D), and **restock3d_v2_pilot in 3D** (`C_pt=8`). **3D-kNN guardrail — measured and
+partly acted on.** On restock3d's 32-point analytic box clouds the doc's `k=16` 3D default is too
+large: PCA neighborhoods span opposite walls, corrupting the normal direction and surface variation
+`f`. Measured PCA-normal accuracy (|cos| vs the true face normal) on the *real* env extents (cube
+0.05³ `small_half`, clutter 0.05²×0.10, tall block 0.05²×0.24 `tall_half`): **cube k=6 0.97 / k=16
+0.80; clutter k=6 0.80 / k=16 0.49; tall block ~0.25–0.50 at every k at 32 points** (its 5:1 faces
+put the opposite wall nearer than the far end of its own face; only a ~150-point cloud recovers it).
+**Action:** the 3D `edgeconv_k` default is lowered **16 → 6** (`pointset_emission` / `build_example`;
+a deviation from the doc's dense-cloud `k=16`), which cleans the well-proportioned boxes; the tall
+block stays PCA-degenerate but that is **harmless — its discriminative F3 signal is height, carried
+in the raw `[x,y,z]` coordinates, not in normals/curvature** (which target 2D concave perimeters).
+`use_pca_feats` and `edgeconv_k` are train-time flags fully **decoupled from collection** (features
+are tensorizer-time; only the stored cloud *density* is collection-time, and densifying buys little
+for boxes), so the dataset can be collected now with the 32-point cloud and the 3D config settled at
+the retrain. Recommended 3D retrain config: **`use_pca_feats=False`** (coords + EdgeConv +
+multi-seed PMA), or PCA-on at `k=6` if a uniform config is wanted — to be pinned empirically. The
+`[area, sinθ, cosθ]` scalars are **kept** (doc §7 schedules their removal as a separate follow-up
+after the retrain). **Deferred:** the full 3-seed retrain + paired-CI FP guardrail comparison
+(doc §7); this pass lands the code + tests + smoke-verify only.
+
+---
+
+<a id="2026-08-18-restock3d-v2-3d-point-cloud-representation-collection"></a>
+## 2026-08-18 — restock3d v2 3D point-cloud representation + collection registration
+
+<!--strip-->
+> **id** `2026-08-18-restock3d-v2-3d-point-cloud-representation-collection` ·
+> **status** active · **tracks** method, env-restock3d, data, evaluation
+<!--/strip-->
+
+**Context.** To evaluate SPECTRE/PIGINet/LAZY/VLMPlan on Restock3D v2 (continuous packing)
+we must first make it collectable. A prior mapping (`docs/restock3d_port_map.md`) found the
+shared blocker: no env emits `SceneGeometry`, and the schema is 2D-footprint-only. Restock3D's
+decisive property is that a cube (`small_half` z=0.025) and a tall block (`tall_half` z=0.12)
+have **identical 2D footprints** and differ only in height, which is exactly what F3 turns on
+(a tall block clears the 0.34 m tall section but overflows the 0.15 m short section). A
+2D-footprint representation is therefore blind to the environment's headline hardness — not
+merely lossy.
+
+**Decision.** (1) **Represent scene geometry as a full 3D point cloud** for Restock3D. Extend
+`schema.ObjectGeometry` with *optional* `point_cloud`/`pose_z`/`height` (default `None`, so
+DD2D/SB2D records and the 2D encoder path are byte-identical), and widen SPECTRE's point-set
+encoder behind a config gate (`SpectreConfig.point_dim`/`pose_dim`, `--scene-3d`): the
+`FootprintEncoder` is already a permutation-invariant set network, so only the input `Linear`
+width changes (2→3) plus the pose projection (3→4). The point cloud is **analytic** (an
+axis-aligned box sampled from ground-truth half-extents) — no perception. (2) **Register a v2
+collection** as a distinct `model_name="restock3d_v2"` / `env_variant="restock3d_v2_pilot"`
+(never mixable with v1): a `Restock3DV2Env` gym wrapper (section bands), `strata_v2` mapping a
+banding stratum 0–3 to committed `generator.STRATA` recipe keys 10–13 (the 1×1..4×4 pilot
+configs; the recipe rides in `model_kwargs` so `config_hash`+`git_sha` pin it — never a runtime
+`STRATA` injection), a hint-tier `DomainSpec`, an aug-policy entry, and collect.py dispatch that
+reuses the real `BacktrackingRefiner` + the v2-ported instrumented refiner. (3) The **v2 pool
+generator is the geometry-informed nearest-first prior** (the deployed generator), so a small
+`K_max` pool holds a feasible skeleton plus `place_short`-on-tall (F3) negatives.
+
+**Consequences.** SPECTRE trains on Restock3D in 3D end-to-end (verified: `best.pt` produced,
+3D checkpoint loads `strict=True` and rolls out; the geometry-less-no-checkpoint trap avoided,
+`n_train>0`). The 2D DD2D/SB2D path is untouched (407 tests green; a 3D checkpoint is
+width-bound and self-describes via its saved `scene_3d`). The instrumented refiner's F2 is
+**redesigned** for continuous packing (section-resident enumeration, not a centre-point probe).
+Cost consequence: full-pool refinement is expensive here (F3-heavy pools, real motion planning),
+so the collection is calibrated to **18 sampling retries + small `K_max`** (10 retries rejected
+even feasible skeletons); 4×4 remains the slow/low-yield corner (genuine overflow). Deferred:
+the three baseline ports (LAZY graph height feature; PIGINet adapter + oblique-render crops;
+VLMPlan adapter + labeler + labeled snapshot) — the shared oblique renderer
+`envs/restock3d/render.py` (height-visible, world→pixel projection for Set-of-Mark + crops)
+is in place. Supersedes nothing; the v1 discrete-region collection stays frozen.
+
+---
+
+<a id="2026-08-18-restock3d-v2-geometry-informed-pick-cost-heuristic-nearest-first"></a>
+## 2026-08-18 — Restock3D v2 geometry-informed A* pick-cost heuristic (nearest-first prior)
+
+<!--strip-->
+> **id** `2026-08-18-restock3d-v2-geometry-informed-pick-cost-heuristic-nearest-first`
+> · **status** active · **tracks** method, env-restock3d, evaluation, baselines
+<!--/strip-->
+
+**Context.** The v2 skeleton pool is enumerated by the stock
+`RelationalHeuristicSearchAbstractPlanGenerator` (`heuristic_name="hff"`) — an A* whose operator cost is
+a hardcoded unit (`heuristic_search_plan_generator.py:139`) and whose only tiebreak is a random uniform,
+so it is **geometry-blind**: every equal-length goal-reaching skeleton is ranked equally and the
+nearest-first (v2 oracle south-to-north) pick order is buried among `6!·2⁶ ≈ 46k` variants at r3
+(4 cubes + 2 talls), surfacing only by tiebreak luck. We wanted a **deliberately weak geometric prior**
+that front-loads the nearest-first order, plus a test that it actually shortens plan generation.
+Continues the v2 milestone (ADR
+[2026-08-17](#2026-08-17-restock3d-v2-continuous-packing-variant-two-place)). Numbers in
+[`notebook/07` 2026-08-18](../notebook/07-stickbutton2d.md#2026-08-18-restock3d-v2-geometry-informed-pick-cost-vs-geometry-blind).
+
+**Decision.** New `GeometryGuidedRestockPlanGenerator` (`envs/restock3d/plan_generator_v2.py`)
+subclasses the hff generator and overrides only the edge cost — the A* loop, hff heuristic, successor
+generator and random tiebreak are reused verbatim — with a state-dependent **pick cost**:
+
+    c(pick(o), s) = 1 + λ · |{ o' unpicked (OnFloor) in s : d(o') < d(o) }|,  λ = 1.
+
+- **`d(o) = object y-coordinate, read once from `x0`** — the northward reach from the per-object
+  southern park station. The holonomic base slides laterally in the clear corridor for *free*, so the
+  only costly / reach-over-relevant axis is y (`_blocks_reach`: a southern object blocks reach to a
+  northern one). This equals the key `oracle_v2.build_skeleton_v2` sorts on, so nearest-first **==** the
+  oracle order (verified **10/10** on the r3 seeds). It is **not** Euclidean distance from the single
+  robot start pose (0,0): that reproduces the oracle order **0/10** (the object band is laterally offset
+  at x≈−0.5 with x-spread ≈ y-spread) and would optimize a different, non-reach-feasible order.
+- All other operators keep unit cost and the hff heuristic is unchanged, so the total extra penalty of a
+  complete plan is exactly its **Kendall-tau inversion count vs nearest-first** (one line: *pick actions
+  incur a unit penalty per remaining nearer block*). A 0-inversion plan is strictly cheapest and hff→0
+  at every goal, so A* yields the oracle pick order — every section variant of it — before any inverted
+  order.
+- **Eval protocol** (`experiments/spectre/restock3d_v2_heuristic_eval.py`): 10 r3 problems, enumeration
+  only (**no refinement**, so K_max is cheap and can go high), match = **oracle pick order AND both
+  talls via `place_tall`** (F3-feasible; the 4 cubes' section op is free — orthogonal to feasibility and
+  to the pick cost). Stats reported **per planner independently** (no cross-planner intersection):
+  success-rate (Wilson 95% CI) + mean/std/bootstrap-95%-CI of attempts over each planner's own found
+  problems.
+- Additive: v1/v2 code untouched; the generator is a subclass and hff stays the stock class.
+
+**Consequences.**
+- Geometry generates the oracle plan in **~15–26 attempts at 100%** success (pick-order match at
+  **attempt 1** every problem); geometry-blind hff needs **~4000 attempts** (strikingly stable across
+  replicates) and reaches only ~50–80% even at K=10000 — a **~150–275× (≈200×) reduction** (3 K=10000
+  replicates). The pick-cost is *constructed* to rank the oracle pick order
+  first, so geometry's low count is by design; the measured quantity is how rarely/slowly hff stumbles
+  onto the same order — and hff is empirically **worse than uniform-random** (its A* enumeration is
+  clustered by shared prefixes, not a uniform sample). Stated openly in output + notebook.
+- **Per-problem attempt indices are `PYTHONHASHSEED`-dependent** (set-iteration order over
+  operators/atoms varies per process — the standing DD2D-generation trap), so only the **aggregate** is
+  cross-run reproducible; two K=10000 replicates agree at the aggregate. Quote aggregates, never
+  per-problem indices.
+- This is a **plan-generation prior**, distinct from the deferred Phase-2 **eager section-capacity
+  heuristic** (which would prune over-capacity sections at enumeration time); it touches neither
+  refinement, collection, nor the learned ranker. The two levers are λ and `d(o)`.
+
+---
+
+<a id="2026-08-17-restock3d-v2-continuous-packing-variant-two-place"></a>
+## 2026-08-17 — Restock3D v2 continuous-packing variant: two place operators + uniform x-band
+
+<!--strip-->
+> **id** `2026-08-17-restock3d-v2-continuous-packing-variant-two-place` · **status**
+> active · **tracks** method, env-restock3d, evaluation, data
+<!--/strip-->
+
+**Context.** Restock3D (v1) models packing as a **discrete region-assignment** problem:
+`Place(robot, obj, region)` targets one of several **single-object** regions, so difficulty is the
+object→region matching (F2 = over-assigning a single-object region) plus F3 (a tall block into a short
+section). The user asked for a **v2 variant that keeps v1 intact** but reframes placement as a
+**continuous geometric packing** problem — closer to the packing negative-control the proposal §0/§6
+wants — while reusing the proven fully-lateral env, front-grasp skills, and reach-over ordering. Two
+approved decisions framed the pass: **scope = working env milestone** (env + oracle + Stage-0 +
+certification + demos + tests; refiner-instrumentation / eager heuristic / K_max / collection deferred
+to Phase 2), and **structure = additive, reuse the env as-is**. Milestone numbers in
+[`notebook/07` 2026-08-17](../notebook/07-stickbutton2d.md#2026-08-17-restock3d-v2-milestone-continuous-packing-certifies).
+
+**Decision.**
+- **Two place operators, `place_tall` / `place_short`** (each `[robot, target]`, `pre {Holding}`,
+  `add {HandEmpty, Stored}`, `del {Holding}`), *both legal for either object size*. Their abstract
+  effects are **identical** — the section choice lives only in the operator identity (a symbolic token
+  the ranker sees) and is validated **geometrically at refinement**: `place_short` of a tall block
+  overhangs the short section's ceiling board and is rejected by real PyBullet collision (F3). Nothing
+  hard-codes tall→bottom.
+- **Continuous uniform x-band, no discrete regions.** Placement x is sampled uniformly across a
+  section's lateral band; y reuses v1's known-good front strip (a section constant) + a ±0.01 m jitter;
+  z is the section surface. The band is derived **analytically** (no sweep) from the shelf board
+  x-extent `[0.099, 0.701]` minus a per-side end margin (0.04) → object-center band **`[0.139, 0.661]`**
+  (a hair wider than v1's reachable `[0.16, 0.64]`, inside the physical max `[0.124, 0.676]`); an
+  over-generous end is self-correcting because uniform sampling + real-collision resampling reject
+  overlaps. Capacity/crowding (the v1 "F2") becomes an **emergent continuous-packing** constraint — two
+  objects with overlapping x collide; a full section can't fit another object — decided by real
+  collision, never a discrete slot.
+- **Predicates `{HandEmpty, Holding, OnFloor, Stored}`** (+ inert `OnBuffer`); **`InRegion` dropped**.
+  `Stored(cube)` is now purely geometric (underside near a section surface AND xy on the shelf band).
+  Goal stays `Stored(o)` per goal object.
+- **Additive, env untouched.** Each shelf **section is one wide placement band** carried by the existing
+  `RegionInfo` struct (`section_geometry.compute_section_infos` → 2 entries with a wide `half_xy[0]`), so
+  the low-level `kinematic_env.py` — its `goal_reached` / `_name_in_any_region` terminal check — is fed
+  the two bands and needs **no code change**. New v2 modules only: `section_geometry.py`, `models_v2.py`
+  (abstractor + operators), `place_controller_v2.py` (a `SectionFrontPlaceController` that reuses v1's
+  translate-only front place *verbatim* by presenting the section as an internal synthetic region
+  object, overriding only the sampler to span the band), `oracle_v2.py` (section assignment + south-to-
+  north skeleton + a manual multi-object rollout-with-resampling certifier that needs no collection
+  pipeline). v1 `models.py` / `place_controller.py` / `oracle.py` / `kinematic_env.py` are byte-for-byte.
+- **Oracle assignment = load-balanced.** Tall blocks → tall section (F3 forces it); cubes balanced
+  across both sections (fewer current objects wins, ties → short) so no band is crowded; stored
+  **south-to-north** (the reach-over order, reused unchanged).
+
+**Consequences.**
+- v2 is a genuine 3D **continuous packing** testbed with the same difficulty *sources* re-expressed:
+  F3 (per-object height collision) survives verbatim; the discrete over-assignment F2 becomes continuous
+  within-section crowding; reach-over ordering is unchanged. It sharpens the proposal's packing
+  negative-control axis and gives the ranker a *symbolic* section choice (operator identity) validated by
+  continuous geometry — a clean representation-question instance.
+- **Milestone gates pass** (`notebook/07` 2026-08-17): Stage-0 4/4 (`place_short(block)` → F3 with the
+  ceiling overlap confirmed; cubes land upright via the translate-only place); oracle certifies sampled
+  r0–r3. New scripts `experiments/spectre/restock3d_v2_{stage0,oracle,demos}.py`; new tests
+  `test_restock3d_v2_{geometry,models,oracle}.py`.
+- **Deferred to Phase 2** (explicitly *not* built): the v2 instrumented refiner (F3 + reach-over transfer
+  directly; **F2 → continuous section-capacity attribution** — culprits = section residents when no free
+  x remains), the eager heuristic/plan-generator (section-capacity penalty replacing the discrete
+  region-occupied gate), K_max/cap_r recalibration, and collection registration (aug policy, domain spec,
+  `CollectionConfig` triplet + `model_name` dispatch, `strata_v2` with `ENV_VARIANT="restock3d_v2"`).
+  Full SPECTRE training + learned baselines + `compare_envs` EnvSpec stay deferred as before. v2 does not
+  supersede v1 — both variants coexist (v1 discrete assignment, v2 continuous packing).
+
+---
+
 <a id="2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision"></a>
 ## 2026-08-17 — restock3d fully-lateral layout + front-grasp-only + strict collision + region sampler
 
 <!--strip-->
 > **id** `2026-08-17-restock3d-fully-lateral-layout-front-grasp-only-strict-collision`
-> · **status** active · **tracks** method, env-restock3d, evaluation, data
-> · **supersedes** the base-collision (best-effort) and F1-clutter decisions of
+> · **status** active · **tracks** method, env-restock3d, evaluation, data ·
+> **supersedes** the base-collision (best-effort) and F1-clutter decisions of
 > [2026-08-15](#2026-08-15-restock3d-f1-clutter-re-added-relocation-buffer)
 <!--/strip-->
 

@@ -1,0 +1,277 @@
+{
+ "description": "Obstruction/rearrangement Shelf3D: a blocker cube pre-occupies the target region on the shelf; the robot must relocate it to a free spot, then place the ground target cube into the cleared target region.",
+ "variant_description": "o1: one ground target, one shelf blocker occupying its target region, two free relocation spots.",
+ "variant_specific_description": "Relocate blocker1 off target_region_1, then place target1 into target_region_1.",
+ "robots": {
+  "tidybot": {
+   "robot": {}
+  }
+ },
+ "scene": "lab2",
+ "fixtures": {
+  "cupboard": {
+   "cupboard_1": {
+    "length": 0.60198,
+    "depth": 0.254,
+    "shelf_heights": [
+     0.254,
+     0.254,
+     0.254
+    ],
+    "shelf_partitions": [
+     [],
+     [],
+     []
+    ],
+    "shelf_thickness": 0.0127,
+    "side_and_back_open": false
+   }
+  }
+ },
+ "regions": {
+  "ground_cupboard_init_region": {
+   "target": "ground",
+   "ranges": [
+    [
+     1.5,
+     0.0,
+     1.5,
+     0.0
+    ]
+   ],
+   "yaw_ranges": [
+    [
+     90,
+     90
+    ]
+   ]
+  },
+  "ground_1_object_init_region": {
+   "target": "ground",
+   "ranges": [
+    [
+     0.5,
+     -0.2,
+     0.7,
+     0.2
+    ]
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "robot_0_task_init_region": {
+   "target": "ground",
+   "ranges": [
+    [
+     -0.1,
+     -0.1,
+     0.1,
+     0.1
+    ]
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "target_region_1": {
+   "target": "cupboard_1",
+   "shelf": 2,
+   "ranges": [
+    [
+     -0.17,
+     0.085,
+     0.0,
+     -0.11,
+     0.105,
+     0.03
+    ]
+   ],
+   "rgba": [
+    1.0,
+    1.0,
+    0.0,
+    0.3
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "free_region_1": {
+   "target": "cupboard_1",
+   "shelf": 2,
+   "ranges": [
+    [
+     -0.01,
+     0.085,
+     0.0,
+     0.05,
+     0.105,
+     0.03
+    ]
+   ],
+   "rgba": [
+    0.0,
+    1.0,
+    1.0,
+    0.3
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "free_region_2": {
+   "target": "cupboard_1",
+   "shelf": 2,
+   "ranges": [
+    [
+     0.13,
+     0.085,
+     0.0,
+     0.19,
+     0.105,
+     0.03
+    ]
+   ],
+   "rgba": [
+    0.0,
+    1.0,
+    1.0,
+    0.3
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  },
+  "blocker1_init_region": {
+   "target": "cupboard_1",
+   "shelf": 2,
+   "ranges": [
+    [
+     -0.16,
+     0.088,
+     0.0,
+     -0.12,
+     0.1,
+     0.03
+    ]
+   ],
+   "rgba": [
+    1.0,
+    0.0,
+    0.0,
+    0.3
+   ],
+   "yaw_ranges": [
+    [
+     0,
+     0
+    ]
+   ]
+  }
+ },
+ "objects": {
+  "cube": {
+   "cube_target1": {
+    "size": 0.02,
+    "rgba": [
+     0.1,
+     0.5,
+     0.1,
+     1
+    ],
+    "mass": 0.1
+   },
+   "cube_blocker1": {
+    "size": 0.035,
+    "rgba": [
+     0.5,
+     0.1,
+     0.1,
+     1
+    ],
+    "mass": 0.1
+   }
+  }
+ },
+ "cameras": {
+  "agentview_1": {
+   "position": [
+    -1,
+    1,
+    2
+   ],
+   "lookat": [
+    2,
+    0,
+    0
+   ],
+   "fovy": 42,
+   "resolution": [
+    640,
+    480
+   ]
+  },
+  "task_view": {
+   "position": [
+    -1,
+    1,
+    2
+   ],
+   "lookat": [
+    2,
+    0,
+    0
+   ],
+   "fovy": 42,
+   "resolution": [
+    640,
+    480
+   ]
+  }
+ },
+ "initial_state": [
+  [
+   "on",
+   "cupboard_1",
+   "ground_cupboard_init_region"
+  ],
+  [
+   "on",
+   "cube_target1",
+   "ground_1_object_init_region"
+  ],
+  [
+   "on",
+   "cube_blocker1",
+   "blocker1_init_region"
+  ],
+  [
+   "on",
+   "robot",
+   "robot_0_task_init_region"
+  ]
+ ],
+ "goal_state": [
+  [
+   "on",
+   "cube_target1",
+   "target_region_1"
+  ]
+ ]
+}

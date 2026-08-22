@@ -60,7 +60,7 @@ def train_lazy(
 
     domain = make_lazy_domain(env_variant)
     vocab = Vocab.from_json(domain.vocab_path)
-    spec = build_feature_spec(vocab)
+    spec = build_feature_spec(vocab, geom_dim=domain.geom_dim)
 
     t0 = time.perf_counter()
     train_structs = load_structs(
@@ -70,6 +70,7 @@ def train_lazy(
         domain.frame_extent,
         domain.shape_max,
         keep_strata=keep_strata,
+        env_variant=env_variant,
     )
     if tiny:
         # Stride across the split so the overfit gate spans strata (episodes are stored
@@ -83,6 +84,7 @@ def train_lazy(
         domain.frame_extent,
         domain.shape_max,
         keep_strata=keep_strata,
+        env_variant=env_variant,
     )
     if tiny:
         val_structs = train_structs  # overfit gate: val == train

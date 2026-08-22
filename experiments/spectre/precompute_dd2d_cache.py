@@ -58,7 +58,7 @@ import torch
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from alphatamp.approaches.spectre import eda
-from alphatamp.approaches.spectre.compare import stratum_of
+from alphatamp.approaches.spectre.compare import stratum_of as _compare_stratum_of
 from alphatamp.approaches.spectre.vocab import Vocab
 
 REPO = Path(__file__).resolve().parents[2]
@@ -226,6 +226,51 @@ _PIGINET_PATHS = {
         "cache": DERIVED_ROOT / "stickbutton2d_v2_kinder" / "clip_cache",
         "domain": "stickbutton2d",
     },
+    # ------------------------------------------------------------------------------ #
+    # Restock3D v2 (2026-08-19). The 3D packing env; `domain: "restock3d"` selects the
+    # oblique height-visible crop adapter (`baselines/piginet/restock_adapter.py`). The
+    # `{seed}` in the checkpoint path gives PIGINet a real seed axis (per-seed `piginet/
+    # seed_<n>/` cache), matching the 3-seed SPECTRE/LAZY rows; the CLIP cache is
+    # checkpoint-independent so all seeds share the one `piginet_clip_cache`. `data` is the
+    # SPECTRE data root: PIGINet builds its examples from the same EpisodeRecord pickles
+    # SPECTRE trains on (the restock adapter renders crops from the seed), so the labels are
+    # identical by construction.
+    "restock3d_v2": {
+        "ckpt": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v2"
+        / "piginet_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v2"
+        / "piginet_clip_cache",
+        "domain": "restock3d",
+    },
+    # restock3d_v3 (per-object dims, SYNTHETIC dataset). Same shape as v2; the restock adapter
+    # dispatches the crop reconstruction on env_variant (oracle_v3.build_v3_bundle).
+    "restock3d_v3": {
+        "ckpt": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v3"
+        / "piginet_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v3"
+        / "piginet_clip_cache",
+        "domain": "restock3d",
+    },
 }
 
 # Which SPECTRE-v2 deployed checkpoint a collection uses. The training run name encodes
@@ -304,12 +349,52 @@ _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
         "abl_cov_only": "checkpoints_spectre_abl_cov_only_s{seed}",
         "abl_waste_only": "checkpoints_spectre_abl_waste_only_s{seed}",
     },
+    # Restock3D trains SPECTRE with `--atom-mode profiles` (init-state + goal atoms ON),
+    # and `train.py` appends `_atoms` to the checkpoint sub-dir for that -- so the deployed
+    # arm lives at `checkpoints_spectre_atoms/restock3d_v2/seed_<s>/best.pt`, not the bare
+    # `checkpoints_spectre_unified` DD2D name. No ablation arms are trained here.
+    "restock3d_v2": {
+        "spectre3": "checkpoints_spectre_atoms",
+    },
+    # restock3d_v3 deploys the `--repeat-feats` arm (the F3 exact-step certificate), which
+    # revived a decisively-inert adaptivity: adaptive 3.13 vs the coverage-only fix-only
+    # 12.18, capturing ~97% of the P2 oracle ceiling (docs/notebook 2026-08-21). Its dir is
+    # `checkpoints_spectre_atoms_repeat/restock3d_v3/seed_<s>/best.pt` (train.py appends the
+    # `--out-suffix _repeat`). `regroup` is off/deprecated (adds nothing here).
+    "restock3d_v3": {
+        "spectre3": "checkpoints_spectre_atoms_repeat",
+    },
 }
 
 
 def _v3_arm_dir(arm: str, env_variant: str) -> str:
     """Checkpoint sub-dir for one v3 arm on one collection."""
     return _V3_ARM_OVERRIDES.get(env_variant, {}).get(arm, _V3_ARMS[arm])
+
+
+#: Single-feature-isolation ablation arms (2026-08-21). Deliberately kept OUT of `_V3_ARMS`:
+#: its keys are iterated for *every* non-`--no-ablations` collection, so putting them there
+#: would make a `dd2d_v4gen_*` or `restock3d_v2` run try (and fail) to load checkpoints those
+#: collections never trained. Instead these are merged into the spectre3 arm set for exactly
+#: the three target collections by `main()`, regardless of `--no-ablations`. The dir strings
+#: are env-independent (train.py inserts `/<env>/seed_<n>/`) and carry NO `{seed}` -- each arm
+#: is trained one seed at a time so one dir holds every `seed_<n>` subdir (the deployed
+#: convention). Each arm writes only `<prefix>_adaptive/` (ablations need no static twin). The
+#: per-arm feature flags (coverage/repeat/scene_3d/atom_mode/records) are read back off each
+#: checkpoint's saved cfg by `load_checkpoint`, so only the dir is registered here.
+_ABLATION_ISOLATION_ARMS: dict[str, str] = {
+    "abl_floor": "checkpoints_spectre_norec_atoms_abl_floor",
+    "abl_only_cov": "checkpoints_spectre_norec_atoms_abl_only_cov",
+    "abl_only_waste": "checkpoints_spectre_norec_atoms_abl_only_waste",
+    "abl_only_repeat": "checkpoints_spectre_norec_atoms_abl_only_repeat",
+    "abl_only_records": "checkpoints_spectre_atoms_abl_only_records",
+    "abl_all": "checkpoints_spectre_atoms_abl_all",
+}
+_ISOLATION_ARMS_BY_VARIANT: dict[str, dict[str, str]] = {
+    "dd2d_v4": _ABLATION_ISOLATION_ARMS,
+    "stickbutton2d_v1": _ABLATION_ISOLATION_ARMS,
+    "restock3d_v3": _ABLATION_ISOLATION_ARMS,
+}
 
 
 # Deploy-time diagnostic: the deployed checkpoint with its evidence memory emptied at
@@ -354,6 +439,34 @@ CACHE_DIR = (
 )
 N_PROBLEMS = 140
 
+# Collections that restrict the comparison to a subset of their strata. restock3d_v2 has
+# its 2x2 (banding stratum 0), 3x3 (stratum 1) and 4x3 (stratum 3) sections collected +
+# evaluated; the remaining crowded strata (3x4 = stratum 2, 4x4 = stratum 4) are still
+# collecting, and their partial stragglers on disk are excluded here so the cache -- and
+# therefore the notebook's per-stratum table and its stratum-blind "ALL" -- contains only
+# {0, 1, 3}.
+_STRATA_KEEP_BY_VARIANT: dict[str, set[int]] = {
+    "restock3d_v2": {0, 1, 3},
+}
+#: Rebound per-variant by ``_configure_paths``; ``None`` (DD2D/SB2D) keeps every stratum.
+_STRATA_KEEP: "set[int] | None" = None
+
+
+def stratum_of(pid) -> int:
+    """Stratum stamped into every cache JSON, v2-aware.
+
+    Wraps ``compare.stratum_of`` with the active ``ENV_VARIANT`` so a 5-stratum
+    collection (restock3d_v2) is decoded by its own banding rather than the shared
+    4-stratum arithmetic, which would collapse its 2x2 and 3x3 sections into one
+    stratum.
+    """
+    return _compare_stratum_of(int(pid), ENV_VARIANT)
+
+
+def _keep_pid(pid) -> bool:
+    """False for a problem outside a strata-restricted collection's kept strata."""
+    return _STRATA_KEEP is None or stratum_of(int(pid)) in _STRATA_KEEP
+
 
 def _count_test_problems(test_dir: Path) -> int:
     """Test-split episode count — drives ``_dir_complete`` and ``meta.json``.
@@ -362,8 +475,15 @@ def _count_test_problems(test_dir: Path) -> int:
     module before the collection exists).
     """
     eps = test_dir / "episodes"
-    n = len(list(eps.glob("*.pkl.gz"))) if eps.is_dir() else 0
-    return n or 140
+    if not eps.is_dir():
+        return 140
+    files = list(eps.glob("*.pkl.gz"))
+    if _STRATA_KEEP is not None:
+        # Count only the kept strata (restock3d_v2 -> {0,1}); the pid is the integer in the
+        # filename (``ep_<pid>.pkl.gz``), so ``_dir_complete`` matches the filtered writers.
+        _pid = lambda f: int(re.search(r"\d+", f.stem).group())  # noqa: E731
+        files = [f for f in files if _keep_pid(_pid(f))]
+    return len(files) or 140
 
 
 def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
@@ -378,7 +498,7 @@ def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
     """
     global ENV_VARIANT, CKPT_VARIANT, SPECTRE_TEST, VOCAB_PATH, CKPT_DIR, V2_CKPT_DIR
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
-    global CACHE_DIR, N_PROBLEMS, REFINE_CAP_S
+    global CACHE_DIR, N_PROBLEMS, REFINE_CAP_S, _STRATA_KEEP
     ckpt_variant = ckpt_variant or env_variant
     known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)
     for _v, _flag in ((env_variant, "--test-variant"), (ckpt_variant, "--env-variant")):
@@ -389,6 +509,9 @@ def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
             )
     ENV_VARIANT = env_variant
     CKPT_VARIANT = ckpt_variant
+    # A strata-restricted collection (restock3d_v2 -> {0,1}) filters both the counted test
+    # problems and every cache writer. Set before N_PROBLEMS so `_dir_complete` matches.
+    _STRATA_KEEP = _STRATA_KEEP_BY_VARIANT.get(env_variant)
     # --- from the TEST/episode variant: what is scored and where the cache is written ---
     SPECTRE_TEST = REPO / "data" / "spectre" / "raw" / env_variant / "test"
     CACHE_DIR = REPO / "data" / "spectre" / "derived" / env_variant / "compare_cache"
@@ -501,6 +624,21 @@ _REFINE_CAP_S: dict[str, float] = {
     # b5-correct-size collection (SB2D matched full control).
     "stickbutton2d_v2": 10.0,
     "stickbutton2d_v2_kinder": 10.0,
+    # Restock3D: refinement is real PyBullet motion planning, so feasible candidates run
+    # tens of seconds while dead-ends run to the crowded strata's ~80-113 s r_cap. Over the
+    # strata-{0,1,3} test set the per-problem fastest-feasible tops out at 53.9 s (the 4x3
+    # stratum; 2x2 32 s / 3x3 45 s), so 55 s sits just above it (`_feasibility_at_risk(55)
+    # == 0`, 0 censored) while still cutting ~76% of candidate refines (the budget-
+    # exhausting failures). Was 50 s on {0,1} alone; raised when 4x3 (stratum 3) landed,
+    # whose slower feasibles would otherwise censor 9 problems at 50 s. Same principle as
+    # SB2D's 10 s.
+    "restock3d_v2": 55.0,
+    # restock3d_v3 wall-clock is SYNTHETIC (analytic dataset): a feasible candidate costs
+    # U[0.6,0.8]*r_cap (max 0.8*110 = 88 s on n=9), a fail costs the full r_cap (50/70/90/110).
+    # 90 s sits just above the max synthetic-feasible (`_feasibility_at_risk(90) == 0`, no
+    # feasible censored) while still cutting the n=9 dead-ends (110 s). The §2b numbers here are
+    # not real measurements -- see the RESTOCK3D_V3 EnvSpec caveats.
+    "restock3d_v3": 90.0,
 }
 # Rebound per-variant by `_configure_paths`; the module default keeps the historical dd2d
 # behaviour for any variant not listed above.
@@ -538,6 +676,8 @@ def _feasibility_at_risk(cap: float) -> int | None:
     n_at_risk = 0
     saw_times = False
     for ep in eda.load_split_episodes(SPECTRE_TEST).episodes:
+        if not _keep_pid(int(ep.provenance.problem_id)):
+            continue  # a strata-restricted collection scores only its kept problems
         feas = [
             float(o.refinement_wall_clock_s or 0.0)
             for o in ep.outcomes
@@ -674,6 +814,8 @@ def cache_astar(force: bool) -> None:
     n = 0
     for ep in test.episodes:
         pid = int(ep.provenance.problem_id)
+        if not _keep_pid(pid):
+            continue
         labels = [1 if o.outcome == "success" else 0 for o in ep.outcomes]
         scores = [float(-j) for j in range(len(ep.outcomes))]  # ascending plan_idx
         order = _static_order(scores)
@@ -741,6 +883,12 @@ def cache_piginet(force: bool, device: str) -> None:
 
             # Factory picks the crop source by variant (kinder PNGs vs schematic).
             domain = make_sb2d_domain(str(PIGINET_DATA), ENV_VARIANT)
+        elif PIGINET_DOMAIN == "restock3d":
+            from alphatamp.approaches.spectre.baselines.piginet.restock_adapter import (
+                make_restock_domain,
+            )
+
+            domain = make_restock_domain(str(PIGINET_DATA), ENV_VARIANT)
         _t0 = time.perf_counter()
         rows, _thr, _temp = score_split(
             str(ckpt),
@@ -768,6 +916,8 @@ def cache_piginet(force: bool, device: str) -> None:
         for pid_str, triples in by_pid.items():
             triples.sort(key=lambda t: t[0])  # order by plan_idx
             pid = int(pid_str.split("_s")[-1])
+            if not _keep_pid(pid):
+                continue
             scores = [t[2] for t in triples]
             ep = ep_by_pid.get(pid)
             order = _static_order(scores)
@@ -960,7 +1110,12 @@ def cache_spectre3(
     (proof-tier demotion was cut on 2026-07-30), so nothing outside the network reorders
     the pool.
     """
-    from alphatamp.approaches.spectre.dataset import build_example, collate
+    from alphatamp.approaches.spectre.dataset import (
+        atom_emission,
+        build_example,
+        collate,
+        pointset_emission,
+    )
     from alphatamp.approaches.spectre.domain import spec_for
     from alphatamp.approaches.spectre.inference import (
         deployed_rollout_traced,
@@ -973,7 +1128,11 @@ def cache_spectre3(
     # dd2d-gen run (both resolve to `_DD2D`), but correct if they ever diverge.
     spec = spec_for(CKPT_VARIANT)
     test = _RawSplit(SPECTRE_TEST)  # raw: `build_example` canonicalizes
-    episodes = [ep for ep in test.episodes if ep.scene_geometry is not None]
+    episodes = [
+        ep
+        for ep in test.episodes
+        if ep.scene_geometry is not None and _keep_pid(int(ep.provenance.problem_id))
+    ]
 
     for prefix, ckpt_subdir in arms.items():
         want_static = prefix in static_arms
@@ -997,6 +1156,22 @@ def cache_spectre3(
                 )
                 continue
             model, deploy = load_checkpoint(ckpt, vocab, device)
+            # Scene/atom emission is a property of the checkpoint, not `deploy`: a 3D
+            # (point_dim==3) model must be fed point clouds + the atoms it trained on, or
+            # the tensorizer emits 2D and the PointSetEncoder gets `None`. `deployed_
+            # rollout_traced` derives this from `model.cfg`; the warmup and static paths
+            # below must do the same or they desync on restock3d (scene_3d) / atom models.
+            _scene_3d = getattr(model.cfg, "point_dim", 2) == 3
+            _ps_feats, _ps_pca, _ps_k = pointset_emission(model.cfg, _scene_3d)
+            _emit_init, _emit_goal = atom_emission(model.cfg)
+            _emit = dict(
+                scene_3d=_scene_3d,
+                pointset_feats=_ps_feats,
+                use_pca_feats=_ps_pca,
+                edgeconv_k=_ps_k,
+                emit_init_atoms=_emit_init,
+                emit_goal_atoms=_emit_goal,
+            )
             # Warm up so one-time CUDA init/autotune does not land in the first problem's
             # measured inference time (no-op cost on cpu).
             if episodes and device.startswith("cuda"):
@@ -1009,6 +1184,7 @@ def cache_spectre3(
                     augment_tags=False,
                     spec=spec,
                     **deploy,
+                    **_emit,
                 )
                 _wb = collate(
                     [_wex], max_arity=vocab.max_operator_arity, records=[_wr]
@@ -1032,6 +1208,7 @@ def cache_spectre3(
                         augment_tags=False,
                         spec=spec,
                         **deploy,
+                        **_emit,
                     )
                     batch = collate(
                         [ex], max_arity=vocab.max_operator_arity, records=[recs]
@@ -1125,12 +1302,20 @@ def cache_lazy(force: bool, device: str) -> None:
     from alphatamp.approaches.spectre.baselines.lazy.graph import build_feature_spec
 
     vocab = Vocab.from_json(VOCAB_PATH)
-    spec = build_feature_spec(vocab)
     # Scales are family-based (dd2d cm vs sb2d config), so the scored (ENV) variant is fine;
     # the vocab/model come from CKPT_VARIANT above (train-old / test-new safe).
     domain = make_lazy_domain(ENV_VARIANT)
+    # geom_dim tracks the domain (restock3d = 9 with the height feature; DD2D/SB2D = 8), so
+    # the eval graph features match what the checkpoint was trained on.
+    spec = build_feature_spec(vocab, geom_dim=domain.geom_dim)
     structs = load_structs(
-        SPECTRE_TEST, vocab, spec, domain.frame_extent, domain.shape_max
+        SPECTRE_TEST,
+        vocab,
+        spec,
+        domain.frame_extent,
+        domain.shape_max,
+        keep_strata=_STRATA_KEEP,
+        env_variant=ENV_VARIANT,
     )
 
     for seed in SEEDS:
@@ -1287,6 +1472,11 @@ def main() -> None:
                 # `suppress` needs a `v3final`-named checkpoint this collection never
                 # trained, so it is skipped here.
                 suppress = {}
+        # Adaptive-feature ablation arms (2026-08-21): merged in for the three target
+        # collections regardless of `--no-ablations` (restock3d_v3 is cached with it), but
+        # never for an explicit `--v3-arm` ad-hoc run.
+        if not args.v3_arm:
+            arms.update(_ISOLATION_ARMS_BY_VARIANT.get(CKPT_VARIANT, {}))
         _assert_same_selector({**arms, **suppress})
         _warn_if_undertrained({**arms, **suppress})
         cache_spectre3(args.force, args.device, arms)

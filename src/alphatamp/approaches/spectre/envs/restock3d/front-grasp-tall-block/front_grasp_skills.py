@@ -126,6 +126,50 @@ PLACE_BASE_DISTANCE = 0.8
 PICK_STANDOFF = 0.12
 
 
+def front_grasp_transform(
+    pitch_from_vertical_deg: float,
+    grip_height_offset: float,
+    grip_backoff: float,
+) -> Pose:
+    """Build an object-frame -> EE front-grasp transform, parameterized.
+
+    ``pitch_from_vertical_deg`` (beta) tilts the tool approach axis (tool +z) in
+    the y-z plane: beta=0 is straight top-down (tool +z -> world -z), beta=90 is
+    fully horizontal toward the shelf (tool +z -> world +y), beta=45 reproduces
+    the original tall-block diagonal. The orientation is a pure ``Rx(beta-180)``,
+    which leaves tool +x fixed at world +x, so the fingers always straddle the
+    object's +/-x faces regardless of pitch.
+
+    The tool origin is placed at the object-frame contact point
+    ``(0, 0, grip_height_offset)`` (a height above the object center) and then
+    backed off ``grip_backoff`` along the -approach axis, so the invisible EE
+    marker box overlaps the object and the fingers reach it. Objects spawn at
+    identity, so the object frame coincides with the world frame at grasp time.
+
+    ``front_grasp_transform(45, 0.037, 0.0283)`` reproduces the tall-block
+    constant ``FRONT_GRASP_TRANSFORM_TO_OBJECT`` (kept as a literal below so the
+    tall-block path is byte-for-byte unchanged).
+    """
+    beta = np.radians(pitch_from_vertical_deg)
+    position = (
+        0.0,
+        -grip_backoff * np.sin(beta),
+        grip_height_offset + grip_backoff * np.cos(beta),
+    )
+    # Pure roll about world x by (beta - 180) deg -> tool +z tilts from straight
+    # down (beta=0) toward +y (beta=90); tool +x stays world +x.
+    return Pose.from_rpy(position, (beta - np.pi, 0.0, 0.0))
+
+
+# Calibration for the SHORT 5cm cube (half-extents 0.025^3), found by a
+# pitch x grip-height x standoff sweep (see SWEEP_FINDINGS.md): keep the tall
+# block's 45-deg front orientation, but grasp the cube's CENTER (grip_height=0)
+# because it is short, and keep the same standoff. Verified 12/12 full
+# pick->place across 12 seeds, single attempt, no retries.
+SMALL_CUBE_FRONT_GRASP_TRANSFORM = front_grasp_transform(45.0, 0.0, 0.02)
+SMALL_CUBE_PICK_DISTANCE_BOUNDS = (0.70, 0.75)
+
+
 class FrontGroundPickController(GroundPickController):
     """Pick a block with a front grasp (diagonal approach), fingers on +/-x.
 
@@ -135,12 +179,22 @@ class FrontGroundPickController(GroundPickController):
     config tends to fail because the goal config sits against the block/ground).
     """
 
-    def __init__(self, objects, sim: ObjectCentricShelf3DEnv) -> None:
+    def __init__(
+        self,
+        objects,
+        sim: ObjectCentricShelf3DEnv,
+        grasp_transform: Pose = FRONT_GRASP_TRANSFORM_TO_OBJECT,
+        pick_distance_bounds: tuple[float, float] = FRONT_PICK_DISTANCE_BOUNDS,
+    ) -> None:
         super().__init__(objects, sim)
+        # Override the inherited top-down grasp with the (parameterized) front
+        # grasp. Defaults reproduce the original tall-block calibration exactly.
+        self._grasp_transform = grasp_transform
+        self._pick_distance_bounds = pick_distance_bounds
 
     def sample_parameters(self, x, rng: np.random.Generator):
         assert isinstance(x, Shelf3DObjectCentricState)
-        distance = rng.uniform(*FRONT_PICK_DISTANCE_BOUNDS)
+        distance = rng.uniform(*self._pick_distance_bounds)
         rot = rng.uniform(*FRONT_PICK_ROT_BOUNDS)
         return np.array([distance, rot])
 
@@ -237,7 +291,7 @@ class FrontGroundPickController(GroundPickController):
                     self.objects[1].name
                 )
                 target_end_effector_pose = multiply_poses(
-                    target_grasp_pose_world, FRONT_GRASP_TRANSFORM_TO_OBJECT
+                    target_grasp_pose_world, self._grasp_transform
                 )
                 joint_plan = self._front_plan_grasp_approach(target_end_effector_pose)
                 self._current_arm_joint_plan = joint_plan[1:]
@@ -319,9 +373,9 @@ class FrontGroundPickController(GroundPickController):
 class FrontGroundPlaceController(GroundPlaceController):
     """Place a block into a shelf cell without rotating it (translate-only).
 
-    Overrides only the pose-building portion of the base ``step()``; the
-    ``navigate`` / ``pre_place`` (straight-line reach-in) / ``open_gripper`` /
-    ``lift`` phases are inherited unchanged from the stock ``BasePlaceController``.
+    Overrides only the pose-building portion of the base ``step()``; the ``navigate`` /
+    ``pre_place`` (straight-line reach-in) / ``open_gripper`` / ``lift`` phases are
+    inherited unchanged from the stock ``BasePlaceController``.
     """
 
     def _target_board_top_z(self) -> float:
@@ -425,15 +479,30 @@ class FrontGroundPlaceController(GroundPlaceController):
 def create_front_lifted_controllers(
     action_space: Kinematic3DRobotActionSpace,
     sim: ObjectCentricShelf3DEnv,
+    grasp_transform: Pose = FRONT_GRASP_TRANSFORM_TO_OBJECT,
+    pick_distance_bounds: tuple[float, float] = FRONT_PICK_DISTANCE_BOUNDS,
 ) -> dict[str, LiftedParameterizedController]:
-    """Create the front-grasp pick + translate-only place lifted controllers."""
+    """Create the front-grasp pick + translate-only place lifted controllers.
+
+    ``grasp_transform`` / ``pick_distance_bounds`` default to the tall-block
+    calibration. Pass overrides (e.g. from :func:`front_grasp_transform`) to
+    retarget the front grasp to a differently-sized object such as a short cube.
+    The place controller needs no override: it rebuilds the EE pose from the
+    grasp transform actually recorded at pick time, so it follows whatever pitch
+    the pick used.
+    """
     del action_space
 
     class PickController(FrontGroundPickController):
         """Front pick controller bound to the sim."""
 
         def __init__(self, objects):
-            super().__init__(objects, sim)
+            super().__init__(
+                objects,
+                sim,
+                grasp_transform=grasp_transform,
+                pick_distance_bounds=pick_distance_bounds,
+            )
 
     class PlaceController(FrontGroundPlaceController):
         """Front place controller bound to the sim."""
@@ -447,8 +516,8 @@ def create_front_lifted_controllers(
         [robot, target],
         PickController,
         Box(
-            low=np.array([FRONT_PICK_DISTANCE_BOUNDS[0], FRONT_PICK_ROT_BOUNDS[0]]),
-            high=np.array([FRONT_PICK_DISTANCE_BOUNDS[1], FRONT_PICK_ROT_BOUNDS[1]]),
+            low=np.array([pick_distance_bounds[0], FRONT_PICK_ROT_BOUNDS[0]]),
+            high=np.array([pick_distance_bounds[1], FRONT_PICK_ROT_BOUNDS[1]]),
         ),
     )
 

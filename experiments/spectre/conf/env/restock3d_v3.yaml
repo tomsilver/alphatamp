@@ -1,0 +1,11 @@
+# Restock3D v3 (per-object widths + heights near the short/tall cutoff) — the SYNTHETIC collection.
+#
+# Four block-count strata n=6/7/8/9 at 100 train / 25 val / 25 test each (400/100/100), pooled
+# under the stratum-encoded problem ids of envs/restock3d/strata_v3.py (v3 rides the SHARED 4-band,
+# so compare.stratum_of decodes it with no routing edit — unlike v2's 5-stratum local band).
+# Driven by experiments/spectre/restock3d_v3_collect.py (analytic refiner + synthetic wall-clock);
+# `env_variant` selects the on-disk layout and `env_id` lets spectre_build_vocab.py resolve (vocab
+# is over the fixed op/pred/type set, so any registered v3 stratum id works — vocab does not stratify).
+env_id: "spectre/Restock3Dv3-r0-v0"
+env_variant: "restock3d_v3"
+model_name: "restock3d_v3"

@@ -96,8 +96,8 @@ def test_coverage_mode_zeroes_one_column_and_leaves_the_other_exact() -> None:
 def test_coverage_mode_is_inert_at_empty_context() -> None:
     """Both columns are 0 at |F|=0 regardless of mode, so the first attempt is static.
 
-    This is what makes the coverage features a purely *adaptive* signal: nothing has been
-    observed yet, so there is nothing for them to say.
+    This is what makes the coverage features a purely *adaptive* signal: nothing has
+    been observed yet, so there is nothing for them to say.
     """
     episode, vocab, _ = _episode_with_evidence()
     for mode in ("both", "coverage", "waste"):
@@ -110,9 +110,8 @@ def test_coverage_mode_is_inert_at_empty_context() -> None:
 def test_coverage_mode_default_is_exact_absence() -> None:
     """Omitting the flag reproduces the pre-flag behaviour byte for byte.
 
-    Every v3 feature is config-gated so that *off* is exactly the older model (D-8);
-    a new knob that perturbed the default would retire the equivalence oracle by
-    accident.
+    Every v3 feature is config-gated so that *off* is exactly the older model (D-8); a
+    new knob that perturbed the default would retire the equivalence oracle by accident.
     """
     episode, vocab, ctx = _episode_with_evidence()
     explicit = _overlap(episode, vocab, ctx, "both")
@@ -195,6 +194,8 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         "aggregate_records",
         "coverage_feats",
         "coverage_mode",
+        "repeat_feats",
+        "regroup_feats",
         "state_delta",
     }
     # the deployed arm: jaccard overlap, coverage on, both columns
@@ -203,3 +204,6 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     assert deploy["aggregate_records"] is True
     assert deploy["coverage_mode"] == "both"
     assert deploy["state_delta"] is False
+    # repeat/regroup default off for a checkpoint trained without them (this arm)
+    assert deploy["repeat_feats"] is False
+    assert deploy["regroup_feats"] is False

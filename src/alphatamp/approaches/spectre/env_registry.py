@@ -40,6 +40,20 @@ _STICK_BUTTON_ENTRY_POINT = "kinder.envs.kinematic2d.stickbutton2d:StickButton2D
 _RESTOCK3D_ENTRY_POINT = (
     "alphatamp.approaches.spectre.envs.restock3d.kinematic_env:Restock3DEnv"
 )
+_RESTOCK3D_V2_ENTRY_POINT = (
+    "alphatamp.approaches.spectre.envs.restock3d.kinematic_env:Restock3DV2Env"
+)
+_RESTOCK3D_V3_ENTRY_POINT = (
+    "alphatamp.approaches.spectre.envs.restock3d.kinematic_env:Restock3DV3Env"
+)
+# v3 per-object-dims SPECTRE strata (banding stratum == recipe key, 0-3). One gym id per stratum;
+# pooled into ``restock3d_v3`` by problem-id band (the shared 4-stratum band).
+_RESTOCK3D_V3_STRATA = (0, 1, 2, 3)
+# v2 continuous-packing SPECTRE strata (committed generator.STRATA keys 10-15). 10-13 =
+# pilot 1x1..4x4; 14/15 = the full collection's asymmetric 3x4/4x3. One gym id per stratum;
+# pooled into ``restock3d_v2_pilot`` (10-13) / ``restock3d_v2`` (11,12,14,15,13) by problem-id
+# band.
+_RESTOCK3D_V2_PILOT_STRATA = (10, 11, 12, 13, 14, 15)
 
 
 # Per-type augmentation policy tables for SPECTRE Φ training-time
@@ -112,6 +126,16 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     # problem-id band). One augmentation policy across strata (movables interchangeable, regions
     # section-semantic).
     "restock3d_v1": _RESTOCK3D_TYPE_AUG_POLICY,
+    # restock3d_v2_pilot: the continuous-packing v2 SPECTRE pilot (1x1..4x4 configs). Same
+    # movable interchangeability; v2 has no region state objects, so the `region` entry is
+    # simply unused.
+    "restock3d_v2_pilot": _RESTOCK3D_TYPE_AUG_POLICY,
+    # restock3d_v2: the full continuous-packing v2 SPECTRE collection (2x2/3x3/3x4/4x3/4x4,
+    # 250/75/75). Same policy as the pilot -- v2 has no region state objects.
+    "restock3d_v2": _RESTOCK3D_TYPE_AUG_POLICY,
+    # restock3d_v3: per-object widths + heights near the cutoff (4 strata). Same movable
+    # interchangeability; no region state objects.
+    "restock3d_v3": _RESTOCK3D_TYPE_AUG_POLICY,
 }
 
 
@@ -194,17 +218,32 @@ def stick_button_variants(button_counts: range | list[int]) -> list[ExtraVariant
 
 
 def register_restock3d_envs() -> None:
-    """Register ``spectre/Restock3D-r{0..3}-v0`` (our kinematic env, not a kinder family).
+    """Register ``spectre/Restock3D-r{0..3}-v0`` (our kinematic env, not a kinder
+    family).
 
     A ``spectre/`` prefix, so it cannot go through :class:`ExtraVariant` (which forces
-    ``kinder/``). One gym id per stratum (fixed object count within a stratum); pooled into
-    ``restock3d_v1`` by problem-id banding, exactly as StickButton2D's ``b{N}``.
+    ``kinder/``). One gym id per stratum (fixed object count within a stratum); pooled
+    into ``restock3d_v1`` by problem-id banding, exactly as StickButton2D's ``b{N}``.
     """
     for r in range(4):
         gid = f"spectre/Restock3D-r{r}-v0"
         if gid not in gymnasium.registry:
             gymnasium.register(
                 id=gid, entry_point=_RESTOCK3D_ENTRY_POINT, kwargs={"stratum": r}
+            )
+    # v2 continuous-packing pilot: one gym id per pilot stratum (10-13).
+    for r in _RESTOCK3D_V2_PILOT_STRATA:
+        gid = f"spectre/Restock3Dv2-r{r}-v0"
+        if gid not in gymnasium.registry:
+            gymnasium.register(
+                id=gid, entry_point=_RESTOCK3D_V2_ENTRY_POINT, kwargs={"stratum": r}
+            )
+    # v3 per-object-dims: one gym id per banding stratum (0-3).
+    for r in _RESTOCK3D_V3_STRATA:
+        gid = f"spectre/Restock3Dv3-r{r}-v0"
+        if gid not in gymnasium.registry:
+            gymnasium.register(
+                id=gid, entry_point=_RESTOCK3D_V3_ENTRY_POINT, kwargs={"stratum": r}
             )
 
 
@@ -213,8 +252,8 @@ def register_extra_envs(
 ) -> None:
     """Register kinder variants that are not registered by default.
 
-    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``; also always
-    registers the ``spectre/Restock3D-r{0..3}`` ids.
+    Safe to call multiple times. Defaults to ``ClutteredStorage2D-b{1..15}``; also
+    always registers the ``spectre/Restock3D-r{0..3}`` ids.
     """
     kinder.register_all_environments()
     register_restock3d_envs()

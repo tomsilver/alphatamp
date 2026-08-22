@@ -178,18 +178,20 @@ def _subsample(recs, k: int, rng):
 # --------------------------------------------------------------------------- #
 # dataset (grouped by problem)
 # --------------------------------------------------------------------------- #
-def _pid_stratum(pid) -> int:
-    """Stratum index (0-3) recovered from a problem id, matching ``compare.stratum_of``.
+def _pid_stratum(pid, env_variant=None) -> int:
+    """Stratum index recovered from a problem id, matching ``compare.stratum_of``.
 
     Both DD2D (``dd2d_..._s<seed>``) and StickButton2D (``sb2d_s<pid>``) ids end in
-    ``_s<int>``. StickButton2D examples carry no ``stratum`` in provenance (only
-    ``num_buttons``), so this pid-derived value is the one uniform source the held-out
-    training filter and the eval per-stratum breakdown both agree on.
+    ``_s<int>``, as does restock3d (``restock_s<pid>``). StickButton2D examples carry no
+    ``stratum`` in provenance (only ``num_buttons``), so this pid-derived value is the
+    one uniform source the held-out training filter and the eval per-stratum breakdown
+    both agree on. ``env_variant`` routes a 5-stratum collection (``restock3d_v2``) to
+    its own banding decoder; ``None`` keeps the shared 4-stratum path.
     """
     # Local import: ``compare`` imports ``piginet.eval``, so a top-level import is circular.
     from alphatamp.approaches.spectre.compare import stratum_of  # noqa: PLC0415
 
-    return stratum_of(int(str(pid).rsplit("_s", 1)[-1]))
+    return stratum_of(int(str(pid).rsplit("_s", 1)[-1]), env_variant)
 
 
 class PIGINetDataset(Dataset):
@@ -204,12 +206,17 @@ class PIGINetDataset(Dataset):
         seed=0,
         domain=None,
         keep_strata=None,
+        env_variant=None,
     ):
         self.n_max = n_max
         self.k = subsample_k
         self.cache = os.path.join(cache_dir, split)
         self.rng = np.random.default_rng(seed)
         self.domain = domain if domain is not None else DD2DDomain(data_root)
+        # Route the ``keep_strata`` filter's pid decoding to the right banding (5-stratum
+        # for restock3d_v2). Prefer the explicit arg; fall back to the domain's own
+        # ``env_variant`` when it exposes one (RestockDomain does).
+        self.env_variant = env_variant or getattr(self.domain, "env_variant", None)
         self.word_idx = {w: i for i, w in enumerate(self.domain.vocab)}
         keep = None if problem_ids is None else set(problem_ids)
         # Held-out-stratum training: keep only problems whose pid-derived stratum index is
@@ -224,7 +231,7 @@ class PIGINetDataset(Dataset):
                 self._build_group(pid, recs)
                 for pid, recs in self.domain.problems(split)
                 if (keep is None or pid in keep)
-                and (keep_s is None or _pid_stratum(pid) in keep_s)
+                and (keep_s is None or _pid_stratum(pid, self.env_variant) in keep_s)
             )
             if g is not None
         ]

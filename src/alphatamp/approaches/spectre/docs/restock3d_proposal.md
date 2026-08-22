@@ -1,543 +1,339 @@
-# Restock3D — Implementation Proposal (v0.1, 2026-08-13)
+# Restock3D — Environment Snapshot (`restock3d_v2`, current 2026-08-20)
 
-The third SPECTRE evaluation environment: 3D, TidyBot-compatible, built on the existing Shelf3D /
-KinDER infrastructure, designed to be hard for the baselines (astar, PIGINet, VLMPlan, LAZY) while
-feeding SPECTRE's evidence channels — and deployable on the physical lab shelf without altering its
-exterior dimensions.
+The third SPECTRE evaluation environment: a **3D, kinematic-PyBullet continuous-packing** task
+in which a mobile-base arm stores floor objects onto a two-section shelf. This file is a
+**current-state snapshot of the deployed `restock3d_v2` variant**, written against the code
+(`envs/restock3d/`), not against the older design docs — the implementation diverged
+substantially from the original 2026-08-13 proposal and again when v2 replaced the discrete
+region model.
 
-**Epistemic conventions** (per the project ledger discipline). Every load-bearing claim below is
-tagged:
-- **[E]** established — read from code/docs/assets or already demonstrated in operation;
-- **[D]** derived — follows from [E] facts by construction (e.g., the coverage-polarity analysis);
-- **[P]** registered prediction — falsifiable, with the probe that tests it named;
-- **[?]** unverified — an estimate or an assumption a probe must confirm before anything depends
-  on it.
+> **What this supersedes.** The original stage-gated proposal (MuJoCo/TidyBot substrate,
+> top-down grasp, discrete multi-slot shelf regions, F1 grasp-obstruction clutter) and the
+> intermediate **v1** as-built (kinematic PyBullet, single-object *discrete* regions,
+> `Place(obj,region)`/`InRegion`) are **history**. v1 still exists in the tree, frozen, and
+> coexists with v2 (`models.py`/`oracle.py`/`place_controller.py` untouched); but **v2 is what
+> is collected, trained, and evaluated.** The design/rationale history and the physical-shelf /
+> real-robot sizing live in the ledger and archive — see *History* at the end. Where this
+> snapshot and any older doc disagree, this snapshot wins for v2.
 
-This document is deliberately **stage-gated**: no phase begins until its gate's probes pass, and
-each gate names its fallback. The design is a hypothesis, not a commitment.
-
-## Status — original proposal + as-built record
-
-This file is the **original implementation proposal (v0.1, 2026-08-13; §1–§9 below)** *plus* this
-**as-built record**. The implementation **diverged substantially** from the proposal; **where they
-disagree this section is authoritative** and §1–§9 are retained only as design *rationale/history*
-(see the banner at §1). Full ledger:
-[`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
-2026-08-14 → 2026-08-17.
-
-## As built (current — 2026-08-17)
-
-**Substrate.** Kinematic **PyBullet** (the MuJoCo/TidyBot substrate of §1–§3 was superseded
-2026-08-14; its dynamics were soft-collision/teleport). Feasibility is decided by **real PyBullet
-collision** — the base env reverts colliding moves, and the pick/place motion planners fail when no
-collision-free solution exists — never a symbolic gate.
-
-**Scene — fully-lateral, three disjoint x-bands** (2026-08-17). Left→right along world x: a **buffer
-band** (x∈[−1.35,−0.90], inert), an **object band** (x∈[−0.80,−0.20], y∈[0.60,1.20]), and one
-**shelf** at (0.4, 1.4) with a **tall section** (bottom; surface z 0.29, clearance 0.34) and a **short
-section** (top; surface z 0.64, clearance 0.15) built from cumulative board gaps. Each section's front
-strip carries **single-object regions** (`region_0_i` tall / `region_1_i` short; metadata, not
-bodies). The holonomic SE2 mobile base (~0.55×0.51 m) parks ~0.72 m south of a front-grasp target, so
-it stays **south (y≤~0.55) of every object (y≥0.60)**: it slides laterally in a clear southern corridor
-and **never crosses the object field** — this is what makes the base collision-free.
-
-**Grasp/place — front grasp for everything.** All picks (cubes *and* tall blocks) use the **front
-grasp** (45°, fingers on ±x faces); the top-down pick is retired. All region places are
-**translate-only** (EE derived from the recorded grasp), so an object keeps its axis-aligned floor
-orientation and lands **upright** — a tall block stays upright (→ F3), a cube lands flat (fixing an
-earlier 45° tilt from the analytic place). **Strict base-collision enforcement is ON** with the
-shelf-only phase-through fallback removed: a boxed base fails (an intended refinement failure) rather
-than phasing through.
-
-**Generation — region rejection sampling** (replaces the fixed grid). Objects are sampled uniformly in
-the 0.6×0.6 object band, each claiming a **0.12 m exclusion radius**; object types (cube vs tall block)
-are assigned in **random order**; poses are **axis-aligned** (only xy sampled); **deterministic in
-seed** with reseed-on-failure.
-
-**Operators / predicates** (`models.py`). Types: robot, cube (every movable), region (symbolic).
-Predicates `HandEmpty, Holding, OnFloor, InRegion(cube,region), Stored`. `Pick(robot,target)` (pre
-`HandEmpty∧OnFloor`); `Place(robot,target,region)` (pre `Holding` **only — no `Clear`**, so
-single-object capacity and cell height are invisible to the planner). Goal = `Stored(o)` for every goal
-object. `PlaceBuffer`/`OnBuffer` and the buffer machinery are present but **inert** (`CLUTTER=0`).
-
-**Strata** (`STRATA` = `(n_small, n_tall, n_tall_reg, n_short_reg)`):
-
-| stratum | cubes | tall blocks | tall reg | short reg | slack (σ_tall, σ_short) | driver |
-|---|---|---|---|---|---|---|
-| r0 | 3 | 0 | 2 | 5 | (2, 4) | slack floor, ~0 FP |
-| r1 | 5 | 0 | 1 | 4 | (1, 0) | **F2** — zero short-slack: 5 cubes → 5 single-object regions (a tight perfect matching) |
-| r2 | 3 | 1 | 2 | 4 | (1, 2) | **F3** + F2 (a tall block present) |
-| r3 | 4 | 2 | 3 | 5 | (1, 2) | **all** — F2 + F3 + reach-over; the hard tail |
-
-**Failure taxonomy = F2 + F3 + reach-over** (F1 retired):
-- **F2 (over-assignment).** Placing a second object into a single-object region collides the resident.
-  The abstraction permits it (no `Clear`), so the planner emits it; refinement rejects it. r1's
-  zero-slack perfect matching is pure F2.
-- **F3 (tall-into-short).** An upright tall block placed into a short-section region overhangs and hits
-  the capping board; culprit-free, `proves_failure`.
-- **Reach-over (new — replaces F1).** The front grasp reaches **north over anything nearer** than the
-  target, so a goal south of another (within a ~0.12 m lateral corridor, when a tall block is involved)
-  blocks the farther goal's pick until it is cleared. The naive pick order fails refinement; the
-  oracle's **south-to-north (nearest-first)** order succeeds — the "far is harder" difficulty. (A
-  calibration sweep confirmed **no floor neighbour obstructs the front grasp at the grasp config**,
-  which is exactly why the proposal's top-down/±x F1 clutter could not be realised and was retired.)
-
-**Solvers / classifiers.** The **oracle** (`oracle.py`) builds a feasible skeleton — south-to-north
-pick order + a valid object→region assignment — and refines it (certifies sampled r0–r3 **4/4**). The
-**eager heuristic** (`eager_tables.py`) folds F2/F3 + a geometric **`reach_blockers`** relation into A*
-action costs so the informed order front-loads a feasible skeleton (first-feasible index 0 on r0–r2).
-The **`is_feasible_skeleton`** classifier accepts a skeleton iff no F2 reuse / no F3 / no uncleared
-reach-blocker — a non-refinement proxy used for K_max.
-
-**Coverage/waste (coverage revived; waste still degenerate).** The §1.2 worry — a pure
-height/capacity twist starves coverage/waste — is now **half-answered by the reach-over**. A reach-over
-pick failure is attributed by `reach_over_culprits` (`instrumented_refiner`, the geometric
-`_blocks_reach` relation shared with the eager `reach_blockers` table) to the un-cleared **south
-blockers** — class-1, actionable culprits (each is a goal that gets stored). So **coverage is live with
-the CORRECT polarity**: a south-to-north candidate that stores the blockers before re-picking the
-target *covers* them — coverage **1.00** vs **0.00** for a talls-first candidate
-(`restock3d_coverage_probe.py`). This is the opposite of F2, where coverage *inverts* (§2.3 / RP-3),
-because here "touching" the culprit means **clearing** it, not creating the hazard. **Waste stays
-degenerate**: the reach-over fix is a *reorder of goal-necessary picks*, not a discretionary relocation,
-so the superfluous set is empty (waste ≡ 0 on every candidate). Reviving waste too needs a **non-goal
-approach-corridor clutter** — a tall block in a target's −y approach that must be relocated to the
-(inert) buffer — the option set aside when blockers were dropped, still one flag away.
-
-**Calibration (deferred-collection tools).**
-- Oracle certification: **r0–r3 4/4** on sampled scenes under strict collision + no fallback.
-- **K_max** (plain-hff first-feasible × 1.2, n=8): r0 4, r1 83, r2 208; **r3 unenumerable** (7/8
-  censored past K=200 — F2+F3+reach-over compose). The reach-over-aware eager surfaces the feasible at
-  index 0 on r0–r2.
-- **cap_r** (per-candidate cap ≈ max feasible oracle time × 1.2, small samples): ~24–65 s, ~2–3× v1
-  from strict collision + front-grasp refinement.
-
-**How this diverges from §1–§9.** MuJoCo/TidyBot → kinematic PyBullet; top-down pick (front grasp
-"abandoned" in §1.2) → **front grasp for every pick**; F1 grasp-obstruction clutter (the coverage/waste
-carrier) → **retired**, replaced by the depth **reach-over**; multi-slot capacity strips (§3.6) →
-**single-object regions**; Config A/B cell-layout probes (§3.3) → a fixed single-shelf tall/short
-geometry; forward floor-staging + cupboard → the **fully-lateral 3-band** layout.
-
-**Deferred / open.** **Waste** — degenerate under reach-over-only (see above); reviving it needs the
-non-goal approach-corridor clutter (still one flag away); coverage itself is **already revived**. Full
-**collection + SPECTRE training**; learned baselines (PIGINet / VLMPlan / LAZY) and the
-`compare_envs` EnvSpec; **r3 enumerability** (larger K or a staged generator); a **precise
-cumulative/depth reach-over corridor** (the current `reach_blockers` is a safe but conservative proxy);
-optional removal of the inert buffer machinery; the dynamic-MuJoCo / real-robot phases (§5 D/R).
+Full ledger: [`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
+entries 2026-08-14 → 2026-08-20.
 
 ---
 
-> **⚠️ §1–§9 are the ORIGINAL proposal (2026-08-13), largely SUPERSEDED — see "As built" above for
-> what was actually implemented.** They are retained as design rationale/history: *why* a third
-> environment (§1.1), *why* the failure classes were chosen, and the physical-shelf sizing the
-> real-robot phase will still need. Known-stale relative to the as-built: the MuJoCo/TidyBot substrate,
-> the top-down grasp and F1 grasp-obstruction clutter (§2, §3.5) — replaced by the front grasp + the
-> depth reach-over; the multi-slot capacity model (§3.6) — regions are single-object; the Config A/B
-> cell-layout probes (§3.3); and the F1 coverage/waste carrier (§1.2, §2.3, RP-3/RP-4) — the **reach-over
-> now carries coverage** (correct polarity, verified), but **waste is still degenerate** until a
-> non-goal approach-clutter is added. Read §1–§9 for intent, the As-built section for reality.
+## 1. What it is, and why
 
-## 1. Background and rationale
+The robot must **store every goal object** — small cubes and tall blocks — onto a shelf split
+into a **tall bottom section** and a **short top section**. The abstraction says only *"pick it,
+place it on a shelf section"*; **whether a plan actually refines is decided by real PyBullet
+collision**, and it hinges on structure the abstraction cannot see:
 
-### 1.1 Why a third environment
+- **F3 (height mismatch)** — a tall block placed into the *short* section overhangs and hits the
+  capping board. The planner is free to emit `place_short(tall_block)`; refinement rejects it.
+- **F2 (continuous crowding / packing)** — a section is one continuous strip, not a set of slots.
+  Placing another object where the strip is already occupied collides a resident; a *full* strip
+  cannot fit another object at all. Capacity is emergent geometry, invisible above the abstraction.
+- **Reach-over (F4, depth)** — the front grasp reaches *north over* anything nearer than the
+  target, so a goal south of another (within a lateral corridor, with a tall block involved)
+  blocks the farther goal's pick until the nearer one is cleared. The naive pick order fails; the
+  **south-to-north (nearest-first)** order succeeds — "far is harder."
 
-SPECTRE's thesis is **failure-information utilization**: each within-episode refinement failure is
-turned into structured evidence (record tokens, culprit-derived coverage/waste, jaccard/dead
-overlaps) and the skeleton pool is re-scored against the accumulated failure context on every
-attempt. On DD2D and SB2D the adaptive increment is positive on both, and the entire margin over
-static rankers appears after the first observed failure [E, as_built §10.4].
-
-The third environment must do three jobs the current pair cannot:
-
-1. **3D + real robot.** A MuJoCo task matched to the physical TidyBot, closing the
-   real → sim → real story the paper needs.
-2. **A distinct structural stress.** Per the environment-selection criterion settled earlier:
-   *reuse the existing failure classes, but stress a structural property neither current
-   environment exercises.* The property chosen here is **self-inflicted culprits** — failures whose
-   blamed objects are in a hazardous configuration *because the plan itself put them there* —
-   which forces order-awareness and gives the record `state_delta` (deployed on a tie in 2D
-   [E, as_built §10.5]) a chance to be load-bearing.
-3. **A baseline↔oracle gap concentrated at the abstract level.** The task planner must produce
-   many goal-reaching skeletons that fail refinement for reasons an oracle with geometric
-   knowledge avoids — a large task space, not a hard sampling problem.
-
-### 1.2 Two designs already rejected, and why
-
-**Shelf-pick declutter** (blockers start on shelf goal regions; move them, then place targets).
-Requires picking *from* the shelf. The pick skills are top-down / ground-style with an
-`OnGround` precondition [E, capabilities §2/§3]; a front-facing grasp was attempted and abandoned
-after substantial unfruitful engineering. Rejected on cost. (Its *spirit* survives as an optional
-lever — §4.6 — with zero grasp engineering.)
-
-**Pure height/capacity twist** (short/tall cells, short/tall objects, nothing else). This is a
-fine hardness mechanism but **starves coverage and waste**, for two separable reasons, both
-checkable against `as_built.md` §6 [D]:
-
-- *Culprit degeneracy.* A `Place(tall, short_cell)` failure's collision witness is the shelf —
-  one monolithic pose-only body in both implementations [E]. Blaming it is formally admissible
-  (the shelf appears in Place's add effect, so it passes the actionable filter) but carries no
-  discrimination: `touch(c, shelf)` is every Place step of every candidate, so class-1 precedence
-  saturates. Routed instead as a **culprit-free exhausted record** ("burned queries are failed
-  means" [E]) the failure is legitimate evidence — but for the record/jaccard/dead channels only,
-  never coverage/waste.
-- *Empty waste denominator.* With a goal of "every object stored," backward relevance marks every
-  pick and place live; the superfluous set is empty and waste reads 0 on every candidate, always.
-  Waste — the stronger of the two features on DD2D [E] — would be structurally dead.
-
-The fix is compositional, not a feature redefinition: add **movable culprits** (pick-side clutter)
-and **discretionary steps** (relocations whose necessity is instance-dependent).
+So a task planner produces many goal-reaching skeletons that fail refinement for reasons an
+oracle with geometric knowledge avoids — a large *abstract* task space, not a hard sampling
+problem — which is exactly the regime SPECTRE's failure-conditioning targets. It also stresses a
+property DD2D/SB2D do not: **self-inflicted / order-dependent culprits** (a crowding or reach-over
+failure is blamed on objects the plan itself placed or left in the way).
 
 ---
 
-## 2. The environment
+## 2. Substrate and feasibility
 
-### 2.1 Scene and task
-
-A floor **staging area** (in the `lab2` scene, as in `Shelf3D-o2.json`) holds:
-
-- **N goal objects**: small cubes plus 0–3 **tall blocks**;
-- **M clutter blocks** (not named in the goal), some spawned adjacent to goal objects so that a
-  top-down grasp of the goal object collides with them.
-
-The **cupboard** (fixed exterior; §3) has its intermediate levels repositioned to create **short
-cells and one tall cell**, each layer split by partitions into 2–3 **compartments**. Each
-compartment's front strip is a named **region** — an abstract object with a pose and extent, so
-the `SceneEncoder`'s footprint path handles it like any other object [E — regions/partitions are
-existing `Cupboard` + task-JSON machinery; capabilities §3].
-
-**Goal:** `Stored(o)` for every goal object, where `Place(robot, o, region)` adds
-`{InRegion(o, region), Stored(o)}`. Assignment of objects to regions is free — that freedom is
-where the combinatorial task space lives. Heights and floor capacities are geometry, invisible
-above the abstraction line; that invisibility is where the false positives come from.
-
-**Operators.** `Pick(robot, obj)` unchanged (top-down, ground precondition — never violated by
-design, since nothing is ever retrieved from the shelf). `Place(robot, obj, region)` replaces the
-region-blind `Place(·, ·, shelf)`. No new skill *families*; the place controller is
-region-parameterized (§5), not re-invented.
-
-### 2.2 The three failure families and what each feeds
-
-| family | trigger | blame channel | feeds |
-|---|---|---|---|
-| **F1 grasp obstruction** (pick side) | top-down grasp sweep collides with adjacent clutter | class-1, movable, *pre-existing* culprits | coverage + waste, verbatim DD2D semantics |
-| **F2 crowding** (place side) | `Place(o, R)` collides with objects the *same plan* placed in R earlier | class-1, movable, **self-inflicted** culprits | record tokens, `state_delta`, jaccard — the novelty carrier |
-| **F3 height mismatch** | tall block under a short cell's ceiling — no valid sample exists | culprit-free exhausted query | record tokens, jaccard/dead |
-
-F1 exists to give coverage/waste their food with correct polarity: relocating blamed clutter is
-touch-before-match (covered), relocating unblamed clutter is an unjustified superfluous step
-(waste). F2 is the structurally new stress. F3 is the clean, sampler-exhaustible infeasibility
-that makes `proves_failure()` semantics available. In the dynamic phase, MuJoCo physics adds a
-free **class-2** family (a placement bumping a neighbor out of its region is a collateral
-deviation blaming the neighbor) — a bonus, explicitly not load-bearing [?].
-
-### 2.3 Registered design risk R1 — coverage polarity inverts on F2
-
-Derived directly from the §6 definitions [D]: for a crowding record (failed `Place(T, A)`,
-culprits = smalls the plan placed in A), class-1 index-precedence reads the **doomed order as
-covered** (the smalls are touched before the re-attempt — by the very placements that create the
-hazard) and the **tall-first fix as uncovered** (T's placement precedes any touch of the smalls).
-Reassignments read covered trivially via the bare-membership branch (every goal object is touched
-by every plan). Net: on the F2 family, coverage is expected to be an **anti-signal**, the same
-shape as the pre-fix SB2D tool anti-signal on waste.
-
-Position: **do not redesign coverage preemptively.** Coverage was the weaker feature on DD2D;
-F2's discrimination is carried by jaccard + culprit tags + order-carrying position embeddings +
-`state_delta`; F1 keeps coverage/waste correct where their polarity holds; and per-environment
-checkpoints mean a learned head can absorb a consistent within-environment sign. Probe P4
-measures the polarity per family. The contingency, if P4 demands it, has a principled
-domain-agnostic shape (a U3): *when a class-1 record's culprits appear in its own delta-added
-atoms, test entailment on those atoms instead of precedence* — which yields the correct polarity
-on the toy walk-through, and which must first pass a frozen-pool diff showing it is (or is
-acceptably not) a no-op on DD2D/SB2D. Gate, don't build.
+- **Kinematic PyBullet** (the MuJoCo/TidyBot substrate of the original proposal was superseded
+  2026-08-14; its dynamics were soft-collision/teleport). A holonomic SE2 mobile base
+  (~0.55×0.51 m) + arm; motion is planned by BiRRT.
+- **Feasibility = real collision, never a symbolic gate.** The base env reverts colliding moves;
+  the pick/place motion planners raise `TrajectorySamplingFailure` when no collision-free
+  solution exists. `Restock3DEnvConfig.check_base_collisions = True` — a boxed-in base **fails**
+  (an intended refinement failure) rather than phasing through.
 
 ---
 
-## 3. Geometry and sizing
+## 3. Scene layout — fully-lateral, three disjoint x-bands
 
-All numbers here are chosen against the **real** constraint set, not the kinematic marker
-abstraction — GRIPPERS.md is explicit that the kinematic grasp ignores width, so anything meant
-for hardware must be sized to the 2F-85 [E].
+Left→right along world x, three disjoint bands keep the base out of the object field
+(`kinematic_env.py`):
 
-### 3.1 Fixed quantities (the lab shelf)
-
-From `Shelf3D-o2.json` and the capabilities doc [E]:
-
-| quantity | value |
-|---|---|
-| interior length (width) | 0.602 m |
-| interior depth | 0.254 m |
-| Σ shelf_heights (vertical budget, exterior fixed) | 0.762 m |
-| board thickness | 0.0127 m |
-| current layout | `[0.254, 0.254, 0.254]`, surfaces ≈ z 0.01 / 0.28 / 0.54 / 0.80 |
-| cell clearance under current layout | ≈ 0.241 m |
-| **proven placement reach** | insertion at z ≈ 0.59 over the 0.54 surface — i.e., only the *top* interior cell is demonstrated [E] |
-
-The last row matters more than it looks: **every insertion height other than ≈0.59 is unverified
-territory** [?], which is why probe P2 (a reach/insertion map) gates the cell layout.
-
-### 3.2 The constraint system
-
-Let `c_s`, `c_t` be short/tall cell clearances (`clearance = shelf_height − 0.0127`), `H_s`,
-`H_t` object heights, `m_hand` the vertical margin the hand needs above a held object during
-horizontal insertion **[? — the single most important unknown; bounded by P2]**, and
-`m_inf ≈ 0.05` the infeasibility margin.
-
-1. `Σ shelf_heights = 0.762` (exterior fixed — the one thing we may not change).
-2. `H_s + m_hand ≤ c_s` — short objects placeable in short cells.
-3. `H_t ≥ c_s + m_inf` — talls **robustly** excluded from short cells. Written against the
-   *object's own height*, not the hand, so the infeasibility survives regardless of how
-   faithfully any simulator models the gripper [D]. This is what makes F3 clean.
-4. `H_t + m_hand ≤ c_t` — talls placeable in the tall cell.
-5. grasp-axis of every object ∈ [0.03, 0.05] m (proven sweet spot; hard cap ~0.07) [E].
-
-Existing operation gives one free bound: the current skill places 0.04 cubes into 0.241-clearance
-cells, so **`m_hand ≤ ~0.20` is established** [E]. Anything tighter needs P2.
-
-### 3.3 Two candidate cell layouts
-
-**Config B — two levels (safe under existing evidence).** Remove one intermediate board;
-`shelf_heights = [0.508, 0.254]` — tall cell at the bottom, short cell on top.
-
-- Clearances: `c_t ≈ 0.495`, `c_s ≈ 0.241`.
-- The short cell *is* the currently proven placement geometry (same clearance, insertion
-  z ≈ 0.59 ≈ the demonstrated pose) [E]. The tall cell's insertions sit at z ≈ 0.30–0.45,
-  nearer the floor than proven but with enormous headroom.
-- `H_t = 0.29` satisfies (3) with margin 0.05 and (4) with headroom 0.205 even at the known
-  worst-case `m_hand = 0.20`. **Config B is feasible using only established bounds** [D].
-- Cost: 2 layers → 4 regions (2 tall + 2 short compartments). Requires confirming a board may
-  physically be removed (G0-a).
-
-**Config A — three levels (more regions, gated on P2).** `shelf_heights = [0.356, 0.203, 0.203]`
-— tall cell bottom, two short cells above; surfaces ≈ z 0.01 / 0.37 / 0.57 / 0.77.
-
-- Clearances: `c_t ≈ 0.343`, `c_s ≈ 0.190`. `H_t = 0.24` (margin 0.05 over `c_s`).
-- Needs `m_hand ≤ 0.15` for the short cells and `≤ 0.103` for the tall cell — **both unverified**
-  [?]. Yields 6 regions.
-
-**Decision rule:** run P2 first. If P2 bounds `m_hand ≤ 0.10`, take Config A (more regions →
-larger assignment space). Otherwise take Config B. If P2 shows only the proven top cell is
-reachable at all, the height-mismatch family (F3) is dropped and difficulty falls back to
-partitions + capacity + clutter alone (§7, fallback FB-2).
-
-Both configs must snap to the physical shelf's actual pin positions — measured in G0-a, then
-mirrored into the JSON so sim and hardware match.
-
-### 3.4 Object specification
-
-| object | dims (m) | grasp axis | mass (kg) | role | notes |
-|---|---|---|---|---|---|
-| small cube | 0.04³ | 0.04 | 0.01–0.02 | goal | the proven MuJoCo size (`"size": 0.02` half-extent) [E] |
-| tall block | 0.05 × 0.05 × `H_t` | 0.05 | 0.03–0.06 | goal | `H_t` = 0.29 (B) / 0.24 (A); pads grip the top ~37.5 mm [E]; aspect ≤ 6:1 — if MuJoCo toppling is a problem, widen footprint to 0.06 (grasp 0.06 ≤ 0.07 cap) [?] |
-| tall clutter | 0.05 × 0.05 × 0.20 | 0.05 | 0.02 | blocker | deliberately the same *family* as tall goals so appearance alone doesn't reveal role |
-| wide box (optional) | 0.09 × 0.045 × 0.045 | 0.045 | 0.02 | goal | footprint-pressure knob for capacity tuning; grasps the short axis like the elongated kinematic blocks [E] |
-
-Carrying a 0.24–0.29 m block below the pinch site requires the retract/home trajectory to clear
-the floor — cheap check inside P2 [?].
-
-### 3.5 Blocking geometry (F1), from the 2F-85 numbers
-
-From GRIPPERS.md [E]: stroke 85 mm pad-to-pad → open pads' inner faces at ±42.5 mm from the
-grasp center, outer faces ≈ ±50 mm (pad thickness 6.4–8 mm); pad faces 22 × 37.5 mm; the
-knuckle/wrist body above the pads is wider still.
-
-Derived design rules [D over [E], envelopes to be calibrated in P1 against the actual collision
-meshes]:
-
-- an **equal-height neighbor** blocks a top-down grasp when its face is within ≈ **3 cm** of the
-  target's face along the grasp axis (it enters the descending finger sweep) [?];
-- **tall clutter** (≥ 0.15 m) blocks from much farther — within ≈ **8–10 cm** — by intersecting
-  the hand/wrist volume rather than the fingers [?]. Tall clutter is therefore the *primary*
-  blocker: robust to collision-mesh fidelity, and cheap to author (the `Shelf3D-o2.json` pattern
-  of tight per-object init regions already places objects adjacently [E]).
-
-**Implementation, kinematic phase:** the kinematic grasp is a 2×2×7 cm marker test that ignores
-all of this [E], so F1 is implemented as an explicit sampler-level validity check —
-`grasp_cfree_3d(target, others)`: a swept-volume box above and around the target, sized from the
-2F-85 envelope; intersecting objects → reject **and name**. This mirrors DD2D's `grasp_cfree`
-exactly (a validity check that already computes its witnesses — the same observation-only
-refactor pattern as before [E]), and it makes kinematic blocking match real geometry *by
-construction* rather than by physics.
-
-### 3.6 Capacity model
-
-Regions are single-row **front strips** (JSON `ranges` confine depth to ~0.12 of the 0.254 m) —
-depth-wise packing is excluded in v1 to keep strata labels clean (it becomes a difficulty
-escalator later, at the price of near-feasible traps). Slots per strip ≈
-`floor(W_strip / (obj_width + 0.025 sampler margin))`: a 0.29 m strip holds ~4 small cubes; a
-0.19 m strip (3-way partition) holds ~2–3. Partition widths are the free tightness knob — pure
-JSON config [E].
-
-Abstract feasibility of an assignment [D]: with `S_t`/`S_s` total slots in tall/short regions and
-`N_t`/`N_s` tall/small goal objects — feasible iff `N_t ≤ S_t` and `N_s ≤ S_s + (S_t − N_t)`,
-*and* orderable so that talls reach tall slots before smalls consume them. The valid-assignment
-fraction (measured in P3) is the astar-FP dial.
-
----
-
-## 4. Difficulty strata
-
-Four strata, mirroring the DD2D discipline (s0–s3 = minimum feasible subset size). The
-per-instance difficulty statistic is `d = (k, σ)` where `k` = minimum number of clutter
-relocations (oracle-computable from the blocking graph) and `σ = S_t − N_t` = tall-slot slack —
-both crisp, both enumerable at generation time, so strata are *labels on generated instances*,
-not hopes.
-
-| stratum | recipe (nominal, tuned by P3/P5) | active families | expected behavior |
-|---|---|---|---|
-| **r0** | `N_s`=3, `N_t`=0, `M`=0, slack everywhere (`k`=0, σ large) | none | every method ≈ 0 FP — the s0/b1 analog and the sanity floor |
-| **r1** | `N_s`=3–4, `N_t`=0, `M`=2–4 with `k` ∈ {1,2}; capacity slack | F1 | shortest skeletons move no clutter → astar defers exactly the plans blocked instances need; coverage/waste live |
-| **r2** | `N_s`=4–5, `N_t`=1–2, `M`=0, σ ∈ {0,1} | F2 + F3 | equal-length skeletons differ only in assignment/order → astar's ordering is tie-breaking noise over a small valid fraction |
-| **r3** | `N_s`=5–6, `N_t`=2, `M`=2–3, σ ≤ 1, `k` ≥ 1 | all | families compose; the headline stratum |
-
-The compositional structure doubles as attribution: per-stratum results show which failure family
-drives which method's failures — a figure DD2D/SB2D cannot produce.
-
-**Why the baselines struggle** [P, tested by P5 and the eventual comparison]:
-- **astar-dist**: length-blind to assignment (all clutter-free skeletons tie), and
-  systematically prefers relocation-free plans on r1/r3 — FP scales with the inverse
-  valid-assignment fraction.
-- **PIGINet**: must predict packing feasibility from the static initial state; the slack-holdout
-  stratum (train slack-rich, test σ ≤ 0 tight) is the analog of the DD2D s3 holdout where it
-  degraded ~9× [E for DD2D; P for transfer].
-- **LAZY**: a scalar online statistic cannot localize which (object, region) pair died.
-- **VLMPlan**: zero-shot combinatorial packing from an image, with heights partially occluded by
-  the cupboard frame.
-- **Static SPECTRE vs adaptive**: after `Place(T, R_short)` exhausts, only the adaptive path can
-  down-rank every candidate sharing the dead query → the after-first-failure decomposition
-  should reproduce [P].
-
----
-
-## 5. Implementation plan (stage-gated)
-
-### G0 — measurements and infra checks (≤ 1 day, mostly no code)
-
-- **G0-a** Measure the physical shelf: pin positions/increments; whether an intermediate board
-  can be *removed* (Config B legality). Snap §3.3 numbers to reality.
-- **G0-b** Confirm `primitive_objects.py` supports 3-axis box dims (tall blocks), not just cubic
-  `size` [?].
-- **G0-c** Confirm `shelf_partitions` JSON semantics end-to-end (builder → regions → 
-  `sample_pose_in_region`/`check_in_region`), using `ConstrainedCupboard3D` as the working
-  reference [E that the pieces exist; ? that they compose for this use].
-- **G0-d** (optional lever, §4.6→§5 note) Check whether grounding is reachability-pruned — if
-  so, immovable pre-placed shelf residents drop out of the actionable set, hence out of the
-  culprit pool `K`, by construction rather than special-casing [?].
-
-### Gate A — geometric feasibility probes (kinematic PyBullet, days)
-
-- **P1 — grasp-sweep blocking.** Implement `grasp_cfree_3d`; calibrate its envelope against the
-  gripper collision meshes; author jammed scenes (tall clutter at 3/6/9 cm gaps; equal-height at
-  1/2/3 cm) and verify rejection + correct witnesses. *Abort criterion:* if no density that the
-  instance generator can realistically produce yields blocking, F1 dies → **FB-1** (§7).
-- **P2 — reach/insertion map.** IK sweep of place insertions across candidate surface heights ×
-  object heights (0.04 / 0.24 / 0.29), including retract-with-tall-block floor clearance.
-  Output: an empirical `m_hand(z)` bound. *Decision:* Config A vs B (§3.3). *Abort:* only the
-  proven top cell reachable → **FB-2**.
-
-### Phase K — kinematic build (the fast-iteration environment)
-
-- **K1** Heterogeneous layer spacing in `create_pybullet_shelf` (per-layer list instead of scalar;
-  the per-layer `_shelf_surface_ids` already exist [E]).
-- **K2** Region objects (borrowing `obstruction3d`'s `target_region` + `is_inside` [E]) with
-  poses/extents exposed to the converter; `InRegion` predicate.
-- **K3** Operators: `Place(robot, obj, region)` adding `{InRegion, Stored}`; goal deriver over
-  `Stored`.
-- **K4** Region-parameterized place sampler (Transport3D's per-target offset + z template [E]),
-  with resident-collision rejection **naming witnesses** (F2) and clean exhaustion on height
-  mismatch (F3, so `proves_failure()` holds).
-- **K5** Instance generator targeting `d = (k, σ)` per stratum; `PYTHONHASHSEED` note carried
-  over from DD2D.
-- **K6** SPECTRE converter + `FailureRecord` instrumentation under `envs/restock3d/`;
-  `EMPTY_SPEC` domain contract (the SB2D precedent: per-environment code = converter + refiner
-  instrumentation, nothing else [E]).
-- **K7** Wire into the dd2d_v4-style pool-enumeration / labeling / caching protocol unchanged.
-
-### Gate B — pool-shape and feature-polarity probes
-
-- **P3 — pool shape** (~50 instances/stratum): valid-assignment fraction; order-sensitivity
-  fraction (same multiset, different order, different refinement outcome); superfluous-step
-  prevalence (the waste denominator must be non-empty *in practice*); pool diversity per the
-  standard probe. *Tuning levers:* partition widths, `N`/`M`, σ. *Abort:* if r2 pools are
-  order-insensitive after tuning, F2 is not doing its job → re-examine strip widths before
-  anything downstream.
-- **P4 — per-family feature polarity** (offline, no training): correlation of coverage/waste
-  with eventual candidate success, split by which family produced the evidence. Tests R1's
-  inversion prediction [P]. *Decision rule:* pick-side correct + place-side inverted → ship
-  as-is (learned head absorbs it), record the finding; only if coverage is net-destructive does
-  the U3 contingency open, gated on the frozen-2D-pool diff.
-
-### Gate C — baseline-gap probe, then training
-
-- **P5 — astar/oracle gap** on r2/r3: target the DD2D-like regime (astar mean FP in the tens
-  against a small oracle FP). *Abort:* gap < ~10 FP after tuning → the environment does not
-  earn its slot; stop before spending training compute.
-- Then: data collection (matched protocol), SPECTRE training per the v3final recipe, **PIGINet
-  on a matched collection** (the standing rule: no cross-collection head-to-head numbers), the
-  VLMPlan adapter as one isolated env module per the established design.
-
-### Phase D — dynamic MuJoCo (the real-robot-matched task)
-
-- **D1** Task JSONs `Restock3D-r{0..3}.json`: `Cupboard` with the chosen `shelf_heights` +
-  `shelf_partitions`; regions; per-object tight init regions for adjacency (the o2 pattern);
-  object specs from §3.4.
-- **D2** Extend the bilevel `goal_deriver` to read JSON region goals (a gap the capabilities doc
-  itself names [E]).
-- **D3** Generalize `PlaceShelfController` from its single hardcoded EE pose to a
-  region-parameterized target — **the main engineering line item** of the whole plan; note it is
-  a *place* generalization, an order of magnitude simpler than the abandoned front *grasp* (no
-  closure geometry, reach-in and release, and the kinematic controller already does the motion
-  shape [E]).
-- **D4** Pick controller unchanged. Class-2 (knock-over) records observed for free; logged, not
-  load-bearing.
-
-### Phase R — real robot
-
-Levels pinned per G0-a; tall blocks fabricated light (3D print / foam, ≤ ~60 g) per §3.4;
-privileged-state deployment per the established `OracleAdapter` path (the adaptive pathway is
-perception-invariant [E]); demo = an r3-style instance end-to-end. Object perception remains the
-known frontier and is out of scope here [E, TidyBot doc §4].
-
----
-
-## 6. Registered predictions
-
-| id | prediction | tested by |
+| band | extent | role |
 |---|---|---|
-| RP-1 | after-first-failure decomposition reproduces (static ≈ adaptive on attempt 1; margin entirely post-failure) | final comparison |
-| RP-2 | `state_delta` ablation is *positive* on Restock3D (vs the DD2D tie) — F2 makes it load-bearing | ablation grid |
-| RP-3 | coverage polarity inverts on F2 evidence, is correct on F1 | P4 |
-| RP-4 | waste correlates with success on r1/r3 via clutter justification | P4 |
-| RP-5 | PIGINet degrades disproportionately on the σ-tight holdout stratum | holdout eval |
-| RP-6 | astar FP on r2/r3 scales ~inversely with valid-assignment fraction | P3 × P5 |
+| **buffer** | x ≈ −1.1 | relocation staging — **present but inert** (clutter = 0; §12) |
+| **object** | x ∈ [−0.80, −0.20], y ∈ [0.60, 1.20] (~0.6×0.6 m) | where goal objects spawn on the floor |
+| **shelf** | centre (0.4, 1.4); width 0.60198 m, depth 0.254 m | the storage target |
 
-## 7. Fallbacks
+The base parks ~0.72 m **south** of a front-grasp target, so it stays south (y ≲ 0.55) of every
+object (y ≳ 0.60): it slides laterally through a clear **southern corridor** and **never crosses
+the object field** — which is what makes the base collision-free and lets `check_base_collisions`
+stay on. (This fully-lateral 3-band arrangement replaced an earlier shelf-north layout whose base
+phase-through was the bug it fixed.)
 
-- **FB-1** (P1 fails — no realistic blocking): F1 is the coverage/waste carrier; without it the
-  design as stated starves those features. Fallbacks, in order: (a) exploit the kinematic
-  ≥2-in-marker grasp rule with near-contact packing (witness = the second marker object — free,
-  but tighter than real 2F-85 blocking, so sim/real blocking thresholds diverge); (b) accept a
-  record-token-only environment and re-scope the paper's coverage/waste claims to the 2D pair.
-  (b) is honest but weakens the unified-features story — hence P1 runs first.
-- **FB-2** (P2 fails — only the proven cell reachable): drop F3; differentiate difficulty by
-  partitions + capacity + clutter only (single cell height). F2 and F1 survive intact.
-- **FB-3** (P3 fails — order-insensitive pools after tuning): F2 degrades to pure capacity; the
-  environment still separates adaptive from static via F1 + F3 evidence, but the self-inflicted
-  novelty claim is withdrawn.
+---
 
-## 8. Optional levers (pocketed, not in v1)
+## 4. The shelf — two sections (tall bottom, short top)
 
-- **Immovable residents**: pre-place non-goal cubes inside cells (JSON `initial_state` supports
-  it [E]) to vary per-region capacity per instance — the rescued spirit of the shelf-pick idea,
-  zero grasp engineering. Contingent on G0-d (reachability pruning keeps them out of `K`).
-- **Depth-wise regions**: two-row strips reintroduce reach-past-front-row failures — more
-  hardness, noisier strata.
-- **Cupboard top surface** (z ≈ 0.80, top-down reachable): an always-feasible overflow region —
-  *reduces* hardness, so excluded; noted only so nobody adds it by accident.
+The shelf is built from solid board bodies at cumulative heights (`section_geometry.py`,
+`region_geometry.section_surfaces`, config in `kinematic_env.py`). Only the **boards** are
+collision bodies (`shelf_structure_ids()`); the ±x side walls and +y back panel render but are
+cosmetic (non-collision), so F3 is a *ceiling-board* collision, not a wall effect.
 
-## 9. Open questions for the lab
+| section | index | surface z | clearance (gap to ceiling board) |
+|---|---|---|---|
+| **tall** (bottom) → `place_tall` | `section_0` | 0.29 | **0.34** |
+| **short** (top) → `place_short` | `section_1` | 0.6427 (= 0.29 + 0.34 + 0.0127) | **0.15** |
 
-1. May a board be physically removed (Config B), or only repositioned (constrains to Config A
-   geometry with P2 risk)? — G0-a.
-2. Confirm the pin increments so §3.3 snaps to real positions. — G0-a.
-3. Is the ~0.19-clearance short cell of Config A acceptable on the real shelf for human loading
-   /reset ergonomics during demos?
-4. Object fabrication: 3D print vs foam for the tall blocks (mass and friction targets in §3.4).
+A tall block is **0.24 m** tall (half-extent z = 0.12). It fits the 0.34 tall gap but overhangs
+the 0.15 short gap by **~0.09 m** → collides the short section's capping board → **F3**.
+
+**Placement band (the continuous free space).** Each section is one **wide continuous strip**,
+not discrete slots. Object-centre x spans `shelf_width/2 − 0.04` per side → the analytic band
+**x ∈ [0.139, 0.661]** (board extent minus a 0.04 m per-side end margin), centred at x = 0.4, so
+the band half-width is ≈ 0.261 m (~0.52 m wide). The front strip is at **y = 1.35** (= shelf y −
+0.05 offset), with ±0.01 m y-jitter. Both sections share this band.
+
+---
+
+## 5. Objects
+
+| object | half-extents (m) | full height (m) | family | role |
+|---|---|---|---|---|
+| small cube | (0.025, 0.025, 0.025) | 0.05 | `cube` | goal (`cube_goal*`) |
+| tall block | (0.025, 0.025, 0.12) | 0.24 | `tall` | goal (`block_goal*`) — the F3 driver |
+| clutter block | (0.025, 0.025, 0.05) | 0.10 | `clutter` | distractor — **inert** (§12) |
+
+A cube and a tall block share a 2D footprint and differ **only in height** — the F3 axis. That is
+the load-bearing fact behind the SPECTRE scene representation (§10).
+
+---
+
+## 6. Generation — region-rejection spawn (no floor grid)
+
+Objects are **not** placed on a fixed grid. `generator._sample_positions` is a
+**region-rejection (Poisson-disk-style) sampler**: each object's xy is drawn uniformly in the
+object band, and a candidate is **rejected if it lies within an exclusion radius of any
+already-placed object**:
+
+- band x ∈ [−0.80, −0.20], y ∈ [0.60, 1.20];
+- **exclusion radius 0.12 m** (min centre-to-centre) — front-grasp lateral clearance only;
+- **xy only** → poses stay axis-aligned;
+- **200 rejection attempts per object**, then the *whole layout* is reseeded; up to **64 reseeds**
+  before `build_spec` raises;
+- **deterministic in the env seed** — a tiny LCG (`_Rng`) seeded from `(seed, stratum, attempt)`,
+  so the layout reproduces per seed (with a `reseed-on-failure` cushion).
+
+**Object typing is random but deterministic:** the sampler places positions type-agnostically,
+then a Fisher-Yates shuffle designates `n_tall` of the spots as tall blocks and the rest cubes.
+Reach-over difficulty is *not* baked into the sampler — it emerges from geometry and is resolved
+by pick **order** (south-to-north), not by spawn placement.
+
+---
+
+## 7. Abstract model — operators and predicates (`models_v2.py`)
+
+- **Types:** `robot` (`Kinematic3DRobot`), `cube` (`Kinematic3DCuboid`). **No `region` type** (v1's
+  `RegionType` is dropped).
+- **Predicates:** `HandEmpty(robot)`, `Holding(robot,cube)`, `OnFloor(cube)`, `Stored(cube)`, plus an
+  **inert `OnBuffer(cube)`**. **`InRegion` is dropped** — there is no region abstraction. `Stored`
+  is purely geometric (object underside near a section surface AND xy on the shelf band); **no
+  per-section capacity is represented**, which is precisely why over-full sections are invisible to
+  the planner (the continuous-packing false positives).
+- **Operators:**
+  - `pick(robot, target)` — pre `{HandEmpty, OnFloor}`; add `{Holding}`; del `{HandEmpty, OnFloor}`.
+  - **`place_tall(robot, target)`** and **`place_short(robot, target)`** — **identical abstract
+    signatures and effects**: pre `{Holding}` *only* (no capacity, no height, no `Clear`); add
+    `{HandEmpty, Stored}`; del `{Holding}`. The **tall/short choice is a symbolic token**: it binds
+    the controller to `section_0` vs `section_1` and is validated *geometrically at refinement*
+    (`place_short(tall_block)` → F3), never abstractly. Nothing hard-codes tall→bottom.
+  - `place_buffer(robot, target)` — inert relocation op (add `{HandEmpty, OnBuffer}`).
+- **Goal:** `Stored(o)` for **every** goal object (all `cube_goal*` + `block_goal*`). Assignment of
+  objects to sections is free — that freedom, plus the invisible capacity/height, is where the
+  false positives come from.
+
+---
+
+## 8. Placement — continuous uniform packing (`place_controller_v2.py`)
+
+`SectionFrontPlaceController` (subclass of v1's front place) overrides only the sampler:
+
+- **x = `uniform(−band, band)`** across the whole section strip (`band ≈ 0.261`) — **no discrete
+  slots**;
+- **y = front strip + `uniform(−0.01, 0.01)`** jitter;
+- **z = section surface + half-height + 3 mm pad**; the object is placed **upright** (translate-only:
+  the EE is derived from the recorded front grasp, so an object keeps its axis-aligned floor
+  orientation — a tall block stays upright → F3, a cube lands flat).
+
+**Capacity / crowding is emergent** — there is no slot check. A sampled x that overlaps a resident
+collides during the real motion plan → `TrajectorySamplingFailure` → resample. A full strip
+exhausts its retries. Placements are ~1-in-6 reliable per sample (BiRRT flakiness), so the rollout
+retries generously: **~18 attempts/step** in the oracle/demo path, `num_sampling_attempts_per_step`
+(default 10) on the collection path. The controller reuses v1's translate-only front place verbatim
+by synthesising the section as a hidden internal `__section_N` region object, so `kinematic_env.py`
+and the inherited `step` are unchanged.
+
+---
+
+## 9. Failure taxonomy and evidence (`instrumented_refiner.py`)
+
+The refiner **does not gate** — it runs the real controllers via the real transition function and a
+candidate fails only by real collision / MP failure. On each rejection an **observation-only** probe
+attributes the cause (it sets/reads poses then restores them; it never changes the accept/reject
+decision). Deepest-rejection metadata is serialized as `refiner_metadata["failures"]` with fields
+`{step_index, schema, args, culprits, n_step, exhausted, budget_exhausted, dev_added, dev_deleted}`.
+
+- **F3 (tall-into-short)** — `_probe_place_v2` lifts the held object to the band centre just off the
+  surface and runs real collision detection against the shelf boards. A hit ⇒ F3, **culprit-free**,
+  so it `proves_failure()`. (Unchanged from v1: the ceiling board spans the whole band, so a single
+  centre probe still catches a too-tall block.)
+- **F2 (continuous crowding)** — if the object fits height-wise but the place still failed, it is
+  attributed to the section's **residents**: objects the prefix already stored on that surface
+  (underside within 0.05 m of the section surface_z). This is *continuous section-capacity
+  attribution* — the objects that crowded the placement out — not v1's discrete slot check. Class-1
+  culprits.
+- **Reach-over (F4)** — `_probe_pick` first checks F1 grasp obstruction (`grasp_blockers`; wired but
+  retired under the unified front grasp, so effectively inert), then **`reach_over_culprits`**: the
+  un-cleared **south** floor objects that block the target's front-pick reach corridor (a geometric
+  rule: A south of B by ≥ 0.03 m, lateral |Δx| < 0.12 m, with a tall block involved). Class-1,
+  actionable — a south-to-north order clears them first.
+- **C2 (class-2 deviation)** — anything else carries the abstract-state deviation
+  (`dev_added`/`dev_deleted`) instead of culprits.
+
+**Coverage/waste.** Reach-over revives **coverage with the correct polarity**: a south-to-north
+candidate *stores the south blockers before re-picking the target* → it **covers** them (coverage
+1.00 vs 0.00 for a talls-first / naive candidate). This is the opposite of F2, where "touching" a
+culprit *creates* the hazard. **Waste stays degenerate** under reach-over-only (goal-necessary
+reordering has an empty superfluous set); reviving it needs a non-goal approach-corridor clutter —
+the inert buffer machinery is exactly that lever (§12).
+
+---
+
+## 10. SPECTRE scene representation — full 3D point cloud (`scene_geometry.py`)
+
+Because a cube and a tall block share a 2D footprint and differ only in height (the F3 axis), a
+2D-footprint scene would be blind to the decisive dimension. So each object emits a **full 3D
+analytic point cloud** (from ground-truth half-extents, not sensed):
+
+- **32-point analytic box surface** (`object_point_cloud`) — 8 corners + 6 face-quadrant centres,
+  scaled by half-extents so the z-extent scales with height;
+- alongside the **2D boundary ring**, **pose_z**, and **height** (for 2D consumers and the height
+  scalar);
+- families `tall` / `cube` / `clutter` / `robot`; the shelf recorded as a `ContainerGeometry`
+  (`kind="shelf"`), not a registry object; `frame_h` carries the z extent for the 3D path.
+
+The deployed SPECTRE model consumes this via `--scene-3d` (point_dim 3, pose_dim 4) + the
+PointSetEncoder, and also ingests the initial abstract state + goal atoms (`--atom-mode profiles`).
+
+---
+
+## 11. Difficulty strata (`generator.STRATA_V2_PILOT`, `strata_v2.py`)
+
+Strata are **(n_tall × n_short)** section configs (tall blocks × short cubes). Two numbering
+systems, deliberately separated: the **banding stratum** (difficulty index 0..4, encoded in
+`problem_id` via `V2_STRATUM_BAND = SPLIT_BAND // 5`) and the committed **recipe key** (a
+`generator.STRATA` entry pinning object counts; recipe tuple = `(n_small, n_tall, n_tall_regions,
+n_short_regions)`, **no clutter field** — clutter lives in the separate all-zero
+`_CLUTTER_PER_STRATUM`).
+
+| banding stratum | recipe key | n_tall × n_short | objects | collection size (train/val/test) |
+|---|---|---|---|---|
+| 0 | 11 | 2 × 2 | 4 | 50 / 15 / 15 |
+| 1 | 12 | 3 × 3 | 6 | 50 / 15 / 15 |
+| 2 | 14 | 3 × 4 | 7 | 25 / 10 / 10 |
+| 3 | 15 | 4 × 3 | 7 | 25 / 10 / 10 |
+| 4 | 13 | 4 × 4 | 8 | 25 / 10 / 10 |
+
+Full target = **175 / 60 / 60 = 295**. Per-stratum collection budgets `(K_max, r_cap s)` =
+`{0:(20,40), 1:(40,70), 2:(75,80), 3:(75,80), 4:(75,90)}`; collected one single-stratum job at a
+time in `SEQUENTIAL_ORDER = (0, 1, 3, 2, 4)` (light first, 4×3 before 3×4). Gym ids
+`spectre/Restock3Dv2-r{key}-v0`.
+
+---
+
+## 12. Distractor blockers — supported, currently inert
+
+The environment has **full end-to-end support for non-goal distractor blockers, but every stratum
+runs with zero of them.** The machinery is one flag away:
+
+- **Generation:** `generator._sample_blockers` would place `n_clutter` cubes each ~0.09 m off a
+  target's ±x face (inside the target's exclusion radius, clear of everything else). It **early-
+  returns `[]`** because `_CLUTTER_PER_STRATUM` is **0 for every key**.
+- **Model:** the `OnBuffer` predicate and `place_buffer` operator exist; goals never reference them.
+- **Controllers:** `BufferPlaceController` / `in_buffer_zone` (the buffer x-band, §3) exist.
+- **Oracle:** `oracle.py` has the relocation phase (`Pick(clutter) + PlaceBuffer(clutter)`) that only
+  runs when clutter is present.
+
+**To enable:** raise `_CLUTTER_PER_STRATUM[key] > 0` in `generator.py` **and** the matching
+`kinematic_env.CLUTTER_PER_STRATUM[key]` (generator drives positions, kinematic_env drives specs —
+the two must agree). Distractor clutter is the path to a **non-goal approach-corridor blocker** that
+must be relocated to the buffer — the missing carrier that would revive **waste** (§9).
+
+---
+
+## 13. Oracle and plan-generation prior
+
+- **Oracle (`oracle_v2.py`)** builds a feasible skeleton directly and certifies it — no collection
+  pipeline: tall blocks → the tall section, cubes load-balanced across sections; a **south-to-north
+  (nearest-first)** pick order; then a manual rollout-with-resampling certifier (18 attempts/step,
+  fresh RNG per attempt, optional `max_seconds` cap). Section choice is validated by real collision
+  (`place_short(tall)` never certifies). It certifies sampled scenes across the strata.
+- **Geometry-informed plan-generation prior (`plan_generator_v2.py`).**
+  `GeometryGuidedRestockPlanGenerator` subclasses the stock hff generator and replaces unit operator
+  cost with a nearest-first **pick cost** `c(pick(o)) = 1 + λ·|{o′ unpicked OnFloor : d(o′) < d(o)}|`
+  (λ=1, `d(o)` = object y = northward reach), so a plan's extra penalty is its Kendall-tau inversion
+  count vs the south-to-north oracle order. It generates the oracle plan in **~15–26 attempts / 100%**
+  vs geometry-blind hff's **~4000 / 50–80%** (≈200×). This is the **default pool generator** for v2
+  collection. It is a *plan-generation* prior, distinct from the (deferred) eager section-capacity
+  heuristic.
+
+---
+
+## 14. Collection, training, and comparison state (current)
+
+- **Collection** (`experiments/spectre/restock3d_v2_{collect,run_all}.py`) follows the DD2D/SB2D
+  protocol — **no oracle in the loop**: the geometry-guided prior emits the candidate pool, each
+  skeleton is refined non-short-circuiting by `BacktrackingRefiner`, and a problem is kept iff ≥1
+  candidate refines. Full `EpisodeRecord`s carry the pool, per-candidate outcomes + wall-clock, the
+  3D scene geometry, and F2/F3 instrumented failures. Env_variant **`restock3d_v2`**. Sequential
+  per-stratum jobs; RAM-sized worker counts.
+- **Status:** strata **2×2, 3×3, 4×3 collected**; **3×4 and 4×4 still collecting** (as of 2026-08-20).
+- **Comparison** (`compare_methods.py`, env key `restock3d`): SPECTRE (3D point-set + atoms), PIGINet
+  (oblique height-visible crops), and LAZY (9-dim height graph) are trained + eval-cached vs the naive
+  planner order, over the collected strata (currently {2×2, 3×3, 4×3}, 3 seeds). Headline so far: all
+  learned methods crush the naive order; **LAZY dominates**, **SPECTRE edges PIGINet at the crowded
+  4×3** (the first hint of the representation advantage, CI still includes 0), **adaptivity is inert**
+  on these strata. Numbers + CIs in [`notebook/07` 2026-08-20](notebook/07-stickbutton2d.md#2026-08-20-restock3d-4x3-stratum-added-3-strata).
+
+---
+
+## 15. Deferred / open
+
+- **Remaining strata** — 3×4 and 4×4 collection; then re-train/re-cache (the crowding + asymmetric
+  3×4 are where the SPECTRE > PIGINet edge may reach significance).
+- **Waste revival** — still degenerate under reach-over-only; needs the non-goal approach-corridor
+  clutter (the inert buffer machinery, §12).
+- **Eager section-capacity heuristic** — a refinement-order heuristic folding continuous
+  section-capacity into A* costs (distinct from the plan-generation prior in §13).
+- **VLMPlan** adapter + labeler for restock3D.
+- **≥3-seed / full-strata paper numbers**; the dynamic-MuJoCo and real-robot phases.
+
+---
+
+## History
+
+The original stage-gated proposal (v0.1, 2026-08-13: MuJoCo/TidyBot, top-down grasp, discrete
+multi-slot regions with `InRegion`, F1 grasp-obstruction clutter, the two candidate cell layouts,
+and the physical-shelf / 2F-85 gripper sizing needed for the eventual real-robot phase) and the v1
+as-built (kinematic PyBullet, single-object **discrete** regions) are retained as design
+rationale/history in the ADR/notebook ledger:
+[`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
+2026-08-13 → 2026-08-18 (env origin, the fully-lateral rebuild, the v2 continuous-packing variant,
+the geometry-informed prior, the 3D point-cloud representation, and the 5-stratum full-collection
+protocol). The real-robot geometry constraints (interior 0.602 × 0.254 m, Σ shelf heights 0.762 m
+fixed exterior, board thickness 0.0127 m, grasp axis 0.03–0.05 m) still apply to the deferred
+hardware phase.

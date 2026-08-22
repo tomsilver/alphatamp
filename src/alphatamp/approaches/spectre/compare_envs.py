@@ -146,6 +146,39 @@ def _sb2d_kinder_scene(episode: EpisodeRecord) -> Image:
     return render_kinder_labeled_scene(episode)
 
 
+def _restock_scene(episode: EpisodeRecord) -> Image:
+    """Top-down Restock3D scene from stored geometry (no PyBullet in the notebook)."""
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.envs.restock3d.render import (
+        render_scene_from_geometry,
+    )
+
+    assert episode.scene_geometry is not None
+    return render_scene_from_geometry(episode.scene_geometry)
+
+
+def _restock_short(name: str) -> str:
+    """``block_goal1`` -> ``block1`` / ``cube_goal2`` -> ``cube2`` (matches the
+    render)."""
+    return name.replace("_goal", "")
+
+
+def _restock_plan_label(steps: Sequence[tuple[str, Sequence[str]]]) -> str:
+    """The store order + section of a Restock3D plan.
+
+    Each object is picked then stored via ``place_tall`` / ``place_short``; the ordered
+    stores (which object, which section) are the readable signal — the store order is
+    the south-to-north / far-first structure feasibility hinges on.
+    """
+    parts: list[str] = []
+    for name, args in steps:
+        if name in ("place_tall", "place_short") and args:
+            obj = _restock_short(args[-1])
+            section = "tall" if name == "place_tall" else "short"
+            parts.append(f"{obj}→{section}")
+    return " · ".join(parts) if parts else "(no stores)"
+
+
 def _short(name: str) -> str:
     """``item_5`` / ``circle_3`` -> the trailing token, matching the render's labels."""
     return name.rsplit("_", 1)[-1]
@@ -373,7 +406,8 @@ SB2D_KINDER = EnvSpec(
     # so it is grafted from that legacy cache rather than recomputed on the kinder
     # re-imaging.
     legacy_only=("SPECTRE-static", "SPECTRE-adaptive", "VLMPlan-32B", "LAZY-adaptive"),
-    has_ablations=False,  # v3 ablations are SPECTRE-internal; §4 is hidden here
+    has_ablations=True,  # single-feature-isolation ablation (§4.3), grafted from the
+    # `stickbutton2d_v1` cache (SPECTRE is image-free; arms trained/cached there) — 2026-08-21
     has_timing=True,  # §2b enabled 2026-08-03: per-env 10s cap, SPECTRE timing grafted
     caveats=(
         "**PIGINet's crops come from kinder's own renderer** (a window on the "
@@ -511,14 +545,118 @@ SB2D_KINDER_HOLDOUT = EnvSpec(
     scene_legend=SB2D_KINDER.scene_legend,
 )
 
+RESTOCK3D = EnvSpec(
+    key="restock3d",
+    title="restock3D — SPECTRE vs PIGINet, LAZY and pure planning",
+    env_variant="restock3d_v2",
+    # Stratum = the section config (n_tall x n_short), banded 0..4 in the problem id by
+    # `strata_v2` (5 strata, NOT the shared 4). The two symmetric light strata (2×2/3×3) plus
+    # the crowded asymmetric 4×3 (banding stratum 3) are collected + evaluated here; the
+    # remaining crowded strata (3×4 = 2, 4×4 = 4) are still collecting. The notebook groups
+    # on `sorted(stratum_labels)` = [0, 1, 3] (note the gap at 2 -- 3×4 is not in yet).
+    stratum_labels={0: "2×2", 1: "3×3", 3: "4×3"},
+    stratum_meaning=(
+        "Stratum = **section config** (n_tall × n_short): how many tall blocks and short "
+        "cubes must be stored on the shelf. 2×2 / 3×3 are the symmetric light strata; 4×3 "
+        "(four tall + three short) is the first crowded stratum, with larger pools (K≤75) "
+        "and more reach-over / F3 pressure. Feasibility hinges on **reach-over** (a nearer "
+        "object blocks the front-grasp of a farther one, so the store order must go "
+        "far-first / south-to-north) and **F3** (a tall block placed in the short top "
+        "section collides the ceiling). Real PyBullet collision decides it."
+    ),
+    stratum_axis_label="section config (tall×short)",
+    has_ablations=False,  # §4 ablation arms not trained for restock3D (deferred)
+    has_timing=True,  # per-candidate refinement_wall_clock_s is stored; §2b enabled
+    caveats=(
+        "**2×2 / 3×3 / 4×3 sections, 3 seeds (0,1,2).** All learned rows (SPECTRE, PIGINet, "
+        "LAZY) are 3 seeds so §1/§2 carry an across-seed ±; the remaining crowded strata "
+        "(3×4, 4×4) are still collecting in a separate session, so the pooled 'ALL' averages "
+        "these three configs (note the stratum axis skips s2 = 3×4). Partial-stratum "
+        "stragglers on disk are excluded by the strata-{0,1,3} filter (train + eval).",
+        "**Read the crowded 4×3, not the two-stratum ALL.** 2×2 and 3×3 are near-trivial "
+        "(small feasible-dense pools every learned method solves in ≈0 attempts), so any "
+        "representation / adaptivity contrast, if one exists, lives at **4×3** — the first "
+        "stratum with real crowding. All learned methods crush the naive planner order "
+        "(astar-dist); see the paired notebook entry for the per-stratum numbers.",
+        "**§2b wall-clock is refinement-dominated.** Restock3D refinement is real PyBullet "
+        "motion planning: feasible candidates take tens of seconds (2×2 ~32 s / 3×3 ~45 s / "
+        "4×3 ~54 s fastest-feasible), while plan-gen and GPU inference are sub-second. The "
+        "55 s per-candidate cap sits just above the fastest-feasible distribution (so no "
+        "feasible candidate is censored); the FP headline stays uncapped.",
+        "**VLMPlan is not run here yet** (deferred). The comparison is the naive planner "
+        "order (astar-dist) vs the three learned methods.",
+    ),
+    render_scene=_restock_scene,
+    plan_label=_restock_plan_label,
+    scene_legend=(
+        "the initial scene, drawn top-down from the episode's stored 3D geometry. **Blue** "
+        "footprints are tall blocks, **orange** are short cubes (the height/F3 axis, shown "
+        "as colour since both share a footprint from above); the grey dashed box is the "
+        "shelf store region; the grey marker is the robot base. y increases south→north — "
+        "the store order the plan table lists. Labels (`cube1`, `block2`) match the plan "
+        "table's `obj→section` stores."
+    ),
+)
+
+RESTOCK3D_V3 = EnvSpec(
+    key="restock3d_v3",
+    title="restock3D-v3 — SPECTRE vs PIGINet, LAZY (SYNTHETIC dataset)",
+    env_variant="restock3d_v3",
+    # Stratum = block count n (6/7/8/9), banded 0..3 on the SHARED 4-stratum band (unlike v2's
+    # 5-stratum local band), so compare.stratum_of decodes it with no routing edit.
+    stratum_labels={0: "n=6", 1: "n=7", 2: "n=8", 3: "n=9"},
+    stratum_meaning=(
+        "Stratum = **block count n** (6/7/8/9). v3 varies **per-object widths** (in "
+        "[0.02, 0.08] m) and **heights near the short/tall fit cutoff**, so — unlike v2's "
+        "interchangeable constant-size blocks — **which** block goes to **which** section "
+        "matters (block *selection*, not just order). Feasibility hinges on a lateral "
+        "**capacity** budget (Σwidths + gaps ≤ shelf) per section plus the **height cutoffs** "
+        "(a too-tall block in the short section is F3) and **reach-over** (store far-first). "
+        "Larger n = tighter feasible-split set (fewer valid tall/short assignments)."
+    ),
+    stratum_axis_label="block count n",
+    has_ablations=True,  # single-feature-isolation ablation (§4.3) — 2026-08-21
+    has_timing=True,  # per-candidate refinement_wall_clock_s present (SYNTHETIC; see caveats)
+    caveats=(
+        "**⚠️ SYNTHETIC dataset — the whole comparison runs on analytic labels, not real "
+        "refinement.** Every candidate here was labelled by the pure-geometry analytic refiner "
+        "(`feasibility_v3.classify_skeleton`, no motion planning), and each `refinement_wall_"
+        "clock_s` is a synthetic estimate (a fail = the full r_cap; a success = U[0.6,0.8]·r_cap "
+        "by stratum, r_cap ∈ {50,70,90,110} s). So the **FP** headline reflects the geometry "
+        "classifier, and **§2b wall-clock is not measured** — both are a pipeline / "
+        "representation probe, not a real-BiRRT result. The real refiner remains the future "
+        "paper-eval instrument (collect with `refiner_mode='real'`).",
+        "**Four strata n=6/7/8/9, 3 seeds (0,1,2), 100/25/25 per stratum.** All learned rows "
+        "(SPECTRE, PIGINet, LAZY) are 3 seeds so §1/§2 carry an across-seed ±. Pools come from "
+        "the geometry-informed nearest-first generator (not hff); a problem is kept iff ≥1 "
+        "candidate is analytically feasible.",
+        "**Read the crowded n=8/9, not the pooled ALL.** Smaller n is feasible-denser (easier); "
+        "any representation / adaptivity contrast, if one exists, lives at the tighter "
+        "feasible-split strata where block *selection* bites.",
+    ),
+    render_scene=_restock_scene,
+    plan_label=_restock_plan_label,
+    scene_legend=(
+        "the initial scene, drawn top-down from the episode's stored 3D geometry. **Blue** "
+        "footprints are tall (short-cutoff-exceeding) blocks, **orange** are short-eligible "
+        "ones (the height/F3 axis shown as colour since footprints vary in width but not from "
+        "above); the grey dashed box is the shelf store region; the grey marker is the robot "
+        "base. y increases south→north — the store order the plan table lists."
+    ),
+)
+
 #: Registry. Order sets the notebook's default (first entry). Only the kinder-rendered
 #: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03); the two
 #: `_holdout_` entries are the held-out-stratum generalization sections (2026-08-09).
+#: `restock3d` is the third evaluation environment (2×2 + 3×3, 1 seed; 2026-08-19);
+#: `restock3d_v3` is its per-object-dims successor on a SYNTHETIC (analytic-labelled) dataset.
 ENVS: dict[str, EnvSpec] = {
     spec.key: spec
     for spec in (
         SB2D_KINDER,
         DD2D,
+        RESTOCK3D,
+        RESTOCK3D_V3,
         DD2D_GEN_SHAPEONLY,
         DD2D_HOLDOUT,
         SB2D_KINDER_HOLDOUT,
@@ -556,6 +694,7 @@ __all__ = [
     "SB2D_KINDER",
     "DD2D_HOLDOUT",
     "SB2D_KINDER_HOLDOUT",
+    "RESTOCK3D",
     "get",
     "stratum_label",
     "methods_for",

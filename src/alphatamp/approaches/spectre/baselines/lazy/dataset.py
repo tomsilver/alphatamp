@@ -53,13 +53,22 @@ def load_structs(
     frame_extent: tuple[float, float],
     shape_max,
     keep_strata: Optional[set[int]] = None,
+    env_variant: Optional[str] = None,
 ) -> list[EpisodeStruct]:
-    """Load, canonicalize and pre-structure every episode under ``split_dir``."""
+    """Load, canonicalize and pre-structure every episode under ``split_dir``.
+
+    ``env_variant`` routes ``keep_strata`` through the right banding decoder --
+    ``restock3d_v2`` bands five strata per split, so the shared 4-stratum ``stratum_of``
+    would collapse its 2x2/3x3 sections. ``None`` keeps the DD2D/SB2D path.
+    """
     structs: list[EpisodeStruct] = []
     for path in list_episodes(split_dir):
         ep = canonicalize_episode(load_episode(path), rng=None)
         if keep_strata is not None:
-            if stratum_of(int(ep.provenance.problem_id)) not in keep_strata:
+            if (
+                stratum_of(int(ep.provenance.problem_id), env_variant)
+                not in keep_strata
+            ):
                 continue
         tree = build_prefix_tree(ep)
         ctx = build_episode_ctx(ep, vocab, spec, frame_extent, shape_max)

@@ -1,0 +1,11 @@
+# Restock3D v2 (continuous packing) — the SPECTRE pilot collection.
+#
+# Four symmetric configs (1x1, 2x2, 3x3, 4x4 tall-block x short-cube), a handful of train/val
+# problems each, to prove the v2 pipeline end-to-end (3D point-cloud scene geometry + place_tall/
+# place_short + instrumented F2/F3 failures) before a full collection. Pooled under the
+# stratum-encoded problem ids of envs/restock3d/strata_v2.py, so compare.stratum_of recovers the
+# banding stratum (0-3). Driven by experiments/spectre/restock3d_v2_collect.py; `env_variant`
+# selects the on-disk layout and `env_id` lets spectre_build_vocab.py resolve.
+env_id: "spectre/Restock3Dv2-r10-v0"
+env_variant: "restock3d_v2_pilot"
+model_name: "restock3d_v2"

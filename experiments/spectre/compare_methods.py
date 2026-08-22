@@ -667,7 +667,11 @@ def _(
         _amap, _bmap = _by_pid(_a), _by_pid(_b)
         _pids = sorted(set(_amap) & set(_bmap))
         if hh_stratum.value != "ALL":
-            _pids = [p for p in _pids if compare.stratum_of(p) == hh_stratum.value]
+            _pids = [
+                p
+                for p in _pids
+                if compare.stratum_of(p, ENV.env_variant) == hh_stratum.value
+            ]
         if not _pids:
             _stq = "" if hh_stratum.value == "ALL" else " in this stratum"
             _disp = mo.md(
@@ -677,7 +681,7 @@ def _(
         else:
             _x = np.array([_amap[p] for p in _pids])
             _y = np.array([_bmap[p] for p in _pids])
-            _sarr = np.array([compare.stratum_of(p) for p in _pids])
+            _sarr = np.array([compare.stratum_of(p, ENV.env_variant) for p in _pids])
             _vmax = float(max(_x.max(), _y.max()))
             _vmax = _vmax * 1.05 if _vmax > 0 else 1.0
             _fig, _ax = plt.subplots(figsize=(5.6, 5.6))
@@ -1064,6 +1068,120 @@ def _(ENV, FLOOR_BY_PID, STRATA, abl_df, mo, pd):
     return (coverage_split,)
 
 
+@app.cell(hide_code=True)
+def _(ENV, mo):
+    (mo.md(\
+           r"""### 4.3 · Single-feature isolation — what carries the adaptivity here?
+
+          Each arm is the deployed backbone (**jaccard overlap** kept as a constant backbone
+          + the point-set-encoder upgrade + atom profiles + ma5 selector) with **exactly one**
+          failure-conditioned feature added, **trained from scratch** (not
+          trained-together-then-disabled-at-deploy), so a feature that looks inert is not
+          being masked by another compensating for it. `floor` is jaccard-only (the Δ
+          reference); `all features` turns them all on (= the *current-architecture* deployed
+          config — the DD2D/SB2D §1 rows are stale/pre-point-set-upgrade, so nothing is
+          reused). `Δ vs floor` is a paired bootstrap over problems (negative = the feature
+          **helps**); a CI excluding 0 is starred. **1 seed for now** (2 more deferred), so
+          `±` is blank until they land.
+
+          `repeat` fires on DD2D/SB2D only because the domain declares an ablation
+          `step_certificate` schema (DD2D `place-buffer`, SB2D button-press) — an intentional
+          **transfer probe**, not a sound certificate like restock3d's F3: the firing census
+          measured it vetoing **44.6%** of feasible DD2D candidates and **10.9%** of SB2D ones
+          (vs ~0% on restock3d), so on DD2D especially expect it to *hurt* (see the ablation
+          ADR).""") if ENV.has_ablations else mo.md(""))
+    return
+
+
+@app.cell
+def _(CACHE_DIR, ENV, LEGACY_CACHE, STRATA, compare, mo, pd):
+    from alphatamp.approaches.spectre import eda as _eda3
+
+    # Arm label -> cache sub-dir. SB2D's arms are cached under `stickbutton2d_v1` (SPECTRE is
+    # image-free), so on `sb2d_kinder` they are read from LEGACY_CACHE; DD2D / restock3d_v3
+    # find them in CACHE_DIR. `_dir_for` resolves per arm.
+    _ISO = {
+        "floor (jaccard only)": "abl_floor_adaptive",
+        "+ coverage": "abl_only_cov_adaptive",
+        "+ waste": "abl_only_waste_adaptive",
+        "+ repeat": "abl_only_repeat_adaptive",
+        "+ records": "abl_only_records_adaptive",
+        "all features": "abl_all_adaptive",
+    }
+
+    def _dir_for(sub):
+        return CACHE_DIR if (CACHE_DIR / sub).is_dir() else LEGACY_CACHE
+
+    _rows, _missing = [], []
+    for _label, _sub in _ISO.items():
+        _d = _dir_for(_sub)
+        if not (_d / _sub).is_dir():
+            _missing.append(_label)
+            continue
+        _rows += [
+            {**r, "arm": _label}
+            for r in compare.load_named_fp_records_per_seed(_d, _sub, _label)
+        ]
+    _iso_df = pd.DataFrame(
+        _rows or [], columns=["problem_id", "stratum", "fp", "seed", "arm"]
+    )
+    if _missing:
+        print(f"§4.3 not cached, omitted: {_missing}")
+    print(
+        f"§4.3 isolation arms loaded (seeds "
+        f"{sorted(_iso_df['seed'].unique()) if len(_iso_df) else []}): "
+        f"{sorted(_iso_df['arm'].unique())}"
+    )
+
+    def _seed_avg(sub):
+        # one row per problem_id, fp averaged across whatever seeds are present (keeps
+        # stratum), so the Δ pairing and the ALL mean are seed-count-agnostic.
+        if not len(sub):
+            return sub
+        return (
+            sub.groupby("problem_id")
+            .agg(fp=("fp", "mean"), stratum=("stratum", "first"))
+            .reset_index()
+        )
+
+    _floor = _seed_avg(_iso_df[_iso_df.arm == "floor (jaccard only)"])
+    _floor_by_pid = dict(zip(_floor["problem_id"], _floor["fp"]))
+
+    def _iso_row(label):
+        _sub = _seed_avg(_iso_df[_iso_df.arm == label])
+        _raw = _iso_df[_iso_df.arm == label]
+        _row = {"arm": label, "n": len(_sub)}
+        _row["ALL"] = f"{_sub['fp'].mean():.2f}" if len(_sub) else "—"
+        _per_seed = (
+            _raw.groupby("seed")["fp"].mean() if len(_raw) else pd.Series(dtype=float)
+        )
+        _row["±"] = f"{_per_seed.std():.2f}" if len(_per_seed) > 1 else "—"
+        for _k in STRATA:
+            _s = _sub[_sub.stratum == _k]["fp"]
+            _row[f"s{_k}"] = f"{_s.mean():.2f}" if len(_s) else "—"
+        _common = sorted(set(_sub["problem_id"]) & set(_floor_by_pid))
+        if _common and len(_sub) and label != "floor (jaccard only)":
+            _a = _sub.set_index("problem_id").loc[_common, "fp"].to_numpy()
+            _b = pd.Series(_floor_by_pid).loc[_common].to_numpy()
+            _dd = _eda3.bootstrap_mean_difference(_a, _b, num_resamples=10_000, seed=0)
+            _star = "" if _dd.ci_low <= 0 <= _dd.ci_high else " *"
+            _row["Δ vs floor"] = (
+                f"{_dd.point:+.2f} [{_dd.ci_low:+.2f}, {_dd.ci_high:+.2f}]{_star}"
+            )
+        else:
+            _row["Δ vs floor"] = "—"
+        return _row
+
+    _order = [a for a in _ISO if a in set(_iso_df["arm"])]
+    isolation_table = (
+        pd.DataFrame([_iso_row(a) for a in _order]).set_index("arm")
+        if _order
+        else pd.DataFrame()
+    )
+    (isolation_table if ENV.has_ablations else mo.md(""))
+    return (isolation_table,)
+
+
 # --- commented out 2026-07-27 (notebook trim): §4.4, the deploy-time suppress-records
 # --- diagnostic. The arm is still cached (`abl_suppress_records`), so uncommenting both
 # --- cells restores it. Measured 2026-07-27: 7.33 suppressed vs 7.50 as-trained, i.e.
@@ -1427,7 +1545,7 @@ def _(
         [
             mo.md(
                 f"### problem **{_pid}**"
-                f" &nbsp;·&nbsp; stratum **{compare.stratum_of(_pid)}**"
+                f" &nbsp;·&nbsp; stratum **{compare.stratum_of(_pid, ENV_VARIANT)}**"
                 f" &nbsp;·&nbsp; pool **{_k}** &nbsp;·&nbsp; feasible "
                 f"**{sum(_feas)}/{_k}**"
                 f" &nbsp;·&nbsp; shortest feasible plan **{_fmin}** ops"

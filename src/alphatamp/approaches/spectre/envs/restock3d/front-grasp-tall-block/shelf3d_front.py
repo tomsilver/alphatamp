@@ -68,13 +68,19 @@ def create_bilevel_planning_models(
     action_space: Space,
     num_objects: int = 1,
     config: Shelf3DEnvConfig | None = None,
+    grasp_transform=None,
+    pick_distance_bounds=None,
 ) -> SesameModels:
     """Create the front-grasp / tall-block Shelf3D env models.
 
-    ``config`` overrides the internal planning sim's config; defaults to a
-    tall-block ``Shelf3DEnvConfig``. It must match the config used to build the
-    executable env (so the planner's sim, abstractor, and transition function
-    all see the same tall block).
+    ``config`` overrides the internal planning sim's config; defaults to a tall-block
+    ``Shelf3DEnvConfig``. It must match the config used to build the executable env (so
+    the planner's sim, abstractor, and transition function all see the same tall block).
+
+    ``grasp_transform`` / ``pick_distance_bounds`` override the front-grasp geometry for
+    a differently-sized object (e.g. the short-cube calibration in
+    ``shelf3d_front_small.py``). Both default to ``None`` -> the tall-block calibration
+    baked into ``create_front_lifted_controllers``.
     """
     assert isinstance(observation_space, ObjectCentricBoxSpace)
     assert isinstance(action_space, Kinematic3DRobotActionSpace)
@@ -182,8 +188,15 @@ def create_bilevel_planning_models(
         delete_effects={LiftedAtom(HandEmpty, [robot]), LiftedAtom(OnGround, [target])},
     )
 
-    # Front-grasp controllers.
-    lifted_controllers = create_front_lifted_controllers(action_space, sim)
+    # Front-grasp controllers (optionally retargeted to a different object size).
+    ctrl_kwargs = {}
+    if grasp_transform is not None:
+        ctrl_kwargs["grasp_transform"] = grasp_transform
+    if pick_distance_bounds is not None:
+        ctrl_kwargs["pick_distance_bounds"] = pick_distance_bounds
+    lifted_controllers = create_front_lifted_controllers(
+        action_space, sim, **ctrl_kwargs
+    )
     PickController = lifted_controllers["front_pick"]
 
     robot = Variable("?robot", Kinematic3DRobotType)

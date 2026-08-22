@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import itertools
+import random
 import time
 from pathlib import Path
 from typing import Callable
@@ -46,6 +47,11 @@ from alphatamp.approaches.spectre.schema import (
 
 _STICK_BUTTON_MODEL_NAME = "stickbutton2d"
 _RESTOCK3D_MODEL_NAME = "restock3d"
+# v2 continuous-packing restock: place_tall/place_short over two shelf sections. Distinct
+# model_name from v1 (different models/sampler/geometry), so its collection is a separate
+# env_variant and cannot be mixed with restock3d_v1.
+_RESTOCK3D_V2_MODEL_NAME = "restock3d_v2"
+_RESTOCK3D_V3_MODEL_NAME = "restock3d_v3"
 
 # Restock3D's recording sampler needs the models' internal sim + region_infos, which the
 # frozen SesameModels cannot carry. `_make_env_models` stashes them here for
@@ -87,6 +93,34 @@ def _make_env_models(
         _restock_extras["region_infos"] = bundle.region_infos
         _restock_extras["goal_names"] = bundle.abstractor.goal_object_names()
         return bundle.models
+
+    if cfg.model_name == _RESTOCK3D_V2_MODEL_NAME:
+        from alphatamp.approaches.spectre.envs.restock3d.models_v2 import (
+            create_restock3d_v2_models,
+        )
+
+        bundle_v2 = create_restock3d_v2_models(
+            observation_space, action_space, int(cfg.model_kwargs["stratum"])
+        )
+        _restock_extras["sim"] = bundle_v2.sim
+        # The v2 recording sampler takes the 2 section bands via the same `region_infos`
+        # channel (keys `section_0`/`section_1`); the probe dispatches on op name.
+        _restock_extras["region_infos"] = bundle_v2.section_infos
+        _restock_extras["goal_names"] = bundle_v2.abstractor.goal_object_names()
+        return bundle_v2.models
+
+    if cfg.model_name == _RESTOCK3D_V3_MODEL_NAME:
+        from alphatamp.approaches.spectre.envs.restock3d.models_v3 import (
+            create_restock3d_v3_models,
+        )
+
+        bundle_v3 = create_restock3d_v3_models(
+            observation_space, action_space, int(cfg.model_kwargs["stratum"])
+        )
+        _restock_extras["sim"] = bundle_v3.sim
+        _restock_extras["region_infos"] = bundle_v3.section_infos
+        _restock_extras["goal_names"] = bundle_v3.abstractor.goal_object_names()
+        return bundle_v3.models
 
     from kinder_bilevel_planning.env_models import (
         create_bilevel_planning_models,
@@ -159,6 +193,32 @@ def _make_plan_generator(
             heuristic_name=cfg.heuristic_name,
             seed=problem_id,
             penalty_fn=make_penalty(tables, EagerWeights()),
+        )
+    if (
+        cfg.model_name in (_RESTOCK3D_V2_MODEL_NAME, _RESTOCK3D_V3_MODEL_NAME)
+        and cfg.plan_generator != "heuristic_search"
+    ):
+        # v2 default = the geometry-informed nearest-first plan-gen prior (the DEPLOYED
+        # generator). It orders the pool feasible-pick-first while still enumerating the
+        # place_short-on-tall (F3) variants, so a small K_max pool contains both a feasible
+        # skeleton and labelled negatives -- tractable AND diverse, unlike a stock-hff pool
+        # whose feasible plan is buried thousands deep on the hard configs. Opt out with
+        # ``plan_generator="heuristic_search"`` for the stock hff ordering.
+        # pylint: disable=import-outside-toplevel
+        from alphatamp.approaches.spectre.envs.restock3d.plan_generator_v2 import (
+            GeometryGuidedRestockPlanGenerator,
+            pick_distance_from_state,
+        )
+
+        state = x0 if x0 is not None else env_models.observation_to_state(obs)
+        v2_goal_names: list[str] = _restock_extras["goal_names"]  # type: ignore[assignment]
+        return GeometryGuidedRestockPlanGenerator(
+            env_models.types,
+            env_models.predicates,
+            env_models.operators,
+            seed=problem_id,
+            pick_distance=pick_distance_from_state(state, v2_goal_names),
+            lam=1.0,
         )
     del obs  # heuristic-search path takes its inputs from env_models alone
     return RelationalHeuristicSearchAbstractPlanGenerator(
@@ -235,15 +295,31 @@ def _make_trajectory_sampler(
         )
 
         return RecordingSampler(**kwargs)
-    if cfg.model_name == _RESTOCK3D_MODEL_NAME:
+    if cfg.model_name in (
+        _RESTOCK3D_MODEL_NAME,
+        _RESTOCK3D_V2_MODEL_NAME,
+        _RESTOCK3D_V3_MODEL_NAME,
+    ):
         # pylint: disable=import-outside-toplevel
         from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
             RestockRecordingSampler,
         )
 
+        # v3 enables the arm-insertion F3 attribution (Phase 3): a block in (cutoff, clearance]
+        # fits under the board but the arm can't insert it; the analytic classifier calls that a
+        # provable F3, so the real refiner must too (Gate G1). v1/v2 pass None (block-vs-board only).
+        section_cutoffs = None
+        if cfg.model_name == _RESTOCK3D_V3_MODEL_NAME:
+            from alphatamp.approaches.spectre.envs.restock3d.feasibility_v3 import (
+                SHORT_CUTOFF,
+                TALL_CUTOFF,
+            )
+
+            section_cutoffs = {"section_0": TALL_CUTOFF, "section_1": SHORT_CUTOFF}
         return RestockRecordingSampler(
             sim=_restock_extras["sim"],
             region_infos=_restock_extras["region_infos"],  # type: ignore[arg-type]
+            section_height_cutoffs=section_cutoffs,
             **kwargs,  # type: ignore[arg-type]
         )
     return ParameterizedControllerTrajectorySampler(**kwargs)  # type: ignore[arg-type]
@@ -277,12 +353,18 @@ def _failure_metadata_fn(
     # pylint: disable=import-outside-toplevel
     if model_name == _STICK_BUTTON_MODEL_NAME:
         from alphatamp.approaches.spectre.envs.stickbutton2d.instrumented_refiner import (
-            failure_metadata as sb_fm,)  # pylint: disable=line-too-long
+            failure_metadata as sb_fm,
+        )  # pylint: disable=line-too-long
 
         return sb_fm
-    if model_name == _RESTOCK3D_MODEL_NAME:
+    if model_name in (
+        _RESTOCK3D_MODEL_NAME,
+        _RESTOCK3D_V2_MODEL_NAME,
+        _RESTOCK3D_V3_MODEL_NAME,
+    ):
         from alphatamp.approaches.spectre.envs.restock3d.instrumented_refiner import (
-            failure_metadata as rs_fm,)
+            failure_metadata as rs_fm,
+        )
 
         return rs_fm
     return None
@@ -326,6 +408,61 @@ def _collect_all_objects(
     return registry
 
 
+def _restock3d_analytic_inputs(
+    x0: object,
+) -> tuple[dict[str, tuple[float, float]], dict[str, tuple[float, float]]]:
+    """Per-block ``(width, height)`` and ``(x, y)`` for the goal blocks, read from
+    ``x0``.
+
+    The pure-geometry inputs to ``feasibility_v3.classify_skeleton``; mirrors
+    ``restock3d_v3_plan_attempts._dims_pos``. Constant across a problem's skeleton pool.
+    """
+    block_dims: dict[str, tuple[float, float]] = {}
+    positions: dict[str, tuple[float, float]] = {}
+    for o in x0:  # type: ignore[attr-defined]
+        if o.name.startswith("obj_goal"):
+            block_dims[o.name] = (
+                2 * x0.get(o, "half_extent_x"),  # type: ignore[attr-defined]
+                2 * x0.get(o, "half_extent_z"),  # type: ignore[attr-defined]
+            )
+            p = x0.get_object_pose(o.name).position  # type: ignore[attr-defined]
+            positions[o.name] = (float(p[0]), float(p[1]))
+    return block_dims, positions
+
+
+def _restock3d_analytic_outcome(
+    action_plan: list[GroundOperator],
+    block_dims: dict[str, tuple[float, float]],
+    positions: dict[str, tuple[float, float]],
+    num_attempts: int,
+    seed: int,
+    r_cap: float,
+) -> tuple[str, float, dict[str, object], int | None]:
+    """Analytic (geometry-only) label + synthetic wall-clock for one skeleton.
+
+    Returns ``(outcome, wall_clock, refiner_metadata, stuck_step_index)``. A feasible
+    skeleton is a ``success`` costing ``U[0.6,0.8]*r_cap``; an infeasible one is a
+    ``fail`` costing the full ``r_cap`` with the first-violation dict recorded under
+    ``refiner_metadata["failures"]`` (byte-compatible with the real failure harvest, so
+    the record is indistinguishable in shape from a real run). Deterministic: the
+    synthetic success time is drawn from a ``random.Random(seed)`` keyed on the per-
+    skeleton seed.
+    """
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.envs.restock3d.feasibility_v3 import (
+        classify_skeleton,
+    )
+
+    steps = [(op.name, [p.name for p in op.parameters]) for op in action_plan]
+    fm = classify_skeleton(steps, block_dims, positions, num_attempts=num_attempts)
+    refiner_metadata: dict[str, object] = {}
+    if fm is None:
+        wall_clock = random.Random(seed).uniform(0.6, 0.8) * r_cap
+        return "success", wall_clock, refiner_metadata, None
+    refiner_metadata["failures"] = [fm]
+    return "fail", r_cap, refiner_metadata, int(fm["step_index"])
+
+
 def collect_episode(
     cfg: CollectionConfig,
     problem_id: int,
@@ -361,7 +498,17 @@ def collect_episode(
             tuple[list[RelationalAbstractState], list[GroundOperator]]
         ] = list(itertools.islice(pool_iter, cfg.K_max))
 
-        trajectory_sampler = _make_trajectory_sampler(cfg, env_models)
+        # Analytic mode (Restock3D-v3 synthetic collection) skips the real sampler/refiner
+        # entirely: each skeleton is labelled by pure geometry and given a synthetic
+        # wall-clock. The env was still reset above for x0/s0/goal/scene_geometry.
+        analytic = cfg.refiner_mode == "analytic"
+        trajectory_sampler = (
+            None if analytic else _make_trajectory_sampler(cfg, env_models)
+        )
+        block_dims: dict[str, tuple[float, float]] = {}
+        positions: dict[str, tuple[float, float]] = {}
+        if analytic:
+            block_dims, positions = _restock3d_analytic_inputs(x0)
 
         skeleton_records: list[SkeletonRecord] = []
         outcome_records: list[OutcomeRecord] = []
@@ -378,43 +525,60 @@ def collect_episode(
             )
 
             seed = _refinement_seed(cfg.refinement_seed_rule, problem_id, idx)
-            refiner = _make_refiner(cfg, obs, trajectory_sampler, seed)
-            # Rejections accumulate on the sampler, which outlives the candidate loop.
-            if hasattr(trajectory_sampler, "clear"):
-                trajectory_sampler.clear()  # type: ignore[union-attr]
-
-            start = time.perf_counter()
             outcome: str
+            wall_clock: float
             error_info: dict[str, str] | None = None
             refiner_metadata: dict[str, object] = {}
             stuck_step_index: int | None = None
-            try:
-                plan = refiner(
-                    x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg
-                )
-                outcome = "success" if plan is not None else "fail"
-            except BaseException as exc:  # pylint: disable=broad-exception-caught
-                outcome = "error"
-                error_info = {"cls": type(exc).__name__, "msg": str(exc)}
 
-            # Harvest the observed failure (SB2D / Restock3D). Observation-only -- every
-            # field was computed by the acceptance check the refiner already ran.
-            fm_fn = _failure_metadata_fn(cfg.model_name) if outcome == "fail" else None
-            if fm_fn is not None:
-                failures = fm_fn(
-                    trajectory_sampler,  # type: ignore[arg-type]
-                    action_plan,
-                    cfg.num_sampling_attempts_per_step,
-                    budget_exhausted=(
-                        time.perf_counter() - start >= cfg.refinement_timeout_s
-                    ),
+            if analytic:
+                outcome, wall_clock, refiner_metadata, stuck_step_index = (
+                    _restock3d_analytic_outcome(
+                        action_plan,
+                        block_dims,
+                        positions,
+                        cfg.num_sampling_attempts_per_step,
+                        seed,
+                        cfg.refinement_timeout_s,
+                    )
                 )
-                if failures:
-                    refiner_metadata["failures"] = failures
-                    step_i = failures[0]["step_index"]
-                    stuck_step_index = int(step_i)  # type: ignore[call-overload]
+            else:
+                refiner = _make_refiner(cfg, obs, trajectory_sampler, seed)
+                # Rejections accumulate on the sampler, which outlives the candidate loop.
+                if hasattr(trajectory_sampler, "clear"):
+                    trajectory_sampler.clear()  # type: ignore[union-attr]
 
-            wall_clock = time.perf_counter() - start
+                start = time.perf_counter()
+                try:
+                    plan = refiner(
+                        x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg
+                    )
+                    outcome = "success" if plan is not None else "fail"
+                except BaseException as exc:  # pylint: disable=broad-exception-caught
+                    outcome = "error"
+                    error_info = {"cls": type(exc).__name__, "msg": str(exc)}
+
+                # Harvest the observed failure (SB2D / Restock3D). Observation-only -- every
+                # field was computed by the acceptance check the refiner already ran.
+                fm_fn = (
+                    _failure_metadata_fn(cfg.model_name) if outcome == "fail" else None
+                )
+                if fm_fn is not None:
+                    failures = fm_fn(
+                        trajectory_sampler,  # type: ignore[arg-type]
+                        action_plan,
+                        cfg.num_sampling_attempts_per_step,
+                        budget_exhausted=(
+                            time.perf_counter() - start >= cfg.refinement_timeout_s
+                        ),
+                    )
+                    if failures:
+                        refiner_metadata["failures"] = failures
+                        step_i = failures[0]["step_index"]
+                        stuck_step_index = int(step_i)  # type: ignore[call-overload]
+
+                wall_clock = time.perf_counter() - start
+
             total_wall_clock += wall_clock
 
             if outcome == "success" and first_success_idx is None:
@@ -464,7 +628,11 @@ def collect_episode(
                 "split": cfg.split,
                 "acyclic_pool": True,
             }
-        elif cfg.model_name == _RESTOCK3D_MODEL_NAME:
+        elif cfg.model_name in (
+            _RESTOCK3D_MODEL_NAME,
+            _RESTOCK3D_V2_MODEL_NAME,
+            _RESTOCK3D_V3_MODEL_NAME,
+        ):
             gen_params = {
                 "stratum": int(cfg.model_kwargs["stratum"]),
                 "split": cfg.split,
@@ -500,6 +668,13 @@ def collect_episode(
             )
 
             scene_geometry = build_scene_geometry(x0)
+        elif cfg.model_name in (_RESTOCK3D_V2_MODEL_NAME, _RESTOCK3D_V3_MODEL_NAME):
+            # pylint: disable=import-outside-toplevel
+            from alphatamp.approaches.spectre.envs.restock3d.scene_geometry import (
+                build_scene_geometry as build_restock3d_scene_geometry,
+            )
+
+            scene_geometry = build_restock3d_scene_geometry(x0)
 
         return EpisodeRecord(
             provenance=provenance,

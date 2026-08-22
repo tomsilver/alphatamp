@@ -1,4 +1,5 @@
-"""Restock3D baseline-FP probe: how deep in the hff-ranked pool is the first refinable skeleton?
+"""Restock3D baseline-FP probe: how deep in the hff-ranked pool is the first refinable
+skeleton?
 
 For each (stratum, problem) it draws the hff skeleton pool and refines candidates **in order**, one at
 a time, stopping at the first that fully refines. The index of that first success is the naive
@@ -117,14 +118,18 @@ def probe(stratum: int, pid: int, k_max: int):
             seed = _refinement_seed(cfg.refinement_seed_rule, pid, idx)
             refiner = _make_refiner(cfg, obs, sampler, seed)
             try:
-                plan = refiner(x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg)
+                plan = refiner(
+                    x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg
+                )
             except BaseException:  # noqa: BLE001
                 plan = None
             if plan is not None:
                 first = idx
                 print(f"    candidate {idx}: SUCCESS  (first refinable)", flush=True)
                 break
-            f = failure_metadata(sampler, action_plan, cfg.num_sampling_attempts_per_step, False)
+            f = failure_metadata(
+                sampler, action_plan, cfg.num_sampling_attempts_per_step, False
+            )
             fam[_classify(f)] += 1
             print(f"    candidate {idx}: fail [{_classify(f)}]", flush=True)
         return first, len(pool), fam

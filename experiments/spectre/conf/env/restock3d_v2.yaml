@@ -1,0 +1,12 @@
+# Restock3D v2 (continuous packing) — the full SPECTRE collection.
+#
+# Five configs — symmetric 2x2, 3x3 and crowded 3x4, 4x3, 4x4 (tall-block x short-cube) — at
+# 50 train / 15 val / 15 test each (250/75/75). Pooled under the stratum-encoded problem ids of
+# envs/restock3d/strata_v2.py (v2-local //5 banding, five strata). Driven by
+# experiments/spectre/restock3d_v2_collect.py; `env_variant` selects the on-disk layout and
+# `env_id` lets spectre_build_vocab.py resolve (vocab is over the fixed op/pred/type set, so any
+# registered v2 stratum id works). NOTE: `compare.stratum_of` is 4-stratum; per-stratum analysis
+# must route through `strata_v2.stratum_of` (deferred — vocab build does not stratify).
+env_id: "spectre/Restock3Dv2-r11-v0"
+env_variant: "restock3d_v2"
+model_name: "restock3d_v2"

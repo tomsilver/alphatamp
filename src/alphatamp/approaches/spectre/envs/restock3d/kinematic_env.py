@@ -60,7 +60,18 @@ _SHELF_HEIGHT = 0.0127  # board thickness
 # object is blocked until nearer ones are cleared -- naive order fails, south-to-north succeeds). The
 # clutter object SPECS + the buffer/relocation machinery are kept inert (one flag away). This drives the
 # object SPECS; generator._CLUTTER_PER_STRATUM drives their POSITIONS -- the two MUST match.
-CLUTTER_PER_STRATUM: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+CLUTTER_PER_STRATUM: dict[int, int] = {
+    0: 0,
+    1: 0,
+    2: 0,
+    3: 0,
+    10: 0,
+    11: 0,
+    12: 0,
+    13: 0,
+    14: 0,  # 3x4 (v2 full collection)
+    15: 0,  # 4x3 (v2 full collection)
+}
 
 
 @dataclass(frozen=True)
@@ -421,13 +432,115 @@ class Restock3DEnv(ConstantObjectKinDEREnv):
         return f"Restock3D stratum r{self._stratum}."
 
 
+class Restock3DV2Env(Restock3DEnv):
+    """Constant-object gym wrapper for a **v2 continuous-packing** stratum.
+
+    Identical to :class:`Restock3DEnv` except it builds the env with the two wide
+    section bands (``stratum_env_args_v2`` / ``compute_section_infos``) instead of the
+    v1 discrete regions, so ``kinder.make`` yields the continuous-packing sim the
+    SPECTRE v2 collection refines. The recipe comes from ``generator.STRATA[stratum]``
+    (committed), so the pilot strata (10-13) select the symmetric 1x1..4x4 configs.
+    """
+
+    def _create_object_centric_env(
+        self, *args, stratum: int = 0, **kwargs
+    ) -> ObjectCentricKinematic3DRobotEnv:
+        from .models_v2 import stratum_env_args_v2  # local: avoid an import cycle
+
+        object_specs, pose_fn, section_infos, config = stratum_env_args_v2(stratum)
+        return ObjectCentricRestock3DEnv(
+            object_specs, pose_fn, section_infos, config=config, *args, **kwargs
+        )
+
+    def _create_variant_markdown_description(self) -> str:
+        return "v2 continuous packing; strata differ by (n_tall x n_short) counts."
+
+
+class ObjectCentricRestock3DEnvV3(ObjectCentricRestock3DEnv):
+    """v3 continuous-packing env with **per-object sampled dims** (width + height).
+
+    v2 keeps object dims as type-keyed constants (only positions vary per seed). v3 samples each
+    object's ``(half_x, half_z)`` per seed via ``spec_fn(seed)``, so the movable PyBullet BODIES are
+    rebuilt whenever the problem seed changes. The object *set* (names / count / type) is fixed per
+    stratum, so the :class:`ConstantObjectKinDEREnv` wrapper's fixed observation Box is unaffected —
+    only body geometry + floor poses change. Collection builds a fresh env per problem and resets
+    once, so this rebuild fires at most twice (the wrapper's exemplar reset, then the real reset).
+    """
+
+    def __init__(
+        self,
+        spec_fn: Callable[[int], list[ObjectSpec]],
+        pose_fn: PoseFn,
+        region_infos: dict[str, RegionInfo],
+        config: Restock3DEnvConfig = Restock3DEnvConfig(),
+        **kwargs,
+    ) -> None:
+        self._spec_fn = spec_fn
+        super().__init__(spec_fn(0), pose_fn, region_infos, config=config, **kwargs)
+        self._built_seed = 0
+
+    def _rebuild_bodies(self, specs: list[ObjectSpec]) -> None:
+        import pybullet as p  # local import; keep the module import surface minimal
+
+        pcid = self.physics_client_id
+        for mid in self._movable_ids.values():
+            p.removeBody(mid, physicsClientId=pcid)
+        self._object_specs = list(specs)
+        self._movable_ids = {}
+        self._half_extents = {}
+        for name, half, rgba in self._object_specs:
+            self._movable_ids[name] = create_pybullet_block(
+                rgba, half, physics_client_id=pcid
+            )
+            self._half_extents[name] = half
+
+    def _reset_objects(self) -> None:
+        if self._problem_seed != self._built_seed:
+            self._rebuild_bodies(self._spec_fn(self._problem_seed))
+            self._built_seed = self._problem_seed
+        super()._reset_objects()
+
+
+class Restock3DV3Env(Restock3DEnv):
+    """Constant-object gym wrapper for a **v3 per-object-dims** stratum.
+
+    Builds :class:`ObjectCentricRestock3DEnvV3` from the v3 generator's ``(spec_fn, pose_fn,
+    section_infos, config)`` (per-object widths + heights, re-balanced 0.27/0.22 partition). The
+    object *set* is the fixed ``obj_goal{i}`` names for the stratum's block count, so the constant
+    observation Box holds; only the per-object feature values (dims) + floor poses vary per seed.
+    """
+
+    def _create_object_centric_env(
+        self, *args, stratum: int = 0, **kwargs
+    ) -> ObjectCentricKinematic3DRobotEnv:
+        from .generator_v3 import stratum_env_args_v3  # local: avoid an import cycle
+
+        spec_fn, pose_fn, section_infos, config = stratum_env_args_v3(stratum)
+        return ObjectCentricRestock3DEnvV3(
+            spec_fn, pose_fn, section_infos, config=config, *args, **kwargs
+        )
+
+    def _get_constant_object_names(self, exemplar_state: ObjectCentricState) -> list:
+        names = ["robot"]
+        for obj in exemplar_state:
+            if obj.name.startswith(("shelf_board_", "obj_goal")):
+                names.append(obj.name)
+        return names
+
+    def _create_variant_markdown_description(self) -> str:
+        return "v3 continuous packing; per-object widths + heights sampled near the cutoff."
+
+
 # Convenience re-export (kept so callers can compute section geometry without importing
 # region_geometry directly).
 __all__ = [
     "Restock3DEnvConfig",
     "Restock3DObjectCentricState",
     "ObjectCentricRestock3DEnv",
+    "ObjectCentricRestock3DEnvV3",
     "Restock3DEnv",
+    "Restock3DV2Env",
+    "Restock3DV3Env",
     "stratum_env_args",
     "stratum_object_specs",
     "stratum_pose_fn",
