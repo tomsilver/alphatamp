@@ -138,6 +138,11 @@ def load_checkpoint(
             atom_mode=str(cfg.get("atom_mode", "off")),
             use_init_atoms=bool(cfg.get("use_init_atoms", True)),
             use_goal_atoms=bool(cfg.get("use_goal_atoms", True)),
+            # Rung-1 learned pathway (F-A/F-B2): architectural (selects the
+            # RecordStepEncoder / StepJoin submodules) AND emitted. Older checkpoints have
+            # no key -> "summary" / off -> nothing built -> byte-identical load.
+            record_mode=str(cfg.get("record_mode", "summary")),
+            use_step_join=bool(cfg.get("use_step_join")),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)
@@ -155,6 +160,10 @@ def load_checkpoint(
         # historical holdout, so only a model trained with `--no-record-holdout` deploys
         # without it (docs/failed_records_fix.md P-1).
         "record_holdout": bool(cfg.get("record_holdout", True)),
+        # Architectural *and* emitted (like state_delta): the encoder needs the submodules
+        # AND the tensorizer must emit the evidence-step arrays. Rebuilt into SpectreConfig
+        # above and threaded into build_example here.
+        "record_mode": str(cfg.get("record_mode", "summary")),
         # Architectural *and* emitted: the encoder needs the submodules and the
         # tensorizer
         # needs to produce the arrays, so it appears in both places -- exactly as
@@ -220,6 +229,7 @@ def deployed_rollout_traced(
     regroup_feats: bool = False,
     state_delta: bool = False,
     record_holdout: bool = True,
+    record_mode: str = "summary",
     suppress_records: bool = False,
     zero_scene_cols: frozenset[str] = frozenset(),
     refine_cap_s: Optional[float] = None,
@@ -316,6 +326,7 @@ def deployed_rollout_traced(
             regroup_feats=regroup_feats,
             state_delta=state_delta,
             record_holdout=record_holdout,
+            record_mode=record_mode,
             scene_3d=scene_3d,
             pointset_feats=_ps_feats,
             use_pca_feats=_ps_pca,

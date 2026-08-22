@@ -65,6 +65,14 @@ MAX_DELTA_ATOMS = 8
 D_PRED = 32
 D_DELTA = 32
 
+# Rung-1 evidence-step stream (docs/failed_records_fix.md F-A). Shared with the tensorizer
+# (`dataset` imports these), so there is one source of truth for the widths.
+N_STEP_SCALARS = 3  # [exhausted, log1p(effort)/10, effort_is_total]
+N_STEP_STATUS = 2  # failed-here (1) / succeeded-and-blamed (2); 0 = pad
+MAX_ATTEMPTS = 32  # attempt-segment table size (deploy |F| tops out at the pool cap)
+D_STEP_STATUS = 16
+D_STEP_ATTEMPT = 16
+
 
 class RecordEncoder(nn.Module):
     """One observed failure -> one token, with the object roles kept apart.
@@ -181,6 +189,87 @@ class RecordEncoder(nn.Module):
                 self._delta(delta_pred_ids, delta_arg_tags)
             )
         return self.proj[2](self.proj[1](hidden)) * mask.unsqueeze(-1)
+
+
+class RecordStepEncoder(nn.Module):
+    """Rung-1 evidence-step tokens (docs/failed_records_fix.md F-A rung 1).
+
+    Each evidence step's geometry is embedded by the **shared** ``CandidateEncoder``
+    (passed in as ``base`` from ``self.cands.encode_steps`` so its weights are not
+    double-registered), which makes a failed ``place_short(b)`` and the current
+    candidate's ``place_short(b)`` identical vectors — the join the step-join then does
+    becomes similarity in a shared space. On top of that, an **additive, zero-init**
+    enrichment adds the status, the attempt segment, the count-weighted culprit role, and
+    the effort scalars; zero-init means at step 0 an evidence token equals its shared step
+    vector, so the enrichment's contribution is measured, not assumed.
+    """
+
+    def __init__(self, max_tags: int, dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        self.status_emb = nn.Embedding(N_STEP_STATUS + 1, D_STEP_STATUS, padding_idx=0)
+        self.attempt_emb = nn.Embedding(MAX_ATTEMPTS + 1, D_STEP_ATTEMPT, padding_idx=0)
+        self.tag_emb = nn.Embedding(max_tags + 1, D_TAG, padding_idx=PAD_TAG)
+        self.enrich = nn.Linear(
+            D_STEP_STATUS + D_STEP_ATTEMPT + D_TAG + N_STEP_SCALARS, D_MODEL
+        )
+        nn.init.zeros_(self.enrich.weight)
+        nn.init.zeros_(self.enrich.bias)
+
+    def forward(
+        self,
+        base: Tensor,
+        status: Tensor,
+        attempt: Tensor,
+        cul_tags: Tensor,
+        cul_counts: Tensor,
+        scalars: Tensor,
+        mask: Tensor,
+    ) -> Tensor:
+        present = (cul_tags != PAD_TAG).float().unsqueeze(-1)  # (B, S, C, 1)
+        w = cul_counts.unsqueeze(-1) * present  # weight the culprit role by log-count
+        cul = (self.tag_emb(cul_tags) * w).sum(2) / w.sum(2).clamp(min=1e-6)
+        # attempt is 0-indexed; shift by +1 so the first real attempt is not the pad slot.
+        enrich_in = torch.cat(
+            [
+                self.status_emb(status),
+                self.attempt_emb((attempt + 1).clamp(max=MAX_ATTEMPTS)),
+                cul,
+                scalars,
+            ],
+            dim=-1,
+        )
+        return (base + self.enrich(enrich_in)) * mask.unsqueeze(-1).float()
+
+
+class StepJoin(nn.Module):
+    """Pre-pooling evidence interaction (docs/failed_records_fix.md F-B2).
+
+    The scorer's own evidence query is the *pooled* candidate embedding, so a step-level
+    candidate×evidence join is not representable there. This module lets the candidate's
+    **per-step** tokens cross-attend over the evidence-step memory *before* the PMA pool,
+    which makes that join representable at all. Zero-init output projection + residual, so
+    a flag-on model is identical to flag-off at step 0 and old checkpoints load
+    ``strict=True`` (the module only exists when ``use_step_join`` is set).
+    """
+
+    def __init__(self, dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        self.attn = nn.MultiheadAttention(
+            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        )
+        self.out = nn.Linear(D_MODEL, D_MODEL)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, step: Tensor, memory: Tensor, mem_mask: Tensor) -> Tensor:
+        b, k, ell, d = step.shape
+        q = step.reshape(b, k * ell, d)
+        has = mem_mask.any(dim=1)  # (B,) — some evidence to attend to
+        safe = mem_mask.clone()
+        safe[~has, 0] = True  # dodge the all-masked-row NaN; zeroed straight after
+        out, _ = self.attn(q, memory, memory, key_padding_mask=~safe)
+        out = out * has.view(b, 1, 1).float()
+        return step + self.out(out).reshape(b, k, ell, d)
 
 
 class EvidenceCrossAttentionScorer(CrossAttentionScorer):
@@ -370,6 +459,16 @@ class SpectreConfig:
     atom_mode: str = "off"
     use_init_atoms: bool = True
     use_goal_atoms: bool = True
+    # --- rung-1 learned-pathway switches (docs/failed_records_fix.md F-A/F-B2) ---
+    # ``record_mode="steps"`` replaces the one-summary-token-per-record evidence memory
+    # with the rung-1 evidence-STEP stream (failed step + culprit establishing steps,
+    # shared-encoder embedded); ``use_step_join`` adds the pre-pooling StepJoin so
+    # candidate step tokens cross-attend over that memory before pooling. Both default off
+    # / "summary", building nothing new, so the state dict is byte-identical to a
+    # pre-flag checkpoint (D-8). They select submodules AND change what the tensorizer
+    # emits, so both are persisted and rebuilt at load time (like ``coverage_feats``).
+    record_mode: str = "summary"
+    use_step_join: bool = False
 
 
 class SpectreModel(nn.Module):
@@ -411,6 +510,9 @@ class SpectreModel(nn.Module):
         # Additive by construction: the record encoder only exists when asked for, so a
         # default-config state dict is byte-identical to v2.2's (D-8) and the
         # equivalence oracle keeps loading.
+        # Summary record tokens (rung 0) OR the rung-1 evidence-step stream, never both:
+        # they encode the same failures, and `record_mode="steps"` uses `rec_steps` as the
+        # evidence memory instead of `records`, so building both would leave dead params.
         self.records = (
             RecordEncoder(
                 n_ops,
@@ -420,7 +522,7 @@ class SpectreModel(nn.Module):
                 c.max_pred_arity,
                 c.use_state_delta,
             )
-            if c.use_records
+            if (c.use_records and c.record_mode != "steps")
             else None
         )
         # Built last (after every other submodule), so a config-off model keeps its exact
@@ -443,6 +545,16 @@ class SpectreModel(nn.Module):
             if c.atom_mode == "profiles"
             else None
         )
+        # Rung-1 learned pathway (F-A/F-B2), built last so an off-config model keeps its
+        # exact init draws and a flag-on model is zero-init-identical at step 0. The step
+        # encoder owns only the enrichment params; it reuses `self.cands` for the step
+        # geometry via `encode_steps`, so those weights are never double-registered.
+        self.rec_steps = (
+            RecordStepEncoder(c.max_tags, c.dropout_p)
+            if (c.use_records and c.record_mode == "steps")
+            else None
+        )
+        self.step_join = StepJoin(c.dropout_p) if c.use_step_join else None
         if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
             raise NotImplementedError(
                 "necessity conditioning was cut from v3 (decisions.md 2026-07-26): D2 "
@@ -464,13 +576,32 @@ class SpectreModel(nn.Module):
         if self.atoms is not None:
             atom_obj_add, atom_glob_add = self.atoms(batch)
         scene_tok = self.scene(batch, atom_obj_add=atom_obj_add)
-        cand_emb = self.cands(batch)
-        # Evidence memory: v3 record tokens when enabled, else the legacy fact tokens.
-        # Never both -- they encode the same failures, so stacking them would
-        # double-count the evidence and make the increment unattributable.
+        # Evidence memory: rung-1 evidence steps when `record_mode="steps"`, else the v3
+        # record tokens, else the legacy fact tokens. Never more than one -- they encode
+        # the same failures, so stacking them would double-count the evidence. Built
+        # before the candidates so the step-join can consume it.
         fact_tok = None
         fact_mask = batch.fact_mask
         if (
+            self.rec_steps is not None
+            and getattr(batch, "rec_step_op_ids", None) is not None
+            and batch.rec_step_op_ids is not None
+            and batch.rec_step_op_ids.shape[1] > 0
+        ):
+            base = self.cands.encode_steps(
+                batch.rec_step_op_ids, batch.rec_step_pos, batch.rec_step_arg_tags
+            )
+            fact_tok = self.rec_steps(
+                base,
+                batch.rec_step_status,
+                batch.rec_step_attempt,
+                batch.rec_step_culprit_tags,
+                batch.rec_step_culprit_counts,
+                batch.rec_step_scalars,
+                batch.rec_step_mask,
+            )
+            fact_mask = batch.rec_step_mask
+        elif (
             self.records is not None
             and getattr(batch, "rec_schema_ids", None) is not None
             and batch.rec_schema_ids is not None
@@ -497,6 +628,19 @@ class SpectreModel(nn.Module):
                 batch.fact_arg_tags,
                 batch.fact_mask,
             )
+        # Candidate embedding, made evidence-aware by the step-join (F-B2) when enabled:
+        # the candidate's per-step tokens cross-attend over the evidence memory before the
+        # PMA pool. Otherwise the pooled candidate embedding, unchanged.
+        if self.step_join is not None and fact_tok is not None:
+            cstep = self.cands.encode_steps(
+                batch.cand_op_ids, batch.cand_pos, batch.cand_arg_tags
+            )
+            cstep = self.step_join(cstep, fact_tok, fact_mask)
+            cand_emb = self.cands.pool_steps(
+                cstep, batch.cand_step_mask, batch.pool_mask
+            )
+        else:
+            cand_emb = self.cands(batch)
         prior = batch.cand_prior if self.cfg.n_prior_feats else None
         if overlap is None and self.cfg.n_overlap_feats:
             overlap = batch.cand_overlap

@@ -198,6 +198,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         "regroup_feats",
         "state_delta",
         "record_holdout",
+        "record_mode",
     }
     # the deployed arm: jaccard overlap, coverage on, both columns
     assert deploy["overlap_mode"] == "jaccard"

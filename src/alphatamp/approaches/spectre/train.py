@@ -107,6 +107,14 @@ class TrainConfig:
     # already read via `unified_evidence`. Emission-only (no submodule); the deployed
     # scalars-on recipe leaves it True, where the holdout is near-harmless de-duplication.
     record_holdout: bool = True
+    # Rung-1 learned pathway (docs/failed_records_fix.md F-A/F-B2). `record_mode="steps"`
+    # emits + consumes the evidence-STEP stream (failed step + culprit establishing steps,
+    # shared-encoder embedded) instead of the summary record tokens; `use_step_join` adds
+    # the pre-pooling StepJoin so candidate step tokens can join against that memory. Both
+    # default off/"summary" (byte-identical). Changes both what `build_example` emits and
+    # the architecture, so both are persisted and rebuilt at load time.
+    record_mode: str = "summary"
+    use_step_join: bool = False
     # Separate cross-attention channel for evidence (EvidenceCrossAttentionScorer).
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
@@ -275,6 +283,7 @@ class SpectreDataset(Dataset):
             regroup_feats=self.cfg.regroup_feats,
             state_delta=self.cfg.use_state_delta,
             record_holdout=self.cfg.record_holdout,
+            record_mode=self.cfg.record_mode,
             scene_3d=self.cfg.scene_3d,
             pointset_feats=_ps,
             use_pca_feats=_pca,
@@ -368,6 +377,7 @@ def deployed_val_fp(
     regroup_feats: bool = False,
     state_delta: bool = False,
     record_holdout: bool = True,
+    record_mode: str = "summary",
 ) -> float:
     """Mean failed attempts before first success, on the real deployed loop.
 
@@ -395,6 +405,7 @@ def deployed_val_fp(
             regroup_feats=regroup_feats,
             state_delta=state_delta,
             record_holdout=record_holdout,
+            record_mode=record_mode,
         )
         fps.append(float(attempts) - 1.0)
     return float(np.mean(fps)) if fps else float("inf")
@@ -530,6 +541,8 @@ def run_training(
             atom_mode=cfg.atom_mode,
             use_init_atoms=cfg.use_init_atoms,
             use_goal_atoms=cfg.use_goal_atoms,
+            record_mode=cfg.record_mode,
+            use_step_join=cfg.use_step_join,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -606,6 +619,7 @@ def run_training(
                 regroup_feats=cfg.regroup_feats,
                 state_delta=cfg.use_state_delta,
                 record_holdout=cfg.record_holdout,
+                record_mode=cfg.record_mode,
             )
 
         fp = _val_fp(model)
@@ -762,6 +776,20 @@ def main(argv=None) -> int:
         "baseline). Default keeps the historical holdout.",
     )
     ap.add_argument(
+        "--record-mode",
+        choices=["summary", "steps"],
+        default="summary",
+        help="'steps' = rung-1 evidence-step stream (failed step + culprit establishing "
+        "steps, shared-encoder embedded) instead of one summary token per record "
+        "(docs/failed_records_fix.md F-A).",
+    )
+    ap.add_argument(
+        "--step-join",
+        action="store_true",
+        help="add the pre-pooling StepJoin (F-B2): candidate step tokens cross-attend "
+        "over the evidence memory before pooling, so a step-level join is representable.",
+    )
+    ap.add_argument(
         "--state-delta",
         action="store_true",
         help="each record token also carries s_j as the delta from s_0 (§6.1): which "
@@ -868,6 +896,8 @@ def main(argv=None) -> int:
         overlap_mode=a.overlap_mode,
         aggregate_records=a.aggregate_records,
         record_holdout=not a.no_record_holdout,
+        record_mode=a.record_mode,
+        use_step_join=a.step_join,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,

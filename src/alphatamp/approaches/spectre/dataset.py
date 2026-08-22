@@ -45,11 +45,13 @@ from alphatamp.approaches.spectre.encoders import (
 from alphatamp.approaches.spectre.facts import TIER_IDS, gather_context_facts
 from alphatamp.approaches.spectre.failure_record import records_for_candidate
 from alphatamp.approaches.spectre.model import (
+    MAX_ATTEMPTS,
     MAX_DELTA_ATOMS,
     MAX_RECORD_ARGS,
     MAX_RECORD_CULPRITS,
     N_OVERLAP_COV,
     N_RECORD_SCALARS,
+    N_STEP_SCALARS,
     SpectreBatch,
 )
 from alphatamp.approaches.spectre.schema import EpisodeRecord
@@ -334,6 +336,9 @@ class SpectreExample:
     init_atom_arg_tags: Optional[np.ndarray] = None  # (A_i, M) int64
     goal_atom_pred: Optional[np.ndarray] = None  # (A_g,) int64
     goal_atom_arg_tags: Optional[np.ndarray] = None  # (A_g, M) int64
+    # Rung-1 evidence-step stream (docs/failed_records_fix.md F-A); None unless
+    # record_mode="steps". A list of StepArray tuples (see build_evidence_steps).
+    rec_steps: Optional[list] = None
 
 
 def _glob_feats(ex: SpectreExample) -> np.ndarray:
@@ -747,6 +752,107 @@ def build_record_arrays(
     return out
 
 
+# ── Rung-1 evidence-step stream (docs/failed_records_fix.md F-A) ──────────────────────
+# One STEP token instead of one summary token per record: the failed step of an attempt
+# plus each culprit's establishing step, all encoded in the CANDIDATE namespace so the
+# shared CandidateEncoder makes a failed `place_short(b)` and the current candidate's
+# `place_short(b)` identical vectors (the load-bearing "shared encoder" of F-A). A
+# `StepArray` is (op_id, arg_tags, pos, status, attempt, culprit_tags, culprit_counts,
+# scalars).
+StepArray = tuple
+STEP_STATUS_FAILED = 1  # the failed step of an attempt
+STEP_STATUS_ESTABLISH = 2  # a successful prior step that seated a culprit
+# N_STEP_SCALARS, MAX_ATTEMPTS are imported from `model` (single source of truth).
+
+
+def build_evidence_steps(
+    episode: EpisodeRecord,
+    context_f: frozenset[int],
+    tags: dict[str, int],
+    vocab: Vocab,
+    spec: DomainSpec,
+    record_holdout: bool = True,
+) -> list[StepArray]:
+    """Per failed attempt: its failed step + each culprit's establishing step.
+
+    Rung-1 enrichment (F-A). Steps are emitted in the candidate namespace (op id +
+    position + arg tags) so the shared ``CandidateEncoder.encode_steps`` embeds them with
+    the current candidate's weights. Per-culprit sample counts (F-A2) are recovered from
+    the **raw** (pre-aggregation) records — ``_aggregate_per_query`` would union them away.
+    A blameless failure emits exactly one token (the rung-0 budget); a culprit-bearing one
+    emits ``1 + |culprits|``. The ``record_holdout`` gate matches ``build_record_arrays``.
+
+    ``(schema, args)`` is the step identity (valid only because no skeleton repeats a
+    ground action — no un-store op); the establishing step is the *last* prefix step whose
+    args name the culprit, exactly the seating-chart scan the ``regroup`` feature uses.
+    """
+    arity = max(vocab.max_operator_arity, 1)
+    out: list[StepArray] = []
+    for attempt_id, idx in enumerate(sorted(context_f)):
+        skeleton = episode.skeleton_pool[idx]
+        seq = [
+            (op.name, tuple(p.name for p in op.parameters))
+            for op in skeleton.operator_seq
+        ]
+        raw = records_for_candidate(episode, idx, spec, with_state_delta=False)
+        # per-(schema, args) per-culprit raw sample counts, before aggregation unions them.
+        counts: dict = {}
+        for r in raw:
+            cc = counts.setdefault((r.schema, r.args), {})
+            for c in r.culprits or r.dev_blame:
+                cc[c] = cc.get(c, 0) + 1
+        for rec in _aggregate_per_query(raw):
+            if (
+                record_holdout
+                and spec.axioms_for(rec.schema).proof_tier()
+                and rec.proves_failure()
+            ):
+                continue
+            t = min(max(int(rec.step_index), 0), max(len(seq) - 1, 0))
+            culprits = [c for c in (rec.culprits or rec.dev_blame) if c in tags]
+            cc = counts.get((rec.schema, rec.args), {})
+            cul_tags = [tags[c] for c in culprits][:MAX_RECORD_CULPRITS]
+            cul_counts = [math.log1p(cc.get(c, 1)) for c in culprits][
+                :MAX_RECORD_CULPRITS
+            ]
+            scalars = [
+                1.0 if rec.exhausted else 0.0,
+                math.log1p(max(rec.n_step, 0)) / 10.0,
+                1.0 if rec.effort_is_total else 0.0,
+            ]
+            out.append(
+                (
+                    int(vocab.operators.get(rec.schema, 0)),
+                    [tags[a] for a in rec.args if a in tags][:arity],
+                    t,
+                    STEP_STATUS_FAILED,
+                    attempt_id,
+                    cul_tags,
+                    cul_counts,
+                    scalars,
+                )
+            )
+            for (
+                c
+            ) in culprits:  # establishing step = last prefix step naming the culprit
+                for u in range(t - 1, -1, -1):
+                    if c in seq[u][1]:
+                        out.append(
+                            (
+                                int(vocab.operators.get(seq[u][0], 0)),
+                                [tags[a] for a in seq[u][1] if a in tags][:arity],
+                                u,
+                                STEP_STATUS_ESTABLISH,
+                                attempt_id,
+                                [],
+                                [],
+                                [0.0] * N_STEP_SCALARS,
+                            )
+                        )
+                        break
+    return out
+
+
 def build_example(
     episode: EpisodeRecord,
     vocab: Vocab,
@@ -765,6 +871,7 @@ def build_example(
     regroup_feats: bool = False,
     state_delta: bool = False,
     record_holdout: bool = True,
+    record_mode: str = "summary",
     scene_3d: bool = False,
     pointset_feats: bool = False,
     use_pca_feats: bool = False,
@@ -1120,6 +1227,11 @@ def build_example(
         if (ctx and not hide)
         else []
     )
+    rec_steps = (
+        build_evidence_steps(canon, ctx, tags, vocab, spec, record_holdout)
+        if (record_mode == "steps" and ctx and not hide)
+        else None
+    )
 
     return (
         SpectreExample(
@@ -1145,6 +1257,7 @@ def build_example(
             init_atom_arg_tags,
             goal_atom_pred,
             goal_atom_arg_tags,
+            rec_steps=rec_steps,
         ),
         records,
     )
@@ -1187,6 +1300,43 @@ def collate(
             for ki, row in enumerate(e.overlap[:k_]):
                 ov_arr[bi, ki] = row
         batch.cand_overlap = torch.as_tensor(ov_arr)
+    # Rung-1 evidence steps (docs/failed_records_fix.md F-A). Independent of the summary
+    # `records` stream, and carried on the example itself (built with the same
+    # canonicalization), so it is padded here rather than threaded through the signature.
+    _steps = [e.rec_steps or [] for e in examples]
+    if any(_steps):
+        b = len(examples)
+        s = max(len(st) for st in _steps)
+        st_op = np.zeros((b, s), np.int64)
+        st_arg = np.zeros((b, s, max_arity), np.int64)
+        st_pos = np.zeros((b, s), np.int64)
+        st_status = np.zeros((b, s), np.int64)
+        st_attempt = np.zeros((b, s), np.int64)
+        st_cul = np.zeros((b, s, MAX_RECORD_CULPRITS), np.int64)
+        st_cnt = np.zeros((b, s, MAX_RECORD_CULPRITS), np.float32)
+        st_scal = np.zeros((b, s, N_STEP_SCALARS), np.float32)
+        st_mask = np.zeros((b, s), bool)
+        for bi, st in enumerate(_steps):
+            for si, (op, ar, pos, status, attempt, cul, cnt, scal) in enumerate(st):
+                st_op[bi, si] = op
+                st_arg[bi, si, : len(ar)] = ar
+                st_pos[bi, si] = pos
+                st_status[bi, si] = status
+                st_attempt[bi, si] = min(int(attempt), MAX_ATTEMPTS - 1)
+                st_cul[bi, si, : len(cul)] = cul
+                st_cnt[bi, si, : len(cnt)] = cnt
+                st_scal[bi, si] = scal
+                st_mask[bi, si] = True
+        t = torch.as_tensor
+        batch.rec_step_op_ids = t(st_op)
+        batch.rec_step_arg_tags = t(st_arg)
+        batch.rec_step_pos = t(st_pos)
+        batch.rec_step_status = t(st_status)
+        batch.rec_step_attempt = t(st_attempt)
+        batch.rec_step_culprit_tags = t(st_cul)
+        batch.rec_step_culprit_counts = t(st_cnt)
+        batch.rec_step_scalars = t(st_scal)
+        batch.rec_step_mask = t(st_mask)
     if not records or not any(records):
         return batch
 

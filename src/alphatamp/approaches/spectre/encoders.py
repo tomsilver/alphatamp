@@ -149,6 +149,21 @@ class SpectreBatch:
     init_atom_arg_tags: Optional[Tensor] = None  # (B, A_i, M) long
     goal_atom_pred: Optional[Tensor] = None  # (B, A_g) long
     goal_atom_arg_tags: Optional[Tensor] = None  # (B, A_g, M) long
+    # Rung-1 evidence-step stream (docs/failed_records_fix.md F-A); None unless
+    # record_mode="steps". Steps are in the candidate namespace (op id + position + arg
+    # tags) so the shared CandidateEncoder embeds them; the enrichment channels
+    # (status/attempt/culprit/scalars) are added on top. See RecordStepEncoder.
+    rec_step_op_ids: Optional[Tensor] = None  # (B, S) long — 0 = pad
+    rec_step_arg_tags: Optional[Tensor] = None  # (B, S, A) long
+    rec_step_pos: Optional[Tensor] = None  # (B, S) long — step index in its plan
+    rec_step_status: Optional[Tensor] = None  # (B, S) long — 1 failed / 2 established
+    rec_step_attempt: Optional[Tensor] = None  # (B, S) long — within-context attempt id
+    rec_step_culprit_tags: Optional[Tensor] = None  # (B, S, MAX_RECORD_CULPRITS) long
+    rec_step_culprit_counts: Optional[Tensor] = (
+        None  # (B, S, MAX_RECORD_CULPRITS) float
+    )
+    rec_step_scalars: Optional[Tensor] = None  # (B, S, N_STEP_SCALARS) float
+    rec_step_mask: Optional[Tensor] = None  # (B, S) bool — real step
 
     def to(self, device) -> "SpectreBatch":
         return SpectreBatch(
@@ -393,17 +408,37 @@ class CandidateEncoder(nn.Module):
         )
         self.max_arity = max_arity
 
+    def encode_steps(self, op_ids: Tensor, pos: Tensor, arg_tags: Tensor) -> Tensor:
+        """Per-step token embeddings ``[op + position + projected args]``, shape
+        ``(..., L, D)``.
+
+        Factored out of :meth:`forward` (byte-identical to the old inline computation) so
+        the **same weights** can encode a failed skeleton's evidence steps for rung-1
+        enrichment — a failed ``place_short(b)`` and the current candidate's
+        ``place_short(b)`` then become identical vectors by construction. Leading dims are
+        arbitrary: ``(B, K, L)`` for candidates, ``(B, S)`` for a flat evidence-step
+        stream.
+        """
+        op = self.op_emb(op_ids)
+        pos_e = self.pos_emb(pos.clamp(max=63))
+        args = self.tag_emb(arg_tags).reshape(
+            *arg_tags.shape[:-1], self.max_arity * D_TAG
+        )
+        return self.step_ln(op + pos_e + self.arg_proj(args))
+
+    def pool_steps(self, step: Tensor, step_mask: Tensor, pool_mask: Tensor) -> Tensor:
+        """PMA-pool per-candidate step tokens ``(B, K, L, D)`` to ``(B, K, D)``."""
+        b, k, ell = step.shape[0], step.shape[1], step.shape[2]
+        emb = self.pool(
+            step.reshape(b * k, ell, D_MODEL), step_mask.reshape(b * k, ell)
+        ).reshape(b, k, D_MODEL)
+        return emb * pool_mask.unsqueeze(-1)
+
     def forward(self, batch: SpectreBatch) -> Tensor:
-        b, k, ell = batch.cand_op_ids.shape
-        op = self.op_emb(batch.cand_op_ids)  # (B, K, L, D)
-        pos = self.pos_emb(batch.cand_pos.clamp(max=63))
-        args = self.tag_emb(batch.cand_arg_tags)  # (B, K, L, A, D_TAG)
-        args = args.reshape(b, k, ell, self.max_arity * D_TAG)
-        step = self.step_ln(op + pos + self.arg_proj(args))  # (B, K, L, D)
-        step = step.reshape(b * k, ell, D_MODEL)
-        smask = batch.cand_step_mask.reshape(b * k, ell)
-        emb = self.pool(step, smask).reshape(b, k, D_MODEL)  # (B, K, D)
-        return emb * batch.pool_mask.unsqueeze(-1)
+        step = self.encode_steps(
+            batch.cand_op_ids, batch.cand_pos, batch.cand_arg_tags
+        )  # (B, K, L, D)
+        return self.pool_steps(step, batch.cand_step_mask, batch.pool_mask)
 
 
 class FactEncoder(nn.Module):

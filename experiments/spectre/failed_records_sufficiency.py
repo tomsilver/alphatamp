@@ -195,11 +195,11 @@ def main() -> None:
                 verdict = "INSUFFICIENT (collision proof)"
             else:
                 verdict = "consistent-with-sufficient"
-            print(
-                f"{name:10s} {chk:9d} {col:7d} {nzpct:8.2f}% {dist:9d}  {verdict}"
-            )
+            print(f"{name:10s} {chk:9d} {col:7d} {nzpct:8.2f}% {dist:9d}  {verdict}")
         for name, w in res["witness"].items():
-            print(f"  witness[{name}]: {w[0]} contexts={w[1]} cand={w[2]} values={w[3]}")
+            print(
+                f"  witness[{name}]: {w[0]} contexts={w[1]} cand={w[2]} values={w[3]}"
+            )
 
 
 if __name__ == "__main__":
