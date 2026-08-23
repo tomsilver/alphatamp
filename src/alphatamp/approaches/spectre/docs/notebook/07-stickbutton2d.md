@@ -55,11 +55,13 @@ letting candidate *steps* attend over the record tokens before pooling — is wh
 headline gate**, on the summary-token step-join alone. So the deployed method's win need not be
 attributed to the compiled scalars as hand-engineering: ~half of it is recoverable by a generic
 attention join over raw evidence. ⚠️ **1 seed** (fr_join's −1.80 rests on a paired-over-problems CI,
-not cross-seed); the `fr_steps_join` regression is unexplained and may be noise. Next: (1) 3-seed
-confirmation of `fr_join`; (2) diagnose `fr_steps_join` (attention-mass audit / cap the evidence-step
-memory); (3) P-4 teachability to price how much of the remaining floor→ceiling gap is C3 (learnability)
-vs C2 (needs a sharper join); (4) the combined `step-join + scalars-on` rung — does the join *add* to
-the deployed ceiling, or is it substitutive?
+not cross-seed). **Decision (2026-08-22): C1 (content enrichment) is CUT** — inert alone, harmful
+combined (dilution), and its one unique value is `regroup`, which is off in practice; the machinery
+stays flag-gated off per the build-then-disable convention but is not pursued (the `fr_steps`/
+`fr_steps_join` arms are dropped from the sweep). The deployed direction is the **StepJoin over the
+summary tokens** alone. Next: (1) 3-seed confirmation of `fr_join`; (2) P-4 teachability — how much of
+the remaining floor→ceiling gap is C3 (learnability) vs C2 (needs a sharper join); (3) the combined
+`step-join + scalars-on` rung — does the join *add* to the deployed ceiling, or is it substitutive?
 
 ---
 

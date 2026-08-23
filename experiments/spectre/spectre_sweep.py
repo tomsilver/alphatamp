@@ -250,45 +250,31 @@ PRESETS: dict[str, dict[str, str]] = {
     "ablation_dd2d": _ablation_arms(),
     "ablation_sb2d": _ablation_arms(),
     "ablation_restock": _ablation_arms(" --scene-3d"),
-    # Learned-pathway workstream (docs/failed_records_fix.md F-A/F-B2). On the SAME ablation
-    # backbone as `abl_only_records` (the rung-0 tokens-only baseline), the increments are:
-    # rung-1 evidence STEPS (`--record-mode steps`) and the pre-pooling StepJoin
-    # (`--step-join`, the C2 fix — candidate step tokens join over the evidence memory before
-    # pooling). `fr_summary` retrains the rung-0 baseline under identical code as the matched
-    # control. Run per env one seed at a time (restock adds ` --scene-3d`):
-    #   --preset failed_records --env dd2d_v4 --seeds 0
+    # Learned-pathway workstream (docs/failed_records_fix.md F-B2). The deployed direction is
+    # the pre-pooling **StepJoin** (`--step-join`, the C2 fix — candidate step tokens join over
+    # the evidence memory before pooling), on the SAME ablation backbone as `abl_only_records`
+    # (the rung-0 tokens-only baseline, retrained here as `fr_summary`). Result 2026-08-22:
+    # `fr_join` −1.80 [−3.52,−0.16] (23%→43% gap-closure). **C1 content enrichment
+    # (`--record-mode steps`) was CUT** — inert alone (`fr_steps` −0.04) and harmful combined
+    # (`fr_steps_join` +0.73, attention dilution); the machinery stays flag-gated (off =
+    # byte-identical) per the build-then-disable convention but is not swept. Run per env one
+    # seed at a time (restock adds ` --scene-3d`):  --preset failed_records --env dd2d_v4 --seeds 0
     "failed_records": {
         "fr_summary": (
             f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta"
         ),
-        "fr_steps": (
-            f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
-            "--record-mode steps"
-        ),
         "fr_join": (
             f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
             "--step-join"
-        ),
-        "fr_steps_join": (
-            f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
-            "--record-mode steps --step-join"
         ),
     },
     "failed_records_restock": {
         "fr_summary": (
             f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn --state-delta"
         ),
-        "fr_steps": (
-            f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn "
-            "--state-delta --record-mode steps"
-        ),
         "fr_join": (
             f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn "
             "--state-delta --step-join"
-        ),
-        "fr_steps_join": (
-            f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn "
-            "--state-delta --record-mode steps --step-join"
         ),
     },
 }

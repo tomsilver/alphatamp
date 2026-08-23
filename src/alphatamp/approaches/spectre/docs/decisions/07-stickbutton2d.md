@@ -38,15 +38,16 @@ compiled coverage/waste/repeat; and enriched-steps-plus-join `fr_steps_join` = *
 one — a generic per-step attention join over raw record tokens recovers ~half of what the hand-compiled
 programs capture, so the deployed win is not purely hand-engineering. (2) Clears the doc's **≥25%
 proceed gate** (43%) but not the **50% headline gate**, on the summary-token join alone → proceed, but
-the headline is not yet earned. (3) The rung-1 evidence-step enrichment is **demoted, not removed**:
-inert alone and harmful combined with the join *as-is* (likely attention dilution from the larger
-memory — the rung-2 SNR risk, one rung early). It is **kept flag-gated** deliberately — off costs
-nothing (byte-identical, `strict=True`); it is the one thing that closes `regroup`'s genuine content
-gap (the establishing-step *schema*, which the summary tokens drop — the doc's "provably not
-computable" is structurally correct, P-2's "sufficient" was underpowered on that ~0–1% feature); and
-the dilution is plausibly fixable (cap / lean the memory). So it stays available per the
-build-then-disable convention and is a live rung-2 follow-up, not the headline direction.
-(4) **Standing caveat: 1 seed** —
+the headline is not yet earned. (3) **C1 (the rung-1 evidence-step content enrichment) is CUT as a
+direction** (user decision, 2026-08-22): inert alone (`fr_steps` −0.04) and harmful combined with the
+join (`fr_steps_join` +0.73 — attention dilution from the larger memory), and the *only* thing it would
+uniquely buy is `regroup` (it closes `regroup`'s real establishing-step-schema content gap — the doc's
+"provably not computable" is structurally correct, P-2's "sufficient" was underpowered on that ~0–1%
+feature), which is **off in practice**. So there is no active reason to enable it. The machinery
+(`record_mode="steps"`, `RecordStepEncoder`, `build_evidence_steps`, the `rec_step_*` fields) is **kept
+flag-gated off only per the build-then-disable convention** (off = byte-identical, `strict=True`, zero
+cost) — not swept, not pursued. The deployed learned direction is the **StepJoin over the summary
+record tokens** alone. (4) **Standing caveat: 1 seed** —
 `fr_join`'s −1.80 rests on a paired-over-problems CI, not cross-seed variance; a 3-seed confirmation is
 required before this is a paper number, and `fr_steps_join`'s regression is unexplained. Next rungs:
 3-seed `fr_join`; an attention-mass audit of `fr_steps_join`; P-4 teachability (is the residual
