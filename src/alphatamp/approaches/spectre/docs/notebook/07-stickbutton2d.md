@@ -48,14 +48,23 @@ gap-closure = (15.77 − FP) / 9.09.
   while s1 drops to 6.72). Most likely the larger evidence-step memory (failed + establishing steps)
   dilutes the step-join's attention (the rung-2 SNR risk, one rung early), or 1-seed optimization noise.
 
+**2-seed confirmation (seeds 0+1; seed 2 still training).** The step-join effect holds across seeds:
+`fr_join` **12.67 ± 1.17** vs `fr_summary` **15.05 ± 2.00** (ALL), paired **`fr_join` − `fr_summary`
+= −2.38, 95% CI [−4.34, −0.67]** (excludes 0) — slightly stronger than the 1-seed −1.80, and it
+improves every non-trivial stratum (s1 17.12→13.98, s2 17.66→16.48, s3 25.44→20.22). The absolute
+levels carry real seed variance (both arms are worse at seed 1; `fr_summary` s1 ±7.58), so the robust
+headline is the **paired increment**, not a single-arm mean. A clean 2-seed *gap-closure %* would need
+`abl_floor`/`abl_all` retrained at seed 1 (they exist at seed 0 only) — deferred; the 43% is the seed-0
+figure. Seed 2 is running; the 3-seed number folds in when it lands.
+
 **Takeaway.** The failure-record inertness is an **architecture** problem, not a content one: the
 information is present (P-2) and enriching it is inert (`fr_steps`), while a one-line reordering —
 letting candidate *steps* attend over the record tokens before pooling — is what unlocks it
 (`fr_join`, −1.80, 23%→43% gap-closure). This clears the doc's **≥25% proceed gate** but not the **50%
 headline gate**, on the summary-token step-join alone. So the deployed method's win need not be
 attributed to the compiled scalars as hand-engineering: ~half of it is recoverable by a generic
-attention join over raw evidence. ⚠️ **1 seed** (fr_join's −1.80 rests on a paired-over-problems CI,
-not cross-seed). **Decision (2026-08-22): C1 (content enrichment) is CUT** — inert alone, harmful
+attention join over raw evidence. **Confirmed across 2 seeds** (paired −2.38 [−4.34, −0.67]; seed 2
+pending). **Decision (2026-08-22): C1 (content enrichment) is CUT** — inert alone, harmful
 combined (dilution), and its one unique value is `regroup`, which is off in practice; the machinery
 stays flag-gated off per the build-then-disable convention but is not pursued (the `fr_steps`/
 `fr_steps_join` arms are dropped from the sweep). The deployed direction is the **StepJoin over the

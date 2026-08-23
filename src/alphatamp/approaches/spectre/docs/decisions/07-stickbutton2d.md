@@ -47,12 +47,13 @@ feature), which is **off in practice**. So there is no active reason to enable i
 (`record_mode="steps"`, `RecordStepEncoder`, `build_evidence_steps`, the `rec_step_*` fields) is **kept
 flag-gated off only per the build-then-disable convention** (off = byte-identical, `strict=True`, zero
 cost) — not swept, not pursued. The deployed learned direction is the **StepJoin over the summary
-record tokens** alone. (4) **Standing caveat: 1 seed** —
-`fr_join`'s −1.80 rests on a paired-over-problems CI, not cross-seed variance; a 3-seed confirmation is
-required before this is a paper number, and `fr_steps_join`'s regression is unexplained. Next rungs:
-3-seed `fr_join`; an attention-mass audit of `fr_steps_join`; P-4 teachability (is the residual
-floor→ceiling gap C3-learnability or C2-needs-a-sharper-join); and the combined step-join+scalars-on
-rung (additive vs substitutive with the deployed ceiling).
+record tokens** alone. (4) **Confirmed at 2 seeds** (paired `fr_join` − `fr_summary` = −2.38
+[−4.34, −0.67], seeds 0+1, CI excludes 0 — stronger than the 1-seed −1.80); seed 2 is training and
+folds in when done. Absolute levels carry seed variance, so the robust statement is the paired
+increment; a clean 2-seed gap-closure % would need `abl_floor`/`abl_all` at seed 1 (seed 0 only today,
+deferred). Next rungs: fold in seed 2; P-4 teachability (is the residual floor→ceiling gap
+C3-learnability or C2-needs-a-sharper-join); and the combined step-join+scalars-on rung (additive vs
+substitutive with the deployed ceiling).
 
 ---
 
