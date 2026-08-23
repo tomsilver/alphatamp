@@ -25,19 +25,25 @@ before the PMA pool — the C2 fix). A 1-seed dd2d_v4 sweep isolated each on the
 backbone (no compiled scalars).
 
 **Decision.** **The architecture fix (StepJoin), not content enrichment, is the lever — adopt the
-step-join as the learned-pathway direction and drop content enrichment as a standalone rung.**
-Evidence (test n=100, paired bootstrap over problems vs the rung-0 baseline `fr_summary` 13.64;
-floor 15.77, ceiling 6.68): content enrichment `fr_steps` = **−0.04 [−2.30, +2.60]** (inert — the
+step-join as the learned-pathway direction and drop content enrichment as a standalone rung.** The
+*direction* is settled by the per-arm contrast (below); the *magnitude* is modest and not
+CI-clean at 3 seeds. Evidence (dd2d_v4 test n=100, paired bootstrap over problems vs the rung-0
+baseline `fr_summary`): content enrichment `fr_steps` = **−0.04 [−2.30, +2.60]** (inert at 1 seed — the
 pooled query cannot reach the richer content, confirming C2); the step-join `fr_join` = **−1.80
-[−3.52, −0.16]** (the only CI-clean arm), lifting raw-evidence gap-closure **23% → 43%** with no
-compiled coverage/waste/repeat; and enriched-steps-plus-join `fr_steps_join` = **+0.73 [−2.28, +3.48]**
-(worse than join alone). See
+[−3.52, −0.16]** at seed 0, **−2.38 [−4.34, −0.67]** at seeds 0+1, **−1.47 [−2.97, +0.11] at 3 seeds
+(grazes 0)** — directionally consistent and **robust at s2/s3**, but s1-noisy (±7), so not established
+at the aggregate; and enriched-steps-plus-join `fr_steps_join` = **+0.73 [−2.28, +3.48]** (worse than
+join alone). The seed-0 "43% gap-closure" was an optimistic draw (`fr_join` seed-0 11.84 vs 3-seed
+13.66); the seed-0 anchors (floor 15.77 / ceiling 6.68) no longer align, so the clean number is the
+same-seeds paired delta. See
 [`notebook 2026-08-22`](../notebook/07-stickbutton2d.md#2026-08-22-rung-1-result-step-join-over-record-tokens).
 
 **Consequences.** (1) The failure-record inertness is an **architecture** limitation, not a content
-one — a generic per-step attention join over raw record tokens recovers ~half of what the hand-compiled
-programs capture, so the deployed win is not purely hand-engineering. (2) Clears the doc's **≥25%
-proceed gate** (43%) but not the **50% headline gate**, on the summary-token join alone → proceed, but
+one — a generic per-step attention join over raw record tokens recovers *some* of what the hand-compiled
+programs capture (directional, s2/s3-robust), so the deployed win is not purely hand-engineering; but
+the magnitude is modest and not established at 3 seeds. (2) At 3 seeds the aggregate paired delta
+grazes 0, so the ≥25% proceed gate is **not cleanly cleared** and the 50% headline gate is not met;
+the direction is worth pursuing (s2/s3 robust) but needs more seeds + an s1-variance fix to settle;
 the headline is not yet earned. (3) **C1 (the rung-1 evidence-step content enrichment) is CUT as a
 direction** (user decision, 2026-08-22): inert alone (`fr_steps` −0.04) and harmful combined with the
 join (`fr_steps_join` +0.73 — attention dilution from the larger memory), and the *only* thing it would
@@ -47,11 +53,13 @@ feature), which is **off in practice**. So there is no active reason to enable i
 (`record_mode="steps"`, `RecordStepEncoder`, `build_evidence_steps`, the `rec_step_*` fields) is **kept
 flag-gated off only per the build-then-disable convention** (off = byte-identical, `strict=True`, zero
 cost) — not swept, not pursued. The deployed learned direction is the **StepJoin over the summary
-record tokens** alone. (4) **Confirmed at 2 seeds** (paired `fr_join` − `fr_summary` = −2.38
-[−4.34, −0.67], seeds 0+1, CI excludes 0 — stronger than the 1-seed −1.80); seed 2 is training and
-folds in when done. Absolute levels carry seed variance, so the robust statement is the paired
-increment; a clean 2-seed gap-closure % would need `abl_floor`/`abl_all` at seed 1 (seed 0 only today,
-deferred). Next rungs: fold in seed 2; P-4 teachability (is the residual floor→ceiling gap
+record tokens** alone. (4) **Seed trajectory (a cautionary tale in small-seed reporting):** paired
+`fr_join` − `fr_summary` read −1.80 (seed 0) → −2.38 [−4.34, −0.67] (seeds 0+1, CI-clean) → **−1.47
+[−2.97, +0.11] (3 seeds, grazes 0)**. The 2-seed "confirmation" did **not** hold; seed 2 (high s1)
+softened it. The robust statement is the same-seeds paired delta at the full seed count, read per
+stratum (s2/s3 hold; s1 ±7 dominates the aggregate). Next rungs: more seeds + s1-variance fix (wider
+selection window / EMA) to settle whether −1.47 becomes CI-clean, and re-measure `abl_floor`/`abl_all`
+at matched seeds for a clean gap-closure %; P-4 teachability (is the residual floor→ceiling gap
 C3-learnability or C2-needs-a-sharper-join); and the combined step-join+scalars-on rung (additive vs
 substitutive with the deployed ceiling).
 

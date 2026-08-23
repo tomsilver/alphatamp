@@ -528,17 +528,19 @@ rollout performance — they are diagnostics only; never optimize for them.
   tokens (C1 content gap out for coverage/waste/repeat; `regroup` is a genuine but ~0–1%, FP-irrelevant
   exception — its establishing-step schema is dropped); **P-0** found the evidence cross-attention query
   is the **pooled** candidate, so a step-level join is not representable (C2). The fix
-  (`--record-mode steps` / `--step-join`, additive + flag-gated, off byte-identical) and a 1-seed
-  dd2d_v4 sweep show the lever is **architecture, not content**: enriching the token content is inert
-  (`fr_steps` −0.04, CI incl. 0), while a pre-pooling per-step candidate×evidence join over the raw
-  record tokens (`fr_join`) is the only CI-clean arm (−1.80 [−3.52, −0.16]), lifting raw-evidence
-  gap-closure **23%→43%** with no compiled scalars — clearing the ≥25% proceed gate but not the 50%
-  headline gate. So ~half of the deployed win is recoverable by a generic attention join over raw
-  evidence. The deployed scalars-on method is **unchanged** (this is a parallel probe). **C1 (content
-  enrichment) was cut** — inert alone, harmful combined (dilution), and its one unique value
-  (`regroup`) is off in practice; the machinery stays flag-gated off per the build-then-disable
-  convention but is not pursued. ⚠️ 1 seed. Next: 3-seed `fr_join`, P-4 teachability (C3 vs C2 for the
-  residual gap), step-join + scalars-on (additive?). See
+  (`--record-mode steps` / `--step-join`, additive + flag-gated, off byte-identical) shows the lever is
+  **architecture, not content**: enriching the token content is inert (`fr_steps` −0.04), while a
+  pre-pooling per-step candidate×evidence join over the raw record tokens (`fr_join`) is the only arm
+  that moves FP. **Magnitude is modest and not established at 3 seeds:** paired `fr_join` − `fr_summary`
+  = −1.80 (seed 0) → −2.38 [−4.34, −0.67] (seeds 0+1) → **−1.47 [−2.97, +0.11] (3 seeds, grazes 0)**,
+  **robust at s2/s3** but s1-noisy (the seed-0 "43% gap-closure" was an optimistic draw). So *some* of
+  the deployed win is recoverable by a generic attention join over raw evidence — it is not purely
+  hand-engineering — but the aggregate effect is directional, not yet CI-clean. The deployed scalars-on
+  method is **unchanged** (this is a parallel probe). **C1 (content enrichment) was cut** — inert alone,
+  harmful combined (dilution), and its one unique value (`regroup`) is off in practice; the machinery
+  stays flag-gated off per the build-then-disable convention but is not pursued. Next: more seeds +
+  s1-variance fix to settle the −1.47, P-4 teachability (C3 vs C2 for the residual gap), step-join +
+  scalars-on (additive?). See
   [`decisions/07` 2026-08-22](decisions/07-stickbutton2d.md#2026-08-22-step-join-lever-content-enrichment-inert)
   and [`notebook/07` 2026-08-22](notebook/07-stickbutton2d.md#2026-08-22-rung-1-result-step-join-over-record-tokens);
   full plan in `docs/failed_records_fix.md`.
