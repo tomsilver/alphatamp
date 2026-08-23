@@ -81,7 +81,7 @@ Drop clean successes of non-culprit steps; drop unreached suffixes; transient (n
 
 **F-C1 — auxiliary supervision / self-distillation:** during training, the evidence pathway additionally predicts the compiled scalars (coverage, waste, repeat, regroup) from tokens — labels free and unlimited (P-4 machinery). **Evaluate tokens-only at inference.** If it works, the paper sentence writes itself: the typed features become training-time scaffolding, absent at test time.
 
-**F-C2 — context-sampling curriculum** (only if P-3 says "decodable but unused"): oversample large-|F| and mixed-family contexts, rollout-aligned.
+**F-C2 — context-sampling curriculum** (only if P-3 says "decodable but unused"): oversample large-|F| and mixed-family contexts, rollout-aligned. **Rollout-alignment guardrail (user directive 2026-08-22):** when training on large |F|, keep the large-|F| distribution *realistic to the higher |F| values a real rollout actually visits* — the current sampler caps at `max_f=8`, but on the hard strata a deployed rollout's |F| grows well past 8 (candidates fail one-by-one toward the pool cap), so the fix is to **extend and reweight |F| to match the true deployment visit distribution at the high end**, not to oversample |F| arbitrarily or beyond what rollouts ever reach. Oversample *up to* and *in proportion to* the real rollout |F| frequency; anything past that breaks the rollout-alignment the sampler was tuned for.
 
 ## 7. Wall-clock note (pre-empting the objection)
 
