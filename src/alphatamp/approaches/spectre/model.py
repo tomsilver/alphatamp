@@ -241,6 +241,56 @@ class RecordStepEncoder(nn.Module):
         return (base + self.enrich(enrich_in)) * mask.unsqueeze(-1).float()
 
 
+def _arg_bitmask(tags: Tensor) -> Tensor:
+    """Bitmask over the object tags in the last axis (tag ``t`` -> bit ``t``; PAD=0 skipped).
+
+    Episode-local tags are ids in ``[1, max_tags]`` (``max_tags`` <= 32, well within int64's
+    62 usable bits), so a step's / record's object set becomes one int64 and set relations
+    are bitwise: intersection = ``a & b != 0``, set-equality = ``a == b`` — exact and cheap,
+    with no per-pair broadcast over the argument axes.
+    """
+    out = tags.new_zeros(tags.shape[:-1])
+    for a in range(tags.shape[-1]):
+        t = tags[..., a]
+        out = torch.bitwise_or(
+            out,
+            torch.where(
+                t > 0,
+                torch.bitwise_left_shift(torch.ones_like(t), t),
+                torch.zeros_like(t),
+            ),
+        )
+    return out
+
+
+def step_match_indicators(
+    cand_op_ids: Tensor,
+    cand_arg_tags: Tensor,
+    rec_schema_ids: Tensor,
+    rec_arg_tags: Tensor,
+    rec_culprit_tags: Tensor,
+) -> Tensor:
+    """Exact candidate-step × record-token match indicators (F-B1), ``(B, K*L, R, 3)``.
+
+    The three equality tests, in ``StepJoin.bias_gate`` order: (1) the step touches an
+    object a record blamed (``args ∩ culprits ≠ ∅``); (2) the step **is** the failed step
+    (same schema *and* same argument set); (3) the step touches the failed query's own
+    objects (``args ∩ rec_args ≠ ∅``). Equality-only and domain-agnostic — reads no scalar.
+    """
+    b = cand_op_ids.shape[0]
+    cand_op = cand_op_ids.reshape(b, -1)[:, :, None]  # (B, KL, 1)
+    cand_bm = _arg_bitmask(cand_arg_tags).reshape(b, -1)[:, :, None]  # (B, KL, 1)
+    rec_schema = rec_schema_ids[:, None, :]  # (B, 1, R)
+    rec_cul_bm = _arg_bitmask(rec_culprit_tags)[:, None, :]  # (B, 1, R)
+    rec_arg_bm = _arg_bitmask(rec_arg_tags)[:, None, :]  # (B, 1, R)
+    touch_cul = ((cand_bm & rec_cul_bm) != 0).float()
+    is_failed = (
+        (cand_op == rec_schema) & (cand_bm == rec_arg_bm) & (cand_bm != 0)
+    ).float()
+    touch_q = ((cand_bm & rec_arg_bm) != 0).float()
+    return torch.stack([touch_cul, is_failed, touch_q], dim=-1)  # (B, KL, R, 3)
+
+
 class StepJoin(nn.Module):
     """Pre-pooling evidence interaction (docs/failed_records_fix.md F-B2).
 
@@ -250,9 +300,22 @@ class StepJoin(nn.Module):
     which makes that join representable at all. Zero-init output projection + residual, so
     a flag-on model is identical to flag-off at step 0 and old checkpoints load
     ``strict=True`` (the module only exists when ``use_step_join`` is set).
+
+    **Match-primitive edge biases (F-B1, ``match_bias``).** Soft attention is weak at the
+    near-*exact* relational join this needs (does a candidate step re-touch the object that
+    blocked a failure? is it the failed step itself?). When ``match_bias`` is on, exact
+    equality indicators between each candidate step and each record token are added to the
+    pre-softmax attention scores through **learned, zero-initialized** per-indicator gates
+    (so it is a no-op at step 0). The indicators compute **equality only** — domain-agnostic
+    and content-free ("the model is told *what matches*, it learns *what matching means*") —
+    they read no compiled coverage/waste/repeat scalar. The gate scalars are the only new
+    parameters, so ``match_bias`` off is byte-identical to the plain step-join.
     """
 
-    def __init__(self, dropout_p: float = DROPOUT) -> None:
+    #: attention-bias indicators, in the order the ``bias_gate`` scalars weight them.
+    N_MATCH_INDIC = 3  # [touches-a-culprit, is-the-failed-step, touches-the-failed-query]
+
+    def __init__(self, dropout_p: float = DROPOUT, match_bias: bool = False) -> None:
         super().__init__()
         self.attn = nn.MultiheadAttention(
             D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
@@ -260,14 +323,35 @@ class StepJoin(nn.Module):
         self.out = nn.Linear(D_MODEL, D_MODEL)
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
+        self.match_bias = match_bias
+        if match_bias:
+            # Zero-init: at step 0 the bias is 0, so a match_bias model == a plain
+            # step-join model until the gates learn a per-indicator weight.
+            self.bias_gate = nn.Parameter(torch.zeros(self.N_MATCH_INDIC))
 
-    def forward(self, step: Tensor, memory: Tensor, mem_mask: Tensor) -> Tensor:
+    def forward(
+        self,
+        step: Tensor,
+        memory: Tensor,
+        mem_mask: Tensor,
+        indicators: Optional[Tensor] = None,
+    ) -> Tensor:
         b, k, ell, d = step.shape
         q = step.reshape(b, k * ell, d)
         has = mem_mask.any(dim=1)  # (B,) — some evidence to attend to
         safe = mem_mask.clone()
         safe[~has, 0] = True  # dodge the all-masked-row NaN; zeroed straight after
-        out, _ = self.attn(q, memory, memory, key_padding_mask=~safe)
+        if self.match_bias and indicators is not None:
+            # Fold the match-bias and the key padding into ONE float attn_mask (mixing a
+            # bool key_padding_mask with a float attn_mask is deprecated): additive
+            # per-indicator bias, then −inf at padded keys, broadcast over heads.
+            bias = (indicators * self.bias_gate).sum(dim=-1)  # (B, K*L, R)
+            bias = bias.masked_fill((~safe).unsqueeze(1), float("-inf"))
+            out, _ = self.attn(
+                q, memory, memory, attn_mask=bias.repeat_interleave(N_HEADS, dim=0)
+            )
+        else:
+            out, _ = self.attn(q, memory, memory, key_padding_mask=~safe)
         out = out * has.view(b, 1, 1).float()
         return step + self.out(out).reshape(b, k, ell, d)
 
@@ -469,6 +553,11 @@ class SpectreConfig:
     # emits, so both are persisted and rebuilt at load time (like ``coverage_feats``).
     record_mode: str = "summary"
     use_step_join: bool = False
+    # F-B1: add exact match-primitive edge biases (candidate-step × record-token equality
+    # indicators) to the step-join's attention, through zero-init learned gates. Requires
+    # ``use_step_join``; off = byte-identical (adds only the gate scalars when on). Reads no
+    # compiled scalar — equality-only, domain-agnostic.
+    step_join_match_bias: bool = False
 
 
 class SpectreModel(nn.Module):
@@ -554,7 +643,11 @@ class SpectreModel(nn.Module):
             if (c.use_records and c.record_mode == "steps")
             else None
         )
-        self.step_join = StepJoin(c.dropout_p) if c.use_step_join else None
+        self.step_join = (
+            StepJoin(c.dropout_p, match_bias=c.step_join_match_bias)
+            if c.use_step_join
+            else None
+        )
         if c.use_necessity:  # pragma: no cover - cut from v3 scope, see decisions.md
             raise NotImplementedError(
                 "necessity conditioning was cut from v3 (decisions.md 2026-07-26): D2 "
@@ -635,7 +728,25 @@ class SpectreModel(nn.Module):
             cstep = self.cands.encode_steps(
                 batch.cand_op_ids, batch.cand_pos, batch.cand_arg_tags
             )
-            cstep = self.step_join(cstep, fact_tok, fact_mask)
+            # F-B1 match-primitive edge biases: exact candidate-step × record-token match
+            # indicators, computed from the SUMMARY record fields (the record_mode="steps"
+            # memory is the evidence steps, not these records, so bias only on the summary
+            # path — `self.records is not None`).
+            indic = None
+            if (
+                self.step_join.match_bias
+                and self.records is not None
+                and getattr(batch, "rec_schema_ids", None) is not None
+                and batch.rec_schema_ids is not None
+            ):
+                indic = step_match_indicators(
+                    batch.cand_op_ids,
+                    batch.cand_arg_tags,
+                    batch.rec_schema_ids,
+                    batch.rec_arg_tags,
+                    batch.rec_culprit_tags,
+                )
+            cstep = self.step_join(cstep, fact_tok, fact_mask, indic)
             cand_emb = self.cands.pool_steps(
                 cstep, batch.cand_step_mask, batch.pool_mask
             )

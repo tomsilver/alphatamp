@@ -267,6 +267,11 @@ PRESETS: dict[str, dict[str, str]] = {
             f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
             "--step-join"
         ),
+        # F-B1: step-join + exact match-primitive edge biases (no compiled scalars).
+        "fr_join_mb": (
+            f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
+            "--step-join --step-join-match-bias"
+        ),
     },
     "failed_records_restock": {
         "fr_summary": (
@@ -275,6 +280,10 @@ PRESETS: dict[str, dict[str, str]] = {
         "fr_join": (
             f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn "
             "--state-delta --step-join"
+        ),
+        "fr_join_mb": (
+            f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn "
+            "--state-delta --step-join --step-join-match-bias"
         ),
     },
 }

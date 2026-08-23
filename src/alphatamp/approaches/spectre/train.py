@@ -115,6 +115,11 @@ class TrainConfig:
     # the architecture, so both are persisted and rebuilt at load time.
     record_mode: str = "summary"
     use_step_join: bool = False
+    # F-B1: exact match-primitive edge biases on the step-join's attention (candidate-step ×
+    # record-token equality indicators, zero-init learned gates). Requires use_step_join;
+    # reads no compiled scalar. Architectural (adds gate params), so persisted + rebuilt at
+    # load time; off = byte-identical.
+    step_join_match_bias: bool = False
     # Separate cross-attention channel for evidence (EvidenceCrossAttentionScorer).
     evidence_attn: bool = False
     # Observed coverage/waste on cand_overlap; the s3 signal `dead` was proxying for.
@@ -543,6 +548,7 @@ def run_training(
             use_goal_atoms=cfg.use_goal_atoms,
             record_mode=cfg.record_mode,
             use_step_join=cfg.use_step_join,
+            step_join_match_bias=cfg.step_join_match_bias,
         ),
     ).to(device)
     opt = torch.optim.AdamW(
@@ -790,6 +796,12 @@ def main(argv=None) -> int:
         "over the evidence memory before pooling, so a step-level join is representable.",
     )
     ap.add_argument(
+        "--step-join-match-bias",
+        action="store_true",
+        help="F-B1: add exact match-primitive edge biases (candidate-step × record-token "
+        "equality indicators, zero-init learned gates) to the step-join. Needs --step-join.",
+    )
+    ap.add_argument(
         "--state-delta",
         action="store_true",
         help="each record token also carries s_j as the delta from s_0 (§6.1): which "
@@ -898,6 +910,7 @@ def main(argv=None) -> int:
         record_holdout=not a.no_record_holdout,
         record_mode=a.record_mode,
         use_step_join=a.step_join,
+        step_join_match_bias=a.step_join_match_bias,
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,

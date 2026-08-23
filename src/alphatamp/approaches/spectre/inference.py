@@ -143,6 +143,7 @@ def load_checkpoint(
             # no key -> "summary" / off -> nothing built -> byte-identical load.
             record_mode=str(cfg.get("record_mode", "summary")),
             use_step_join=bool(cfg.get("use_step_join")),
+            step_join_match_bias=bool(cfg.get("step_join_match_bias")),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)

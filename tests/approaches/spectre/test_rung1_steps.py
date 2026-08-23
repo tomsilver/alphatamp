@@ -67,6 +67,16 @@ def test_steps_mode_swaps_records_for_step_encoder() -> None:
     assert not any(k.startswith("rec_steps.cands") for k in keys)
 
 
+def test_match_bias_adds_only_a_gate_param() -> None:
+    # F-B1: match_bias adds exactly the zero-init gate vector on top of a plain step-join.
+    plain = set(_model(use_step_join=True).state_dict())
+    mb = _model(use_step_join=True, step_join_match_bias=True)
+    mb_keys = set(mb.state_dict())
+    assert "step_join.bias_gate" in mb_keys
+    assert mb_keys - plain == {"step_join.bias_gate"}
+    assert torch.count_nonzero(mb.step_join.bias_gate) == 0  # zero-init
+
+
 def _episode_batch():
     raw = REPO / "data" / "spectre" / "raw" / _VARIANT / "train" / "episodes"
     vpath = REPO / "data" / "spectre" / "derived" / _VARIANT / "train_vocab.json"
@@ -139,6 +149,27 @@ def test_step_join_is_zero_init_noop() -> None:
     lj, _ = m_join(batch)
     ln, _ = m_no(batch)
     assert torch.allclose(lj[avail], ln[avail], atol=1e-6)
+
+
+def test_match_bias_forward_finite_and_zero_init_noop() -> None:
+    # F-B1 on the summary step-join: forward is finite, and at zero-init gates it is a
+    # no-op vs the plain step-join (same weights minus the gate).
+    batch, vocab = _episode_batch()
+    m_mb = _real_model(vocab, use_step_join=True, step_join_match_bias=True).eval()
+    logits, _ = m_mb(batch)
+    avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
+    assert torch.isfinite(logits[avail]).all()
+    m_plain = _real_model(vocab, use_step_join=True).eval()
+    m_plain.load_state_dict(
+        {
+            k: v
+            for k, v in m_mb.state_dict().items()
+            if k != "step_join.bias_gate"
+        },
+        strict=False,
+    )
+    lp, _ = m_plain(batch)
+    assert torch.allclose(logits[avail], lp[avail], atol=1e-6)
 
 
 def test_checkpoint_roundtrips_rung1_switches(tmp_path) -> None:
