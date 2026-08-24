@@ -538,9 +538,18 @@ rollout performance — they are diagnostics only; never optimize for them.
   hand-engineering — but the aggregate effect is directional, not yet CI-clean. The deployed scalars-on
   method is **unchanged** (this is a parallel probe). **C1 (content enrichment) was cut** — inert alone,
   harmful combined (dilution), and its one unique value (`regroup`) is off in practice; the machinery
-  stays flag-gated off per the build-then-disable convention but is not pursued. Next: more seeds +
-  s1-variance fix to settle the −1.47, P-4 teachability (C3 vs C2 for the residual gap), step-join +
-  scalars-on (additive?). See
+  stays flag-gated off per the build-then-disable convention but is not pursued.
+  **Final 3-seed result (2026-08-23, matched floor/ceiling anchors):** the scalar-free step-join
+  recovers **~25% of the floor→ceiling scalar gap** (`fr_join` 13.66 vs floor 15.73 / ceiling 7.45),
+  **~3× raw records alone** (`fr_summary` 7%) — but Δ-vs-floor −2.08 [−4.48, +0.02] **grazes 0**
+  (s1-variance-marginal). The join is **substitutive, not additive**: `fr_all_join` (join + all scalars)
+  7.23 ≈ `abl_all` 7.45, so it captures a *subset* of the scalars' signal and cannot exceed them. **F-B1
+  match-primitive edge biases are a dead end** (they *hurt*: +1.37 vs `fr_join`). And the scalars
+  **stabilize s1** where the raw-evidence join is noisy (s1 ±7 vs ±2.5). Net: the thesis is partially
+  borne out and honestly bounded — architecture (per-step join), not content/hints/aux-supervision, is
+  the lever, it is scalar-free + domain-agnostic, it recovers ~25% (not 100%) of the hand-engineered
+  scalars, matching the pre-registered expectation. Deferred: the s1-variance settle (more seeds /
+  wider selection window / F-C2 rollout-aligned large-|F| curriculum). See
   [`decisions/07` 2026-08-22](decisions/07-stickbutton2d.md#2026-08-22-step-join-lever-content-enrichment-inert)
-  and [`notebook/07` 2026-08-22](notebook/07-stickbutton2d.md#2026-08-22-rung-1-result-step-join-over-record-tokens);
+  and [`notebook/07` 2026-08-23](notebook/07-stickbutton2d.md#2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers);
   full plan in `docs/failed_records_fix.md`.

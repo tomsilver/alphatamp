@@ -4,6 +4,65 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers"></a>
+## 2026-08-23 — Learned-pathway final results — scalar-free step-join recovers ~25% of the scalar gap, substitutive with scalars, F-B1 dead end
+
+<!--strip-->
+> **id** `2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers` ·
+> **status** active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** Definitive 3-seed evaluation of the learned-pathway workstream on dd2d_v4 with
+**matched 3-seed floor/ceiling anchors** (retrained `abl_floor`/`abl_all` at seeds 1–2 so the
+gap-closure % is clean, not seed-0-mixed). Arms, all on the ablation backbone (jaccard + pointset +
+atoms + ma5), scored by the deployed rollout (`spectre_score.py`, paired bootstrap over the 100 test
+problems). Two questions this settles: does the scalar-free step-join sharpen with **F-B1
+match-primitive edge biases** (`fr_join_mb`), and is the learned join **additive or substitutive**
+with the compiled scalars (`fr_all_join` = join + all scalars vs `abl_all` = scalars only)?
+
+**Result.** Uncensored FP, mean ± across-seed std; gap-closure = (floor − arm)/(floor − ceiling),
+floor `abl_floor` 15.73, ceiling `abl_all` 7.45, gap 8.28.
+
+| arm | scalars? | join? | ALL FP | Δ vs floor (paired) | gap-closure |
+|---|---|---|---|---|---|
+| `abl_floor` | — | — | 15.73 ± 0.68 | — | 0% |
+| `fr_summary` | — | pooled query | 15.13 ± 1.42 | −0.61 [−3.17, +1.88] | 7% |
+| **`fr_join`** | **none** | step-join | 13.66 ± 1.90 | −2.08 [−4.48, +0.02] | **~25%** |
+| `fr_join_mb` | none | join + match-bias | 15.02 ± 2.35 | (−1.37 vs `fr_join`) | 9% |
+| `fr_all_join` | all | join + scalars | 7.23 ± 0.75 | −8.50 [−12.47, −5.11]\* | ~103% |
+| `abl_all` | all | — | 7.45 ± 0.93 | −8.28 [−12.17, −4.88]\* | 100% |
+
+- **Scalar-free step-join recovers ~25% of the scalar gap** (`fr_join` 13.66), **~3× what raw records
+  alone recover** (`fr_summary` 7%). This is the headline scalar-free, domain-agnostic result — a
+  per-step attention join over raw failure evidence, no coverage/waste/repeat. But the Δ-vs-floor CI
+  **grazes 0** (−2.08 [−4.48, +0.02]): real at the point estimate, statistically marginal at 3 seeds.
+- **The join is SUBSTITUTIVE, not additive.** `fr_all_join` 7.23 ≈ `abl_all` 7.45 (Δ −0.22, within
+  noise) — putting the step-join on top of the full scalars changes nothing. The join captures a
+  *subset* of what the scalars compute, not new signal. So it can partly *replace* the scalars (25%
+  alone) but cannot *exceed* them.
+- **F-B1 (match-primitive edge biases) is a DEAD END** — it *hurts*: `fr_join_mb` 15.02, +1.37
+  [−0.05, +2.98] vs `fr_join`, erasing the step-join's gain back to ~baseline. Exact-match hints degrade
+  the soft learned join; the plain step-join is best. (F-B1 machinery kept flag-gated off per
+  build-then-disable; not pursued.)
+- **The scalars stabilize s1; the raw-evidence join does not.** `fr_join` s1 = 17.05 ± **7.02** vs
+  `abl_all` s1 = 10.12 ± 2.46 and `fr_all_join` s1 = 10.09 ± 2.14. The s1 across-seed variance that
+  makes `fr_join` marginal is exactly the stratum where coverage/waste earn their keep (few feasible
+  solutions → a stable hand-computed signal beats an unstable learned one).
+
+**Takeaway.** The learned-pathway thesis is **partially borne out and honestly bounded**: *how* the
+model reads raw evidence (per-step join) is the lever — content enrichment (C1), match-hints (F-B1),
+and aux supervision (F-C1, cut on principle) all fail — and it is fully **scalar-free + domain-agnostic**,
+recovering **~25%** of the hand-engineered scalars' value (3× raw records). It does **not** close the
+gap (75% still needs the scalars), is **substitutive** (redundant on top of scalars), and is
+**s1-variance-marginal** at 3 seeds. This matches the pre-registered expectation ("reduce reliance,
+don't expect 100% recovery"). The deployed scalars-on method is unchanged. Whether the ~25% becomes
+CI-clean is an **s1-variance question** (more seeds / wider selection window; F-C2 rollout-aligned
+large-|F| curriculum is the scalar-free training-side option, guardrail recorded) — deferred by
+directive ("accept variance for now"). Full run: commits `2d19380`..`88115fd` on `restock3d`; F-B1
+numbers were an overnight autonomous run.
+
+---
+
 <a id="2026-08-22-rung-1-result-step-join-over-record-tokens"></a>
 ## 2026-08-22 — Rung-1 result — step-join over record tokens is the lever, content enrichment inert (C2 confirmed, fixable)
 
