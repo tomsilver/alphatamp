@@ -546,16 +546,38 @@ def sample_context(
     p_empty: float = 0.35,
     p_drop_facts: float = 0.3,
     max_f: int = 8,
+    phi: Optional[int] = None,
 ) -> tuple[frozenset[int], bool]:
     """Sample a failure context ``F`` plus an evidence-dropout flag.
 
     Mass is heavy at ``|F| = 0`` because that is the deployment start: the static
     pathway has to stand on its own before any failure has been observed. ``hide_facts``
     drops the evidence for an example so the ranker cannot become dependent on it.
+
+    ``phi`` (F-C2 rollout-aligned curriculum, ``decisions.md`` 2026-08-23) reshapes the
+    *size* draw to the deployment visit distribution of **this** episode. A deployed
+    rollout that ends at attempt ``phi + 1`` queries the ranker exactly once at each of
+    ``|F| = 0, 1, ..., phi``, so ``Uniform{0..phi}`` *is* that rollout's visit
+    distribution -- unlike the fixed ``[1, max_f]`` uniform, which both caps at 8 (the
+    hard strata visit |F| well past that) and over-weights the tail. ``phi`` is a
+    reference policy's deployed FP on the episode (built by
+    ``experiments/spectre/fc2_build_phi.py``). The ``p_empty`` branch is kept **on top**
+    so the static ranker still gets a fixed floor of |F|=0 training mass (30% in the
+    deployed F-C2 arm, per the 2026-08-22 user directive) even on hard episodes whose
+    rollout mass at |F|=0 is otherwise ~1/(phi+1). Capping at ``len(fail_idx)`` and never
+    past ``phi`` respects the 2026-08-22 rollout-alignment guardrail: never oversample
+    |F| a good ranker never reaches. ``None`` keeps the historical ``[1, max_f]`` draw.
     """
     if not fail_idx or rng.random() < p_empty:
         return frozenset(), False
-    size = int(rng.integers(1, min(max_f, len(fail_idx)) + 1))
+    if phi is not None:
+        # Uniform over {0..phi}, truncated to what the pool can supply. size==0 is a
+        # legitimate |F|=0 draw (this episode's rollout does visit the empty context).
+        size = int(rng.integers(0, min(int(phi), len(fail_idx)) + 1))
+    else:
+        size = int(rng.integers(1, min(max_f, len(fail_idx)) + 1))
+    if size <= 0:
+        return frozenset(), False
     chosen = rng.choice(np.asarray(fail_idx), size=size, replace=False)
     return frozenset(int(i) for i in chosen), bool(rng.random() < p_drop_facts)
 

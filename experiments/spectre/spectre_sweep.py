@@ -273,6 +273,23 @@ PRESETS: dict[str, dict[str, str]] = {
             "--step-join --step-join-match-bias"
         ),
     },
+    # F-C2 rollout-aligned |F| curriculum (docs/failed_records_fix.md; decisions.md
+    # 2026-08-23). `fr_join` with the training context size drawn from each episode's
+    # deployment visit distribution Uniform{0..phi_e} 70% of the time and |F|=0 the other
+    # 30% (`--p-empty 0.30`, a static-ranking floor per the user directive). Attacks the
+    # s1 OOD-|F| variance: hard-stratum rollouts query |F|=9..22 but the uniform sampler
+    # caps at 8. DD2D-only (the phi map is env-specific); build it first with
+    #   python experiments/spectre/fc2_build_phi.py --env-variant dd2d_v4 \
+    #       --arm-subdir checkpoints_spectre_atoms_fr_join --seed 0
+    # then:  --preset failed_records_fc2 --env dd2d_v4 --seeds 0
+    "failed_records_fc2": {
+        "fr_join_fc2": (
+            f"{_ABL_BACKBONE} --aggregate-records --evidence-attn --state-delta "
+            "--step-join --context-mode rollout --p-empty 0.30 "
+            "--phi-path data/spectre/derived/dd2d_v4/"
+            "fc2_phi_train_spectre_atoms_fr_join.json"
+        ),
+    },
     "failed_records_restock": {
         "fr_summary": (
             f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn --state-delta"

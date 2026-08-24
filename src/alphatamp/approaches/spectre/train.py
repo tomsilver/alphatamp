@@ -213,6 +213,16 @@ class TrainConfig:
     # begin. Default = warmup_epochs so the shadow never averages in the random init or
     # the high-LR warmup iterates.
     ema_start_epoch: int = 2
+    # F-C2 rollout-aligned |F| curriculum (`decisions.md` 2026-08-23). "uniform"
+    # (default) is the historical `sample_context` draw -- byte-for-byte unchanged.
+    # "rollout" reshapes the training context size to each episode's deployment visit
+    # distribution, Uniform{0..phi_e}, where phi_e is a reference policy's deployed FP on
+    # that episode, read from `phi_path` keyed by problem_id. Purely a *training-time*
+    # context sampler: it changes neither the model nor what `build_example` emits nor
+    # the deploy/eval path, so it adds no `state_dict` keys and old checkpoints are
+    # unaffected. A missing problem_id in the map falls back to the uniform draw.
+    context_mode: str = "uniform"
+    phi_path: str = ""
 
 
 class SpectreDataset(Dataset):
@@ -240,6 +250,13 @@ class SpectreDataset(Dataset):
             for p in list_episodes(split_dir)
             if _keep(load_episode(p), cfg.train_strata, cfg.env)
         ]
+        # F-C2: per-episode reference-policy FP (phi_e), keyed by problem_id, used only
+        # when cfg.context_mode == "rollout". Loaded once; a problem_id absent from the
+        # map -> phi=None -> the uniform draw (graceful fallback).
+        self._phi: dict[int, int] = {}
+        if cfg.context_mode == "rollout" and cfg.phi_path:
+            with open(cfg.phi_path, "r", encoding="utf-8") as f:
+                self._phi = {int(k): int(v) for k, v in json.load(f).items()}
 
     @property
     def paths(self) -> list[Path]:
@@ -262,11 +279,17 @@ class SpectreDataset(Dataset):
         spec = self.spec or spec_for(episode.provenance.env_variant)
         rng = np.random.default_rng((self.cfg.seed, idx, self.epoch))
         fail_idx = [i for i, o in enumerate(episode.outcomes) if o.outcome == "fail"]
+        phi = (
+            self._phi.get(int(episode.provenance.problem_id))
+            if self.cfg.context_mode == "rollout"
+            else None
+        )
         ctx, hide = sample_context(
             fail_idx,
             rng,
             p_empty=self.cfg.p_empty,
             p_drop_facts=self.cfg.p_drop_facts,
+            phi=phi,
         )
         _ps, _pca, _k = pointset_emission(self.cfg, self.cfg.scene_3d)
         _ai, _ag = atom_emission(self.cfg)
@@ -843,6 +866,24 @@ def main(argv=None) -> int:
         ),
     )
     ap.add_argument(
+        "--context-mode",
+        choices=("uniform", "rollout"),
+        default=TrainConfig.context_mode,
+        help=(
+            "F-C2 |F| curriculum: 'uniform' (default, historical [1,max_f] draw) or "
+            "'rollout' (per-episode Uniform{0..phi_e} from --phi-path)"
+        ),
+    )
+    ap.add_argument(
+        "--phi-path",
+        type=str,
+        default=TrainConfig.phi_path,
+        help=(
+            "JSON {problem_id: reference-policy FP} for --context-mode rollout; "
+            "build with experiments/spectre/fc2_build_phi.py"
+        ),
+    )
+    ap.add_argument(
         "--scene-3d",
         action="store_true",
         help="3D point-cloud scene representation (Restock3D); default 2D footprint",
@@ -925,6 +966,8 @@ def main(argv=None) -> int:
         ema_decay=a.ema_decay,
         ema_start_epoch=a.ema_start_epoch,
         select_window=a.select_window,
+        context_mode=a.context_mode,
+        phi_path=a.phi_path,
         scene_3d=a.scene_3d,
         use_pca_feats=a.use_pca_feats,
         use_edgeconv=a.use_edgeconv,
