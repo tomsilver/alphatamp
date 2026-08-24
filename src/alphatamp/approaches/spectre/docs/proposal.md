@@ -548,8 +548,17 @@ rollout performance — they are diagnostics only; never optimize for them.
   **stabilize s1** where the raw-evidence join is noisy (s1 ±7 vs ±2.5). Net: the thesis is partially
   borne out and honestly bounded — architecture (per-step join), not content/hints/aux-supervision, is
   the lever, it is scalar-free + domain-agnostic, it recovers ~25% (not 100%) of the hand-engineered
-  scalars, matching the pre-registered expectation. Deferred: the s1-variance settle (more seeds /
-  wider selection window / F-C2 rollout-aligned large-|F| curriculum). See
+  scalars, matching the pre-registered expectation. **The step-join is now in the deployed recipe**
+  (2026-08-23) — scalar-free, off-byte-identical / on-zero-init-additive, a within-noise tie with
+  scalars on (substitutive), baked in as future-proofing (current deployed checkpoints get it on the
+  next retrain). **F-C2, the last rung — a rollout-aligned large-|F| curriculum — was tried and is a
+  clean negative** (2026-08-24): per-episode `Uniform{0..φₑ}` made `fr_join` *worse* in mean and
+  variance (13.66→16.39, +2.73 [+1.18,+4.37]; s1 std 7.02→8.74), because **rollout-visit-aligned ≠
+  FP-value-aligned** — FP is time-to-*first*-success, so small-|F| decisions dominate and reweighting
+  toward large |F| stole capacity from them (a φ-capped disambiguation remains open). Still deferred:
+  the s1-variance settle. See
   [`decisions/07` 2026-08-22](decisions/07-stickbutton2d.md#2026-08-22-step-join-lever-content-enrichment-inert)
-  and [`notebook/07` 2026-08-23](notebook/07-stickbutton2d.md#2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers);
-  full plan in `docs/failed_records_fix.md`.
+  / [2026-08-24](decisions/07-stickbutton2d.md#2026-08-24-step-join-promoted-deployed-recipe-f-c2-curriculum),
+  [`notebook/07` 2026-08-23](notebook/07-stickbutton2d.md#2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers)
+  / [2026-08-24](notebook/07-stickbutton2d.md#2026-08-24-f-c2-rollout-aligned-f-curriculum-negative-step-join);
+  frozen plan `docs/failed_records_fix.md`, **as-built `docs/failed_records_as_built.md`**.

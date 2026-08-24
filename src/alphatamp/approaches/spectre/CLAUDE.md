@@ -129,7 +129,8 @@ order (details in @docs/proposal.md §4–5; respect the de-risking gates):
    script was archived in the 2026-08-12 refactor; the SB2D flow folds its checks into
    `sb2d_finalize.sh`.
 4. **Train** (the deployed recipe; multi-seed):
-   `python -m alphatamp.approaches.spectre.train --env dd2d_v4 --seed 0 --overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn --state-delta --select-window 5`
+   `python -m alphatamp.approaches.spectre.train --env dd2d_v4 --seed 0 --overlap-mode jaccard --coverage-feats --aggregate-records --evidence-attn --state-delta --select-window 5 --step-join`
+   — `--step-join` (the pre-pooling candidate-step×evidence join) joined the deployed recipe 2026-08-23 (learned-pathway workstream, `docs/failed_records_as_built.md`); scalar-free + zero-init-additive, a within-noise tie with scalars on, baked in as future-proofing. Current deployed *checkpoints* predate it and get it on the next retrain.
    — or, concurrently across seeds, `python experiments/spectre/spectre_sweep.py --preset v3final --seeds 0 1 2 --env dd2d_v4`; the SB2D flow is `bash experiments/spectre/sb2d_finalize.sh`. (The v1-era Hydra wrapper `spectre_train.py` / `spectre_train.slurm` + `conf/spectre_train.yaml` were archived in the 2026-08-12 refactor — the deployed training was always the argparse `train` module + `spectre_sweep.py`.)
 5. **Analyze / experiments:** the analysis notebook is
    `experiments/spectre/compare_methods.py` (marimo — see stage 7); it drives `eda.py`

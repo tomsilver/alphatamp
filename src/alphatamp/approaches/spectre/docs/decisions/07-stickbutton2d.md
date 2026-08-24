@@ -4,6 +4,48 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-24-step-join-promoted-deployed-recipe-f-c2-curriculum"></a>
+## 2026-08-24 — step-join promoted to deployed recipe; F-C2 curriculum negative
+
+<!--strip-->
+> **id** `2026-08-24-step-join-promoted-deployed-recipe-f-c2-curriculum` · **status**
+> active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**Context.** The learned-pathway workstream (`docs/failed_records_as_built.md`,
+`failed_records_fix.md`) established that the pre-pooling **step-join** (F-B2) is the one
+positive lever for learning adaptive signal from raw failure records: scalar-free and
+domain-agnostic, on DD2D it recovers ~25% of the scalar gap (`fr_join` 13.66 vs floor 15.73),
+~3x raw records. Two questions remained: (1) should step-join enter the deployed recipe, given
+that with the scalars *on* it is substitutive (`fr_all_join` 7.23 ≈ `abl_all` 7.45, a
+within-noise tie); (2) whether the last plan rung, **F-C2** (a rollout-aligned large-|F|
+training curriculum), rescues the marginal `fr_join` CI by fixing the train/test |F| mismatch
+(hard-stratum rollouts query |F|≈9–22 but the sampler caps at 8).
+
+**Decision.** (1) **Add `--step-join` to the deployed recipe** — `v3final` (spectre_sweep.py),
+`sb2d_finalize.sh`, `restock3d_v3_train.sh`, and the CLAUDE.md command. It is off-byte-identical
+/ on-zero-init-additive with no downside when scalars are on, so it is baked in as
+**future-proofing** so future training runs do not miss the workstream's best lever — **not** as
+a re-measured deployed FP win (on DD2D-scalars-on the measured effect is a tie). Current deployed
+*checkpoints* predate it and get it on the next full retrain; the SB2D/restock3d adoptions are
+**unmeasured** on those envs and flagged to re-measure. (2) **F-C2 is rejected as-built.** The
+per-episode `Uniform{0..φₑ}` curriculum (φₑ = a reference policy's deployed FP) made `fr_join`
+**worse in mean and variance**: ALL 13.66 → 16.39 (+2.73 [+1.18, +4.37], CI excludes 0), s1 std
+7.02 → 8.74.
+
+**Consequences.** The likely mechanism is that **rollout-visit-aligned ≠ FP-value-aligned**: FP
+is time-to-*first*-success, so the small-|F| decisions dominate the metric, and reweighting
+training mass toward large |F| reallocated capacity away from them (compounded by lowering
+`p_empty` 0.35→0.30). A secondary cause is an untamed φ tail (p99 79, max 184) that plausibly
+destabilized training — consistent with the variance rising. A **φ-capped** variant (cap ~p90≈49)
+is the guardrail-faithful disambiguation of the two causes and is the one open thread; it was
+**not run**. The F-C2 machinery stays flag-gated off (`--context-mode uniform` default), no
+`state_dict` surface. The deployed *method* remains scalars-on; step-join is the only recipe
+change and it is measured-neutral there. Numbers: `docs/notebook/07-stickbutton2d.md` 2026-08-24;
+full retrospective: `docs/failed_records_as_built.md`.
+
+---
+
 <a id="2026-08-22-step-join-lever-content-enrichment-inert"></a>
 ## 2026-08-22 — step-join is the lever content enrichment inert
 

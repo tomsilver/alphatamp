@@ -18,9 +18,13 @@ CKPT="data/spectre/checkpoints/restock3d_v3"
 # otherwise-inert adaptivity (adaptive 3.13 vs coverage-only 12.18, ~97% of the P2 oracle
 # ceiling). Lands in checkpoints_spectre_atoms_repeat/ via `--out-suffix _repeat`. `regroup`
 # is deprecated/off (adds nothing on v3; to be removed in a later refactor).
+# `--step-join` (2026-08-23, learned-pathway workstream): the pre-pooling step-join is
+# scalar-free + off-byte-identical / on-zero-init-additive. Adopted from the deployed recipe
+# for parity; on restock3d_v3 its effect is UNMEASURED (measured only on DD2D) -- re-measure
+# on the next v3 retrain.
 SPECTRE_FLAGS="--epochs 30 --scene-3d --atom-mode profiles --use-pca-feats --use-edgeconv \
 --use-point-sab --pma-seeds 4 --overlap-mode jaccard --coverage-feats --coverage-mode both \
---aggregate-records --evidence-attn --state-delta --select-window 5 --repeat-feats \
+--aggregate-records --evidence-attn --state-delta --select-window 5 --repeat-feats --step-join \
 --out-suffix _repeat"
 
 echo "### SPECTRE 3 seeds (concurrent) $(date -Is)"

@@ -163,12 +163,21 @@ PRESETS: dict[str, dict[str, str]] = {
     # dir, so the frozen 5.78/6.29 numbers predate this change and a retrain is pending;
     # reconcile the downstream `spectre_score.py`/`compare.py` checkpoint-dir names when
     # that retrain lands. `--scene-3d` is intentionally NOT here (Restock3D-only widening).
+    # `--step-join` added 2026-08-23 (learned-pathway workstream,
+    # docs/failed_records_as_built.md): the pre-pooling candidate-step x evidence join
+    # (F-B2). Scalar-free, domain-agnostic, off-byte-identical / on-zero-init-additive. On
+    # DD2D scalars-on it is SUBSTITUTIVE -- a within-noise tie (fr_all_join 7.23 vs abl_all
+    # 7.45), so not a measured deployed FP win; baked in because it is the workstream's one
+    # positive lever (scalar-FREE it recovers ~25% of the scalar gap, fr_join 13.66 vs
+    # floor 15.73) with no downside when scalars are on -- future-proofing, not a
+    # re-measured gain. The current deployed *checkpoints* predate this and get it on the
+    # next full retrain.
     "v3final": {
         "v3final": (
             "--overlap-mode jaccard --coverage-feats "
             "--aggregate-records --evidence-attn --state-delta --select-window 5 "
             "--use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 "
-            "--atom-mode profiles"
+            "--atom-mode profiles --step-join"
         ),
     },
     # EMA weight-averaging arm of the deployed config, to recover the domain-agnostic

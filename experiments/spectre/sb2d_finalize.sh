@@ -64,12 +64,16 @@ for seed in "${SEEDS[@]}"; do
     # --atom-mode profiles); class defaults stay off. --atom-mode profiles adds an `_atoms`
     # checkpoint-dir suffix, so the frozen SB2D numbers predate this and the scoring stage
     # below will need its --arm dir names reconciled when this retrain lands.
+    # --step-join (2026-08-23, learned-pathway workstream): the pre-pooling step-join is
+    # scalar-free + off-byte-identical / on-zero-init-additive. Adopted here from the
+    # deployed recipe for parity; on SB2D its effect is UNMEASURED (measured only on DD2D,
+    # where scalars-on it is a within-noise tie) -- re-measure on the next SB2D retrain.
     python -u -m alphatamp.approaches.spectre.train \
       --env $ENV_VARIANT --seed "$seed" --epochs 30 --num-workers 3 \
       --overlap-mode jaccard --coverage-feats --coverage-mode "$arm" \
       --aggregate-records --evidence-attn --state-delta --select-window 5 \
       --use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 \
-      --atom-mode profiles \
+      --atom-mode profiles --step-join \
       ${suffix:+--out-suffix "$suffix"} \
       > "$LOG_DIR/sb2d_train${suffix}_s$seed.log" 2>&1 &
     pids+=($!)

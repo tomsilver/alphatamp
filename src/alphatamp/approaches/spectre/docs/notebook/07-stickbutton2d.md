@@ -4,6 +4,48 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-24-f-c2-rollout-aligned-f-curriculum-negative-step-join"></a>
+## 2026-08-24 — F-C2 rollout-aligned |F| curriculum negative; step-join to deployed recipe
+
+<!--strip-->
+> **id** `2026-08-24-f-c2-rollout-aligned-f-curriculum-negative-step-join` ·
+> **status** active · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** Ran F-C2, the last rung of the learned-pathway plan: a rollout-aligned |F| training
+curriculum for the scalar-free `fr_join` (step-join) arm. Motivation — hard-stratum DD2D
+rollouts query |F|≈9–22 (deployed FP), but the training sampler caps |F| at 8, so the evidence
+pathway runs out-of-distribution on most attempts of a hard rollout (exactly where `fr_join`'s s1
+is noisy). Fix (additive, flag-gated, training-time only): `sample_context(phi=)` draws
+**|F| ~ Uniform{0..φₑ}** 70% of the time and |F|=0 the other 30% (static floor, user directive),
+where φₑ = `fr_join` seed-0's deployed FP on that episode (`fc2_build_phi.py`). φ map (dd2d_v4
+train): mean 15.45, p50 4, p90 49, max 184; s0=0, s1 13.9, s2 26.3, s3 21.5. Realized training
+|F|: mean 5.4 (was ~2.9), p50 0, p90 14, **p99 79, max 184**. 3-seed, matched anchors.
+
+**Result.** F-C2 is **decisively worse**, mean *and* variance:
+
+| arm | ALL | s1 | vs `fr_join` |
+|---|---|---|---|
+| `fr_join` (baseline) | 13.66 ± 1.90 | 17.05 ± 7.02 | — |
+| `fr_join_fc2` (curriculum) | **16.39 ± 3.05** | **20.20 ± 8.74** | **+2.73 [+1.18, +4.37]** *excludes 0 |
+
+The 1-seed dev pass (fc2 13.40 vs fr_join seed-0 11.84, +1.56 CI incl. 0) was uninformative — a
+variance claim is unmeasurable at 1 seed, and `fr_join`'s seed 0 was its lucky low draw; the
+3-seed picture is what settles it. Anchors reproduced exactly (floor 15.73, ceiling 7.45 — no
+harness drift). **Also:** promoted `--step-join` into the deployed recipe (`v3final` +
+sb2d/restock3d scripts + CLAUDE.md) — future-proofing, since it is scalar-free and a within-noise
+tie with scalars on (`fr_all_join` 7.23 ≈ `abl_all` 7.45).
+
+**Takeaway / next.** **Rollout-visit-aligned ≠ FP-value-aligned.** FP is time-to-*first*-success,
+so the small-|F| "who to try first" decisions dominate; reweighting training toward large |F|
+stole capacity from them (and lowering `p_empty` 0.35→0.30 trimmed the static floor further). The
+variance blow-up also points at an untamed φ tail (p99 79, max 184) destabilizing training. One
+open thread: a **φ-capped** curriculum (cap ~p90≈49) to disambiguate the conceptual cause (A) from
+the tail-instability cause (B) — the guardrail-faithful design; not run. Retrospective:
+`docs/failed_records_as_built.md`; ADR: `docs/decisions/07-stickbutton2d.md` 2026-08-24.
+
+---
+
 <a id="2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers"></a>
 ## 2026-08-23 — Learned-pathway final results — scalar-free step-join recovers ~25% of the scalar gap, substitutive with scalars, F-B1 dead end
 
