@@ -489,6 +489,16 @@ rollout performance — they are diagnostics only; never optimize for them.
   LAZY 11.79 / PIGINet 38.11. Purely adaptive (static unchanged); `regroup` (F2, ~1%) deprecated.
   `repeat` is a `step_certificate`-gated overlap column, inert on DD2D/SB2D (graceful degradation). See
   [`decisions/07` 2026-08-21](decisions/07-stickbutton2d.md#2026-08-21-restock3d-v3-adaptivity-revived-coverage-canonicalize).)*
+  *(2026-08-25: the synthetic result is now explicitly an **upper bound**, and a **real (non-synthetic)
+  Restock3D-v3 dataset collection is underway** to audit it. Labels come from real PyBullet motion
+  planning via a new **hybrid-prune** collection mode: the analytic classifier prunes the K_max pool,
+  then real MP labels only the analytic-feasible candidates + a deterministic 25% audit sample of the
+  analytic-infeasible ones (the rest trust the analytic label) — spending motion planning only where it
+  changes the answer. New env_variant **`restock3d_v3_real`** (synthetic preserved); K_max at ~p95
+  first-feasible (35/40/135/185) keeps it distribution-matched to the synthetic, so the audit compares
+  labels not problems. Each candidate carries a non-digested `label_source ∈ {real, analytic}`; culprit
+  tracking is F2-only on both refiners. See
+  [`decisions/07` 2026-08-25](decisions/07-stickbutton2d.md#2026-08-25-restock3d-v3-real-hybrid-prune-collection).)*
 - **PIGINet's SB2D pixel source is now kinder-native.** The low-level comparator
   on StickButton2D previously read a *schematic* crop (each object drawn as a lone
   polygon on a blank background); for the representation contrast to be fair, PIGINet
@@ -562,3 +572,20 @@ rollout performance — they are diagnostics only; never optimize for them.
   [`notebook/07` 2026-08-23](notebook/07-stickbutton2d.md#2026-08-23-learned-pathway-final-results-scalar-free-step-join-recovers)
   / [2026-08-24](notebook/07-stickbutton2d.md#2026-08-24-f-c2-rollout-aligned-f-curriculum-negative-step-join);
   frozen plan `docs/failed_records_fix.md`, **as-built `docs/failed_records_as_built.md`**.
+  **Round 2 (2026-08-26, `docs/failed_records_fix_part2.md`; ⚠️ the round-1 "~25% gap-closure" above
+  was confounded — jaccard was in the floor — so on a clean floor the tokens-only +records is
+  net-inert, and the actual records gain is below).** A fresh retrain showed the jointly-trained
+  +records adaptivity *hurts* overall (helps s1, degrades s2/s3) — the **W3 interference** hypothesis.
+  The fix that ships: **X2 — the record channel as a zero-init |F|-gated residual on a frozen,
+  warm-started pure-static trunk.** Freezing flips records from net-negative (jointly-trained +1.33 vs
+  static) to **net-positive** (residual −0.48 [−1.23,+0.18] vs static, beating jointly-trained by
+  ~1.8 FP at every stratum) — *freezing the trunk is what makes failure records net-useful*, though
+  their edge over pure static is small/CI-grazing on DD2D. Three composition fixes were then
+  measured-and-rejected: **W1** (deepest-record truncation) *falsified* (aggregation already dedups —
+  1.04/1.02 multiplicity at s2/s3); **W2** (cross-candidate evidence cap) *minor* (~1 FP, non-monotone);
+  **X1** (compiled sum/max aggregation) *negative* (sum ties attention, max trades crowded-for-sparse).
+  Composition is real but small and stratum-specific; the learned soft attention already sits near the
+  best compromise. **Frozen** at "diagnosed, measured, disclosed"; all round-2 machinery is flag-gated
+  off. See [`decisions/07` 2026-08-26](decisions/07-stickbutton2d.md#2026-08-26-failure-records-made-net-positive-via-frozen)
+  / [`notebook/07` 2026-08-26](notebook/07-stickbutton2d.md#2026-08-26-records-round-2-x2-frozen-residual),
+  as-built §Round 2.

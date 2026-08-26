@@ -4,6 +4,245 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-26-records-round-2-x2-frozen-residual"></a>
+## 2026-08-26 — records round 2: X2 frozen residual ships; W1/W2/X1 composition fixes negative
+
+<!--strip-->
+> **id** `2026-08-26-records-round-2-x2-frozen-residual` · **status** active ·
+> **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**What.** Round 2 of the failure-record learnability workstream (`docs/failed_records_fix_part2.md`),
+prompted by a fresh 4-arm DD2D retrain showing the +records adaptivity **hurts overall** (helps s1,
+degrades s2/s3) — the W3 *interference* hypothesis (the jointly-trained evidence pathway damages the
+shared representations). Built + measured four things on `dd2d_v4` (all additive, flag-gated; 1-seed
+screens except X2 at 3 seeds).
+
+**Result.**
+- **X2 — record channel as a zero-init |F|-gated residual on a FROZEN, warm-started pure-static trunk
+  (the fix that works).** Warm-start `abl_static` into the static half, freeze it (117 params), train
+  only the 23 residual tensors; zero-init adjustment ⇒ step-0 ≡ static exactly. **3 seeds:**
+
+  | arm | ALL | s1 | s2 | s3 |
+  |---|---|---|---|---|
+  | residual (X2) | **17.87 ± 2.70** | 18.99 ± 6.95 | 21.52 | 30.97 |
+  | abl_records (jointly-trained) | 19.68 ± 2.13 | 19.72 | 24.79 | 34.20 |
+  | abl_static (floor) | 18.35 ± 2.15 | 21.84 | 21.09 | 30.45 |
+
+  Paired: residual −0.48 [−1.23, +0.18] vs static; abl_records +1.33 vs static. **Freezing flips
+  records from net-negative to net-positive** — the residual beats jointly-trained records by ~1.8 FP
+  at *every* stratum (interference confirmed + fixed) — but its edge over pure static is small and
+  CI-grazing (the record channel's net value over static is small on DD2D; the s1 gain is
+  high-variance). The seed-0 screen (−1.55) was the lucky seed.
+- **W1 — deepest-record truncation: FALSIFIED by its own step-0 gate.** Post-aggregation multiplicity
+  is **1.04 / 1.02** tokens/candidate at s2/s3 (only 3% / 1% carry >1 token) — `_aggregate_per_query`
+  already dedups the raw 6–17 same-`(schema,args)` records. Truncation is a near-no-op exactly where
+  it was hoped to help; the real s2/s3 noise is *cross*-candidate (|F|≈20–30 tokens), not within.
+- **W2 — cross-candidate evidence-cap sweep on the X2 seed-0 checkpoint (eval-only, no training).**
+  Capping the evidence to the k most-recent failures: **minor, non-monotone.** k≈2 modestly beats full
+  (residual ALL 15.32 vs 15.76; s2 20.16 vs 21.40, s3 29.60 vs 30.68 — **~1 FP**), k=1 starves s1
+  (15.64). Same on the abl_records control ⇒ it's the evidence attention drowning slightly, not the
+  gate. ~1 FP, an order below the 3–4 that would justify X1.
+- **X1 — compiled sum/max aggregation (learned per-record read, hand-fixed reduction): NEGATIVE.**
+  vs the X2 soft-attention residual (paired): **sum −0.24 [−2.71, +2.08] (tied)**; **max +0.88 (worse)**.
+  `sum` ≈ attention; `max` trades strata *exactly as composition theory predicts* — helps crowded
+  **s2/s3** (20.12/29.04 vs 21.40/30.68, ~1.3–1.6 FP) but **wrecks sparse s1** (17.40 vs 10.96). No
+  fixed reduction beats soft attention net.
+
+**Takeaway / next.** **Records made net-positive via the frozen residual (X2) is the shipped gain**;
+the composition fixes (W1 falsified, W2 minor, X1 negative) don't beat the soft attention. Composition
+is real but **small and stratum-specific** — a hard ∃-quantifier (`max`) is the right bias at crowded
+strata and the wrong one at sparse ones, so the learned soft attention already sits near the best
+compromise. **Freeze** the round-2 workstream; all machinery stays flag-gated off by default
+(`residual_adaptive`/`freeze_static`/`evidence_agg`/`evidence_cap_k`). ADR: `docs/decisions/07`
+2026-08-26. **Correction (part2 §0):** the earlier fr_join "23%→43% gap-closure" was confounded
+(jaccard in the floor); the isolated +records is net-inert, and X2 is the actual records gain.
+
+---
+
+<a id="2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers"></a>
+## 2026-08-26 — DD2D+SB2D SPECTRE refresh — 5-section numbers + 4-arm ablation
+
+<!--strip-->
+> **id** `2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers` · **status** active
+> · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** Refreshed the stale `compare_methods.py` DD2D + SB2D SPECTRE rows: retrained the deployed
+recipe (now with `--repeat-feats`, inert here after the domain graceful-degradation change) + 3
+ablation arms on dd2d_v4 & stickbutton2d_v1, deployed-only holdouts (dd2d s0–s2, sb2d b1–b3), and
+re-scored `gen_shapeonly` train-old/test-new. 3 seeds; external baselines reused from cache. ADR:
+[2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm](../decisions/07-stickbutton2d.md#2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm).
+
+**Result.** §1 mean FP (3 seeds, ± across-seed):
+
+| section | SPECTRE-adaptive | SPECTRE-static | PIGINet | LAZY | astar |
+|---|---|---|---|---|---|
+| dd2d | **7.11 ± 0.49** | 20.52 ± 3.05 | 17.27 ± 0.19 | 23.26 ± 0.50 | 34.52 |
+| sb2d_kinder | **1.88 ± 0.07** | 2.17 ± 0.13 | 2.28 ± 0.29 | 1.85 ± 0.02 | 16.29 |
+| dd2d_gen_shapeonly | **3.95 ± 1.00** | 15.57 ± 0.97 | 22.68 ± 0.39 | — | 34.73 |
+| dd2d_holdout_s3 | **5.94 ± 2.68** | 20.24 ± 4.04 | 27.88 ± 2.51 | — | 34.52 |
+| sb2d_holdout_b5 | 2.10 ± 0.78 | 3.34 ± 1.96 | **1.68 ± 0.20** | — | 16.29 |
+
+§4 4-arm ablation (mean FP; Δ vs static, paired bootstrap over problems):
+
+| arm | dd2d ALL | dd2d Δ vs static | sb2d ALL | sb2d Δ vs static |
+|---|---|---|---|---|
+| static | 18.35 | — | 2.22 | — |
+| +records | 19.68 | +1.33 [−0.27, +2.91] | 2.36 | +0.14 [−0.06, +0.37] |
+| +scalars | 7.98 | **−10.37 [−13.46, −7.55]** | 1.95 | **−0.27 [−0.43, −0.11]** |
+| full (deployed) | 7.11 | −11.24 [−14.88, −7.99] | 1.88 | −0.34 [−0.54, −0.18] |
+
+**Takeaway.** Three things hold and one drifts. (1) **The documented cross-env story survives the
+retrain:** DD2D SPECTRE ≪ PIGINet ≪ astar with adaptive ≪ static; SB2D non-separation (SPECTRE ≈
+LAZY ≈ PIGINet); SPECTRE generalizes where PIGINet collapses (holdout-s3 5.94 vs 27.88; gen 3.95 vs
+22.68), and the SB2D holdout stays a non-separation (PIGINet 1.68 marginally ahead within spread).
+(2) **The 4-arm ablation decomposes it cleanly and identically on both envs: the compiled scalar
+features carry the adaptive gain (static → +scalars is the big, CI-clean drop), the raw failure
+records alone are inert (Δ grazes/includes 0), and records add only a small increment on top of
+scalars.** The ablation "static" (trained no-adaptive; dd2d 18.35) is a distinct model from the §1
+`SPECTRE-static` row (deployed scored at |F|=0; 20.52). (3) `repeat` is inert on DD2D/SB2D by design
+now (no leakage). **The drift:** DD2D adaptive is 7.11 vs the frozen 5.78 / live 6.29 — the
+pointset+atom+step-join recipe is net-neutral-to-slightly-worse on DD2D, concentrated at the
+known-high-variance s1 (9.03); the win over every baseline is unchanged in magnitude.
+
+---
+
+<a id="2026-08-25-restock3d-v3-real-hybrid-prune-pilot-samples-probe"></a>
+## 2026-08-25 — Restock3D-v3 real hybrid-prune pilot + samples probe
+
+<!--strip-->
+> **id** `2026-08-25-restock3d-v3-real-hybrid-prune-pilot-samples-probe` · **status**
+> active · **tracks** method, env-restock3d, data, evaluation
+<!--/strip-->
+
+**What.** Pre-full-run pilot for the real (hybrid-prune) `restock3d_v3_real` collection: 5
+problems/stratum, real-refined, saved into train (merge into the full run via pre-scan). Measured
+per-worker RSS (→ worker sizing), REAL wall-clock/problem, and the analytic↔real agreement
+(false-positive = analytic-feasible→real-fail; false-negative = audit-sampled analytic-infeasible→
+real-success). Then a controlled **samples probe**: re-refined 25 analytic-feasible skeletons at
+`samples=6` **and** `samples=18` (same skeleton, same seed) to test whether `samples=6` is
+under-powered. Collection is CPU+RAM only (GPU 0% throughout, confirmed via `nvidia-smi`).
+
+**Result.**
+- **Per-worker RSS is LOW:** n=6/7/8/9 = **1.9 / 1.5 / 2.3 / 3.6 GB** — far under the ~5 GB pre-pilot
+  estimate (real hybrid path = geometry generator + PyBullet sim, not the hff-A* memory bomb). So the
+  box was badly under-subscribed at 4 workers; `_PER_WORKER_GB_REAL` recalibrated to
+  `{2.5,2.5,3.5,4.5}` (auto-sizer now gives ~8–14 workers/stratum).
+- **The analytic classifier is a poor proxy for real MP on v3:** overall **false-positive 58%**
+  (42/72 analytic-feasible candidates real-FAIL) and **false-negative 13.2%** (67/508 audit-sampled
+  analytic-infeasible real-SUCCEED; per-stratum 15/46/8/11%, the n=7 46% a small-sample outlier).
+- **`samples=6` is NOT under-powered (decisive):** re-refining the 25 analytic-feasible skeletons at
+  `samples=18` recovered **0** additional successes — `success@6 == success@18 = 56%`, **0 flips, 0
+  regressions** across all strata (n=9 got 9 skeletons, so the hard stratum is covered). The ~44–58%
+  of analytic-feasible that fail are *genuine* true false positives (MP can't realize the packing),
+  not a budget artifact.
+- REAL wall-clock/problem (real-refined subset only, ≠ `total_wall_clock_s` which double-counts the
+  synthetic trusted time): n=6 ≈730 s, n=7 ≈734 s, n=8 ≈2138 s, n=9 ≈3824 s.
+- **Reconciles the G1 "~100% agreement" claim** ([2026-08-20](../decisions/07-stickbutton2d.md#2026-08-20-restock3d-v3-per-object-dims-analytic-collection)),
+  which is now understood as an under-powered gate, NOT a contradiction: (i) G1's *label-aware*
+  budget capped analytic-**infeasible** candidates at **15 s** (feasible got 120 s) on the "infeasible
+  fails regardless of time" assumption — but a false-negative needs the full ~40 s+ to seat blocks, so
+  15 s starves it → it fails → counted as agreement; G1 could not detect FN by construction (its
+  "infeasible 84/84" is a 15 s-cap artifact). The pilot gives every audited candidate the full deployed
+  `r_cap` (60–75 s), so the FN surface. (ii) G1 measured FP on **3** feasible candidates at a *generous*
+  120 s cap ("0 FP, 3/3"); the pilot uses 72 at the deployed cap. (iii) G1's aggregate agreement % is
+  base-rate-dominated (~95% infeasible→TN), so it ≈ the infeasible base rate regardless of the FP/FN on
+  the ~5% feasible slice. Lesson: **report per-class FP/FN rates at the deployed budget, never a single
+  class-imbalanced "agreement %" with an asymmetric cap.**
+
+**Takeaway-next.** `samples=6` holds → the disagreement is real, not a samples artifact. The 58% FP is
+captured correctly by hybrid (analytic-feasible are all real-refined) and is a strong quantification of
+the "synthetic = upper bound" caveat; the 13% FN on the *trusted* bulk is the actionable issue and
+hurts **evaluation** (a mislabeled-feasible test candidate biases time-to-first-success) more than
+listwise **training**. Decision (see the paired ADR
+[2026-08-25-restock3d-v3-real-hybrid-prune-collection](../decisions/07-stickbutton2d.md#2026-08-25-restock3d-v3-real-hybrid-prune-collection)):
+**hybrid-prune on TRAIN, fully-real on VAL/TEST** (clean eval labels). Full run split-specific;
+est. ~1.5–2 days.
+
+**Classifier recalibration — attempted, PROVEN futile (2026-08-25 follow-up).** Fit ALL analytic
+constants (height CUTOFFs both directions, USABLE, GAP) against the pilot's **964 real-labeled
+candidates** (210 real-success / 754 real-fail) — re-classify each under new constants, compare to the
+ground-truth real label. **Zero settings reduce both FP and FN** (every one trades: strict → less FP /
+more FN, loose → the reverse). Root cause: real feasibility is **not separable** in the analytic
+feature space — tall-section real-successes span heights 0.09–0.17 and real-fails span 0.05–0.17
+(near-identical); the best single per-section height threshold separates only **78%**, and the FP is
+**98% at the place step** (real F3/place-fail), not grasp. So the classifier is *irreducibly* rough —
+real feasibility depends on the packing/MP configuration (and near-boundary MP sampling noise) that no
+geometric threshold captures. **The reframing that matters:** in hybrid, FP and FN are asymmetric — an
+FP is real-refined ⇒ correctly labeled (costs MP, **zero noise**); only FN (trusted-infeasible that is
+real-feasible) is noise. So the lever is never classifier accuracy, it is **how much to real-refine**
+(permissiveness = cost; the limit is fully-real = 0 FN). The approved plan already sits at the right
+point (fully-real val/test = 0 eval FN; hybrid train tolerates ~13% FN). Decision: keep the approved
+plan; do NOT recalibrate. This negative result *strengthens* "synthetic = upper bound" — the geometric
+classifier can't even be re-tuned to match real MP.
+
+---
+
+<a id="2026-08-25-restock3d-v3-budget-calibration-samples-false-negative-risk"></a>
+## 2026-08-25 — Restock3D-v3 budget calibration: samples is a false-negative risk not a speed lever; r_cap trimmable only on n=8/9
+
+<!--strip-->
+> **id** `2026-08-25-restock3d-v3-budget-calibration-samples-false-negative-risk` ·
+> **status** active · **tracks** env-restock3d, evaluation, tooling
+<!--/strip-->
+
+**What.** A standalone real-refiner calibration sweep
+(`experiments/spectre/restock3d_v3_budget_sweep.py`) to decide how far the two collection
+budgets — `num_sampling_attempts_per_step` (samples/step, deployed 18) and `r_cap`
+(`refinement_timeout_s`, per-stratum 50/70/90/110 s) — can be lowered before the real
+`BacktrackingRefiner` stops refining feasible skeletons, ahead of a real-refiner v3 collection.
+Both are pure runtime knobs (no re-collect/retrain). Method: per stratum (n=6/7/8/9), 20 "gold"
+problems from the synthetic `restock3d_v3` train split. A **fused** per-problem task recovers a
+dataset analytic-success skeleton, verifies it reaches the goal at samples=18 (this *is* the gold
+gate, so the 18-column is 1.00 by construction), then re-refines that **same in-process**
+`(state_plan, action_plan)` across samples {4,6,…,18} (1 deterministic seed each), timing each;
+plus one analytic-infeasible skeleton per problem across the grid. (An initial two-phase design
+re-recovered the gold skeleton in a *second* process, where the hash-dependent, K_max-truncated
+pool order dropped it and a silent fallback measured the *wrong* skeleton — a flat-0.50 artifact;
+the fused design makes gold ⟺ succeeds@18 tautological.) Analytic false positives are discarded —
+crowded gold skipped up to ~8–10 FP each, so analytic↔real disagreement climbs steeply with `n`.
+~4.6 h wall-clock, 27→5 RAM-sized workers (n=9 peaked wRSSmax 11 GB, survived on swap), 0 errors.
+
+**Result — feasible success-rate vs samples (20 gold/stratum, 1 seed).**
+
+| stratum | s=4 | s=8 | s=12 | s=16 | s=18 | shape |
+|---|---|---|---|---|---|---|
+| n=6 | 0.95 | 0.90 | 1.00 | 0.90 | 1.00 | noisy, non-monotone |
+| n=7 | 0.75 | 0.85 | 0.85 | 0.95 | 1.00 | **clean monotone** |
+| n=8 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | flat |
+| n=9 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | flat |
+
+Only **n=7** shows a real budget effect: dropping samples loses feasible skeletons (25% at s=4).
+n=8/n=9 are **insensitive** (flat 1.00 down to s=4). n=6 is a **boundary artifact** — its feasible
+refines take ~43–50 s right at r_cap=50, so success flips on wall-clock jitter under 27-worker
+contention (the s=8/s=16 dips), not on budget.
+
+**Result — wall-clock / r_cap floors.** Successful-feasible wall-clock is ~**flat in samples** (a
+skeleton succeeds at ~the same time regardless of budget) → lowering samples gives **no
+feasible-refine speed-up**. Max feasible-success dt vs current r_cap: n=6 49.7/50, n=7 69.5/70
+(both **at floor**, no room), n=8 57.2/90, n=9 77.9/110 (**cushion** → room to trim). Infeasible
+skeletons run to ~r_cap (14–20/20 hit the cap across strata), so r_cap is the binding cost for the
+(majority) infeasible candidates — but lower samples *does* speed infeasible exhaust (n=8 mean
+79 s @s=4 vs 94 s @s=18; 16/20 vs 20/20 hit the cap), a smaller backtracking tree exhausting sooner.
+
+**Takeaway / next.** The knobs are asymmetric; the collection-time lever is **r_cap on the crowded
+strata, not samples.** (1) **samples: do not lower globally** — no feasible speed-up, and its only
+saving (faster infeasible exhaust) costs **false negatives**: n=7 loses 25% of feasible skeletons
+at s=4, silently corrupting labels. Keep samples ≈ 18 wherever tight (n=7-like) strata are
+collected; a per-stratum samples would tolerate ~8 on n=8/9. (2) **r_cap: trim only n=8 (90→~65–70 s)
+and n=9 (110→~90 s)**, where feasibles finish with a large cushion yet infeasibles run to the cap —
+cutting the dominant infeasible cost on exactly the slowest strata; n=6/7 are at floor. (3)
+**Caveats:** wall-clock measured under heavy contention (near-r_cap success-rates are noisy — the
+n=6 dips), and *which* gold skeleton is picked is in-process hash-dependent, so exact per-stratum
+curves can shift on re-run — the robust findings are n=7 sensitivity, n=8/9 insensitivity, and the
+r_cap floors. **Production budgets in `strata_v3.BUDGETS` are unchanged** — this is a measurement;
+adopting a trim is a separate edit. Artifacts:
+`data/spectre/derived/restock3d_v3/budget_sweep/` (`budget_sweep_results.md`,
+`success_vs_samples.png`, `wallclock_vs_samples.png`).
+
+---
+
 <a id="2026-08-24-f-c2-rollout-aligned-f-curriculum-negative-step-join"></a>
 ## 2026-08-24 — F-C2 rollout-aligned |F| curriculum negative; step-join to deployed recipe
 

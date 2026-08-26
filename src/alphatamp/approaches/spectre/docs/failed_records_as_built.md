@@ -1,17 +1,24 @@
 # Failure-record learned pathway — as-built retrospective
 
-**Status:** as-built, 2026-08-24. This is the *retrospective* companion to the probe plan
-[`failed_records_fix.md`](failed_records_fix.md): what we actually followed, deviated from,
-decided, learned, and shipped. Where the two disagree, **this document is the record of what
-happened**; `failed_records_fix.md` remains the frozen original plan.
+**Status:** as-built, 2026-08-24; **Round 2 appended 2026-08-26** (§Round 2). This is the
+*retrospective* companion to the probe plans [`failed_records_fix.md`](failed_records_fix.md)
+(round 1) and [`failed_records_fix_part2.md`](failed_records_fix_part2.md) (round 2): what we
+actually followed, deviated from, decided, learned, and shipped. Where the two disagree, **this
+document is the record of what happened**; the plans remain frozen.
 
-**One-line result:** the deployed *scalars-on* method is unchanged; a scalar-free,
-domain-agnostic **pre-pooling step-join** (F-B2) recovers **~25% of the scalar gap** on DD2D
-(the workstream's one positive lever, now baked into the deployed recipe as future-proofing),
-while content enrichment, match-hint biases, auxiliary supervision, and a rollout-aligned
-large-|F| curriculum were each **tried and rejected**. The honest headline is
-*architecture (how evidence is read), not content/hints/supervision/curriculum, is the lever —
-and it is substitutive with the scalars, not additive*.
+> **⚠️ CORRECTION (2026-08-26, `failed_records_fix_part2.md` §0).** The round-1 "step-join recovers
+> **~25% of the scalar gap**" figure below was **confounded** — jaccard was in the floor, so the
+> step-join delta was s1-localized, substitutive and CI-grazing (fr_join − fr_summary
+> −1.47 [−2.97, +0.11]). **Do not cite the 25%.** On a clean isolated floor (jaccard off) the
+> tokens-only +records arm is **net-inert-to-negative** (helps s1, hurts s2/s3). The actual records
+> gain is **Round 2's X2 frozen residual** (§Round 2), not the step-join.
+
+**One-line result (round 1, corrected):** the deployed *scalars-on* method is unchanged; a
+scalar-free, domain-agnostic **pre-pooling step-join** (F-B2) is the round-1 lever, but on a clean
+floor its aggregate effect is within noise (the ~25% figure is retracted above); content enrichment,
+match-hint biases, auxiliary supervision, and a rollout-aligned large-|F| curriculum were each
+**tried and rejected**. The honest headline is *architecture (how evidence is read), not
+content/hints/supervision/curriculum, is the lever*.
 
 ---
 
@@ -178,3 +185,49 @@ learns a *subset* of the same signal from the raw tokens.
 **Citations:** notebook/decisions `07-stickbutton2d` entries 2026-08-22 (step-join lever, holdout inert,
 adaptive-feature isolation) and 2026-08-23 (learned-pathway final results); proposal §6 "Learned pathway
 from raw failure evidence"; the frozen plan [`failed_records_fix.md`](failed_records_fix.md).
+
+---
+
+## Round 2 — the interference fix and the composition probes (2026-08-26)
+
+Plan: [`failed_records_fix_part2.md`](failed_records_fix_part2.md). A fresh 4-arm DD2D retrain showed
+the +records adaptivity **hurts overall** (helps s1, degrades s2/s3), even with step-join — the **W3
+interference** hypothesis (the jointly-trained evidence pathway damages the shared representations).
+Round 2 tested that fix (X2) and three composition fixes (W1/W2/X1). All additive + flag-gated; the
+deployed scalars-on method is untouched. Full numbers: `docs/notebook/07` / `docs/decisions/07`
+2026-08-26.
+
+### What shipped — X2: record channel as a frozen-residual (the actual records gain)
+Warm-start a **pure-static** checkpoint (`abl_static`, no overlap) into the static half of a new
+`ResidualEvidenceScorer`, **freeze** it (117 params), and train only the zero-init record/evidence
+residual (`logit = static_logit + g(|F|)·adjustment`, 23 tensors / ~48k weights). Zero-init adjustment
+⇒ **step-0 ≡ static exactly**, so attaching the channel cannot corrupt the static representation.
+Flags: `--residual-adaptive --freeze-static --init-static-from <ckpt>` (`{seed}`-substituted).
+
+**3-seed result:** records flip from **net-negative** (jointly-trained `abl_records` +1.33 vs static)
+to **net-positive** (residual **−0.48 [−1.23, +0.18]** vs static), beating jointly-trained records by
+~1.8 FP at *every* stratum. **Freezing the trunk is what makes failure records net-useful.** But the
+edge over pure static is small and CI-grazing on DD2D (the record channel's net value over static is
+small; the s1 gain is high-variance). *Guarantee caveat: "cannot be worse than static" holds at INIT
+only — the frozen trunk protects the representation, not a per-stratum floor (residual is +0.4/0.5 above
+static at s2/s3).*
+
+### What was measured and rejected
+- **W1 — deepest-record truncation: FALSIFIED.** Step-0 multiplicity is 1.04/1.02 tokens/candidate at
+  s2/s3 (`_aggregate_per_query` already dedups the raw 6–17 same-`(schema,args)` records). Within-
+  candidate truncation is a no-op; the s2/s3 noise is *cross*-candidate. *Standing fact.*
+- **W2 — cross-candidate evidence cap (eval-only): MINOR.** `evidence_cap_k` caps the evidence to the
+  k most-recent failures (decoupled from the re-try mask and the |F| gate). k≈2 modestly beats full
+  (~1 FP at s2/s3), non-monotone (k=1 starves s1); same on the no-gate control ⇒ the evidence attention
+  drowning slightly. ~1 FP — an order below the X1-justifying bar.
+- **X1 — compiled sum/max aggregation: NEGATIVE.** `CompiledEvidenceAgg` replaces the soft evidence
+  attention with a learned per-record read reduced by a hand-fixed `sum`/`max` (`--evidence-agg`). vs
+  the X2 soft-attention residual: **sum −0.24 (tied)**, **max +0.88 (worse)**. `max` trades strata
+  exactly as composition theory predicts — helps crowded s2/s3 (~1.3 FP) but wrecks sparse s1 — so no
+  fixed reduction beats learned attention net. *Composition is real but small and stratum-specific.*
+
+### Verdict + what's one flag away
+**Freeze.** X2 is the shipped records gain; the composition fixes don't beat the soft attention. New
+modules/flags stay flag-gated **off** by default (`ResidualEvidenceScorer`/`residual_adaptive`/
+`freeze_static`, `CompiledEvidenceAgg`/`evidence_agg`, eval-only `evidence_cap_k`). Tests:
+`test_residual_adaptive.py`, `test_compiled_agg.py`, `test_evidence_cap.py`.

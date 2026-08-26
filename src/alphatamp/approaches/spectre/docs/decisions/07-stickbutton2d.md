@@ -4,6 +4,236 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-26-failure-records-made-net-positive-via-frozen"></a>
+## 2026-08-26 — failure records made net-positive via frozen residual (X2); composition fixes (W1/W2/X1) do not beat it; freeze
+
+<!--strip-->
+> **id** `2026-08-26-failure-records-made-net-positive-via-frozen` · **status** active
+> · **tracks** method, evaluation, env-dd2d
+<!--/strip-->
+
+**Context.** A fresh 4-arm DD2D retrain (2026-08-26) showed the +records/evidence adaptivity **hurts
+overall** — helps s1, degrades s2/s3 — netting worse than SPECTRE-static, even with step-join
+(`docs/failed_records_fix_part2.md` §0). The leading explanation was **W3 interference**: the
+jointly-trained evidence pathway degrades the shared candidate/scene representations. Round 2 of the
+record-learnability workstream tested that and three composition fixes on `dd2d_v4` (numbers:
+`docs/notebook/07` 2026-08-26).
+
+**Decision.** **X2 (the record channel as a zero-initialized |F|-gated RESIDUAL over a frozen,
+warm-started pure-static trunk) is the shipped records improvement**, and the composition fixes
+(W1/W2/X1) are **measured-and-rejected**; the round-2 workstream **freezes**. Specifically:
+- **X2 ships** (flag-gated, off by default): warm-start a pure-static checkpoint into the static half
+  (`--init-static-from`), freeze it (`--freeze-static`), and train only the zero-init record/evidence
+  residual (`--residual-adaptive`; a neutral |F| gate). Property: step-0 ≡ static exactly, so attaching
+  the channel cannot corrupt the static representation. 3 seeds: **records flip from net-negative
+  (jointly-trained +1.33 vs static) to net-positive (residual −0.48 [−1.23,+0.18])**, beating
+  jointly-trained records by ~1.8 FP at every stratum. Freezing *is* what makes failure records
+  net-useful; their edge over pure static is small/CI-grazing on DD2D.
+- **W1 (deepest-record truncation) FALSIFIED** by its step-0 multiplicity gate (1.04/1.02 at s2/s3;
+  aggregation already dedups). **W2 (cross-candidate evidence cap) MINOR** (~1 FP, non-monotone k≈2,
+  eval-only). **X1 (compiled sum/max aggregation) NEGATIVE** — sum ties attention (−0.24), max trades
+  crowded-for-sparse (helps s2/s3 ~1.3 FP, wrecks s1), no fixed reduction beats soft attention net.
+- All round-2 machinery stays **flag-gated off** (build-then-disable): `residual_adaptive`,
+  `freeze_static`, `init_static_from`, `evidence_agg` ("attention" default), and the eval-only
+  `evidence_cap_k` — the deployed scalars-on pipeline is untouched.
+
+**Consequences.** **New invariants / standing facts:** (1) *the "cannot be worse than static"
+guarantee is at INIT only* — a frozen trunk protects the representation, but the residual head can
+still learn a small net-harmful adjustment at a stratum in service of overall loss (residual is
++0.4/0.5 above static at s2/s3); (2) *within-candidate record multiplicity is already ~1 after
+`_aggregate_per_query`* on DD2D — W1-style truncation is a no-op there, so cross-candidate composition
+is the only bag-size lever; (3) *composition is real but small and stratum-specific* — a hard
+∃-quantifier (max) is the right bias at crowded strata and wrong at sparse ones, so learned soft
+attention already sits near the best compromise. **Correction:** the earlier fr_join "23%→43%
+gap-closure" (`docs/failed_records_as_built.md`) was confounded — jaccard was in the floor; the
+isolated +records is net-inert, and X2 is the actual records gain. Numbers: `docs/notebook/07`
+2026-08-26; retrospective updated in `docs/failed_records_as_built.md` §Round 2. New modules
+(`ResidualEvidenceScorer`, `CompiledEvidenceAgg`) and flags are one flag away, per convention.
+
+---
+
+<a id="2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm"></a>
+## 2026-08-26 — SPECTRE refresh: repeat graceful degradation, 4-arm ablation, DD2D+SB2D retrain
+
+<!--strip-->
+> **id** `2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm` · **status**
+> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**Context.** The `compare_methods.py` DD2D + SB2D SPECTRE numbers were **stale** — the deployed
+checkpoints (`checkpoints_spectre_unified` / `checkpoints_spectre`) predate the PointSetEncoder
+upgrade, atom profiles, and step-join now in the deployed recipe, so a refresh required a full
+retrain (`precompute:161` already flagged this). Two design questions rode along. (1) `repeat`
+(the F3 exact-step certificate) had been declared on DD2D `place-buffer` and the SB2D press
+schemas **as a negative-transfer stress test**, where it *leaks* — its veto keys on the bare
+`(schema, args)` step identity, but those failures are order/context-dependent **means-failures**
+(not intrinsic per-step certificates), so it vetoed 44.6% of feasible DD2D candidates / 10.9% SB2D
+(vs ~0% on restock3d's genuine F3). (2) The §4 ablation (cov×tokens 2×2 + 6-arm single-feature
+isolation) kept **jaccard overlap — an adaptive feature — in its floor**, so it never cleanly
+isolated static-vs-adaptive.
+
+**Decision.**
+- **`repeat` graceful degradation.** Retire the stress-test `step_certificate=True` on DD2D
+  `place-buffer` (`_DD2D`) and the four SB2D press schemas (`_SB2D`). The deployed recipe now
+  carries `--repeat-feats` **uniformly across all envs**, but with no certificate declared,
+  `_rr_repeat_steps` stays empty → the `repeat` column is **identically 0** on DD2D/SB2D (inert,
+  exactly like `regroup` where no `grouping_certificate` is declared). restock3d_v3's genuine F3
+  certificate is a separate object, untouched. **New invariant:** `step_certificate` is declared
+  only where a blameless-exhausted per-step failure is **intrinsic (context-free)**; on
+  packing/means-failure domains `repeat` degrades gracefully to inert rather than leaking.
+  `.step_certificate` is read in exactly one place (`dataset.py` repeat block), so
+  `proof_tier`/`dead`/demotion/token-holdout are byte-unchanged.
+- **4-arm ablation.** Replace the 2×2 + 6-arm isolation on DD2D/SB2D with a single
+  **adaptive-component decomposition**: **static** (no adaptive) / **+records** (raw failure
+  tokens, no scalars) / **+scalars** (cand-overlap + coverage/waste + inert repeat, no records) /
+  **full = deployed**. The floor is now the truly **static** trained model. Each arm trained from
+  scratch (3 seeds); "full" reuses the deployed `spectre3` checkpoint. Wired via `_ABLATION_4ARM`
+  + `_ISOLATION_ARMS_BY_VARIANT` (dd2d_v4 + stickbutton2d_v1 → 4-arm; restock3d_v3 keeps its 6-arm),
+  the notebook §4.3 env-branches on it, and §4.1/4.2 are retired.
+- **Refresh.** Retrain the deployed recipe (now `checkpoints_spectre_atoms_v3final`) + the 3
+  ablation arms on dd2d_v4 & stickbutton2d_v1, plus deployed-only holdouts (dd2d s0–s2, sb2d
+  b1–b3); re-score `dd2d_gen_shapeonly` train-old/test-new. 3 seeds throughout. External baselines
+  (astar/PIGINet/LAZY/VLMPlan) reused from cache.
+
+**Consequences.**
+- **DD2D** deployed → **SPECTRE-adaptive 7.11 ± 0.49** (was frozen 5.78 / live 6.29 — the
+  pointset+atom+step-join recipe is net-neutral-to-slightly-worse here, the drift concentrated at
+  the known-noisy s1 = 9.03). Story intact: ≪ PIGINet 17.27 ≪ astar 34.52; adaptive ≪ static 20.52.
+- **SB2D** → **SPECTRE-adaptive 1.88 ± 0.07** ≈ LAZY 1.85 ≈ PIGINet 2.28 — the SB2D non-separation
+  holds; adaptive < static 2.17.
+- **The 4-arm ablation is clean and consistent across both envs: the compiled scalars carry the
+  adaptive gain, raw records alone are inert.** DD2D: static 18.35 → **+scalars 7.98 (Δ −10.37
+  [−13.46, −7.55])**, **+records 19.68 (Δ +1.33, ns)**, full 7.11. SB2D: static 2.22 → **+scalars
+  1.95 (Δ −0.27 [−0.43, −0.11])**, **+records 2.36 (Δ +0.14, ns)**, full 1.88. Records add only a
+  small increment *on top of* scalars (DD2D 7.98→7.11, SB2D 1.95→1.88). The ablation "static"
+  (trained no-adaptive, DD2D 18.35) is a different model from the §1 `SPECTRE-static` row (deployed
+  scored at |F|=0, 20.52).
+- **Generalization** refreshed (ablation omitted per scope): `gen_shapeonly` adaptive 3.95 vs static
+  15.57 / PIGINet 22.68; `holdout_s3` adaptive 5.94 vs PIGINet 27.88 (SPECTRE generalizes, PIGINet
+  collapses); `holdout_b5` adaptive 2.10 ≈ PIGINet 1.68 (SB2D non-separation).
+- restock3d_v3's 6-arm ablation renders unchanged. Only `test_repeat_regroup.py` changed (the
+  step_certificate assertions flipped to the new invariant); **514 spectre tests pass**. Stale
+  old-arm cache dirs (`abl_cov_*`, `abl_only_*`, `abl_suppress_records`, …) are left on disk,
+  unread by the notebook.
+
+---
+
+<a id="2026-08-25-restock3d-v3-real-hybrid-prune-collection"></a>
+## 2026-08-25 — Restock3D-v3 real hybrid-prune collection
+
+<!--strip-->
+> **id** `2026-08-25-restock3d-v3-real-hybrid-prune-collection` · **status** active ·
+> **tracks** method, env-restock3d, data, evaluation
+<!--/strip-->
+
+**Context.** The `restock3d_v3` dataset that produced the §0 crossover (SPECTRE 3.13 ≫ PIGINet
+38.11) is **synthetic** — labels come from `feasibility_v3.classify_skeleton` (pure geometry, no
+motion planning), flagged an *upper bound* pending a real-refiner audit. Real-refining all K_max
+candidates is wasteful: ~95% are analytically infeasible and analytic↔real agreement is high, so
+most real MP would be spent confirming labels we already trust. Real MP only *adds information* in
+two places: (1) **analytic-feasible** candidates (analytic false positives — a geometrically valid
+packing the MP sampler can't realize; exactly the labels the synthetic set gets wrong), and (2) a
+**sample of analytic-infeasible** candidates (to audit "analytic-infeasible ⇒ real-infeasible" and
+catch rare false negatives).
+
+**Decision.** A new **`hybrid_prune`** collection mode (`CollectionConfig.refiner_mode`, pinned
+into `config_hash`). Per problem: classify all K_max candidates analytically, then **real-refine
+every analytic-feasible candidate + a deterministic 25% audit sample** (`collect._HYBRID_AUDIT_FRAC`,
+string-seeded per `(rule, problem_id, idx)` so it is reproducible across processes) **of the
+analytic-infeasible ones**; trust the analytic label for the rest. Each candidate carries a
+non-digested **`OutcomeRecord.label_source ∈ {real, analytic}`** marker (+ a finer
+`refiner_metadata["prune_reason"]`) for the later real-vs-synthetic audit. The real dataset is a
+**new env_variant `restock3d_v3_real`** (synthetic `restock3d_v3` preserved as the negative
+control), reusing the `strata_v3` env/banding so `compare.stratum_of` is unchanged. Params (budget
+sweep + p95 first-feasible calibration): **K_max 35/40/135/185, r_cap 60/65/65/75 s,
+samples_per_step 6**, sizes train 100/100/50/50, val 20/20/10/10, test 40/40/20/20. Collection is
+CPU+RAM only (PyBullet DIRECT + IKFast, **no GPU**); workers auto-size at `min(0.80·CPU,
+0.80·RAM/PER_WORKER_GB)`, one stratum per process, sequential. Culprit tracking is **F2-only on
+both refiners**: to honour "F4 dead", the analytic classifier's pick/reach-over branch is now
+**culprit-free** (parity with the real `_probe_pick` of the same date), so no F1/F3/F4 culprits
+enter the dataset (F3 stays emitted culprit-free — it drives `repeat`).
+
+**Consequences.** Every *success* label is real-verified (analytic-feasible ⇒ always real-refined);
+failure conditioning comes from a mix of real + analytic F2/F3 records, digested identically
+(`canonicalize` preserves `None`; verified end-to-end). Adaptivity therefore works on analytically
+generated failures. The real set stays distribution-matched to the synthetic (K_max at ~p95
+first-feasible retains ~95% of problems), so the deferred audit compares labels, not problems. Cost
+is bounded to ~`0.25·K_max` real-refines/problem; the pilot (5/stratum, saved into train) sets the
+true `PER_WORKER_GB` and prices analytic↔real agreement before the full run.
+
+**Pilot outcome (2026-08-25) refined the split-specific labeling** (numbers in the paired notebook
+entry). The pilot found per-worker RSS far under estimate (1.5–3.6 GB → `_PER_WORKER_GB_REAL`
+recalibrated, ~8–14 workers/stratum), and — decisively — that the analytic classifier is a **poor
+proxy** for real MP on v3: **58% false-positive** (analytic-feasible → real-fail) and **13% false-
+negative** (trusted-infeasible → real-feasible), with `samples=6` confirmed adequate by a controlled
+probe (so the disagreement is real, not a budget artifact; the earlier G1 "~100% agreement" was an
+under-powered gate — asymmetric 15 s infeasible cap hid FN + base-rate-dominated aggregate). The FP is
+captured correctly (analytic-feasible are all real-refined); the **FN is the actionable issue and
+biases *evaluation* more than listwise *training***. Decision: **hybrid-prune on TRAIN** (robust to
+~13% trusted-bulk FN, keeps train affordable) **+ FULLY real on VAL/TEST** (`refiner_mode=real`, every
+candidate real-refined → clean, unbiased eval labels). Implemented as split-specific collector
+invocations in `restock3d_v3_real_run_all.sh` (~2× the all-hybrid cost, but only on 60 val + 120 test
+problems). Classifier re-calibration was **attempted and proven futile** (fit all constants —
+height cutoffs both directions, USABLE, GAP — against the pilot's 964 real-labeled candidates:
+**zero settings reduce both FP and FN**; real-success/real-fail heights overlap, best per-section
+threshold separates only 78%, FP is 98% at the place step). Reframing: in hybrid, FP = wasted MP
+(real-refined ⇒ correct label, no noise), FN = the only noise; the lever is **how much to
+real-refine** (permissiveness = cost, limit = fully-real), not classifier accuracy — so the
+split-specific plan already sits at the right point and stands. The negative result strengthens
+"synthetic = upper bound". The analytic classifier
+change is shared with the synthetic path, but the frozen synthetic dataset on disk is untouched
+(a future synthetic re-collection would differ only on ~0% F4 records). Additive + non-breaking:
+`label_source` is a trailing optional field, `hybrid_prune` an opt-in mode; the DD2D/SB2D/synthetic
+paths are byte-unchanged. **Follow-up (deferred):** vocab + SPECTRE/PIGINet/LAZY training on the
+real set + the `compare_envs` real-vs-synthetic audit. Builds on
+[2026-08-25-restock3d-v3-real-refiner-tracks-only-crowding-f2](#2026-08-25-restock3d-v3-real-refiner-tracks-only-crowding-f2)
+(the real-refiner F2-only change) and the K_max/budget calibration of the same era.
+
+---
+
+<a id="2026-08-25-restock3d-v3-real-refiner-tracks-only-crowding-f2"></a>
+## 2026-08-25 — Restock3D-v3 real-refiner tracks only crowding (F2) culprits; pick-side (F1/F4) attribution disabled
+
+<!--strip-->
+> **id** `2026-08-25-restock3d-v3-real-refiner-tracks-only-crowding-f2` · **status**
+> active · **tracks** method, env-restock3d, data
+<!--/strip-->
+
+**Context.** A census of the collected `restock3d_v3` synthetic dataset (train+val+test, ~64k
+failed skeletons) measured the failure-family mix directly from the stored records
+(`(schema, culprits)` → family, since `family` is not serialized): **F3 height ≈ 75%** (blameless),
+**F2 crowding ≈ 25%** (residents culprits), **F4 reach-over ≈ 0.03%** (11 / 42,689 train), **F1 = 0%**
+(retired). So the two pick-side class-1 families we attribute culprits for are effectively **inert**:
+F1 never fires under the unified front grasp, and F4 is geometric-noise-rare in the fully-lateral
+layout. Carrying pick-side culprit machinery buys ~nothing yet runs two real-collision probes
+(`grasp_blockers` IK + `reach_over_culprits`) on every pick rejection — a real-cost we pay per
+sample in the (expensive) real-refiner collection.
+
+**Decision.** In the **real** recording sampler (`instrumented_refiner._probe_pick`), **disable
+pick-side culprit attribution entirely** — a pick failure is now recorded **culprit-free (class-2
+deviation)** rather than a class-1 F1/F4 record. `_probe_pick` short-circuits to `((), "C2")` and no
+longer calls `grasp_blockers` / `reach_over_culprits` (both stay defined — the eager tables,
+generator and `restock3d_coverage_probe` still use them). Net: restock3d **tracks only crowding (F2)
+culprits**; F3 stays culprit-free/provable and F2 place attribution is unchanged. Scope is the real
+refiner only; the analytic classifier (`feasibility_v3.classify_skeleton`) still emits F4 pick
+culprits — deliberately not touched, as it is unused once collection moves to the real refiner and
+F4 is ~0% regardless.
+
+**Consequences.** (1) Verified: a 1-problem real (`refiner_mode="real"`) v3 collection produces valid
+records; F3 real records are shaped identically to the analytic ones (culprit-free, **empty**
+deviation, `exhausted=True` — the place controller raises on a too-tall block, so `achieved=None`),
+so downstream `blame`/coverage and the `repeat` F3-certificate consume real records unchanged. Unit
+coverage: `test_pick_is_culprit_free` (new, pick → `((), "C2")`), `test_f2_place_onto_resident`
+(F2 residents), `test_restock3d_refiner`/`_v2_refiner`/`_v3_refiner_f3` F3 all green. (2) A small
+real-collection **speedup** — two fewer collision probes per pick rejection. (3) **Divergence to
+track:** analytic-F4 (culprits) vs real-F4 (culprit-free) now disagree; immaterial for labels
+(F4 ≈ 0%, success/fail unchanged) and for a real collection (analytic path unused), but note it if the
+analytic path is ever re-run for records. (4) The coverage/waste channel on restock3d is now fed
+**only** by F2 residents — consistent with the standing finding that the adaptive win rode the F3
+`repeat` certificate (~75% mass) and ordering coverage/waste carried ~1%.
+
+---
+
 <a id="2026-08-24-step-join-promoted-deployed-recipe-f-c2-curriculum"></a>
 ## 2026-08-24 — step-join promoted to deployed recipe; F-C2 curriculum negative
 
