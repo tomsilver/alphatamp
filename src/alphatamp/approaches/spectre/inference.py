@@ -145,6 +145,7 @@ def load_checkpoint(
             use_step_join=bool(cfg.get("use_step_join")),
             step_join_match_bias=bool(cfg.get("step_join_match_bias")),
             residual_adaptive=bool(cfg.get("residual_adaptive")),
+            evidence_agg=str(cfg.get("evidence_agg", "attention")),
         ),
     )
     model.load_state_dict(ck["state_dict"], strict=True)

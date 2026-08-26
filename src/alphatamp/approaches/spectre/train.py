@@ -234,6 +234,9 @@ class TrainConfig:
     residual_adaptive: bool = False
     init_static_from: str = ""
     freeze_static: bool = False
+    # X1: the residual's evidence read -- "attention" (soft) or the compiled "sum"/"max"
+    # aggregation (learned per-record read, hand-fixed quantifier). Only with residual_adaptive.
+    evidence_agg: str = "attention"
 
 
 class SpectreDataset(Dataset):
@@ -584,6 +587,7 @@ def run_training(
             use_step_join=cfg.use_step_join,
             step_join_match_bias=cfg.step_join_match_bias,
             residual_adaptive=cfg.residual_adaptive,
+            evidence_agg=cfg.evidence_agg,
         ),
     ).to(device)
     # X2 warm-start + freeze (docs/failed_records_fix_part2.md §3): load a pure-static
@@ -949,6 +953,12 @@ def main(argv=None) -> int:
         help="freeze the warm-started static params (requires_grad=False); only the residual trains",
     )
     ap.add_argument(
+        "--evidence-agg",
+        choices=("attention", "sum", "max"),
+        default=TrainConfig.evidence_agg,
+        help="X1: residual evidence read -- soft 'attention' or compiled 'sum'/'max' aggregation",
+    )
+    ap.add_argument(
         "--scene-3d",
         action="store_true",
         help="3D point-cloud scene representation (Restock3D); default 2D footprint",
@@ -1038,6 +1048,7 @@ def main(argv=None) -> int:
         # multi-seed sweep warm-starts each residual seed from the matching static seed.
         init_static_from=a.init_static_from.replace("{seed}", str(a.seed)),
         freeze_static=a.freeze_static,
+        evidence_agg=a.evidence_agg,
         scene_3d=a.scene_3d,
         use_pca_feats=a.use_pca_feats,
         use_edgeconv=a.use_edgeconv,

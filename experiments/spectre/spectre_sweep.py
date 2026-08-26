@@ -319,6 +319,25 @@ PRESETS: dict[str, dict[str, str]] = {
             "dd2d_v4/seed_{seed}/best.pt"
         ),
     },
+    # X1 (docs/failed_records_fix_part2.md §3): the residual reads records with a COMPILED
+    # aggregation (learned per-record read, hand-fixed sum/max reduction = the quantifier) instead
+    # of the soft evidence attention -- W2 showed the soft attention composes many records
+    # imperfectly. Same frozen-static residual as `residual_records`, only `--evidence-agg` differs.
+    # Screen both reductions one seed at a time:  --preset residual_records_x1 --env dd2d_v4 --seeds 0
+    "residual_records_x1": {
+        "residual_x1sum": (
+            f"{_ABL_BACKBONE} --no-overlap --aggregate-records --evidence-attn "
+            "--state-delta --residual-adaptive --freeze-static --evidence-agg sum "
+            "--init-static-from data/spectre/checkpoints_spectre_norec_noov_atoms_abl_static/"
+            "dd2d_v4/seed_{seed}/best.pt"
+        ),
+        "residual_x1max": (
+            f"{_ABL_BACKBONE} --no-overlap --aggregate-records --evidence-attn "
+            "--state-delta --residual-adaptive --freeze-static --evidence-agg max "
+            "--init-static-from data/spectre/checkpoints_spectre_norec_noov_atoms_abl_static/"
+            "dd2d_v4/seed_{seed}/best.pt"
+        ),
+    },
     "failed_records_restock": {
         "fr_summary": (
             f"{_ABL_BACKBONE} --scene-3d --aggregate-records --evidence-attn --state-delta"

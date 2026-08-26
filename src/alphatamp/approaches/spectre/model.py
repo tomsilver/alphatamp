@@ -457,6 +457,46 @@ class EvidenceCrossAttentionScorer(CrossAttentionScorer):
         return logit
 
 
+class CompiledEvidenceAgg(nn.Module):
+    """X1: a compiled aggregation over the failure records (docs/failed_records_fix_part2.md §3).
+
+    The soft evidence cross-attention learns BOTH the per-record read AND the weighting; the W2
+    sweep showed it composes many records imperfectly (small-k beats full at s2/s3). X1 keeps the
+    per-record read **learned** but **fixes the aggregation by hand** -- a ``sum`` (⇒ count /
+    fraction, like ``coverage``) or ``max`` (⇒ ∃-a-relevant-record) reduction over the records --
+    giving the model the quantifier the compiled scalars have and soft attention cannot reliably
+    induce. Engineered structure, learned content: one level up the ladder from the evidence
+    attention it replaces. Drop-in for ``evid_attn`` in ``ResidualEvidenceScorer``: same
+    ``(cand_emb, fact_tok, fact_mask) -> (B,K,D)`` contract, so the zero-init ``adaptive_head``
+    still makes the residual a no-op at init (the X2 "cannot be worse than static" guarantee holds).
+    """
+
+    def __init__(self, reduce: str = "sum", dropout_p: float = DROPOUT) -> None:
+        super().__init__()
+        assert reduce in ("sum", "max")
+        self.reduce = reduce
+        # Per-(candidate, record) learned read; the reduction below is the fixed quantifier.
+        self.pair = nn.Sequential(
+            nn.Linear(2 * D_MODEL, D_MODEL),
+            nn.GELU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(D_MODEL, D_MODEL),
+        )
+
+    def forward(self, cand_emb: Tensor, fact_tok: Tensor, fact_mask: Tensor) -> Tensor:
+        b, k, d = cand_emb.shape
+        r = fact_tok.shape[1]
+        c = cand_emb.unsqueeze(2).expand(b, k, r, d)
+        f = fact_tok.unsqueeze(1).expand(b, k, r, d)
+        pair = self.pair(torch.cat([c, f], dim=-1))  # (B,K,R,D) learned per-record read
+        m = fact_mask.view(b, 1, r, 1)  # True = valid record
+        if self.reduce == "sum":
+            return (pair * m).sum(dim=2)  # masked sum ⇒ count/fraction quantifier
+        # max ⇒ ∃-best-record; rows with no valid record collapse to 0 (like `ev * has`).
+        ev = pair.masked_fill(~m, float("-inf")).max(dim=2).values
+        return torch.nan_to_num(ev, neginf=0.0)
+
+
 class ResidualEvidenceScorer(CrossAttentionScorer):
     """X2: the failure-record channel as a zero-init, |F|-gated **residual** over static.
 
@@ -491,13 +531,24 @@ class ResidualEvidenceScorer(CrossAttentionScorer):
         n_overlap_feats: int = 0,
         n_prior_feats: int = 0,
         dropout_p: float = DROPOUT,
+        evidence_agg: str = "attention",
     ) -> None:
         # n_overlap=0 to super so the STATIC head is 2·D_MODEL(+n_prior) and key-matches a
         # pure-static checkpoint; the overlap feats (if any) feed the adjustment instead.
         super().__init__(0, n_prior_feats, dropout_p)
         self.adaptive_overlap = n_overlap_feats
-        self.evid_attn = nn.MultiheadAttention(
-            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        # Evidence read: soft cross-attention (default) OR the X1 compiled sum/max aggregation.
+        # Exactly one is built, so an "attention" residual is byte-identical to pre-X1.
+        self.evidence_agg = evidence_agg
+        self.evid_attn = (
+            nn.MultiheadAttention(D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True)
+            if evidence_agg == "attention"
+            else None
+        )
+        self.compiled_agg = (
+            None
+            if evidence_agg == "attention"
+            else CompiledEvidenceAgg(evidence_agg, dropout_p)
         )
         self.adaptive_head = nn.Sequential(
             nn.Linear(D_MODEL + n_overlap_feats, FFN_DIM),
@@ -549,16 +600,20 @@ class ResidualEvidenceScorer(CrossAttentionScorer):
         if self.n_prior_feats:
             static_logit = static_logit + self.prior_gate(pr).squeeze(-1)
 
-        # --- residual path: record/evidence cross-attention (same guard as evid channel) ---
+        # --- residual path: record/evidence read (soft attention OR X1 compiled sum/max) ---
         ev = cand_emb.new_zeros(b, k, D_MODEL)
         if fact_tok is not None and fact_tok.shape[1] > 0 and fact_mask is not None:
-            has = fact_mask.any(dim=1)
-            safe = fact_mask.clone()
-            safe[~has, 0] = True
-            out, _ = self.evid_attn(
-                cand_emb, fact_tok, fact_tok, key_padding_mask=~safe
-            )
-            ev = out * has.view(b, 1, 1)
+            if self.compiled_agg is not None:
+                ev = self.compiled_agg(cand_emb, fact_tok, fact_mask)
+            else:
+                assert self.evid_attn is not None
+                has = fact_mask.any(dim=1)
+                safe = fact_mask.clone()
+                safe[~has, 0] = True
+                out, _ = self.evid_attn(
+                    cand_emb, fact_tok, fact_tok, key_padding_mask=~safe
+                )
+                ev = out * has.view(b, 1, 1)
         adap_parts = [ev]
         if self.adaptive_overlap:
             adap_parts.append(
@@ -689,6 +744,12 @@ class SpectreConfig:
     # nothing new, so the state dict is byte-identical to a pre-flag checkpoint (D-8). Persisted
     # + rebuilt at load time like the other architecture switches.
     residual_adaptive: bool = False
+    # X1 (docs/failed_records_fix_part2.md §3): how the residual reads the failure records.
+    # "attention" (default) is the soft evidence cross-attention; "sum"/"max" select the compiled
+    # aggregation (learned per-record read, hand-fixed reduction = the quantifier). Only meaningful
+    # with `residual_adaptive`; off ("attention") builds `evid_attn` exactly as before, so an X2
+    # residual is byte-identical. Persisted + rebuilt at load like the other architecture switches.
+    evidence_agg: str = "attention"
 
 
 class SpectreModel(nn.Module):
@@ -723,12 +784,20 @@ class SpectreModel(nn.Module):
         self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
         if c.residual_adaptive:
-            scorer_cls: type[CrossAttentionScorer] = ResidualEvidenceScorer
+            self.scorer: CrossAttentionScorer = ResidualEvidenceScorer(
+                c.n_overlap_feats,
+                c.n_prior_feats,
+                c.dropout_p,
+                evidence_agg=c.evidence_agg,
+            )
         elif c.evidence_attn:
-            scorer_cls = EvidenceCrossAttentionScorer
+            self.scorer = EvidenceCrossAttentionScorer(
+                c.n_overlap_feats, c.n_prior_feats, c.dropout_p
+            )
         else:
-            scorer_cls = CrossAttentionScorer
-        self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
+            self.scorer = CrossAttentionScorer(
+                c.n_overlap_feats, c.n_prior_feats, c.dropout_p
+            )
         self.aux = AuxHead()
         # Additive by construction: the record encoder only exists when asked for, so a
         # default-config state dict is byte-identical to v2.2's (D-8) and the
