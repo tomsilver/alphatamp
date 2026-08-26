@@ -235,6 +235,7 @@ def deployed_rollout_traced(
     suppress_records: bool = False,
     zero_scene_cols: frozenset[str] = frozenset(),
     refine_cap_s: Optional[float] = None,
+    evidence_cap_k: Optional[int] = None,
 ) -> tuple[int, Trace]:
     """Run the deployed ranker; return ``(attempts_to_first_success, trace)``.
 
@@ -311,6 +312,13 @@ def deployed_rollout_traced(
     budget = n_candidates if max_attempts is None else min(max_attempts, n_candidates)
     while len(tried) < budget:
         _t_infer = time.perf_counter()
+        # W2 evidence-composition probe (docs/failed_records_fix_part2.md §2): a **diagnostic**,
+        # not a deployment mode. `evidence_cap_k` caps the failure EVIDENCE the model conditions
+        # on to the k most-recently-tried failures (recency = rollout order = descending score),
+        # while `context_f` stays the full tried set -- so re-try prevention (the _TRIED sentinel
+        # below) and the |F| gate are unchanged, and only the record/fact token memory shrinks.
+        # It isolates whether the residual drowns composing a large |F| context. `None` = uncapped.
+        ev_ctx = None if evidence_cap_k is None else frozenset(tried[-evidence_cap_k:])
         example, records = build_example(
             episode,
             vocab,
@@ -318,6 +326,7 @@ def deployed_rollout_traced(
             max_tags=max_tags,
             evidence=True,
             context_f=frozenset(tried),
+            evidence_context=ev_ctx,
             augment_tags=False,
             spec=spec,
             overlap_mode=overlap_mode,

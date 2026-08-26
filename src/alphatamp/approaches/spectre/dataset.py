@@ -900,6 +900,7 @@ def build_example(
     edgeconv_k: int = 0,
     emit_init_atoms: bool = False,
     emit_goal_atoms: bool = False,
+    evidence_context: Optional[frozenset[int]] = None,
 ) -> tuple[SpectreExample, list[RecordArray]]:
     """Tensorize one geometry-carrying episode for the v3 model.
 
@@ -1075,12 +1076,20 @@ def build_example(
         ctx = frozenset()
     avail = [i not in ctx for i in range(k)]
 
-    if hide or not ctx:
+    # W2 evidence-composition probe (docs/failed_records_fix_part2.md §2): cap the failure
+    # EVIDENCE (record + hint-fact tokens) to a subset of the context while leaving `avail`
+    # (re-try mask) and the |F| gate on the full `ctx`. `None` ⇒ ev_ctx = ctx, byte-identical.
+    # The caller (deployed_rollout_traced, evidence_cap_k) passes the k most-recently-tried
+    # failures, so the model conditions on fewer records without changing which candidates
+    # remain available or what |F| the residual's gate reads.
+    ev_ctx = ctx if evidence_context is None else (frozenset(evidence_context) & ctx)
+
+    if hide or not ev_ctx:
         ftype: list[int] = []
         ftier: list[int] = []
         farg: list[list[int]] = []
     else:
-        ftype, ftier, farg = _hint_fact_arrays(canon, ctx, tags)
+        ftype, ftier, farg = _hint_fact_arrays(canon, ev_ctx, tags)
 
     # --- planner signals + structural evidence ------------------------------
     # Column 0 (enumeration order) is inert: the v3 scorer takes no prior features.
@@ -1238,7 +1247,7 @@ def build_example(
     records = (
         build_record_arrays(
             canon,
-            ctx,
+            ev_ctx,
             tags,
             vocab,
             spec,
@@ -1246,12 +1255,12 @@ def build_example(
             state_delta,
             record_holdout,
         )
-        if (ctx and not hide)
+        if (ev_ctx and not hide)
         else []
     )
     rec_steps = (
-        build_evidence_steps(canon, ctx, tags, vocab, spec, record_holdout)
-        if (record_mode == "steps" and ctx and not hide)
+        build_evidence_steps(canon, ev_ctx, tags, vocab, spec, record_holdout)
+        if (record_mode == "steps" and ev_ctx and not hide)
         else None
     )
 
