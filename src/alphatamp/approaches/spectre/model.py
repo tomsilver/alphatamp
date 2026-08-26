@@ -313,7 +313,9 @@ class StepJoin(nn.Module):
     """
 
     #: attention-bias indicators, in the order the ``bias_gate`` scalars weight them.
-    N_MATCH_INDIC = 3  # [touches-a-culprit, is-the-failed-step, touches-the-failed-query]
+    N_MATCH_INDIC = (
+        3  # [touches-a-culprit, is-the-failed-step, touches-the-failed-query]
+    )
 
     def __init__(self, dropout_p: float = DROPOUT, match_bias: bool = False) -> None:
         super().__init__()
@@ -455,6 +457,126 @@ class EvidenceCrossAttentionScorer(CrossAttentionScorer):
         return logit
 
 
+class ResidualEvidenceScorer(CrossAttentionScorer):
+    """X2: the failure-record channel as a zero-init, |F|-gated **residual** over static.
+
+    ``logit = static_logit + g(|F|) · adjustment``, where
+
+    - ``static_logit`` = ``head([cand_emb ; geometry-attended])`` -- exactly the pure-static
+      ``CrossAttentionScorer`` computation (2·D_MODEL head over the candidate and a
+      ``[scene ; glob]``-only attention). So ``self.{attn, glob_proj, head}`` key- and
+      shape-match a pure-static checkpoint and are what ``--init-static-from`` warm-starts and
+      ``--freeze-static`` freezes; before any residual training the model reproduces the static
+      ranker bit-for-bit.
+    - ``adjustment`` = ``adaptive_head([ev ; overlap])`` where ``ev`` is the record/evidence
+      cross-attention (the existing v3 channel), **output layer zero-initialized** so it is 0 at
+      step 0 -> ``logit ≡ static_logit`` at init. This is the ``prior_gate``/``delta_proj`` idiom.
+    - ``g`` = a tiny MLP on ``log1p(|F|)`` through a sigmoid, its output layer zero-init so
+      ``g = σ(0) = 0.5`` **flat** across |F| at init: a NEUTRAL gate that is free to learn to
+      amplify *or* suppress the residual by context size -- it is not pre-biased to shut off in
+      large contexts (with the static trunk frozen the interference cause is removed, so the
+      residual may help at every stratum).
+
+    Property, not hope: with the static half frozen + warm-started and the adjustment zero-init,
+    attaching this channel cannot make the ranker worse than static at init, and training only
+    *adds* the residual. Overlap columns are routed into the adjustment (they are
+    failure-conditioned), keeping the static head at 2·D_MODEL and warm-start-compatible; the X2
+    probe runs with no overlap, so ``ev`` alone drives the residual.
+    """
+
+    GATE_HID = 16
+
+    def __init__(
+        self,
+        n_overlap_feats: int = 0,
+        n_prior_feats: int = 0,
+        dropout_p: float = DROPOUT,
+    ) -> None:
+        # n_overlap=0 to super so the STATIC head is 2·D_MODEL(+n_prior) and key-matches a
+        # pure-static checkpoint; the overlap feats (if any) feed the adjustment instead.
+        super().__init__(0, n_prior_feats, dropout_p)
+        self.adaptive_overlap = n_overlap_feats
+        self.evid_attn = nn.MultiheadAttention(
+            D_MODEL, N_HEADS, dropout=dropout_p, batch_first=True
+        )
+        self.adaptive_head = nn.Sequential(
+            nn.Linear(D_MODEL + n_overlap_feats, FFN_DIM),
+            nn.GELU(),
+            nn.Dropout(dropout_p),
+            nn.Linear(FFN_DIM, 1),
+        )
+        self.gate = nn.Sequential(
+            nn.Linear(1, self.GATE_HID), nn.GELU(), nn.Linear(self.GATE_HID, 1)
+        )
+        # Zero-init the adjustment output (step-0 residual is 0 -> logit ≡ static) and the gate
+        # output (g = σ(0) = 0.5 flat -> neutral, no suppression prior).
+        for seq in (self.adaptive_head, self.gate):
+            last = seq[-1]
+            assert isinstance(last, nn.Linear)
+            nn.init.zeros_(last.weight)
+            nn.init.zeros_(last.bias)
+
+    def forward(  # type: ignore[override]
+        self,
+        cand_emb: Tensor,
+        scene_tok: Tensor,
+        obj_mask: Tensor,
+        glob_feats: Tensor,
+        overlap: Optional[Tensor] = None,
+        fact_tok: Optional[Tensor] = None,
+        fact_mask: Optional[Tensor] = None,
+        prior: Optional[Tensor] = None,
+        glob_extra: Optional[Tensor] = None,
+        context_size: Optional[Tensor] = None,
+    ) -> Tensor:
+        b, k, _ = cand_emb.shape
+        # --- static path (identical to pure-static CrossAttentionScorer, facts absent) ---
+        glob = self.glob_proj(glob_feats)
+        if glob_extra is not None:
+            glob = glob + glob_extra
+        glob = glob.unsqueeze(1)
+        memory = torch.cat([scene_tok, glob], dim=1)
+        key_pad = torch.cat(
+            [~obj_mask, torch.zeros(b, 1, dtype=torch.bool, device=obj_mask.device)],
+            dim=1,
+        )
+        attended, _ = self.attn(cand_emb, memory, memory, key_padding_mask=key_pad)
+        pr = cand_emb.new_zeros(b, k, self.n_prior_feats) if prior is None else prior
+        static_parts = [cand_emb, attended]
+        if self.n_prior_feats:
+            static_parts.append(pr)
+        static_logit = self.head(torch.cat(static_parts, dim=-1)).squeeze(-1)
+        if self.n_prior_feats:
+            static_logit = static_logit + self.prior_gate(pr).squeeze(-1)
+
+        # --- residual path: record/evidence cross-attention (same guard as evid channel) ---
+        ev = cand_emb.new_zeros(b, k, D_MODEL)
+        if fact_tok is not None and fact_tok.shape[1] > 0 and fact_mask is not None:
+            has = fact_mask.any(dim=1)
+            safe = fact_mask.clone()
+            safe[~has, 0] = True
+            out, _ = self.evid_attn(
+                cand_emb, fact_tok, fact_tok, key_padding_mask=~safe
+            )
+            ev = out * has.view(b, 1, 1)
+        adap_parts = [ev]
+        if self.adaptive_overlap:
+            adap_parts.append(
+                overlap
+                if overlap is not None
+                else cand_emb.new_zeros(b, k, self.adaptive_overlap)
+            )
+        adjustment = self.adaptive_head(torch.cat(adap_parts, dim=-1)).squeeze(-1)
+
+        # --- neutral |F|-gate; broadcast the per-episode g over candidates ---
+        if context_size is None:
+            cs = cand_emb.new_zeros(b, 1)
+        else:
+            cs = torch.log1p(context_size.to(cand_emb.dtype)).view(b, 1)
+        g = torch.sigmoid(self.gate(cs))  # (B, 1), = 0.5 flat at init
+        return static_logit + g * adjustment
+
+
 N_OVERLAP_COV = 4
 """``[dead, jaccard, coverage, waste]``.
 
@@ -558,6 +680,15 @@ class SpectreConfig:
     # ``use_step_join``; off = byte-identical (adds only the gate scalars when on). Reads no
     # compiled scalar — equality-only, domain-agnostic.
     step_join_match_bias: bool = False
+    # X2 (docs/failed_records_fix_part2.md §3): train the record/evidence channel as a
+    # zero-init |F|-gated RESIDUAL on top of a static base, selecting `ResidualEvidenceScorer`.
+    # `logit = static_logit([cand_emb; geometry-attended]) + g(|F|)·adjustment([ev; overlap])`,
+    # the adjustment output zero-initialized so step-0 ≡ static. The static half
+    # (`scorer.{attn,glob_proj,head}`, a 2·D_MODEL head) key-matches a pure-static checkpoint,
+    # so it warm-starts + freezes (train.py `--init-static-from`/`--freeze-static`). Off builds
+    # nothing new, so the state dict is byte-identical to a pre-flag checkpoint (D-8). Persisted
+    # + rebuilt at load time like the other architecture switches.
+    residual_adaptive: bool = False
 
 
 class SpectreModel(nn.Module):
@@ -591,9 +722,12 @@ class SpectreModel(nn.Module):
         )
         self.cands = CandidateEncoder(n_ops, c.max_tags, max_arity, c.dropout_p)
         self.facts = FactEncoder(c.max_tags, c.dropout_p)
-        scorer_cls = (
-            EvidenceCrossAttentionScorer if c.evidence_attn else CrossAttentionScorer
-        )
+        if c.residual_adaptive:
+            scorer_cls: type[CrossAttentionScorer] = ResidualEvidenceScorer
+        elif c.evidence_attn:
+            scorer_cls = EvidenceCrossAttentionScorer
+        else:
+            scorer_cls = CrossAttentionScorer
         self.scorer = scorer_cls(c.n_overlap_feats, c.n_prior_feats, c.dropout_p)
         self.aux = AuxHead()
         # Additive by construction: the record encoder only exists when asked for, so a
@@ -755,6 +889,13 @@ class SpectreModel(nn.Module):
         prior = batch.cand_prior if self.cfg.n_prior_feats else None
         if overlap is None and self.cfg.n_overlap_feats:
             overlap = batch.cand_overlap
+        avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
+        scorer_kwargs = {"glob_extra": atom_glob_add}
+        if self.cfg.residual_adaptive:
+            # |F| = number of in-context (failed) candidates per episode, for the residual's
+            # neutral gate. Derived from avail_mask (avail=False ⟺ in context) intersected
+            # with the real pool, so no new batch field and no frozen-shape change.
+            scorer_kwargs["context_size"] = ((~avail) & batch.pool_mask).sum(dim=-1)
         logits = self.scorer(
             cand_emb,
             scene_tok,
@@ -764,8 +905,7 @@ class SpectreModel(nn.Module):
             fact_tok,
             fact_mask,
             prior,
-            glob_extra=atom_glob_add,
+            **scorer_kwargs,
         )
-        avail = batch.avail_mask if batch.avail_mask is not None else batch.pool_mask
         logits = logits.masked_fill(~avail, float("-inf"))
         return logits, self.aux(scene_tok)

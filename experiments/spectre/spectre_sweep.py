@@ -172,9 +172,14 @@ PRESETS: dict[str, dict[str, str]] = {
     # floor 15.73) with no downside when scalars are on -- future-proofing, not a
     # re-measured gain. The current deployed *checkpoints* predate this and get it on the
     # next full retrain.
+    # `--repeat-feats` added 2026-08-25 (graceful degradation): the recipe now carries the
+    # F3 exact-step certificate uniformly across all envs. On DD2D/SB2D it is INERT -- those
+    # domains declare no `step_certificate` (the stress-test declarations were retired), so
+    # the `repeat` column is identically 0 and the deployed FP is unchanged; on restock3d it
+    # is the load-bearing F3 veto. See docs/decisions 2026-08-25.
     "v3final": {
         "v3final": (
-            "--overlap-mode jaccard --coverage-feats "
+            "--overlap-mode jaccard --coverage-feats --repeat-feats "
             "--aggregate-records --evidence-attn --state-delta --select-window 5 "
             "--use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 "
             "--atom-mode profiles --step-join"
@@ -297,6 +302,21 @@ PRESETS: dict[str, dict[str, str]] = {
             "--step-join --context-mode rollout --p-empty 0.30 "
             "--phi-path data/spectre/derived/dd2d_v4/"
             "fc2_phi_train_spectre_atoms_fr_join.json"
+        ),
+    },
+    # X2: the record/evidence channel as a zero-init |F|-gated RESIDUAL over a frozen,
+    # warm-started PURE-STATIC trunk (docs/failed_records_fix_part2.md §3; the plan file). Goal:
+    # show failure records are learnable/valuable without the interference that made the
+    # jointly-trained `+records` arm degrade s2/s3. Pure static (`--no-overlap`, NO scalar
+    # columns) + records + `--residual-adaptive --freeze-static`, warm-started per-seed from the
+    # refreshed pure-static checkpoint (`{seed}` -> this run's seed). DD2D-only; run one seed at
+    # a time:  --preset residual_records --env dd2d_v4 --seeds 0
+    "residual_records": {
+        "residual_records": (
+            f"{_ABL_BACKBONE} --no-overlap --aggregate-records --evidence-attn "
+            "--state-delta --residual-adaptive --freeze-static --init-static-from "
+            "data/spectre/checkpoints_spectre_norec_noov_atoms_abl_static/"
+            "dd2d_v4/seed_{seed}/best.pt"
         ),
     },
     "failed_records_restock": {

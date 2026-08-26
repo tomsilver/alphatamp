@@ -223,6 +223,17 @@ class TrainConfig:
     # unaffected. A missing problem_id in the map falls back to the uniform draw.
     context_mode: str = "uniform"
     phi_path: str = ""
+    # X2 (docs/failed_records_fix_part2.md §3): train the record/evidence channel as a
+    # zero-init |F|-gated residual on a frozen, warm-started pure-static trunk.
+    # `residual_adaptive` selects `ResidualEvidenceScorer` (architecture; persisted in cfg and
+    # rebuilt at load). `init_static_from` is a pure-static checkpoint whose matching submodules
+    # are copied in at construction; `freeze_static` then sets requires_grad=False on exactly
+    # those loaded params so only the residual trains. The last two are training-process levers
+    # (not architecture): they change which weights are initialized/updated, never the state
+    # dict shape, so they need no load-time round-trip.
+    residual_adaptive: bool = False
+    init_static_from: str = ""
+    freeze_static: bool = False
 
 
 class SpectreDataset(Dataset):
@@ -572,10 +583,47 @@ def run_training(
             record_mode=cfg.record_mode,
             use_step_join=cfg.use_step_join,
             step_join_match_bias=cfg.step_join_match_bias,
+            residual_adaptive=cfg.residual_adaptive,
         ),
     ).to(device)
+    # X2 warm-start + freeze (docs/failed_records_fix_part2.md §3): load a pure-static
+    # checkpoint into the matching (static) submodules, then optionally freeze exactly those
+    # params so only the zero-init record/evidence residual trains. The static keys
+    # (scene/cands/facts/atoms/aux/scorer.{attn,glob_proj,head}) key-match; the residual keys
+    # (records.*/scorer.{evid_attn,adaptive_head,gate}.*) are `missing` and keep their init.
+    frozen_keys: set[str] = set()
+    if cfg.init_static_from:
+        static_sd = torch.load(cfg.init_static_from, map_location=device)["state_dict"]
+        own = model.state_dict()
+        loadable = {k: v for k, v in static_sd.items() if k in own}
+        if len(loadable) != len(static_sd):
+            missing_in_model = set(static_sd) - set(own)
+            raise ValueError(
+                f"warm-start checkpoint has {len(missing_in_model)} keys absent from the "
+                f"model (e.g. {sorted(missing_in_model)[:3]}); the static backbone must match"
+            )
+        incompat = model.load_state_dict(loadable, strict=False)
+        frozen_keys = set(loadable)
+        print(
+            f"[warm-start] {cfg.init_static_from}: loaded {len(loadable)} static keys; "
+            f"{len(incompat.missing_keys)} residual keys left at init",
+            flush=True,
+        )
+        if cfg.freeze_static:
+            for name, p in model.named_parameters():
+                if name in frozen_keys:
+                    p.requires_grad_(False)
+            n_frozen = sum(1 for n, _ in model.named_parameters() if n in frozen_keys)
+            n_train = sum(1 for p in model.parameters() if p.requires_grad)
+            print(
+                f"[freeze-static] froze {n_frozen} static params; "
+                f"{n_train} trainable (residual) params remain",
+                flush=True,
+            )
     opt = torch.optim.AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+        [p for p in model.parameters() if p.requires_grad],
+        lr=cfg.lr,
+        weight_decay=cfg.weight_decay,
     )
 
     ema_note = (
@@ -884,6 +932,23 @@ def main(argv=None) -> int:
         ),
     )
     ap.add_argument(
+        "--residual-adaptive",
+        action="store_true",
+        help="X2: record/evidence channel as a zero-init |F|-gated residual over a static base "
+        "(ResidualEvidenceScorer); pair with --init-static-from/--freeze-static",
+    )
+    ap.add_argument(
+        "--init-static-from",
+        type=str,
+        default=TrainConfig.init_static_from,
+        help="pure-static checkpoint (best.pt) to warm-start the static trunk from",
+    )
+    ap.add_argument(
+        "--freeze-static",
+        action="store_true",
+        help="freeze the warm-started static params (requires_grad=False); only the residual trains",
+    )
+    ap.add_argument(
         "--scene-3d",
         action="store_true",
         help="3D point-cloud scene representation (Restock3D); default 2D footprint",
@@ -968,6 +1033,11 @@ def main(argv=None) -> int:
         select_window=a.select_window,
         context_mode=a.context_mode,
         phi_path=a.phi_path,
+        residual_adaptive=a.residual_adaptive,
+        # `{seed}` in the static-init path is substituted with this run's seed, so a
+        # multi-seed sweep warm-starts each residual seed from the matching static seed.
+        init_static_from=a.init_static_from.replace("{seed}", str(a.seed)),
+        freeze_static=a.freeze_static,
         scene_3d=a.scene_3d,
         use_pca_feats=a.use_pca_feats,
         use_edgeconv=a.use_edgeconv,
