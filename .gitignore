@@ -235,6 +235,11 @@ data/dd2d/
 # never committed. See docs/decisions ADR for the refactor.
 /_archive_local/
 
+# Spectre docs archive (intermediate/dev docs: fix & feature proposals, autonomous
+# session logs, built-feature guides now folded into as_built.md, plus the pre-existing
+# frozen specs). Kept on disk under docs/archive/ but not exposed in the synced repo.
+src/alphatamp/approaches/spectre/docs/archive/
+
 # Untracked analysis output from analyze_cluttered_storage.ipynb
 experiments/analyze_cluttered_storage.pkl
 
