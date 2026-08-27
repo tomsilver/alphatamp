@@ -153,15 +153,17 @@ def test_classify_crowding_f2() -> None:
 
 
 def test_classify_reachover_f4() -> None:
-    # A south of B, same x, both tall -> picking B first is a reach-over failure blamed on A
+    # A south of B, same x, both tall -> picking B first is a reach-over failure. F4 is DEAD:
+    # the failure is still detected (infeasible), but tracked CULPRIT-FREE (parity with the real
+    # _probe_pick). Restock3D-v3 tracks only F2 crowding culprits.
     dims = {"A": (0.05, 0.17), "B": (0.05, 0.17)}
     pos = {"A": (0.4, 0.70), "B": (0.4, 1.00)}
     plan_bad = [("pick", ("robot", "B")), ("place_tall", ("robot", "B"))]
     rec = F.classify_skeleton(plan_bad, dims, pos)
     assert rec is not None
     assert rec["schema"] == "pick"
-    assert rec["culprits"] == ["A"]
-    assert rec["dev_added"] is None  # class-1
+    assert rec["culprits"] == []  # F4 dead: no pick culprits
+    assert rec["dev_added"] == [] and rec["dev_deleted"] == []  # class-2, empty deviation
     # clearing A first (south-to-north) removes the reach-over
     plan_ok = [
         ("pick", ("robot", "A")),

@@ -264,7 +264,9 @@ def classify_skeleton(
     * **crowding F2** — a place that overflows the level's capacity formula -> culprits = the
       residents already stored on that level.
     * **reach-over F4** — a pick whose south reach corridor still holds uncleared floor blockers
-      -> culprits = those blockers (via the shared ``_blocks_reach``).
+      -> **culprit-free** (F4 is dead: parity with the real ``_probe_pick``, which returns no pick
+      culprits). Still a class-2 failure, so the feasibility label is unchanged; only culprit
+      attribution is dropped. Restock3D-v3 tracks ONLY F2 (crowding) culprits.
     """
     cleared: set[str] = set()  # objects already picked (off the floor)
     placed_names: dict[str, list[str]] = {"place_tall": [], "place_short": []}
@@ -289,7 +291,12 @@ def classify_skeleton(
                 )
             )
             if culprits:
-                return _failure_dict(step_index, op_name, args, culprits, num_attempts)
+                # F4 (reach-over) is DEAD: track NO pick culprits, for parity with the real
+                # refiner's ``_probe_pick`` (culprit-free, returns "C2"). The reach-over is still
+                # an infeasibility (a class-2 failure), so the feasibility label is unchanged --
+                # only the culprit attribution is dropped. Restock3D-v3 tracks ONLY F2 (crowding)
+                # culprits. Inert to repeat/regroup (pick has no step/grouping certificate).
+                return _failure_dict(step_index, op_name, args, (), num_attempts)
             cleared.add(target)
         elif op_name in ("place_tall", "place_short"):
             target = args[1]

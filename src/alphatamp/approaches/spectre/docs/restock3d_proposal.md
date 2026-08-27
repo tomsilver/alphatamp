@@ -1,339 +1,329 @@
-# Restock3D — Environment Snapshot (`restock3d_v2`, current 2026-08-20)
+# Restock3D — Environment Snapshot (`restock3d_v3`, current 2026-08-27)
 
-The third SPECTRE evaluation environment: a **3D, kinematic-PyBullet continuous-packing** task
-in which a mobile-base arm stores floor objects onto a two-section shelf. This file is a
-**current-state snapshot of the deployed `restock3d_v2` variant**, written against the code
-(`envs/restock3d/`), not against the older design docs — the implementation diverged
-substantially from the original 2026-08-13 proposal and again when v2 replaced the discrete
-region model.
+The third SPECTRE evaluation environment: a **3D, kinematic-PyBullet continuous-packing** task in
+which a mobile-base arm stores floor objects onto a two-section shelf. This file is a **current-state
+snapshot of the deployed `restock3d_v3` variant**, written against the code (`envs/restock3d/`), not
+the older design docs — the implementation has moved on twice (the v2 continuous-packing rebuild, then
+the v3 per-object-dimensions difficulty pass).
 
-> **What this supersedes.** The original stage-gated proposal (MuJoCo/TidyBot substrate,
-> top-down grasp, discrete multi-slot shelf regions, F1 grasp-obstruction clutter) and the
-> intermediate **v1** as-built (kinematic PyBullet, single-object *discrete* regions,
-> `Place(obj,region)`/`InRegion`) are **history**. v1 still exists in the tree, frozen, and
-> coexists with v2 (`models.py`/`oracle.py`/`place_controller.py` untouched); but **v2 is what
-> is collected, trained, and evaluated.** The design/rationale history and the physical-shelf /
-> real-robot sizing live in the ledger and archive — see *History* at the end. Where this
-> snapshot and any older doc disagree, this snapshot wins for v2.
+> **What v3 is, and what it supersedes.** v3 keeps v2's continuous-packing substrate but makes block
+> **selection** the hard problem: every object now has a **sampled width** and a **sampled height**
+> straddling the section cutoffs, on a **re-balanced shelf**, and problems are drawn by a **new analytic
+> generator** that guarantees difficulty. **v2 is retained frozen as a negative control** (an easier
+> env where the learned rankers all sit near-oracle; a second `RESTOCK3D` EnvSpec still points at
+> `restock3d_v2`). v1 (discrete regions) and the original 2026-08-13 proposal are history. Where this
+> snapshot and any older doc disagree, this snapshot wins for v3.
 
 Full ledger: [`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
-entries 2026-08-14 → 2026-08-20.
+entries 2026-08-14 → 2026-08-27. Single source of truth for the geometric constants:
+[`envs/restock3d/feasibility_v3.py`](../envs/restock3d/feasibility_v3.py).
 
 ---
 
 ## 1. What it is, and why
 
-The robot must **store every goal object** — small cubes and tall blocks — onto a shelf split
-into a **tall bottom section** and a **short top section**. The abstraction says only *"pick it,
-place it on a shelf section"*; **whether a plan actually refines is decided by real PyBullet
-collision**, and it hinges on structure the abstraction cannot see:
+The robot must **store every goal object** onto a shelf split into a **tall bottom section** and a
+**short top section**. The abstraction says only *"pick it, place it on a shelf section"*; **whether a
+plan refines is decided by real geometry**, and it hinges on structure the abstraction cannot see:
 
-- **F3 (height mismatch)** — a tall block placed into the *short* section overhangs and hits the
-  capping board. The planner is free to emit `place_short(tall_block)`; refinement rejects it.
-- **F2 (continuous crowding / packing)** — a section is one continuous strip, not a set of slots.
-  Placing another object where the strip is already occupied collides a resident; a *full* strip
-  cannot fit another object at all. Capacity is emergent geometry, invisible above the abstraction.
-- **Reach-over (F4, depth)** — the front grasp reaches *north over* anything nearer than the
-  target, so a goal south of another (within a lateral corridor, with a tall block involved)
-  blocks the farther goal's pick until the nearer one is cleared. The naive pick order fails; the
-  **south-to-north (nearest-first)** order succeeds — "far is harder."
+- **Block selection (the v3 difficulty axis).** Each block has a per-object width and height. Which
+  subset of blocks goes on which level — and in what order — is a genuine packing/assignment problem:
+  heights near the short/tall cutoff make "can this block go short?" a real decision, and widths near
+  the section capacity make "do these blocks all fit on one level?" a real decision.
+- **F3 (height mismatch).** A block too tall for a section cannot be threaded under its ceiling board
+  (the gripper needs ~0.10 m of headroom below the board). The planner is free to emit
+  `place_short(tall_block)`; refinement rejects it.
+- **F2 (continuous crowding / packing).** A section is one continuous strip. Placing another block where
+  the strip is already occupied collides a resident; a *full* strip fits nothing more. Capacity is
+  emergent geometry, invisible above the abstraction.
 
-So a task planner produces many goal-reaching skeletons that fail refinement for reasons an
-oracle with geometric knowledge avoids — a large *abstract* task space, not a hard sampling
-problem — which is exactly the regime SPECTRE's failure-conditioning targets. It also stresses a
-property DD2D/SB2D do not: **self-inflicted / order-dependent culprits** (a crowding or reach-over
-failure is blamed on objects the plan itself placed or left in the way).
+So a task planner produces many goal-reaching skeletons that fail refinement for reasons an oracle with
+geometric knowledge avoids — a large *abstract* task space, not a hard sampling problem — exactly the
+regime SPECTRE's failure-conditioning targets. It also stresses a property DD2D/SB2D do not:
+**self-inflicted / order-dependent culprits** (a crowding failure is blamed on blocks the plan itself
+placed) and a **blameless height certificate** (F3), which is what the `repeat` feature (§9) reads.
 
 ---
 
 ## 2. Substrate and feasibility
 
-- **Kinematic PyBullet** (the MuJoCo/TidyBot substrate of the original proposal was superseded
-  2026-08-14; its dynamics were soft-collision/teleport). A holonomic SE2 mobile base
-  (~0.55×0.51 m) + arm; motion is planned by BiRRT.
-- **Feasibility = real collision, never a symbolic gate.** The base env reverts colliding moves;
-  the pick/place motion planners raise `TrajectorySamplingFailure` when no collision-free
-  solution exists. `Restock3DEnvConfig.check_base_collisions = True` — a boxed-in base **fails**
-  (an intended refinement failure) rather than phasing through.
+- **Kinematic PyBullet.** A holonomic SE2 mobile base (~0.55×0.51 m) + arm; motion planned by BiRRT.
+- **Feasibility = real collision, never a symbolic gate** *for the eval instrument*. The pick/place
+  motion planners raise `TrajectorySamplingFailure` when no collision-free solution exists;
+  `Restock3DEnvConfig.check_base_collisions = True` (a boxed-in base **fails** rather than phasing
+  through).
+- **Collection labels are analytic.** The deployed `restock3d_v3` dataset is labelled by a pure-geometry
+  **analytic refinability classifier** (`feasibility_v3.classify_skeleton`, §6) — no motion planning —
+  which is byte-compatible with the real refiner's failure schema. The real PyBullet refiner is kept as
+  the **eval instrument** and the audit reference (§14). A real-MP-labelled collection
+  (`restock3d_v3_real`) is in progress.
 
 ---
 
 ## 3. Scene layout — fully-lateral, three disjoint x-bands
 
-Left→right along world x, three disjoint bands keep the base out of the object field
-(`kinematic_env.py`):
+Left→right along world x, three disjoint bands keep the base out of the object field (unchanged from
+v2, `kinematic_env.py`):
 
-| band | extent | role |
-|---|---|---|
-| **buffer** | x ≈ −1.1 | relocation staging — **present but inert** (clutter = 0; §12) |
-| **object** | x ∈ [−0.80, −0.20], y ∈ [0.60, 1.20] (~0.6×0.6 m) | where goal objects spawn on the floor |
-| **shelf** | centre (0.4, 1.4); width 0.60198 m, depth 0.254 m | the storage target |
+| band | role |
+|---|---|
+| **buffer** (x ≈ −1.1) | relocation staging — **present but inert** (clutter = 0; §12) |
+| **object** (x ∈ [−0.80, −0.20], y ∈ [0.60, 1.20]) | where goal objects spawn on the floor |
+| **shelf** (centre ≈ (0.4, 1.4)) | the storage target |
 
-The base parks ~0.72 m **south** of a front-grasp target, so it stays south (y ≲ 0.55) of every
-object (y ≳ 0.60): it slides laterally through a clear **southern corridor** and **never crosses
-the object field** — which is what makes the base collision-free and lets `check_base_collisions`
-stay on. (This fully-lateral 3-band arrangement replaced an earlier shelf-north layout whose base
-phase-through was the bug it fixed.)
+The base parks ~0.72 m **south** of a front-grasp target, so it stays south of every object: it slides
+laterally through a clear southern corridor and **never crosses the object field**, which is what lets
+`check_base_collisions` stay on.
 
 ---
 
-## 4. The shelf — two sections (tall bottom, short top)
+## 4. The shelf — two sections, re-balanced for v3
 
-The shelf is built from solid board bodies at cumulative heights (`section_geometry.py`,
-`region_geometry.section_surfaces`, config in `kinematic_env.py`). Only the **boards** are
-collision bodies (`shelf_structure_ids()`); the ±x side walls and +y back panel render but are
-cosmetic (non-collision), so F3 is a *ceiling-board* collision, not a wall effect.
+Solid board bodies at cumulative heights (`region_geometry.section_surfaces`; config
+`generator_v3.v3_config()` → `Restock3DEnvConfig(section_clearances = feasibility_v3.SECTION_CLEARANCES)`).
+Only the boards are collision bodies; the side/back panels render but are cosmetic, so F3 is a
+*ceiling-board* effect. Board thickness `_SHELF_HEIGHT = 0.0127`; `bottom_surface_z = 0.29`.
 
 | section | index | surface z | clearance (gap to ceiling board) |
 |---|---|---|---|
-| **tall** (bottom) → `place_tall` | `section_0` | 0.29 | **0.34** |
-| **short** (top) → `place_short` | `section_1` | 0.6427 (= 0.29 + 0.34 + 0.0127) | **0.15** |
+| **tall** (bottom) → `place_tall` | `section_0` | 0.29 | **0.27** |
+| **short** (top) → `place_short` | `section_1` | **0.5727** (= 0.29 + 0.27 + 0.0127) | **0.22** |
 
-A tall block is **0.24 m** tall (half-extent z = 0.12). It fits the 0.34 tall gap but overhangs
-the 0.15 short gap by **~0.09 m** → collides the short section's capping board → **F3**.
-
-**Placement band (the continuous free space).** Each section is one **wide continuous strip**,
-not discrete slots. Object-centre x spans `shelf_width/2 − 0.04` per side → the analytic band
-**x ∈ [0.139, 0.661]** (board extent minus a 0.04 m per-side end margin), centred at x = 0.4, so
-the band half-width is ≈ 0.261 m (~0.52 m wide). The front strip is at **y = 1.35** (= shelf y −
-0.05 offset), with ±0.01 m y-jitter. Both sections share this band.
+**v3 re-balances the partition to `SECTION_CLEARANCES = (0.27, 0.22)`** (from v2's `(0.34, 0.15)`) —
+same total shelf height (0.49) but the short section is much taller. This is why **the short section is
+no longer cube-only**: with a 0.22 m clearance and a 0.12 m short cutoff, short-eligible blocks span
+0.05–0.12 m rather than only the 0.05 m cube. Each section is one **wide continuous packing band**
+(§8), not per-object cells. Lateral band constants: `GAP = 0.06`, `USABLE = 0.50`, `END_MARGIN = 0.04`;
+physical shelf width 0.60198.
 
 ---
 
-## 5. Objects
+## 5. Objects — per-object sampled width and height (the v3 change)
 
-| object | half-extents (m) | full height (m) | family | role |
-|---|---|---|---|---|
-| small cube | (0.025, 0.025, 0.025) | 0.05 | `cube` | goal (`cube_goal*`) |
-| tall block | (0.025, 0.025, 0.12) | 0.24 | `tall` | goal (`block_goal*`) — the F3 driver |
-| clutter block | (0.025, 0.025, 0.05) | 0.10 | `clutter` | distractor — **inert** (§12) |
+v3 drops v2's type-keyed constant dims (fixed 0.05 m cube / 0.24 m tall block) and **samples every
+object's width and height** (`generator_v3`, depth fixed at half-extent 0.025):
 
-A cube and a tall block share a 2D footprint and differ **only in height** — the F3 axis. That is
-the load-bearing fact behind the SPECTRE scene representation (§10).
+- **Width** `U[0.02, 0.08]` (`feasibility_v3.WIDTH_MIN/WIDTH_MAX`), per object, rounded to 4 dp — full
+  x-width, so section capacity (§6) genuinely depends on which blocks land there.
+- **Height**, sampled in three role bands (`generator_v3._sample_heights`, then shuffled so role order ≠
+  sample order):
+  - **forced/tall-only** (`n_forced` blocks): `U[0.121, 0.17]` — must go to the tall section;
+  - **near-threshold** (`n_near` blocks): `U[0.09, 0.15]` — straddles the short cutoff (the genuine
+    decisions);
+  - **free/short-eligible** (the rest): `U[0.05, 0.12]`.
+- **Cutoffs** `SHORT_CUTOFF = 0.12`, `TALL_CUTOFF = 0.17` (`CUTOFF = {"tall": 0.17, "short": 0.12}`).
+  `height_eligible(h, section)` = `h ≤ CUTOFF[section] + eps` — the F3 arm-insertion rule (~0.10 m
+  gripper headroom below each board).
+- **Colour cue** (`_rgba`): reddish if `h > SHORT_CUTOFF` (tall-only), greenish if short-eligible.
 
----
-
-## 6. Generation — region-rejection spawn (no floor grid)
-
-Objects are **not** placed on a fixed grid. `generator._sample_positions` is a
-**region-rejection (Poisson-disk-style) sampler**: each object's xy is drawn uniformly in the
-object band, and a candidate is **rejected if it lies within an exclusion radius of any
-already-placed object**:
-
-- band x ∈ [−0.80, −0.20], y ∈ [0.60, 1.20];
-- **exclusion radius 0.12 m** (min centre-to-centre) — front-grasp lateral clearance only;
-- **xy only** → poses stay axis-aligned;
-- **200 rejection attempts per object**, then the *whole layout* is reseeded; up to **64 reseeds**
-  before `build_spec` raises;
-- **deterministic in the env seed** — a tiny LCG (`_Rng`) seeded from `(seed, stratum, attempt)`,
-  so the layout reproduces per seed (with a `reseed-on-failure` cushion).
-
-**Object typing is random but deterministic:** the sampler places positions type-agnostically,
-then a Fisher-Yates shuffle designates `n_tall` of the spots as tall blocks and the rest cubes.
-Reach-over difficulty is *not* baked into the sampler — it emerges from geometry and is resolved
-by pick **order** (south-to-north), not by spawn placement.
+A block's 2D footprint no longer determines its class — width and height are independent — which is the
+load-bearing fact behind the SPECTRE 3D point-cloud scene representation (§10).
 
 ---
 
-## 7. Abstract model — operators and predicates (`models_v2.py`)
+## 6. Generation — the new analytic generator (`generator_v3.py`, `feasibility_v3.py`)
 
-- **Types:** `robot` (`Kinematic3DRobot`), `cube` (`Kinematic3DCuboid`). **No `region` type** (v1's
-  `RegionType` is dropped).
-- **Predicates:** `HandEmpty(robot)`, `Holding(robot,cube)`, `OnFloor(cube)`, `Stored(cube)`, plus an
-  **inert `OnBuffer(cube)`**. **`InRegion` is dropped** — there is no region abstraction. `Stored`
-  is purely geometric (object underside near a section surface AND xy on the shelf band); **no
-  per-section capacity is represented**, which is precisely why over-full sections are invisible to
-  the planner (the continuous-packing false positives).
-- **Operators:**
-  - `pick(robot, target)` — pre `{HandEmpty, OnFloor}`; add `{Holding}`; del `{HandEmpty, OnFloor}`.
-  - **`place_tall(robot, target)`** and **`place_short(robot, target)`** — **identical abstract
-    signatures and effects**: pre `{Holding}` *only* (no capacity, no height, no `Clear`); add
-    `{HandEmpty, Stored}`; del `{Holding}`. The **tall/short choice is a symbolic token**: it binds
-    the controller to `section_0` vs `section_1` and is validated *geometrically at refinement*
-    (`place_short(tall_block)` → F3), never abstractly. Nothing hard-codes tall→bottom.
-  - `place_buffer(robot, target)` — inert relocation op (add `{HandEmpty, OnBuffer}`).
-- **Goal:** `Stored(o)` for **every** goal object (all `cube_goal*` + `block_goal*`). Assignment of
-  objects to sections is free — that freedom, plus the invisible capacity/height, is where the
-  false positives come from.
+`build_spec_v3(seed, stratum)` (LRU-cached) samples widths + role-banded heights, applies an acceptance
+filter, then draws floor XY with v2's region-rejection sampler and shuffles spot↔role. It loops up to
+`_MAX_RESEED_V3 = 600` before raising.
+
+**Capacity formula.** `level_used(widths) = Σw + GAP·(n−1) + 2·END_MARGIN = Σw + 0.06·(n−1) + 0.08`;
+`level_fits` iff `level_used ≤ USABLE + eps = 0.50` (empty level → 0).
+
+**Splits + acceptance.** A "split" assigns each block to `{tall, short}`; `split_is_feasible` requires
+every block **height-eligible** for its section AND both levels pass the capacity formula.
+`enumerate_feasible_splits` walks all `2^n` masks; `feasible_ratio → (n_feasible, 2^n, rho)`;
+`min_fill_over_feasible` is the loosest feasible packing's fill fraction. `_accept(blocks, p)` requires
+**all** of: `n_feasible ≥ 1`; `rho` within the stratum's `rho_band`; `min_fill` within
+`FILL_BAND = (0.55, 0.995)`; and — if `require_crack` — **both** greedy hand-rules pick an *infeasible*
+split ("no universal rule").
+
+**Greedy hand-rules** (`HAND_RULES`): `greedy_widest_best_fit` (widest-first, best-fit into the
+height-eligible level with least leftover slack) and `greedy_send_shortest_up` (shortest-first, fill
+short while it fits, rest to tall). A hard stratum is one that defeats both.
+
+**`classify_skeleton`** — the analytic refinability classifier used for collection labels. It walks a
+candidate skeleton in order (`pick`/`place_tall`/`place_short`) and returns `None` if feasible, else the
+**first-violation** failure dict in the exact `instrumented_refiner.failure_metadata` shape:
+- **F3 height** (tested first): a place of a block taller than its section cutoff → **culprit-free**
+  (`dev_added/dev_deleted = []`, `proves_failure()`).
+- **F2 crowding**: a place that overflows `level_fits` → culprits = the residents already on that level.
+- **F4 reach-over**: a pick whose south corridor still holds uncleared blockers (shared `_blocks_reach`)
+  → **culprit-free/"dead"** (parity with the real `_probe_pick`; still a class-2 infeasibility, only
+  culprit attribution is dropped). **v3 tracks only F2 (crowding) culprits.**
 
 ---
 
-## 8. Placement — continuous uniform packing (`place_controller_v2.py`)
+## 7. Abstract model (`models_v3.py`) — reuses v2's abstraction
 
-`SectionFrontPlaceController` (subclass of v1's front place) overrides only the sampler:
+`create_restock3d_v3_models` calls v2's `build_restock3d_v2_models` with
+`lifted_controllers_factory = create_lifted_controllers_v3`; only the sim body (per-seed dims) and the
+place controllers differ.
 
-- **x = `uniform(−band, band)`** across the whole section strip (`band ≈ 0.261`) — **no discrete
-  slots**;
-- **y = front strip + `uniform(−0.01, 0.01)`** jitter;
-- **z = section surface + half-height + 3 mm pad**; the object is placed **upright** (translate-only:
-  the EE is derived from the recorded front grasp, so an object keeps its axis-aligned floor
-  orientation — a tall block stays upright → F3, a cube lands flat).
+- **Predicates:** `{HandEmpty, Holding, OnFloor, Stored}` (+ inert `OnBuffer`). **No `region` type, no
+  capacity, no height** — `Stored` is purely geometric section membership, so over-full sections and
+  wrong-height placements are invisible to the planner (the intended false-positive source).
+- **Operators:** `pick`; `place_tall`/`place_short` with **identical abstract effects**
+  (pre `{Holding}`; add `{HandEmpty, Stored}`; del `{Holding}`) — the tall/short choice is a symbolic
+  token, bound to `section_0`/`section_1` and validated only by real geometry (`place_short(tall)` → F3);
+  `place_buffer` (inert relocation).
+- **Goal:** `Stored(o)` for every goal object; section assignment is free.
 
-**Capacity / crowding is emergent** — there is no slot check. A sampled x that overlaps a resident
-collides during the real motion plan → `TrajectorySamplingFailure` → resample. A full strip
-exhausts its retries. Placements are ~1-in-6 reliable per sample (BiRRT flakiness), so the rollout
-retries generously: **~18 attempts/step** in the oracle/demo path, `num_sampling_attempts_per_step`
-(default 10) on the collection path. The controller reuses v1's translate-only front place verbatim
-by synthesising the section as a hidden internal `__section_N` region object, so `kinematic_env.py`
-and the inherited `step` are unchanged.
+---
+
+## 8. Placement — left-to-right continuous packing (`place_controller_v3.py`)
+
+`LeftToRightSectionPlaceController` (subclass of v2's `SectionFrontPlaceController`) overrides only
+`sample_parameters`: it reads the section's current residents from state (`_resident_right_edges`,
+filtered to bodies within `_RESIDENT_Z_TOL = 0.05` of the section surface) and packs the held block at
+the **leftmost free slot** (`leftmost_slot_center`: `left_face = max(right_edges) + GAP` if residents
+else `cx − USABLE/2 + END_MARGIN`), plus `±0.01` jitter. It is **consistent-by-construction with
+`feasibility_v3.level_fits`**, so a full strip is unpackable both analytically and in sim. Objects land
+upright (translate-only front place from the recorded grasp).
 
 ---
 
 ## 9. Failure taxonomy and evidence (`instrumented_refiner.py`)
 
-The refiner **does not gate** — it runs the real controllers via the real transition function and a
-candidate fails only by real collision / MP failure. On each rejection an **observation-only** probe
-attributes the cause (it sets/reads poses then restores them; it never changes the accept/reject
-decision). Deepest-rejection metadata is serialized as `refiner_metadata["failures"]` with fields
-`{step_index, schema, args, culprits, n_step, exhausted, budget_exhausted, dev_added, dev_deleted}`.
+The refiner does not gate — a candidate fails only by real collision / MP failure. On each rejection an
+**observation-only** probe attributes the cause. The v3 behaviour is gated by `section_height_cutoffs`
+(None ⇒ v2 byte-identical); `collect.py` passes `{section_0: 0.17, section_1: 0.12}` for the v3 model.
 
-- **F3 (tall-into-short)** — `_probe_place_v2` lifts the held object to the band centre just off the
-  surface and runs real collision detection against the shelf boards. A hit ⇒ F3, **culprit-free**,
-  so it `proves_failure()`. (Unchanged from v1: the ceiling board spans the whole band, so a single
-  centre probe still catches a too-tall block.)
-- **F2 (continuous crowding)** — if the object fits height-wise but the place still failed, it is
-  attributed to the section's **residents**: objects the prefix already stored on that surface
-  (underside within 0.05 m of the section surface_z). This is *continuous section-capacity
-  attribution* — the objects that crowded the placement out — not v1's discrete slot check. Class-1
-  culprits.
-- **Reach-over (F4)** — `_probe_pick` first checks F1 grasp obstruction (`grasp_blockers`; wired but
-  retired under the unified front grasp, so effectively inert), then **`reach_over_culprits`**: the
-  un-cleared **south** floor objects that block the target's front-pick reach corridor (a geometric
-  rule: A south of B by ≥ 0.03 m, lateral |Δx| < 0.12 m, with a tall block involved). Class-1,
-  actionable — a south-to-north order clears them first.
-- **C2 (class-2 deviation)** — anything else carries the abstract-state deviation
-  (`dev_added`/`dev_deleted`) instead of culprits.
+- **F3 (tall-into-short)** — the v3 **arm-insertion parity probe** in `_probe_place_v2`: if the held
+  block's full height `> section cutoff + 1e-9`, return culprit-free `"F3"` *before* the PyBullet
+  block-vs-board test (the board clearance sits ~0.10 m above the arm-insertion cutoff, so a block in
+  `(cutoff, clearance]` fits under the board but the arm cannot thread it in). Culprit-free, provable.
+- **F2 (continuous crowding)** — a place that fits height-wise but still fails is attributed to the
+  section's **residents** (blocks the prefix already stored there, within `_RESIDENT_Z_TOL`). Class-1
+  self-inflicted culprits. **This is the only culprit class v3 tracks.**
+- **Pick-side (F1 grasp / F4 reach-over): DISABLED** — `_probe_pick` returns `((), "C2")`. F1 is retired
+  under the unified front grasp; F4 was ~0.03% of real failures (`decisions/07` 2026-08-25). The
+  `grasp_blockers`/`reach_over_culprits` geometry remains defined (for the generator and coverage) but
+  is not consulted. The analytic classifier's F4-dead / F2-only rule mirrors this exactly.
 
-**Coverage/waste.** Reach-over revives **coverage with the correct polarity**: a south-to-north
-candidate *stores the south blockers before re-picking the target* → it **covers** them (coverage
-1.00 vs 0.00 for a talls-first / naive candidate). This is the opposite of F2, where "touching" a
-culprit *creates* the hazard. **Waste stays degenerate** under reach-over-only (goal-necessary
-reordering has an empty superfluous set); reviving it needs a non-goal approach-corridor clutter —
-the inert buffer machinery is exactly that lever (§12).
+**Coverage / waste / repeat.** Coverage/waste are computed as elsewhere (from the F2 residents).
+**`repeat` is the load-bearing adaptive signal here**: Restock3D-v3's `place_tall`/`place_short` are the
+**only** schemas that declare `QueryAxioms.step_certificate = True`, so an F3 failure (blameless,
+exhausted) certifies its exact `(schema, args)` step, and any candidate repeating that step is vetoed
+(`repeat = 1`). This is the F3 mass that coverage — an *ordering* signal — cannot see; it is what makes
+adaptivity load-bearing on this env (§14). `regroup` (`grouping_certificate`) is declared but deprecated
+and off.
 
 ---
 
-## 10. SPECTRE scene representation — full 3D point cloud (`scene_geometry.py`)
+## 10. SPECTRE scene representation — full 3D point cloud + atoms (`scene_geometry.py`)
 
-Because a cube and a tall block share a 2D footprint and differ only in height (the F3 axis), a
-2D-footprint scene would be blind to the decisive dimension. So each object emits a **full 3D
-analytic point cloud** (from ground-truth half-extents, not sensed):
-
-- **32-point analytic box surface** (`object_point_cloud`) — 8 corners + 6 face-quadrant centres,
-  scaled by half-extents so the z-extent scales with height;
-- alongside the **2D boundary ring**, **pose_z**, and **height** (for 2D consumers and the height
-  scalar);
-- families `tall` / `cube` / `clutter` / `robot`; the shelf recorded as a `ContainerGeometry`
-  (`kind="shelf"`), not a registry object; `frame_h` carries the z extent for the 3D path.
-
-The deployed SPECTRE model consumes this via `--scene-3d` (point_dim 3, pose_dim 4) + the
-PointSetEncoder, and also ingests the initial abstract state + goal atoms (`--atom-mode profiles`).
+Because width and height are independent per object (§5), a 2D-footprint scene would be blind to the
+decisive dimensions. Each object emits a **32-point analytic box-surface point cloud** (from ground-truth
+half-extents, z-extent scaling with height) alongside the 2D boundary ring, `pose_z`, and `height`. The
+deployed SPECTRE model consumes this via `--scene-3d` (`point_dim 3`, `pose_dim 4`) + the PointSetEncoder,
+and also ingests the initial abstract state + goal atoms via `--atom-mode profiles`.
 
 ---
 
-## 11. Difficulty strata (`generator.STRATA_V2_PILOT`, `strata_v2.py`)
+## 11. Difficulty strata (`strata_v3.py`)
 
-Strata are **(n_tall × n_short)** section configs (tall blocks × short cubes). Two numbering
-systems, deliberately separated: the **banding stratum** (difficulty index 0..4, encoded in
-`problem_id` via `V2_STRATUM_BAND = SPLIT_BAND // 5`) and the committed **recipe key** (a
-`generator.STRATA` entry pinning object counts; recipe tuple = `(n_small, n_tall, n_tall_regions,
-n_short_regions)`, **no clutter field** — clutter lives in the separate all-zero
-`_CLUTTER_PER_STRATUM`).
+Four strata, **one block count each** — `n = 6/7/8/9` — riding the **shared 4-stratum band**
+(`STRATUM_BAND = SPLIT_BAND // 4`), so `compare.stratum_of` needs no routing edit. `FILL_BAND = (0.55,
+0.995)`. Gym ids `spectre/Restock3Dv3-r{stratum}-v0`.
 
-| banding stratum | recipe key | n_tall × n_short | objects | collection size (train/val/test) |
-|---|---|---|---|---|
-| 0 | 11 | 2 × 2 | 4 | 50 / 15 / 15 |
-| 1 | 12 | 3 × 3 | 6 | 50 / 15 / 15 |
-| 2 | 14 | 3 × 4 | 7 | 25 / 10 / 10 |
-| 3 | 15 | 4 × 3 | 7 | 25 / 10 / 10 |
-| 4 | 13 | 4 × 4 | 8 | 25 / 10 / 10 |
+| stratum | n | rho_band | n_forced | n_near | require_crack | K_max | r_cap (s) | sizes (train/val/test) |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 6 | (0.08, 0.55)  | 1 | 2 | False | 40  | 50  | 100 / 25 / 25 |
+| 1 | 7 | (0.02, 0.30)  | 1 | 2 | False | 60  | 70  | 100 / 25 / 25 |
+| 2 | 8 | (0.005, 0.15) | 2 | 2 | True  | 150 | 90  | 100 / 25 / 25 |
+| 3 | 9 | (0.002, 0.06) | 2 | 3 | True  | 200 | 110 | 100 / 25 / 25 |
 
-Full target = **175 / 60 / 60 = 295**. Per-stratum collection budgets `(K_max, r_cap s)` =
-`{0:(20,40), 1:(40,70), 2:(75,80), 3:(75,80), 4:(75,90)}`; collected one single-stratum job at a
-time in `SEQUENTIAL_ORDER = (0, 1, 3, 2, 4)` (light first, 4×3 before 3×4). Gym ids
-`spectre/Restock3Dv2-r{key}-v0`.
+Full target = **400 / 100 / 100 = 600**.
 
 ---
 
 ## 12. Distractor blockers — supported, currently inert
 
-The environment has **full end-to-end support for non-goal distractor blockers, but every stratum
-runs with zero of them.** The machinery is one flag away:
-
-- **Generation:** `generator._sample_blockers` would place `n_clutter` cubes each ~0.09 m off a
-  target's ±x face (inside the target's exclusion radius, clear of everything else). It **early-
-  returns `[]`** because `_CLUTTER_PER_STRATUM` is **0 for every key**.
-- **Model:** the `OnBuffer` predicate and `place_buffer` operator exist; goals never reference them.
-- **Controllers:** `BufferPlaceController` / `in_buffer_zone` (the buffer x-band, §3) exist.
-- **Oracle:** `oracle.py` has the relocation phase (`Pick(clutter) + PlaceBuffer(clutter)`) that only
-  runs when clutter is present.
-
-**To enable:** raise `_CLUTTER_PER_STRATUM[key] > 0` in `generator.py` **and** the matching
-`kinematic_env.CLUTTER_PER_STRATUM[key]` (generator drives positions, kinematic_env drives specs —
-the two must agree). Distractor clutter is the path to a **non-goal approach-corridor blocker** that
-must be relocated to the buffer — the missing carrier that would revive **waste** (§9).
+The environment retains v2's full end-to-end support for non-goal distractor blockers (the buffer band,
+`OnBuffer`/`place_buffer`, `BufferPlaceController`, the oracle relocation phase), but **every stratum
+runs with zero of them** (clutter = 0). Distractor clutter is the deferred lever that would revive
+**waste** (which is degenerate when all reordering is goal-necessary, §9).
 
 ---
 
 ## 13. Oracle and plan-generation prior
 
-- **Oracle (`oracle_v2.py`)** builds a feasible skeleton directly and certifies it — no collection
-  pipeline: tall blocks → the tall section, cubes load-balanced across sections; a **south-to-north
-  (nearest-first)** pick order; then a manual rollout-with-resampling certifier (18 attempts/step,
-  fresh RNG per attempt, optional `max_seconds` cap). Section choice is validated by real collision
-  (`place_short(tall)` never certifies). It certifies sampled scenes across the strata.
-- **Geometry-informed plan-generation prior (`plan_generator_v2.py`).**
-  `GeometryGuidedRestockPlanGenerator` subclasses the stock hff generator and replaces unit operator
-  cost with a nearest-first **pick cost** `c(pick(o)) = 1 + λ·|{o′ unpicked OnFloor : d(o′) < d(o)}|`
-  (λ=1, `d(o)` = object y = northward reach), so a plan's extra penalty is its Kendall-tau inversion
-  count vs the south-to-north oracle order. It generates the oracle plan in **~15–26 attempts / 100%**
-  vs geometry-blind hff's **~4000 / 50–80%** (≈200×). This is the **default pool generator** for v2
-  collection. It is a *plan-generation* prior, distinct from the (deferred) eager section-capacity
-  heuristic.
+- **Oracle** builds a feasible skeleton directly and certifies it by real rollout-with-resampling — no
+  collection pipeline. Section choice is validated by real collision.
+- **Geometry-informed plan-generation prior** (`GeometryGuidedRestockPlanGenerator`): the stock hFF
+  generator with a nearest-first pick cost `c(pick(o)) = 1 + λ·|{o′ unpicked OnFloor : d(o′) < d(o)}|`
+  (λ=1, `d(o)` = northward reach `y`), so a plan's penalty is its Kendall-τ inversion count vs the
+  south-to-north order. This is the **default pool generator** for v3 collection (a *plan-generation*
+  prior, distinct from the deferred eager section-capacity heuristic).
 
 ---
 
 ## 14. Collection, training, and comparison state (current)
 
-- **Collection** (`experiments/spectre/restock3d_v2_{collect,run_all}.py`) follows the DD2D/SB2D
-  protocol — **no oracle in the loop**: the geometry-guided prior emits the candidate pool, each
-  skeleton is refined non-short-circuiting by `BacktrackingRefiner`, and a problem is kept iff ≥1
-  candidate refines. Full `EpisodeRecord`s carry the pool, per-candidate outcomes + wall-clock, the
-  3D scene geometry, and F2/F3 instrumented failures. Env_variant **`restock3d_v2`**. Sequential
-  per-stratum jobs; RAM-sized worker counts.
-- **Status:** strata **2×2, 3×3, 4×3 collected**; **3×4 and 4×4 still collecting** (as of 2026-08-20).
-- **Comparison** (`compare_methods.py`, env key `restock3d`): SPECTRE (3D point-set + atoms), PIGINet
-  (oblique height-visible crops), and LAZY (9-dim height graph) are trained + eval-cached vs the naive
-  planner order, over the collected strata (currently {2×2, 3×3, 4×3}, 3 seeds). Headline so far: all
-  learned methods crush the naive order; **LAZY dominates**, **SPECTRE edges PIGINet at the crowded
-  4×3** (the first hint of the representation advantage, CI still includes 0), **adaptivity is inert**
-  on these strata. Numbers + CIs in [`notebook/07` 2026-08-20](notebook/07-stickbutton2d.md#2026-08-20-restock3d-4x3-stratum-added-3-strata).
+Two collection variants exist, both registered in `env_registry.py`; the geometry-guided prior emits the
+candidate pool, each skeleton is labelled non-short-circuiting, and a problem is kept iff ≥1 candidate
+is feasible. Full `EpisodeRecord`s carry the pool, per-candidate outcomes + wall-clock, the 3D scene
+geometry, and F2/F3 failures.
+
+- **`restock3d_v3` — SYNTHETIC (analytic labels).** `CollectionConfig.refiner_mode = "analytic"`:
+  `collect._restock3d_analytic_outcome` labels via `classify_skeleton` (no motion planning) and
+  **synthesizes wall-clock** (fail = full `r_cap`; success = `U[0.6, 0.8]·r_cap`). Collected by
+  `restock3d_v3_collect.py` / `restock3d_v3_run_all.sh` (one stratum/process, workers 16/12/6/4),
+  **400 / 100 / 100**. **This is what is trained and wired into the comparison.**
+- **`restock3d_v3_real` — REAL (hybrid-prune).** Same env/strata/generator, labelled by real PyBullet
+  MP: **TRAIN → `hybrid_prune`** (analytic classifier prunes the K_max pool, real MP labels the
+  analytic-feasible candidates + a deterministic 25% audit of the analytic-infeasible, the rest trust
+  the analytic label; each `OutcomeRecord.label_source ∈ {real, analytic}`); **VAL/TEST → fully real**.
+  Motivated by a pilot showing the analytic classifier is a poor proxy (**~58% false-positive** on
+  analytic-feasible, **~13% false-negative**). Scripts `restock3d_v3_real_{pilot,run_all}.sh`; raw
+  episodes exist but there is **no derived cache, no EnvSpec, and no comparison table yet**.
+
+**Training + comparison (synthetic).** SPECTRE deploy recipe (`restock3d_v3_train.sh`, jointly-trained —
+not the DD2D/SB2D residual): `--scene-3d --atom-mode profiles --coverage-mode both --repeat-feats
+--step-join --out-suffix _repeat` → `checkpoints_spectre_atoms_repeat`. Comparison via the
+`RESTOCK3D_V3` `EnvSpec` (`compare_envs.py`, key `restock3d_v3`, strata n=6..9 on the shared 4-band,
+`has_timing`, isolation ablation arms; `precompute_dd2d_cache._REFINE_CAP_S["restock3d_v3"] = 90`).
+PIGINet (`piginet_s{seed}`, height-visible oblique crops) and LAZY (9-dim height graph) are trained + eval-cached; **no VLMPlan** (deferred). Result (test n=100, 3 seeds; **synthetic → upper bound**):
+
+| method | ALL |
+|---|---|
+| **SPECTRE-adaptive** (`repeat`) | **3.13 ± 0.11** (n6 1.04 / n7 1.37 / n8 2.99 / n9 7.11) |
+| SPECTRE-static | 12.01 ± 0.30 |
+| LAZY-adaptive | 11.79 ± 0.10 |
+| PIGINet (low-level) | 38.11 ± 1.23 |
+| astar-dist | 38.41 |
+
+The §0 **representation crossover appears most sharply here**: PIGINet ties the naive planner order
+(38.11 ≈ astar 38.41), both abstract rankers beat them ~3×, and the **`repeat` F3 certificate** drops
+SPECTRE from ~12 (a tie with LAZY) to **3.13** (SPECTRE-static is 12.01, so the whole gap is adaptive).
+**⚠️ These are analytic-synthetic labels** — an upper bound favouring the geometry-encoding
+representation; the `restock3d_v3_real` audit is what will price how much survives real MP noise.
 
 ---
 
 ## 15. Deferred / open
 
-- **Remaining strata** — 3×4 and 4×4 collection; then re-train/re-cache (the crowding + asymmetric
-  3×4 are where the SPECTRE > PIGINet edge may reach significance).
-- **Waste revival** — still degenerate under reach-over-only; needs the non-goal approach-corridor
-  clutter (the inert buffer machinery, §12).
-- **Eager section-capacity heuristic** — a refinement-order heuristic folding continuous
-  section-capacity into A* costs (distinct from the plan-generation prior in §13).
-- **VLMPlan** adapter + labeler for restock3D.
-- **≥3-seed / full-strata paper numbers**; the dynamic-MuJoCo and real-robot phases.
+- **Real-refiner comparison** — the `restock3d_v3_real` collection (hybrid-prune train / real val+test),
+  its derived cache + EnvSpec, and a real-vs-synthetic audit slice.
+- **VLMPlan** adapter + labeler for Restock3D.
+- **Eager section-capacity heuristic** — folding continuous section-capacity into A* costs (distinct
+  from the plan-generation prior in §13).
+- **Waste revival** — still degenerate under F2/F3-only; needs the non-goal approach-corridor clutter
+  (the inert buffer machinery, §12).
+- **≥3-seed / real paper numbers**; the dynamic-MuJoCo and real-robot phases.
 
 ---
 
 ## History
 
-The original stage-gated proposal (v0.1, 2026-08-13: MuJoCo/TidyBot, top-down grasp, discrete
-multi-slot regions with `InRegion`, F1 grasp-obstruction clutter, the two candidate cell layouts,
-and the physical-shelf / 2F-85 gripper sizing needed for the eventual real-robot phase) and the v1
-as-built (kinematic PyBullet, single-object **discrete** regions) are retained as design
-rationale/history in the ADR/notebook ledger:
-[`decisions/07`](decisions/07-stickbutton2d.md) / [`notebook/07`](notebook/07-stickbutton2d.md),
-2026-08-13 → 2026-08-18 (env origin, the fully-lateral rebuild, the v2 continuous-packing variant,
-the geometry-informed prior, the 3D point-cloud representation, and the 5-stratum full-collection
-protocol). The real-robot geometry constraints (interior 0.602 × 0.254 m, Σ shelf heights 0.762 m
-fixed exterior, board thickness 0.0127 m, grasp axis 0.03–0.05 m) still apply to the deferred
-hardware phase.
+v2 (`restock3d_v2`, continuous-packing, fixed 0.05 cube / 0.24 tall block, 5 banding strata
+n_tall×n_short) is **retained frozen as the easier negative control** — the learned rankers all sit
+near-oracle there, so it cannot separate methods; a second `RESTOCK3D` EnvSpec still points at it.
+v1 (kinematic PyBullet, single-object **discrete** regions with `InRegion`) and the original stage-gated
+proposal (v0.1, 2026-08-13: MuJoCo/TidyBot, top-down grasp, discrete multi-slot regions, F1
+grasp-obstruction clutter, the real-robot shelf/gripper sizing) are retained as design rationale in the
+ADR/notebook ledger ([`decisions/07`](decisions/07-stickbutton2d.md) /
+[`notebook/07`](notebook/07-stickbutton2d.md), 2026-08-13 → 2026-08-27). The real-robot geometry
+constraints (interior 0.602 × 0.254 m, Σ shelf heights 0.762 m, board thickness 0.0127 m) still apply to
+the deferred hardware phase.

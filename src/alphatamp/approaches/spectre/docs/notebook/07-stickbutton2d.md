@@ -4,6 +4,57 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section"></a>
+## 2026-08-27 — Residual-adaptive re-do — records fixed, refreshed 5-section numbers
+
+<!--strip-->
+> **id** `2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section` ·
+> **status** active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
+> **supersedes** 2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers
+<!--/strip-->
+
+**What.** Re-did the DD2D+SB2D refresh with **all adaptive arms as residuals** (frozen
+`abl_static` trunk + zero-init |F|-gated residual; `--residual-adaptive --freeze-static
+--init-static-from`, step-join dropped) to fix the joint refresh's inert-to-negative
+`+records` arm, and added **per-seed breakdown tables** (§1b/§2b.1/§4.3b). Joint results
+preserved (`docs/joint_refresh_snapshot.md` + cache backups). ADR:
+[2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via](../decisions/07-stickbutton2d.md#2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via).
+
+**Result.** §1 mean FP (3 seeds, ± across-seed):
+
+| section | SPECTRE-adaptive | static | PIGINet | LAZY | astar |
+|---|---|---|---|---|---|
+| dd2d | **6.42 ± 1.28** | 18.35 | 17.27 | 23.26 | 34.52 |
+| sb2d_kinder | **1.98 ± 0.45** | 2.22 | 2.28 | 1.85 | 16.29 |
+| dd2d_gen_shapeonly | **3.97 ± 1.04** | 14.31 | 22.68 | — | 34.73 |
+| dd2d_holdout_s3 | **5.07 ± 0.87** | 26.32 | 27.88 | — | 34.52 |
+| sb2d_holdout_b5 | 1.81 ± 0.26 | 2.21 | **1.68 ± 0.20** | — | 16.29 |
+
+§4 residual 4-arm ablation (Δ vs static, paired bootstrap); joint values in brackets:
+
+| arm | dd2d ALL | dd2d Δ vs static | sb2d ALL | sb2d Δ vs static |
+|---|---|---|---|---|
+| static | 18.35 | — | 2.22 | — |
+| +records | 17.87 | **−0.48 [−1.23, +0.18]** (joint +1.33) | 2.19 | **−0.03 [−0.09, +0.01]** (joint +0.14) |
+| +scalars | 6.63 | −11.72 [−15.61, −8.30] | 1.90 | −0.32 [−0.52, −0.16] |
+| full (deployed) | 6.42 | −11.93 [−15.79, −8.54] | 1.98 | −0.24 [−0.49, −0.01] |
+
+**Takeaway.** **The residual fix works, and it's the whole point of the re-do.** DD2D
+`+records` flips from **net-negative (+1.33, hurting s2/s3)** under joint training to
+**net-positive (−0.48, helping s1 18.99 vs 21.84, no longer hurting s2/s3)** as a frozen-trunk
+residual — matching the X2 as-built exactly; SB2D goes +0.14 → −0.03 (net-neutral, no longer
+hurting). Freezing the trunk is what makes raw failure records net-useful, confirming the W3
+interference diagnosis. **Bonus:** the residual deployed model is *at least as good as joint*
+(DD2D 6.42 < 7.11; SB2D 1.98 ≈ 1.88), the scalars still carry the bulk (DD2D −11.72), and the
+whole cross-env / generalization story is intact (SPECTRE ≪ PIGINet ≪ astar; holdout-s3 5.07
+vs PIGINet 27.88; SB2D non-separation). The `+records` Δ CI still grazes 0 (small, s1-variance
+marginal at 3 seeds), so it is *net-positive-to-neutral*, not a large win — records are a
+modest, protected residual on top of the load-bearing scalars. Per-seed tables (§1b/§2b.1/
+§4.3b) now expose the individual-seed spread (e.g. DD2D `+records` beats static on 2/3 seeds,
+seed-2 an outlier).
+
+---
+
 <a id="2026-08-26-records-round-2-x2-frozen-residual"></a>
 ## 2026-08-26 — records round 2: X2 frozen residual ships; W1/W2/X1 composition fixes negative
 
@@ -64,8 +115,17 @@ compromise. **Freeze** the round-2 workstream; all machinery stays flag-gated of
 ## 2026-08-26 — DD2D+SB2D SPECTRE refresh — 5-section numbers + 4-arm ablation
 
 <!--strip-->
-> **id** `2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers` · **status** active
-> · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+> **id** `2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers` · **status**
+> partially-superseded
+> · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
+> **superseded by** 2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section
+>
+> ⚠️ **PARTIALLY SUPERSEDED** by
+> [2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section](#2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section):
+> these are the **joint-trained** numbers (SPECTRE-adaptive DD2D 7.11 / SB2D 1.88, `+records`
+> inert-to-negative). The refresh was re-done residual-adaptive on 2026-08-27 (deployed 6.42,
+> `+records` net-positive −0.48). Read this as the motivation; the numbers here are the joint
+> baseline (frozen in `docs/joint_refresh_snapshot.md`).
 <!--/strip-->
 
 **What.** Refreshed the stale `compare_methods.py` DD2D + SB2D SPECTRE rows: retrained the deployed

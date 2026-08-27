@@ -287,72 +287,35 @@ _V2_CKPT_SUBDIR = {
     "dd2d_v4": "checkpoints_v2_evidence_ov",
 }
 
-# SPECTRE v3 arms: cache sub-dir prefix -> checkpoint sub-dir ({seed} substituted).
+# SPECTRE arms: cache sub-dir prefix -> checkpoint sub-dir ({seed} substituted).
 #
-# `spectre3` is the deployed method and is the only one that also gets a *static* row.
-# The rest are the ablation, all held at the SAME matched setting -- `--overlap-mode
-# jaccard`, no `--aggregate-records`, no `--evidence-attn` -- so the 2x2 varies only what
-# it names. Deployed differs from `abl_cov_rec` by exactly those two consumption
-# switches, which is why the headline record-token number is "tokens + machinery" and the
-# 2x2's is tokens alone.
+# `spectre3` is the deployed method and the only arm listed here (it also gets a *static*
+# row). The §4 ablation arms are NOT here -- they are the 4-arm adaptive decomposition in
+# `_ABLATION_4ARM` below, merged per-variant by `main()`. The old cov×tokens 2x2 arms
+# (`abl_cov_*`, `abl_nocov_*`) were retired 2026-08-25 when the ablation was replaced.
 #
-# Every arm here post-dates G6b, so all were selected by the uncensored whole-split
-# selector. Mixing in a `g6_*` arm (censored at 30 attempts, 50 val episodes) would
-# compare checkpoints chosen by two different instruments -- `_assert_same_selector`
-# enforces this rather than trusting the directory name.
+# Every arm post-dates G6b (uncensored whole-split selector); `_assert_same_selector`
+# enforces that rather than trusting the directory name.
 _V3_ARMS: dict[str, str] = {
-    # The deployed model. Repointed 2026-07-28 from `checkpoints_spectre_v3final_s{seed}` to
-    # the state-delta arm, which is now the deployed configuration (`decisions.md`
-    # 2026-07-28). **Re-cache with `--force`**: `spectre3_{static,adaptive}/seed_0` was
-    # written from the pre-delta checkpoint and `_dir_complete` skips any full directory,
-    # so without it seed 0 stays pre-delta while seeds 1-2 are the delta model -- one
-    # method row silently mixing two generations.
-    # 2026-07-31: repointed to the unified coverage/waste definition, which is now the
-    # deployed default. 5.78 +/- 0.10 against the previous arm's 7.44 +/- 0.76 --
-    # -1.66 FP, CI [-2.71, -0.71], every seed beating every baseline seed. One directory
-    # holding all three seeds, so no `{seed}` substitution here.
-    # **Re-cache with `--force`**: `_dir_complete` skips a full directory, so without it
-    # the row silently keeps the previous definition's rollout.
-    "spectre3": "checkpoints_spectre_unified",
-    # ^ DD2D's deployed dir. Per-variant overrides live in `_V3_ARM_OVERRIDES` below:
-    # a second environment trains the same arm under a different run name, and silently
-    # scoring the wrong directory (or, as happened first, skipping the arm entirely with
-    # a "missing checkpoint" line buried in a log) is not a failure worth repeating.
-    # coverage x record-tokens 2x2
-    # NOT `checkpoints_spectre_p8_cov_final_s{seed}`, despite autorun_decisions A15 naming it
-    # "the clean 3-seed re-run": all three of those runs stopped at **epoch 5 of 30**, so
-    # their best.pt is a mid-training stub that scores 26.97 (s0 36.64, where every other
-    # arm gets 0.00). Retrained here at identical flags. See notebook.md 2026-07-27.
-    "abl_cov_rec": "checkpoints_spectre_abl_cov_rec",
-    "abl_cov_norec": "checkpoints_spectre_norec_p9_cov_norec",
-    "abl_nocov_rec": "checkpoints_spectre_g8_jac",
-    "abl_nocov_norec": "checkpoints_spectre_norec_abl_jac_norec_nocov",
-    # coverage vs waste, split apart by --coverage-mode
-    "abl_cov_only": "checkpoints_spectre_abl_cov_only",
-    "abl_waste_only": "checkpoints_spectre_abl_waste_only",
+    # The deployed model. Repointed 2026-08-26 (round 2) to the RESIDUAL-ADAPTIVE full arm:
+    # a frozen pure-geometry trunk (warm-started from `abl_static`) + a zero-init |F|-gated
+    # scalars+records residual (`--residual-adaptive --freeze-static`; step-join dropped).
+    # Trained via `--out-suffix _resid_full` -> `checkpoints_spectre_atoms_resid_full`, one dir
+    # for all three seeds (no `{seed}`). The joint `checkpoints_spectre_atoms_v3final` dir is
+    # kept on disk as the superseded joint baseline. **Re-cache with `--force`**.
+    "spectre3": "checkpoints_spectre_atoms_resid_full",
 }
-#: Per-variant checkpoint-dir overrides for the v3 arms. StickButton2D trained the
-#: deployed config with no `--out-suffix`, so its dir is the bare `checkpoints_spectre`;
-#: DD2D's carries the `_unified` tag from the 2026-07-31 definition change.
+#: Per-variant checkpoint-dir overrides for the deployed `spectre3` arm.
 _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
-    # StickButton2D's arms were trained by `spectre_sweep.py --preset sb2dabl`, which
-    # writes one directory per (arm, seed) -- hence `{seed}` -- and `run_training` prefixes
-    # `_norec` onto any `--no-records` run, so two of the six carry it. DD2D's arms
-    # predate that sweep and use their own historical names, which is exactly why this
-    # map is per-variant rather than a string rule.
+    # StickButton2D trains the same refreshed recipe; SPECTRE is image-free, so `sb2d_kinder`
+    # grafts these rows from `stickbutton2d_v1`. One dir holds all three seeds (no `{seed}`).
     "stickbutton2d_v1": {
-        "spectre3": "checkpoints_spectre",
-        "abl_cov_rec": "checkpoints_spectre_abl_cov_rec_s{seed}",
-        "abl_cov_norec": "checkpoints_spectre_norec_abl_cov_norec_s{seed}",
-        "abl_nocov_rec": "checkpoints_spectre_abl_nocov_rec_s{seed}",
-        "abl_nocov_norec": "checkpoints_spectre_norec_abl_nocov_norec_s{seed}",
-        "abl_cov_only": "checkpoints_spectre_abl_cov_only_s{seed}",
-        "abl_waste_only": "checkpoints_spectre_abl_waste_only_s{seed}",
+        "spectre3": "checkpoints_spectre_atoms_resid_full",
     },
-    # Restock3D trains SPECTRE with `--atom-mode profiles` (init-state + goal atoms ON),
+    # Restock3D v2 trains SPECTRE with `--atom-mode profiles` (init-state + goal atoms ON),
     # and `train.py` appends `_atoms` to the checkpoint sub-dir for that -- so the deployed
-    # arm lives at `checkpoints_spectre_atoms/restock3d_v2/seed_<s>/best.pt`, not the bare
-    # `checkpoints_spectre_unified` DD2D name. No ablation arms are trained here.
+    # arm lives at `checkpoints_spectre_atoms/restock3d_v2/seed_<s>/best.pt`. No ablation
+    # arms are trained here.
     "restock3d_v2": {
         "spectre3": "checkpoints_spectre_atoms",
     },
@@ -390,19 +353,33 @@ _ABLATION_ISOLATION_ARMS: dict[str, str] = {
     "abl_only_records": "checkpoints_spectre_atoms_abl_only_records",
     "abl_all": "checkpoints_spectre_atoms_abl_all",
 }
+#: The 4-arm adaptive-component decomposition, for DD2D + SB2D. **Round 2 (2026-08-26): the
+#: two adaptive arms are now RESIDUAL** (frozen `abl_static` trunk + a zero-init |F|-gated
+#: residual; `--residual-adaptive --freeze-static`). `abl_static` is the shared frozen trunk
+#: (reused from round 1 -- unchanged). The deployed `spectre3` arm is the "full" cell (read
+#: separately). Env-independent dir strings (train.py inserts `/<env>/seed_<n>/`), one dir per
+#: arm holding all three seeds; each writes only `<prefix>_adaptive/`. The static arm's
+#: adaptive rollout equals its static order (inputs do not depend on the failure context).
+_ABLATION_4ARM: dict[str, str] = {
+    "abl_static": "checkpoints_spectre_norec_noov_atoms_abl_static",
+    "abl_records": "checkpoints_spectre_noov_atoms_resid_records",
+    # +records +jaccard (2026-08-27): records + the simple jaccard-overlap column only (no
+    # coverage/waste/repeat) -- the old "floor" feature, easy to justify. Residual arm.
+    "abl_recjac": "checkpoints_spectre_atoms_resid_recjac",
+    "abl_scalars": "checkpoints_spectre_norec_atoms_resid_scalars",
+}
 _ISOLATION_ARMS_BY_VARIANT: dict[str, dict[str, str]] = {
-    "dd2d_v4": _ABLATION_ISOLATION_ARMS,
-    "stickbutton2d_v1": _ABLATION_ISOLATION_ARMS,
+    # DD2D + SB2D use the new 4-arm decomposition (2026-08-25); restock3d_v3 keeps its 6-arm
+    # single-feature isolation untouched (its real dataset is still collecting).
+    "dd2d_v4": _ABLATION_4ARM,
+    "stickbutton2d_v1": _ABLATION_4ARM,
     "restock3d_v3": _ABLATION_ISOLATION_ARMS,
 }
 
 
-# Deploy-time diagnostic: the deployed checkpoint with its evidence memory emptied at
-# every step. Not a method result -- it is a train/deploy mismatch on purpose, to
-# separate "training with records damaged the weights" from "the model ignores them".
-_V3_SUPPRESS_ARMS: dict[str, str] = {
-    "abl_suppress_records": "checkpoints_spectre_v3final_s{seed}",
-}
+# Deploy-time suppress-records diagnostic: retired 2026-08-25 with the old §4 (its §4.4 cell
+# and the `checkpoints_spectre_v3final_s{seed}` target are gone). Empty = never cached.
+_V3_SUPPRESS_ARMS: dict[str, str] = {}
 
 # Env-variant-dependent path globals. The cache functions read these as module globals
 # at call time, so ``main`` rebinds them via ``_configure_paths`` from ``--env-variant``

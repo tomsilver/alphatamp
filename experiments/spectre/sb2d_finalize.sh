@@ -68,9 +68,11 @@ for seed in "${SEEDS[@]}"; do
     # scalar-free + off-byte-identical / on-zero-init-additive. Adopted here from the
     # deployed recipe for parity; on SB2D its effect is UNMEASURED (measured only on DD2D,
     # where scalars-on it is a within-noise tie) -- re-measure on the next SB2D retrain.
+    # --repeat-feats (2026-08-25, graceful degradation): uniform recipe across envs; INERT
+    # on SB2D (no step_certificate declared), so the deployed FP is unchanged.
     python -u -m alphatamp.approaches.spectre.train \
       --env $ENV_VARIANT --seed "$seed" --epochs 30 --num-workers 3 \
-      --overlap-mode jaccard --coverage-feats --coverage-mode "$arm" \
+      --overlap-mode jaccard --coverage-feats --coverage-mode "$arm" --repeat-feats \
       --aggregate-records --evidence-attn --state-delta --select-window 5 \
       --use-pca-feats --use-edgeconv --use-point-sab --pma-seeds 4 \
       --atom-mode profiles --step-join \

@@ -1134,6 +1134,57 @@ def build_table(records: list[dict]) -> tuple[list[str], list[list[str]], list[d
     return header, rows, tidy
 
 
+def build_per_seed_table(
+    records: list[dict],
+) -> tuple[list[str], list[list[str]], list[dict]]:
+    """Per-seed FP breakdown: one row per ``(method, seed)``.
+
+    Companion to :func:`build_table`. The cell mean is the mean over that seed's problems (a
+    single seed, no across-seed averaging); the ``±`` is the spread ACROSS PROBLEMS within
+    that seed (within-seed variability), NOT across seeds. Multi-seed methods (PIGINet on
+    per-seed caches, SPECTRE-static/adaptive, LAZY) get one row per seed; a single
+    deterministic run (astar, VLMPlan; ``seed=None``) gets one row labelled ``det``. Feed
+    :func:`load_fp_records_per_seed`. Output matches :func:`build_table`'s
+    ``(header, rows, tidy)`` contract so :func:`render_markdown` renders it unchanged.
+    """
+    strata = sorted({r["stratum"] for r in records})
+    by_ms: dict[tuple[str, object, object], list[float]] = defaultdict(list)
+    for r in records:
+        by_ms[(r["method"], r["seed"], r["stratum"])].append(r["fp"])
+        by_ms[(r["method"], r["seed"], "ALL")].append(r["fp"])
+
+    methods = [m for m in METHOD_ORDER if any(r["method"] == m for r in records)]
+    methods += sorted({r["method"] for r in records} - set(methods))
+
+    header = ["method", "seed", "ALL"] + [f"s{s}" for s in strata]
+    rows: list[list[str]] = []
+    tidy: list[dict] = []
+    for method in methods:
+        seeds = sorted(
+            {r["seed"] for r in records if r["method"] == method},
+            key=lambda s: (s is None, s),
+        )
+        for seed in seeds:
+            row = [method, "det" if seed is None else str(seed)]
+            for stratum in ["ALL"] + list(strata):
+                fps = by_ms[(method, seed, stratum)]
+                # std is ACROSS PROBLEMS within this one seed (within-seed spread)
+                mean, std = _mean(fps), _std(fps)
+                row.append(_fmt(mean, std))
+                tidy.append(
+                    {
+                        "method": method,
+                        "seed": seed,
+                        "stratum": stratum,
+                        "n_problems": len(fps),
+                        "mean_fp": mean,
+                        "std_fp_across_problems": std,
+                    }
+                )
+            rows.append(row)
+    return header, rows, tidy
+
+
 def render_markdown(header: list[str], rows: list[list[str]]) -> str:
     """Render :func:`build_table`'s output as a GitHub-flavoured markdown table."""
     widths = [
@@ -1395,4 +1446,50 @@ def build_time_table(
                 }
             )
         rows.append(row)
+    return header, rows, tidy
+
+
+def build_per_seed_time_table(
+    records: list[dict], plan_gen_s: dict[int, float], use_capped: bool = True
+) -> tuple[list[str], list[list[str]], list[dict]]:
+    """Per-seed wall-clock breakdown: one row per ``(method, seed)``.
+
+    Companion to :func:`build_time_table`. Cell mean = mean ``total_s`` over that seed's
+    problems; ``±`` = std ACROSS PROBLEMS within that seed (within-seed spread), not across
+    seeds. One row per seed for multi-seed methods; ``det`` for a single deterministic run.
+    Reuses :func:`per_problem_time_records` so the total matches the §2b table exactly.
+    """
+    pp = per_problem_time_records(records, plan_gen_s, use_capped)
+    strata = sorted({r["stratum"] for r in pp})
+    by_ms: dict[tuple[str, object, object], list[float]] = defaultdict(list)
+    for r in pp:
+        by_ms[(r["method"], r["seed"], r["stratum"])].append(r["total_s"])
+        by_ms[(r["method"], r["seed"], "ALL")].append(r["total_s"])
+    methods = [m for m in METHOD_ORDER if any(r["method"] == m for r in pp)]
+    methods += sorted({r["method"] for r in pp} - set(methods))
+    header = ["method", "seed", "ALL"] + [f"s{s}" for s in strata]
+    rows: list[list[str]] = []
+    tidy: list[dict] = []
+    for method in methods:
+        seeds = sorted(
+            {r["seed"] for r in pp if r["method"] == method},
+            key=lambda s: (s is None, s),
+        )
+        for seed in seeds:
+            row = [method, "det" if seed is None else str(seed)]
+            for stratum in ["ALL"] + list(strata):
+                ts = by_ms[(method, seed, stratum)]
+                mean, std = _mean(ts), _std(ts)
+                row.append(_fmt(mean, std))
+                tidy.append(
+                    {
+                        "method": method,
+                        "seed": seed,
+                        "stratum": stratum,
+                        "n_problems": len(ts),
+                        "mean_seconds": mean,
+                        "std_seconds_across_problems": std,
+                    }
+                )
+            rows.append(row)
     return header, rows, tidy

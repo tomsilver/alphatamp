@@ -8,12 +8,15 @@ collision probe** (``getClosestPoints`` / ``check_body_collisions``) purely to *
 failure — it never changes the accept/reject decision (observation-only):
 
 * **F1 grasp obstruction** (pick) — the arm at the grasp IK collides with a floor neighbour. Retired
-  under the unified front grasp (a neighbour never touches the arm at the front-grasp config), but the
-  probe is kept wired; those blockers are class-1 *pre-existing* culprits.
+  under the unified front grasp (a neighbour never touches the arm at the front-grasp config).
 * **F4 reach-over** (pick) — the grasp is reachable at the final config but a nearer object blocks the
-  diagonal approach path (invisible to the F1 final-config probe); attributed geometrically by
-  ``reach_over_culprits`` to the un-cleared south blockers — class-1, actionable, feeding coverage with
-  the correct polarity (decisions/07 2026-08-17).
+  diagonal approach path; ``reach_over_culprits`` can attribute it to the un-cleared south blockers.
+
+**Pick-side culprit attribution (F1 + F4) is DISABLED** (decisions/07 2026-08-25): restock3d-v3 tracks
+**only crowding (F2) culprits**, so a pick failure is recorded culprit-free (class-2 deviation, no
+blame) — F4 was only ~0.03% of real failures and F1 is inert. ``grasp_blockers`` /
+``reach_over_culprits`` stay defined for the eager tables, generator and coverage probe; ``_probe_pick``
+simply no longer consults them.
 * **F2 crowding** (place) — the held block, at the region's resting pose, collides with a resident
   the plan already placed there; those residents are class-1 *self-inflicted* culprits.
 * **F3 height mismatch** (place) — the held block, lifted just clear of the surface, collides only
@@ -443,18 +446,16 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
     def _probe_pick(
         self, state: ObjectCentricState, a: GroundOperator
     ) -> tuple[tuple[str, ...], str]:
-        # F1 grasp obstruction: a movable collides the arm at the final grasp config (``grasp_blockers``,
-        # the single source of truth shared with the eager table + generator). Retired under the front
-        # grasp (a floor neighbour never touches the arm there) but kept wired.
-        target = a.parameters[1].name
-        blockers, _reachable = grasp_blockers(self._sim, target, state)
-        if blockers:
-            return blockers, "F1"
-        # F4 reach-over: the grasp is reachable at the final config but a nearer object blocks the
-        # diagonal approach path (invisible to grasp_blockers). Attribute it to the geometric reach
-        # blockers so the failure carries class-1 culprits and feeds coverage (decisions/07 2026-08-17).
-        reach = reach_over_culprits(self._sim, target, state)
-        return reach, "F4"
+        # Pick-side culprit attribution is intentionally DISABLED: restock3d-v3 tracks ONLY crowding
+        # (F2) culprits (decisions/07 2026-08-25). F1 grasp obstruction is retired under the unified
+        # front grasp (``grasp_blockers`` never fires -- a floor neighbour does not touch the arm at the
+        # front-grasp config, verified by sweep) and F4 reach-over was only ~0.03% of real failures, so a
+        # pick failure is recorded as a culprit-free class-2 deviation (no blame) rather than class-1.
+        # ``grasp_blockers`` / ``reach_over_culprits`` remain defined for the eager tables, generator and
+        # coverage probe; they are simply no longer consulted here (also skips two collision probes per
+        # pick rejection -- a real-collection speedup).
+        del state, a  # unused now: no probe on picks (signature kept for _probe dispatch)
+        return (), "C2"
 
 
 def _deepest_rejection(

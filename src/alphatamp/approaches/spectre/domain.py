@@ -275,40 +275,40 @@ class DomainSpec:
 #: exactly ``3n + 1`` calls -- measured to hold for 85.76% of dd2d_v3 retrieve failures,
 #: which are therefore provably un-resampled.
 #:
-#: ``place-buffer`` carries ``step_certificate=True`` **as an intentional negative-transfer
-#: stress test** for the ``repeat`` feature (ablation ADR 2026-08-21), NOT because it is a
-#: sound certificate. The firing census (``ablation_repeat_census.py``) shows it is the
-#: *only* DD2D schema on which ``repeat`` fires at all -- ``retrieve``/``pick`` failures
-#: always carry culprits/dev_blame, so they are never ``blame_empty`` -- but a
-#: ``place-buffer`` failure is a **means-failure** (the buffer is full *given the current
-#: staging order*; a candidate that stages fewer objects first succeeds), so vetoing every
-#: candidate that re-uses the step is unsound: 44.6% of feasible candidates get flagged
-#: (leakage), vs ~0% on restock3d's genuine F3 certificate. It is read ONLY by ``repeat``
-#: (proof_tier stays False -- ``monotone``/``local``/``exact`` are absent -- so ``dead``,
-#: demotion and the token holdout are byte-unchanged, and the DEPLOYED DD2D model, which is
-#: trained with no ``--repeat-feats``, never reads it). The whole point of the ``abl_only_
-#: repeat``/``abl_all`` DD2D arms is to *measure* that this restock-shaped certificate does
-#: not transfer to a packing domain.
+#: ``place-buffer`` declares **no** ``step_certificate`` (graceful degradation, 2026-08-25).
+#: It once carried ``step_certificate=True`` as a negative-transfer stress test for the
+#: ``repeat`` feature, but a ``place-buffer`` failure is a **means-failure** (the buffer is
+#: full *given the current staging order*; a candidate that stages fewer objects first
+#: succeeds), so keying the ``repeat`` veto on the bare step identity is unsound: the firing
+#: census (``ablation_repeat_census.py``) measured it vetoing 44.6% of feasible candidates,
+#: vs ~0% on restock3d's genuine F3 certificate. The deployed recipe now includes
+#: ``--repeat-feats`` uniformly across all envs, but because DD2D declares no certificate
+#: the ``repeat`` column is **identically 0** here (``_rr_repeat_steps`` stays empty in
+#: ``dataset.py``) -- inert, exactly like ``regroup`` is inert wherever no schema declares
+#: ``grouping_certificate``. ``step_certificate`` never touched ``proof_tier()``
+#: (``monotone``/``local``/``exact`` are absent), so ``dead``, demotion and the token
+#: holdout were already byte-unchanged and remain so.
 _DD2D = DomainSpec(
     axioms={
         "retrieve": QueryAxioms(monotone=True, local=True, exact=True),
         "pick": QueryAxioms(),
-        "place-buffer": QueryAxioms(step_certificate=True),
+        "place-buffer": QueryAxioms(),
     },
     min_calls_per_schema={"pick": 1, "place-buffer": 2, "retrieve": 1},
 )
 
-#: StickButton2D. EMPTY_SPEC in every way except a ``step_certificate`` declaration on the
-#: four **press** schemas -- the terminal-manipulation analogue of restock3d's
-#: ``place_{tall,short}`` (a press that provably, blamelessly fails is "this button cannot
-#: be pressed from here"). Added for the ``repeat`` ablation (ADR 2026-08-21). The firing
-#: census shows the press set fires on ~55% of candidates with ~10.9% leakage of feasible
-#: candidates -- markedly *more* sound than DD2D's packing (44.6%) but still not the ~0% of
-#: restock's F3, so it too is a transfer probe, not a proven certificate. ``monotone``/
-#: ``local``/``exact`` stay False (proof_tier False; ``dead``/demotion/token-holdout
-#: unchanged), and coverage/waste/record paths never read the axioms, so the deployed SB2D
-#: model (no ``--repeat-feats``) is byte-unchanged. ``PlaceStick``/``Pick*`` are intermediate
-#: transport steps, not the goal manipulation, so they are left undeclared.
+#: StickButton2D. Effectively EMPTY_SPEC: it declares **no** ``step_certificate`` (graceful
+#: degradation, 2026-08-25). The four **press** schemas once carried
+#: ``step_certificate=True`` as a ``repeat`` transfer probe, but a press failure is
+#: context-dependent ("this button cannot be pressed *from here*" -- conditioned on robot
+#: pose / stick state / which buttons are already pressed), which the bare ``(schema, args)``
+#: step key does not encode: the firing census measured the press set vetoing ~55% of
+#: candidates with ~10.9% leakage of feasible candidates (vs ~0% on restock's genuine F3).
+#: With the declaration gone, the deployed ``--repeat-feats`` recipe leaves the ``repeat``
+#: column **identically 0** on SB2D (inert, like ``regroup``). ``proof_tier()`` was already
+#: False (``monotone``/``local``/``exact`` absent), so ``dead``/demotion/token-holdout are
+#: byte-unchanged. The press schemas are still named (as plain ``QueryAxioms()``) to document
+#: the goal-manipulation set; ``PlaceStick``/``Pick*`` transport steps are left undeclared.
 _SB2D_PRESS_SCHEMAS = (
     "StickPressButtonFromNothing",
     "RobotPressButtonFromNothing",
@@ -316,7 +316,7 @@ _SB2D_PRESS_SCHEMAS = (
     "RobotPressButtonFromButton",
 )
 _SB2D = DomainSpec(
-    axioms={s: QueryAxioms(step_certificate=True) for s in _SB2D_PRESS_SCHEMAS},
+    axioms={s: QueryAxioms() for s in _SB2D_PRESS_SCHEMAS},
 )
 
 #: An environment that declares nothing. Everything is hint-tier and the ranker must
@@ -382,10 +382,11 @@ DOMAINS: dict[str, DomainSpec] = {
     # place_short as `step_certificate` for the F3 `repeat` feature (2026-08-21); proof_tier
     # stays False, so `dead`/demotion/token-holdout are unchanged vs the EMPTY_SPEC baseline.
     "restock3d_v3": _RESTOCK3D_V3,
-    # StickButton2D. Was EMPTY_SPEC (fell through spec_for's default); now declares the
-    # press schemas as `step_certificate` for the `repeat` ablation (ADR 2026-08-21). All
-    # SB2D collections share the same operator contract, so every variant maps to `_SB2D`;
-    # the kinder-rendered / holdout variants reuse the same episodes' provenance.
+    # StickButton2D. Effectively EMPTY_SPEC: the press schemas are named but declare no
+    # `step_certificate` (graceful degradation, 2026-08-25 -- the `repeat` transfer probe was
+    # retired because it leaks ~10.9% on SB2D; see `_SB2D`). All SB2D collections share the
+    # same operator contract, so every variant maps to `_SB2D`; the kinder-rendered / holdout
+    # variants reuse the same episodes' provenance.
     "stickbutton2d_v1": _SB2D,
     "stickbutton2d_v1_kinder": _SB2D,
     "stickbutton2d_v1_kinder_holdout_b5": _SB2D,

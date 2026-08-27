@@ -1,4 +1,13 @@
-"""SPECTRE collector for **restock3d_v3** -- the SYNTHETIC dataset.
+"""SPECTRE collector for **restock3d_v3** -- SYNTHETIC (default) or REAL (hybrid-prune).
+
+By default this collects the SYNTHETIC dataset (``--refiner-mode analytic``, env_variant
+``restock3d_v3``). Pass ``--refiner-mode hybrid_prune --env-variant restock3d_v3_real`` (see
+``restock3d_v3_real_run_all.sh``) to collect the REAL dataset: the analytic classifier prunes the
+K_max pool, then real PyBullet motion planning labels only the analytic-feasible candidates plus a
+deterministic 25%% audit sample of the analytic-infeasible ones (the rest trust the analytic
+label). Each candidate carries ``OutcomeRecord.label_source in {real, analytic}``. Real/hybrid runs
+are RAM-heavy (MP per candidate) and auto-size workers via ``_sized_workers`` (0.80*CPU / 0.80*RAM)
+unless ``--workers`` is given.
 
 Collects the four block-count strata (n=6/7/8/9) at **100/25/25** train/val/test
 (``strata_v3.SIZES``; 400 train / 100 val / 100 test) into
@@ -24,8 +33,12 @@ pool draw; the n=9 K_max=200 A* enumeration is the heaviest). Workers default to
 conservative count; a memory watchdog is kept as cheap insurance. Per-stratum ``(K_max, r_cap)``
 come from ``strata_v3.BUDGETS``.
 
-    python experiments/spectre/restock3d_v3_collect.py                 # all 4 strata, 400/100/100
+    python experiments/spectre/restock3d_v3_collect.py                 # synthetic: all 4 strata, 400/100/100
     python experiments/spectre/restock3d_v3_collect.py --strata 0 --train 2 --val 1 --test 1 --workers 2  # smoke
+    # real (hybrid-prune) smoke into the restock3d_v3_real tree:
+    python experiments/spectre/restock3d_v3_collect.py --env-variant restock3d_v3_real \
+        --refiner-mode hybrid_prune --strata 0 --train 2 --val 0 --test 0 \
+        --k-max 35 --refinement-timeout 60 --samples-per-step 6 --workers 2
 """
 
 from __future__ import annotations
@@ -56,13 +69,43 @@ from alphatamp.approaches.spectre.envs.restock3d import strata_v3 as S
 
 _HEARTBEAT_S = 30.0
 
+# Per-worker RSS estimate (GB) for the REAL/hybrid path (motion planning per candidate), keyed by
+# stratum. RE-CALIBRATED 2026-08-26 04:18 mid-full-run: the FULL run's larger problem sample hit
+# much heavier peaks than the pilot (n=7 wRSSmax 4.4 GB vs pilot 1.5, freeRAM to critical at ~12
+# workers), so the pilot-based {2.5,2.5,3.5,4.5} under-provisioned and the watchdog paused 3x. These
+# match observed full-run peaks + margin. Consulted for auto-sizing when --workers is omitted on a
+# real/hybrid run; the analytic path stays on the fixed light default.
+_PER_WORKER_GB_REAL: dict[int, float] = {0: 4.0, 1: 4.5, 2: 5.5, 3: 8.0}
+
+
+def _sized_workers(
+    strata: list[int], cpu: int, avail_gb: float, mem_floor_gb: float
+) -> int:
+    """Workers = min(0.80*CPU, RAM_budget / max per-worker GB over the requested strata), >=1.
+
+    RAM_budget = min(0.80*freeRAM, freeRAM - (mem_floor + 3)) -- whichever of CPU or RAM caps
+    first wins (ported from restock3d_v2_collect._sized_workers at 0.80 per the plan; no GPU term,
+    collection is CPU+RAM only). Recomputed per sequential stratum from live free RAM.
+    """
+    pwg = max(_PER_WORKER_GB_REAL.get(s, 5.0) for s in strata)
+    ram_budget = min(0.80 * avail_gb, avail_gb - (mem_floor_gb + 3.0))
+    by_ram = int(ram_budget / pwg)
+    by_cpu = int(0.80 * cpu)
+    return max(1, min(by_cpu, by_ram))
+
 
 def _config(
-    stratum: int, split: str, k_max: int, timeout_s: float, samples: int
+    stratum: int,
+    split: str,
+    k_max: int,
+    timeout_s: float,
+    samples: int,
+    refiner_mode: str = "analytic",
+    env_variant: str = S.ENV_VARIANT,
 ) -> CollectionConfig:
     return CollectionConfig(
         env_id=S.env_id(stratum),
-        env_variant=S.ENV_VARIANT,
+        env_variant=env_variant,
         model_name="restock3d_v3",
         # Recipe key = the stratum itself (create_restock3d_v3_models reads only `stratum`).
         model_kwargs={"stratum": stratum},
@@ -72,23 +115,34 @@ def _config(
         problem_seed_end=S.problem_id(split, stratum, 0) + 1,
         K_max=k_max,
         plan_generator="closed_form",  # -> v3 geometry-guided generator (collect.py dispatch)
-        # Analytic labels: no motion planning; feasibility_v3.classify_skeleton + synthetic wall.
-        refiner_mode="analytic",
+        # "analytic" = synthetic (geometry classifier); "hybrid_prune" = real MP on the
+        # analytic-feasible + a 25% audit of analytic-infeasible; "real" = MP every candidate.
+        refiner_mode=refiner_mode,  # type: ignore[arg-type]
         # Generous, so a full K_max pool of goal-reaching plans can be enumerated for n=9.
         abstract_plan_timeout_s=120.0,
-        refinement_timeout_s=timeout_s,  # = r_cap; the synthetic fail-cost / success-cost base.
+        refinement_timeout_s=timeout_s,  # = r_cap; per-candidate MP cap / synthetic fail-cost.
         num_sampling_attempts_per_step=samples,
         max_trajectory_steps=500,
     )
 
 
 def _task(args) -> dict:
-    """Worker: collect one problem analytically, keep iff feasible, write if kept."""
-    stratum, split, index, k_max, timeout_s, samples, data_root = args
+    """Worker: collect one problem (analytic/hybrid/real), keep iff >=1 success, write if kept."""
+    (
+        stratum,
+        split,
+        index,
+        k_max,
+        timeout_s,
+        samples,
+        data_root,
+        refiner_mode,
+        env_variant,
+    ) = args
     from alphatamp.approaches.spectre.collect import collect_episode, episode_path
     from alphatamp.approaches.spectre.io import atomic_write_pickle_gz
 
-    cfg = _config(stratum, split, k_max, timeout_s, samples)
+    cfg = _config(stratum, split, k_max, timeout_s, samples, refiner_mode, env_variant)
     pid = S.problem_id(split, stratum, index)
     path = episode_path(Path(data_root), cfg.env_variant, split, pid)
     if path.exists():
@@ -221,14 +275,26 @@ def main() -> int:
         help="override per-stratum r_cap",
     )
     ap.add_argument("--samples-per-step", type=int, default=18)
-    # Analytic collection is light (no motion planning); the n=9 K_max=200 A* enumeration is
-    # the only heavy step. A fixed conservative default keeps the peak well under the box RAM;
-    # the watchdog is the backstop. Raise if the heartbeat shows spare freeRAM.
+    ap.add_argument(
+        "--refiner-mode",
+        choices=["analytic", "real", "hybrid_prune"],
+        default="analytic",
+        help="analytic (synthetic, default), hybrid_prune (real MP on analytic-feasible + 25%% "
+        "audit), or real (MP every candidate)",
+    )
+    ap.add_argument(
+        "--env-variant",
+        default=S.ENV_VARIANT,
+        help="data-tree label (default restock3d_v3; use restock3d_v3_real for the real dataset)",
+    )
+    # --workers omitted => auto-size. For real/hybrid (motion planning) sizing is RAM-aware via
+    # _sized_workers at 0.80*CPU / 0.80*RAM. For the light analytic path it stays min(0.6*CPU,12).
+    # The watchdog is the backstop either way. An explicit --workers overrides.
     ap.add_argument(
         "--workers",
         type=int,
-        default=max(1, min(int(0.6 * (os.cpu_count() or 4)), 12)),
-        help="concurrency (default min(0.6*CPU, 12))",
+        default=None,
+        help="concurrency (default: auto-size; real/hybrid RAM-aware, analytic min(0.6*CPU,12))",
     )
     ap.add_argument("--data-root", default="data/spectre")
     ap.add_argument(
@@ -240,6 +306,17 @@ def main() -> int:
     ap.add_argument("--mem-floor-gb", type=float, default=6.0)
     ap.add_argument("--mem-critical-gb", type=float, default=3.0)
     a = ap.parse_args()
+
+    if a.workers is None:
+        if a.refiner_mode == "analytic":
+            a.workers = max(1, min(int(0.6 * (os.cpu_count() or 4)), 12))
+        else:
+            a.workers = _sized_workers(
+                list(a.strata),
+                os.cpu_count() or 4,
+                psutil.virtual_memory().available / 1e9,
+                a.mem_floor_gb,
+            )
 
     _size_override = {"train": a.train, "val": a.val, "test": a.test}
 
@@ -274,9 +351,10 @@ def main() -> int:
         for s in a.strata
     )
     print(
-        f"[collect] restock3d_v3 (ANALYTIC) strata={a.strata} splits={a.splits} "
-        f"workers={a.workers} sizes(tr/val/test per s)={{{_sizes_txt}}} "
-        f"budgets={{{', '.join(f'{s}:{_budget(s)}' for s in a.strata)}}}",
+        f"[collect] {a.env_variant} ({a.refiner_mode.upper()}) strata={a.strata} "
+        f"splits={a.splits} workers={a.workers} samples={a.samples_per_step} "
+        f"sizes(tr/val/test per s)={{{_sizes_txt}}} "
+        f"budgets(K,r_cap)={{{', '.join(f'{s}:{_budget(s)}' for s in a.strata)}}}",
         flush=True,
     )
 
@@ -301,7 +379,17 @@ def main() -> int:
             c["inflight"] += 1
             fut = ex.submit(
                 _task,
-                (stratum, split, idx, kmax, rcap, a.samples_per_step, a.data_root),
+                (
+                    stratum,
+                    split,
+                    idx,
+                    kmax,
+                    rcap,
+                    a.samples_per_step,
+                    a.data_root,
+                    a.refiner_mode,
+                    a.env_variant,
+                ),
             )
             inflight[fut] = cell_key
             return True
@@ -311,7 +399,7 @@ def main() -> int:
                 pass
 
         # RESUME PRE-SCAN: seed each cell from episodes already on disk.
-        raw_dir = Path(a.data_root) / "raw" / S.ENV_VARIANT
+        raw_dir = Path(a.data_root) / "raw" / a.env_variant
         for cell_key, c in cells.items():
             split, stratum = cell_key
             ep_dir = raw_dir / split / "episodes"
@@ -443,7 +531,7 @@ def main() -> int:
         for r in surplus:
             p = episode_path(
                 Path(a.data_root),
-                S.ENV_VARIANT,
+                a.env_variant,
                 split,
                 S.problem_id(split, stratum, r["index"]),
             )

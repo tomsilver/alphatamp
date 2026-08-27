@@ -4,6 +4,60 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via"></a>
+## 2026-08-27 — SPECTRE residual-adaptive deployed — records net-positive via frozen residual; per-seed tables
+
+<!--strip-->
+> **id** `2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via` ·
+> **status** active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
+> **supersedes** 2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm
+<!--/strip-->
+
+**Context.** The joint refresh
+([2026-08-26](#2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm)) found the
+**+records ablation arm inert-to-negative** (jointly-trained records help s1 but hurt s2/s3,
+net Δ +1.33 vs static), diagnosed as **W3 interference** — the jointly-trained evidence
+pathway damages the shared representations. The X2 fix (`docs/failed_records_fix_part2.md` /
+`docs/failed_records_as_built.md` §Round 2; `--residual-adaptive --freeze-static
+--init-static-from`) freezes a pure-geometry trunk and trains a zero-init |F|-gated residual
+on top. This entry **re-does the refresh with all adaptive arms as residuals** (the chosen
+mapping) and adds **per-seed breakdown tables**. The repeat graceful-degradation from the
+superseded entry stands unchanged.
+
+**Decision.**
+- **All-residual deployment.** `ResidualEvidenceScorer` forces the static half to pure
+  geometry and routes ALL failure-conditioned features (records + compiled scalars) into the
+  residual. So: **static** = the frozen `abl_static` trunk (reused, no retrain) = the Δ
+  reference = the main-table `SPECTRE-static` row; **+records / +scalars / full** = residuals
+  over it (records-only / scalars-only / both). Deployed `spectre3` = full-residual
+  (`checkpoints_spectre_atoms_resid_full`); **step-join dropped** (it perturbs the frozen
+  static input). Holdouts train their own holdout static trunk (`_hstatic`, `--train-strata`)
+  → holdout full-residual (`_hfull`); `gen_shapeonly` re-scores the deployed residual.
+- **Per-seed tables.** `compare.build_per_seed_table` / `build_per_seed_time_table` (one row
+  per (method, seed); ± = within-seed across-problem spread) + notebook companion cells
+  §1b/§2b.1/§4.3b for every multi-seed figure.
+- **Joint results preserved** (cache backups + `docs/joint_refresh_snapshot.md` + the joint
+  checkpoints) as the superseded baseline.
+
+**Consequences.**
+- **The records fix works.** DD2D `+records` flips from joint **+1.33** (net-negative, hurts
+  s2/s3) to residual **−0.48 [−1.23, +0.18]** (net-positive: helps s1 18.99 vs static 21.84,
+  no longer hurts s2/s3) — matching the as-built X2. SB2D `+records` +0.14 → **−0.03**
+  (net-neutral, no longer hurting). **Freezing the trunk is what makes failure records
+  net-useful.**
+- **The deployed residual is at least as good as joint.** DD2D SPECTRE-adaptive **6.42 ±
+  1.28** (< joint 7.11); SB2D **1.98** (≈ joint 1.88). Scalars still carry the bulk (DD2D
+  `+scalars` Δ −11.72 [−15.61, −8.30]; SB2D −0.32). Story intact: SPECTRE ≪ PIGINet 17.27 ≪
+  astar 34.52; adaptive ≪ static 18.35.
+- **Generalization intact:** `gen_shapeonly` adaptive 3.97 (static 14.31 / PIGINet 22.68);
+  `holdout_s3` 5.07 vs PIGINet 27.88 (SPECTRE generalizes, PIGINet collapses); `holdout_b5`
+  1.81 ≈ PIGINet 1.68 (non-separation).
+- Deployed recipe is now a **two-stage procedure** (train `abl_static` trunk → train the
+  residual with `--init-static-from`); `v3final` (joint + step-join) is the superseded joint
+  baseline. restock3d_v3's 6-arm ablation unchanged. 527 spectre tests pass.
+
+---
+
 <a id="2026-08-26-failure-records-made-net-positive-via-frozen"></a>
 ## 2026-08-26 — failure records made net-positive via frozen residual (X2); composition fixes (W1/W2/X1) do not beat it; freeze
 
@@ -57,7 +111,18 @@ isolated +records is net-inert, and X2 is the actual records gain. Numbers: `doc
 
 <!--strip-->
 > **id** `2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm` · **status**
-> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+> partially-superseded · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
+> **superseded by** 2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via
+>
+> ⚠️ **PARTIALLY SUPERSEDED** by
+> [2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via](#2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via):
+> the **joint-trained** deployed model + 4-arm ablation below (`checkpoints_spectre_atoms_v3final`,
+> SPECTRE-adaptive 7.11, `+records` inert-to-negative +1.33, step-join in the recipe) were
+> **re-done as residual-adaptive** on 2026-08-27 — the deployed model is now the frozen-trunk
+> full-residual (6.42) and `+records` is net-positive (−0.48). Read this entry for the
+> repeat graceful-degradation (unchanged) and as the **motivation** for the residual fix; the
+> deployed FP + ablation-training numbers here are the superseded joint baseline (frozen in
+> `docs/joint_refresh_snapshot.md`).
 <!--/strip-->
 
 **Context.** The `compare_methods.py` DD2D + SB2D SPECTRE numbers were **stale** — the deployed

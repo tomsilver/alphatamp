@@ -95,8 +95,13 @@ class CollectionConfig:
     # ``feasibility_v3.classify_skeleton`` -- no motion planning -- and SYNTHESIZES the
     # wall-clock: a fail costs the full ``refinement_timeout_s`` (= r_cap); a success costs
     # ``U[0.6,0.8]*r_cap``. The EpisodeRecord is otherwise byte-identical to a real run, so
-    # every downstream stage works unchanged. Pinned into ``config_hash``.
-    refiner_mode: Literal["real", "analytic"] = "real"
+    # every downstream stage works unchanged. ``"hybrid_prune"`` (Restock3D-v3 real collection)
+    # analytically classifies all K_max candidates, then REAL-refines only the analytic-feasible
+    # ones plus a deterministic 25% audit sample of the analytic-infeasible ones, trusting the
+    # analytic label for the rest -- spending motion planning only where it changes the answer.
+    # Each candidate carries ``OutcomeRecord.label_source in {real, analytic}``. Pinned into
+    # ``config_hash``.
+    refiner_mode: Literal["real", "analytic", "hybrid_prune"] = "real"
     refinement_seed_rule: str = "v1_blake2b_problem_skeleton"
     collect_instrumentation: bool = False
     state_path_depth: Literal["s0_sL_only", "full"] = "s0_sL_only"

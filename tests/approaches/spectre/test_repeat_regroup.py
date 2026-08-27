@@ -128,15 +128,18 @@ def test_v3_spec_declares_place_step_certificate_but_not_proof_tier() -> None:
     # reach-over pick is culprit-bearing but neither certificate holds
     assert spec.axioms_for("pick").step_certificate is False
     assert spec.axioms_for("pick").grouping_certificate is False
-    # DD2D (`place-buffer`) and SB2D (button-press) activate `repeat` for the ablation
-    # (ADR 2026-08-22): step_certificate True but proof_tier False, so dead/demotion/
-    # token-holdout stay byte-unchanged; culprit-bearing / transport steps stay undeclared.
+    # DD2D (`place-buffer`) and SB2D (button-press) declare NO `step_certificate` (graceful
+    # degradation, 2026-08-25): the `repeat` transfer probe leaked (44.6% DD2D / 10.9% SB2D)
+    # because these are context/order-dependent means-failures, so it was retired. With the
+    # declaration gone the deployed `--repeat-feats` recipe leaves `repeat` identically 0 on
+    # both envs. proof_tier() stays False regardless, so dead/demotion/token-holdout are
+    # byte-unchanged; only restock3d_v3 keeps a genuine F3 step_certificate.
     dd2d = spec_for("dd2d_v4")
-    assert dd2d.axioms_for("place-buffer").step_certificate is True
+    assert dd2d.axioms_for("place-buffer").step_certificate is False
     assert dd2d.axioms_for("place-buffer").proof_tier() is False
     assert dd2d.axioms_for("pick").step_certificate is False
     sb2d = spec_for("stickbutton2d_v1_kinder")
-    assert sb2d.axioms_for("StickPressButtonFromNothing").step_certificate is True
+    assert sb2d.axioms_for("StickPressButtonFromNothing").step_certificate is False
     assert sb2d.axioms_for("StickPressButtonFromNothing").proof_tier() is False
     assert sb2d.axioms_for("PlaceStick").step_certificate is False
     # a still-undeclared env -> repeat is inert there (graceful degradation)

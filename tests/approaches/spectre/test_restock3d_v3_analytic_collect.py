@@ -81,8 +81,9 @@ def test_analytic_episode_is_valid_and_synthetic_wall_clock():
 
 
 def test_analytic_failure_families_have_correct_culprit_shape():
-    # A crowded stratum surfaces F2 (residents culprits), F3 (culprit-free height), and possibly
-    # F4 (reach-over culprits) -- exactly the failure taxonomy the analytic classifier emits.
+    # A crowded stratum surfaces F2 (residents culprits) + F3 (culprit-free height). F4 reach-over
+    # is now culprit-free too (restock3d-v3 tracks ONLY F2 culprits), so F2 is the sole
+    # culprit-bearing family.
     ep, _ = _collect(stratum=3)
     saw_culprit_bearing = saw_f3_free = False
     for o in ep.outcomes:
@@ -93,13 +94,13 @@ def test_analytic_failure_families_have_correct_culprit_shape():
                 saw_f3_free = True
                 assert f["dev_added"] == [] and f["dev_deleted"] == []
             if f["culprits"]:
-                # F2 residents / F4 reach-over: class-1, deviation is None.
+                # F2 residents: class-1, deviation is None (the only culprit-bearing family now).
                 saw_culprit_bearing = True
                 assert f["dev_added"] is None and f["dev_deleted"] is None
     assert (
         saw_f3_free
     ), "expected at least one culprit-free F3 failure on the crowded stratum"
-    assert saw_culprit_bearing, "expected at least one culprit-bearing (F2/F4) failure"
+    assert saw_culprit_bearing, "expected at least one culprit-bearing F2 failure"
 
 
 def test_real_mode_default_untouched():
@@ -115,3 +116,44 @@ def test_real_mode_default_untouched():
         problem_seed_end=1,
     )
     assert cfg.refiner_mode == "real"
+
+
+def _base_cfg(mode: str) -> CollectionConfig:
+    return CollectionConfig(
+        env_id=S.env_id(0),
+        env_variant="restock3d_v3_real",
+        model_name="restock3d_v3",
+        model_kwargs={"stratum": 0},
+        split="train",
+        num_problems=1,
+        problem_seed_start=0,
+        problem_seed_end=1,
+        K_max=8,
+        plan_generator="closed_form",
+        refiner_mode=mode,  # type: ignore[arg-type]
+    )
+
+
+def test_hybrid_mode_is_valid_and_pins_distinct_hash():
+    # hybrid_prune is an accepted refiner_mode and pins a config_hash distinct from analytic/real,
+    # so hybrid-collected episodes self-describe in provenance.
+    hashes = {m: _base_cfg(m).config_hash for m in ("analytic", "real", "hybrid_prune")}
+    assert len(set(hashes.values())) == 3
+
+
+def test_outcome_record_label_source_optional_and_replace_preserved():
+    # label_source is a trailing optional field (default None) so legacy/other-env collections are
+    # unaffected, and canonicalize's dataclasses.replace preserves it.
+    import dataclasses
+
+    from alphatamp.approaches.spectre.schema import OutcomeRecord
+
+    o = OutcomeRecord(
+        skeleton_idx=0,
+        outcome="fail",
+        refinement_wall_clock_s=1.0,
+        refinement_seed=7,
+    )
+    assert o.label_source is None  # default: single-mode / legacy collections
+    o2 = dataclasses.replace(o, label_source="real")
+    assert o2.label_source == "real"

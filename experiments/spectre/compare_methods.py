@@ -19,8 +19,7 @@ def _(mo):
           (failed refinement attempts before the first success; lower is better). **Pick
           the environment below** — strata, method list, caveats and the §5 scene all
           come from its `compare_envs.py` entry.
-          """
-             )
+          """)
     return
 
 
@@ -136,15 +135,13 @@ def _(REPO, compare_envs, env_picker, mo, np, pd, plt, sns, compare):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## Load
+    mo.md(r"""## Load
 
           Reads precomputed per-problem FP from the primary + legacy caches (grafting
           the methods without a native row). Two frames: **`df_seeds`** (per
           method/seed/problem — §1/§2's `±` is across seeds) and **`df`** (seed-
           collapsed; §3/§5/the CSV).
-          """
-             )
+          """)
     return
 
 
@@ -195,8 +192,7 @@ def _(CACHE_DIR, ENV_VARIANT, LEGACY_CACHE, LEGACY_ONLY, LEGACY_VARIANT, compare
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 1 · Summary table — mean FP per stratum
+    mo.md(r"""## 1 · Summary table — mean FP per stratum
 
           `±` = across-seed spread of the per-stratum mean; `seeds` = how many went into it
           (`-` = a single deterministic run). A one-seed row shows a bare mean, never
@@ -245,6 +241,24 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
     return summary_df, summary_tidy
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""### 1b · Per-seed breakdown — individual seeds
+
+        Each multi-seed method split into its individual seeds (PIGINet, SPECTRE-static/
+        adaptive, LAZY); the `±` here is the **within-seed spread across problems**, not the
+        across-seed std of §1. A single deterministic run (astar, VLMPlan) shows one `det`
+        row.""")
+    return
+
+
+@app.cell
+def _(compare, merged, mo):
+    _ps_h, _ps_r, _ps_tidy = compare.build_per_seed_table(merged)
+    mo.md(compare.render_markdown(_ps_h, _ps_r))
+    return
+
+
 # --- commented out 2026-07-27 (notebook trim); uncomment both cells to restore the
 # --- across-seed spread table. It reads `--` at one cached seed and fills in once
 # --- `precompute_dd2d_cache.py --seeds 0 1 2 ...` has run.
@@ -276,8 +290,7 @@ def _(COLLECTION, METHODS, compare, df, df_seeds, merged, mo, pd):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 2 · Mean FP per stratum (± across-seed std)
+    mo.md(r"""## 2 · Mean FP per stratum (± across-seed std)
 
           §1 as a bar chart. Error bars = across-seed std; a bar with **no cap** is a
           single deterministic run (astar, VLMPlan). Hatched = grafted from the legacy
@@ -387,8 +400,7 @@ def _(ENV, mo):
         VLMPlan's plan-gen is 0 (its generation *is* the inference `infer_s`).
         """
         if ENV.has_timing
-        else\
-             r"""## 2b · Wall-clock to first success
+        else r"""## 2b · Wall-clock to first success
 
              _Deferred for this environment: its episodes carry real per-candidate refinement
              times, but filling §2b needs a per-env refinement cap (the DD2D 2 s cap would
@@ -451,6 +463,23 @@ def _(ENV, compare, mo, plan_gen_s, refine_cap_s, summary_tidy, time_records):
         )
     _out
     return (time_tidy,)
+
+
+@app.cell
+def _(ENV, compare, mo, plan_gen_s, time_records):
+    if ENV.has_timing and time_records:
+        _pst_h, _pst_r, _ = compare.build_per_seed_time_table(
+            time_records, plan_gen_s, use_capped=True
+        )
+        _pst_out = mo.md(
+            "### 2b.1 · Per-seed wall-clock — individual seeds\n\n"
+            "Capped total seconds per (method, seed); `±` is the within-seed spread across "
+            "problems (not across seeds).\n\n" + compare.render_markdown(_pst_h, _pst_r)
+        )
+    else:
+        _pst_out = mo.md("")
+    _pst_out
+    return
 
 
 @app.cell
@@ -545,8 +574,7 @@ def _(ENV, METHODS, SLAB, STRATA, compare, mo, time_tidy):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 2c · Paired head-to-head — any two methods, per problem
+    mo.md(r"""## 2c · Paired head-to-head — any two methods, per problem
 
           Pick **two methods**, a **stratum** (or ALL) and a **metric**. Each point is one
           test problem: **x = method A**, **y = method B** — both *lower is better*. The
@@ -803,8 +831,7 @@ def _(compare, hh_result, mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 3 · Survival curves
+    mo.md(r"""## 3 · Survival curves
 
           Fraction of problems solved within ≤ k failed attempts (higher & further-left is
           better). `ALL` = whole split, the rest by stratum. Each curve is the mean of the
@@ -852,25 +879,17 @@ def _(COLORS, METHODS, SLAB, STRATA, df_seeds, np, plt):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (mo.md(\
-           r"""## 4 · Ablation — what makes SPECTRE adaptive?
+    (mo.md(r"""## 4 · Ablation — what makes SPECTRE adaptive?
 
-          Two adaptive components (both exactly zero at `F=∅`, accruing as the rollout
-          observes failures): the **`coverage`/`waste`** columns and **record tokens** (one
-          token per failing query). Both are switched on/off below at a matched setting.
-
-          - **`coverage`** = recall over the failures' named-culprit pool `K` — the fraction
-            of `K` a candidate discharges.
-          - **`waste`** = precision over unexplained work — of the steps the abstraction
-            says were unneeded, the fraction answering to nothing the evidence named.
-
-          <!--
-          Unified definition (deployed 2026-07-31). ⚠️ The arms below were **scored under
-          the pre-unification definition**, so read §4 internally, not against §1. Arms are
-          **seed 0** (only the deployed config was multi-seed), accepted by paired bootstrap
-          over problems; `Δ vs floor` is measured against the no-columns/no-tokens arm.
-          -->
-          """) if ENV.has_ablations else mo.md(""))
+           The deployed model decomposed into its adaptive components (2026-08-25), each
+           **trained from scratch** (not trained-together-then-disabled), so a component
+           that looks inert is not masked by another compensating for it. The floor is
+           the **static** model — no failure-conditioned features, so its attempt order
+           is fixed — and on top of it we add the **failure-record token stream** and
+           the **compiled scalar features** separately, then both together (= deployed).
+           Every adaptive feature is exactly zero at `F=∅`, so the arms differ only as
+           the rollout observes failures. The single decomposition table is **§4.3**.
+           """) if ENV.has_ablations else mo.md(""))
     return
 
 
@@ -882,19 +901,10 @@ def _(CACHE_DIR, compare, pd):
     # tokens` is §4.2's "both" row, and the rest are one edit away from being restored.
     # The row builders skip arms absent from `abl_df`, so deleting an entry here would
     # silently drop a row rather than error.
-    ABL_ARMS = {
-        # "cov+waste" = --coverage-feats, which adds BOTH columns. The single-column arms
-        # below are the --coverage-mode split; naming them apart matters because the pair
-        # and the coverage column alone do not behave the same.
-        "cov+waste, tokens": "abl_cov_rec_adaptive",
-        "cov+waste, no tokens": "abl_cov_norec_adaptive",
-        "no cov/waste, tokens": "abl_nocov_rec_adaptive",
-        "neither (no cols, no tokens)": "abl_nocov_norec_adaptive",
-        "coverage column only": "abl_cov_only_adaptive",
-        "waste column only": "abl_waste_only_adaptive",
-        "deployed (cov+waste, tokens)": "spectre3_adaptive",
-        "deployed, records suppressed": "abl_suppress_records_adaptive",
-    }
+    # RETIRED 2026-08-25: the cov×tokens 2x2 (§4.1) and cov/waste split (§4.2) were replaced
+    # by the single 4-arm adaptive-component decomposition in §4.3. Left empty so the §4.1/4.2
+    # cells stay in the dataflow graph (they render nothing) without referencing dead arms.
+    ABL_ARMS: dict[str, str] = {}
 
     _rows, _missing = [], []
     for _label, _subdir in ABL_ARMS.items():
@@ -926,16 +936,9 @@ def _(CACHE_DIR, compare, pd):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (
-        mo.md(
-            r"""### 4.1 · coverage × record tokens
-
-          One component at a time. `Δ vs floor` is a paired bootstrap over problems against
-          the no-columns/no-tokens arm (negative = better); a CI excluding 0 is starred."""
-        )
-        if ENV.has_ablations
-        else mo.md("")
-    )
+    mo.md(
+        ""
+    )  # §4.1 (cov×tokens 2x2) retired 2026-08-25 — replaced by the §4.3 decomposition
     return
 
 
@@ -979,7 +982,7 @@ def _(ENV, STRATA, abl_df, mo, pd):
         if _a in set(abl_df["arm"])
     ]
     ablation_2x2 = pd.DataFrame(_rows).set_index("arm") if _rows else pd.DataFrame()
-    (ablation_2x2 if ENV.has_ablations else mo.md(""))
+    mo.md("")  # §4.1 retired 2026-08-25 (empty ABL_ARMS → empty frame); see §4.3
     return FLOOR_BY_PID, ablation_2x2
 
 
@@ -1019,12 +1022,9 @@ def _(ENV, STRATA, abl_df, mo, pd):
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (mo.md(\
-           r"""### 4.2 · `coverage` vs `waste`, separated
-
-          Each column on alone (record tokens stay on for all three). `coverage` = recall
-          over the named-culprit pool; `waste` = precision over unexplained work. `neither`
-          keeps tokens but no columns.""") if ENV.has_ablations else mo.md(""))
+    mo.md(
+        ""
+    )  # §4.2 (coverage vs waste split) retired 2026-08-25 — see the §4.3 decomposition
     return
 
 
@@ -1064,32 +1064,50 @@ def _(ENV, FLOOR_BY_PID, STRATA, abl_df, mo, pd):
     coverage_split = (
         pd.DataFrame(_cov_rows).set_index("arm") if _cov_rows else pd.DataFrame()
     )
-    (coverage_split if ENV.has_ablations else mo.md(""))
+    mo.md("")  # §4.2 retired 2026-08-25; see §4.3
     return (coverage_split,)
 
 
 @app.cell(hide_code=True)
 def _(ENV, mo):
-    (mo.md(\
-           r"""### 4.3 · Single-feature isolation — what carries the adaptivity here?
+    if not ENV.has_ablations:
+        _md43 = ""
+    elif ENV.env_variant.startswith("restock3d"):
+        # restock3d keeps its 6-arm single-feature isolation (its real dataset is still
+        # collecting). `repeat` is the load-bearing feature here — a SOUND F3 exact-step
+        # certificate (a too-tall block hits the section ceiling, dead in any context).
+        _md43 = r"""### 4.3 · Single-feature isolation — what carries the adaptivity here?
 
-          Each arm is the deployed backbone (**jaccard overlap** kept as a constant backbone
-          + the point-set-encoder upgrade + atom profiles + ma5 selector) with **exactly one**
-          failure-conditioned feature added, **trained from scratch** (not
-          trained-together-then-disabled-at-deploy), so a feature that looks inert is not
-          being masked by another compensating for it. `floor` is jaccard-only (the Δ
-          reference); `all features` turns them all on (= the *current-architecture* deployed
-          config — the DD2D/SB2D §1 rows are stale/pre-point-set-upgrade, so nothing is
-          reused). `Δ vs floor` is a paired bootstrap over problems (negative = the feature
-          **helps**); a CI excluding 0 is starred. **1 seed for now** (2 more deferred), so
-          `±` is blank until they land.
+          Each arm is the deployed backbone (jaccard overlap + point-set encoder + atom
+          profiles + ma5 selector) with **exactly one** failure-conditioned feature added,
+          **trained from scratch**. `floor` is jaccard-only (the Δ reference); `all features`
+          turns them all on. `Δ vs floor` is a paired bootstrap over problems (negative = the
+          feature **helps**); a CI excluding 0 is starred. On restock3d_v3, `repeat` is the
+          load-bearing feature — a sound F3 exact-step certificate."""
+    else:
+        # DD2D + SB2D: the residual-adaptive component decomposition (2026-08-27).
+        _md43 = r"""### 4.3 · Adaptive-component decomposition (residual)
 
-          `repeat` fires on DD2D/SB2D only because the domain declares an ablation
-          `step_certificate` schema (DD2D `place-buffer`, SB2D button-press) — an intentional
-          **transfer probe**, not a sound certificate like restock3d's F3: the firing census
-          measured it vetoing **44.6%** of feasible DD2D candidates and **10.9%** of SB2D ones
-          (vs ~0% on restock3d), so on DD2D especially expect it to *hurt* (see the ablation
-          ADR).""") if ENV.has_ablations else mo.md(""))
+          Arms sharing one **frozen pure-geometry trunk** (the `static` arm, warm-started +
+          frozen), each adding a zero-init |F|-gated **residual** over a subset of the adaptive
+          components (`--residual-adaptive --freeze-static`), so a component's effect is
+          isolated on an identical substrate:
+
+          - **static** — the frozen trunk; nothing failure-conditioned (fixed order; Δ reference).
+          - **+ records** — a residual over the raw failure-record tokens only (aggregated per
+            query, own cross-attention channel, state-delta); no overlap/scalar columns.
+          - **+ records + jaccard** — records + the simple **jaccard-overlap** column
+            (candidate × failed-set similarity), no coverage/waste/repeat — the cheap-feature
+            step up from records alone.
+          - **+ scalars** — the compiled scalars only (jaccard + coverage/waste + `repeat`); no
+            record tokens. **`repeat` is inert here** — DD2D/SB2D declare no `step_certificate`
+            (graceful degradation), so it carries no signal.
+          - **full (deployed)** — scalars + records = the deployed model.
+
+          `Δ vs static` is a paired bootstrap over problems (negative = the component
+          **helps**); a CI excluding 0 is starred. Freezing the trunk is what makes the
+          raw-records residual net-positive (the jointly-trained version hurt s2/s3)."""
+    mo.md(_md43)
     return
 
 
@@ -1100,14 +1118,29 @@ def _(CACHE_DIR, ENV, LEGACY_CACHE, STRATA, compare, mo, pd):
     # Arm label -> cache sub-dir. SB2D's arms are cached under `stickbutton2d_v1` (SPECTRE is
     # image-free), so on `sb2d_kinder` they are read from LEGACY_CACHE; DD2D / restock3d_v3
     # find them in CACHE_DIR. `_dir_for` resolves per arm.
-    _ISO = {
-        "floor (jaccard only)": "abl_floor_adaptive",
-        "+ coverage": "abl_only_cov_adaptive",
-        "+ waste": "abl_only_waste_adaptive",
-        "+ repeat": "abl_only_repeat_adaptive",
-        "+ records": "abl_only_records_adaptive",
-        "all features": "abl_all_adaptive",
-    }
+    #
+    # DD2D + SB2D use the 4-arm adaptive-component decomposition (2026-08-25); "full
+    # (deployed)" is the deployed `spectre3` arm. restock3d_v3 keeps its 6-arm single-feature
+    # isolation. `_floor_label` is the per-scheme Δ reference.
+    if ENV.env_variant.startswith("restock3d"):
+        _ISO = {
+            "floor (jaccard only)": "abl_floor_adaptive",
+            "+ coverage": "abl_only_cov_adaptive",
+            "+ waste": "abl_only_waste_adaptive",
+            "+ repeat": "abl_only_repeat_adaptive",
+            "+ records": "abl_only_records_adaptive",
+            "all features": "abl_all_adaptive",
+        }
+        _floor_label = "floor (jaccard only)"
+    else:
+        _ISO = {
+            "static": "abl_static_adaptive",
+            "+ records": "abl_records_adaptive",
+            "+ records + jaccard": "abl_recjac_adaptive",
+            "+ scalars": "abl_scalars_adaptive",
+            "full (deployed)": "spectre3_adaptive",
+        }
+        _floor_label = "static"
 
     def _dir_for(sub):
         return CACHE_DIR if (CACHE_DIR / sub).is_dir() else LEGACY_CACHE
@@ -1144,7 +1177,7 @@ def _(CACHE_DIR, ENV, LEGACY_CACHE, STRATA, compare, mo, pd):
             .reset_index()
         )
 
-    _floor = _seed_avg(_iso_df[_iso_df.arm == "floor (jaccard only)"])
+    _floor = _seed_avg(_iso_df[_iso_df.arm == _floor_label])
     _floor_by_pid = dict(zip(_floor["problem_id"], _floor["fp"]))
 
     def _iso_row(label):
@@ -1160,7 +1193,7 @@ def _(CACHE_DIR, ENV, LEGACY_CACHE, STRATA, compare, mo, pd):
             _s = _sub[_sub.stratum == _k]["fp"]
             _row[f"s{_k}"] = f"{_s.mean():.2f}" if len(_s) else "—"
         _common = sorted(set(_sub["problem_id"]) & set(_floor_by_pid))
-        if _common and len(_sub) and label != "floor (jaccard only)":
+        if _common and len(_sub) and label != _floor_label:
             _a = _sub.set_index("problem_id").loc[_common, "fp"].to_numpy()
             _b = pd.Series(_floor_by_pid).loc[_common].to_numpy()
             _dd = _eda3.bootstrap_mean_difference(_a, _b, num_resamples=10_000, seed=0)
@@ -1179,7 +1212,46 @@ def _(CACHE_DIR, ENV, LEGACY_CACHE, STRATA, compare, mo, pd):
         else pd.DataFrame()
     )
     (isolation_table if ENV.has_ablations else mo.md(""))
-    return (isolation_table,)
+    # Exposed for the §4.3b per-seed companion (raw per-(arm, seed, problem) frame + order).
+    iso_df_raw, iso_arm_order = _iso_df, _order
+    return isolation_table, iso_df_raw, iso_arm_order
+
+
+@app.cell(hide_code=True)
+def _(ENV, mo):
+    (
+        mo.md(r"""### 4.3b · Per-seed ablation — individual seeds
+
+          Each arm × seed (mean FP over that seed's problems), so the seed-to-seed spread the
+          §4.3 `±` column summarizes is visible per stratum.""")
+        if ENV.has_ablations
+        else mo.md("")
+    )
+    return
+
+
+@app.cell
+def _(ENV, STRATA, iso_arm_order, iso_df_raw, mo, pd):
+    if not (ENV.has_ablations and len(iso_df_raw)):
+        _psa = mo.md("")
+    else:
+        _psa_rows = []
+        for _arm in iso_arm_order:
+            _a = iso_df_raw[iso_df_raw.arm == _arm]
+            for _s in sorted(_a["seed"].unique()):
+                _as = _a[_a.seed == _s]
+                _r = {"arm": _arm, "seed": int(_s), "ALL": f"{_as['fp'].mean():.2f}"}
+                for _k in STRATA:
+                    _ss = _as[_as.stratum == _k]["fp"]
+                    _r[f"s{_k}"] = f"{_ss.mean():.2f}" if len(_ss) else "—"
+                _psa_rows.append(_r)
+        _psa = (
+            pd.DataFrame(_psa_rows).set_index(["arm", "seed"])
+            if _psa_rows
+            else pd.DataFrame()
+        )
+    _psa
+    return
 
 
 # --- commented out 2026-07-27 (notebook trim): §4.4, the deploy-time suppress-records
@@ -1769,8 +1841,7 @@ def _(
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(\
-          r"""## 6 · VLMPlan — usable plans generated per problem
+    mo.md(r"""## 6 · VLMPlan — usable plans generated per problem
 
           `n_proposed` = unique, valid, parseable plans each VLM arm generated itself
           (budget 200) — a capacity measure, not an attempt count. Error bars = ± std

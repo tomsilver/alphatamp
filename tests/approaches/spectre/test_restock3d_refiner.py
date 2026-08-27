@@ -134,6 +134,25 @@ def test_f2_place_onto_resident() -> None:
     assert "cube_goal1" in culprits
 
 
+def test_pick_is_culprit_free() -> None:
+    """Pick-side culprit attribution is disabled -- restock3d tracks ONLY crowding (F2) culprits
+    (decisions/07 2026-08-25). A pick failure is recorded culprit-free (class-2), even in a clutter
+    scene that would once have named F1/F4 blockers; ``_probe_pick`` no longer probes the arm."""
+    specs = [
+        ("cube_goal1", (0.025, 0.025, 0.025), (0.1, 0.5, 0.1, 1.0)),
+        ("clutter1", (0.025, 0.025, 0.10), (0.3, 0.3, 0.3, 1.0)),
+        ("clutter2", (0.025, 0.025, 0.10), (0.3, 0.3, 0.3, 1.0)),
+    ]
+    poses = {"cube_goal1": (0.45, 0.05), "clutter1": (0.52, 0.05), "clutter2": (0.38, 0.05)}
+    sim, _, sampler = _scene(specs, poses)
+    state, _ = sim.reset(seed=0)
+    culprits, family = sampler._probe_pick(
+        state, _op("pick", "robot", "cube_goal1", state=state)
+    )
+    assert culprits == ()
+    assert family == "C2"
+
+
 @pytest.mark.skip(
     reason="F1 grasp-obstruction retired under the unified FRONT grasp (decisions/07 2026-08-16): "
     "a floor neighbour does not collide the arm at the front-grasp config, so grasp_blockers returns "

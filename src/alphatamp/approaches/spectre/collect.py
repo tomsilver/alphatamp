@@ -59,6 +59,12 @@ _RESTOCK3D_V3_MODEL_NAME = "restock3d_v3"
 # are built before its sampler), so a module-level holder is safe (separate workers).
 _restock_extras: dict[str, object] = {}
 
+# hybrid_prune (Restock3D-v3 real collection): fraction of the analytic-INFEASIBLE candidates
+# that are still real-refined, to audit "analytic-infeasible => real-infeasible" and catch rare
+# analytic false negatives. Analytic-FEASIBLE candidates are always real-refined (they are the
+# analytic false positives we most need real labels for).
+_HYBRID_AUDIT_FRAC = 0.25
+
 
 def _refinement_seed(rule: str, problem_id: int, skeleton_idx: int) -> int:
     """Stable blake2b-8 hash.
@@ -430,6 +436,47 @@ def _restock3d_analytic_inputs(
     return block_dims, positions
 
 
+def _restock3d_classify(
+    action_plan: list[GroundOperator],
+    block_dims: dict[str, tuple[float, float]],
+    positions: dict[str, tuple[float, float]],
+    num_attempts: int,
+) -> dict | None:
+    """Run the pure-geometry ``feasibility_v3.classify_skeleton`` on one candidate.
+
+    Returns ``None`` if analytically feasible, else the first-violation failure dict
+    (byte-compatible in shape with the real failure harvest). Split out so the hybrid-prune
+    path can classify once and reuse the dict for the analytic-trusted branch.
+    """
+    # pylint: disable=import-outside-toplevel
+    from alphatamp.approaches.spectre.envs.restock3d.feasibility_v3 import (
+        classify_skeleton,
+    )
+
+    steps = [(op.name, [p.name for p in op.parameters]) for op in action_plan]
+    return classify_skeleton(steps, block_dims, positions, num_attempts=num_attempts)
+
+
+def _restock3d_outcome_from_fm(
+    fm: dict | None,
+    seed: int,
+    r_cap: float,
+) -> tuple[str, float, dict[str, object], int | None]:
+    """Analytic label + synthetic wall-clock from an already-computed classify dict ``fm``.
+
+    ``fm is None`` -> a ``success`` costing ``U[0.6,0.8]*r_cap`` (deterministic in ``seed``);
+    else a ``fail`` costing the full ``r_cap`` with the first-violation dict under
+    ``refiner_metadata["failures"]``. Returns ``(outcome, wall_clock, refiner_metadata,
+    stuck_step_index)``.
+    """
+    refiner_metadata: dict[str, object] = {}
+    if fm is None:
+        wall_clock = random.Random(seed).uniform(0.6, 0.8) * r_cap
+        return "success", wall_clock, refiner_metadata, None
+    refiner_metadata["failures"] = [fm]
+    return "fail", r_cap, refiner_metadata, int(fm["step_index"])
+
+
 def _restock3d_analytic_outcome(
     action_plan: list[GroundOperator],
     block_dims: dict[str, tuple[float, float]],
@@ -440,27 +487,64 @@ def _restock3d_analytic_outcome(
 ) -> tuple[str, float, dict[str, object], int | None]:
     """Analytic (geometry-only) label + synthetic wall-clock for one skeleton.
 
-    Returns ``(outcome, wall_clock, refiner_metadata, stuck_step_index)``. A feasible
-    skeleton is a ``success`` costing ``U[0.6,0.8]*r_cap``; an infeasible one is a
-    ``fail`` costing the full ``r_cap`` with the first-violation dict recorded under
-    ``refiner_metadata["failures"]`` (byte-compatible with the real failure harvest, so
-    the record is indistinguishable in shape from a real run). Deterministic: the
-    synthetic success time is drawn from a ``random.Random(seed)`` keyed on the per-
-    skeleton seed.
+    Thin wrapper over ``_restock3d_classify`` + ``_restock3d_outcome_from_fm``. A feasible
+    skeleton is a ``success`` costing ``U[0.6,0.8]*r_cap``; an infeasible one is a ``fail``
+    costing the full ``r_cap`` with the first-violation dict under ``refiner_metadata[
+    "failures"]`` -- indistinguishable in shape from a real run downstream.
     """
-    # pylint: disable=import-outside-toplevel
-    from alphatamp.approaches.spectre.envs.restock3d.feasibility_v3 import (
-        classify_skeleton,
-    )
+    fm = _restock3d_classify(action_plan, block_dims, positions, num_attempts)
+    return _restock3d_outcome_from_fm(fm, seed, r_cap)
 
-    steps = [(op.name, [p.name for p in op.parameters]) for op in action_plan]
-    fm = classify_skeleton(steps, block_dims, positions, num_attempts=num_attempts)
+
+def _real_refine_candidate(
+    cfg: CollectionConfig,
+    obs: dict[str, object] | object,
+    trajectory_sampler: ParameterizedControllerTrajectorySampler | None,
+    bpg: BilevelPlanningGraph,
+    x0: object,
+    state_plan: list[RelationalAbstractState],
+    action_plan: list[GroundOperator],
+    seed: int,
+) -> tuple[str, float, dict[str, object], int | None, dict[str, str] | None]:
+    """One real (motion-planned) refinement of a candidate + observed-failure harvest.
+
+    Lifted from the ``real`` branch of ``collect_episode`` so the hybrid-prune path can
+    real-refine a candidate identically. Returns ``(outcome, wall_clock, refiner_metadata,
+    stuck_step_index, error_info)``. Observation-only harvest -- every failure field was
+    computed by the acceptance check the refiner already ran.
+    """
+    refiner = _make_refiner(cfg, obs, trajectory_sampler, seed)
+    # Rejections accumulate on the sampler, which outlives the candidate loop.
+    if hasattr(trajectory_sampler, "clear"):
+        trajectory_sampler.clear()  # type: ignore[union-attr]
+
     refiner_metadata: dict[str, object] = {}
-    if fm is None:
-        wall_clock = random.Random(seed).uniform(0.6, 0.8) * r_cap
-        return "success", wall_clock, refiner_metadata, None
-    refiner_metadata["failures"] = [fm]
-    return "fail", r_cap, refiner_metadata, int(fm["step_index"])
+    error_info: dict[str, str] | None = None
+    stuck_step_index: int | None = None
+    start = time.perf_counter()
+    try:
+        plan = refiner(x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg)
+        outcome = "success" if plan is not None else "fail"
+    except BaseException as exc:  # pylint: disable=broad-exception-caught
+        outcome = "error"
+        error_info = {"cls": type(exc).__name__, "msg": str(exc)}
+
+    fm_fn = _failure_metadata_fn(cfg.model_name) if outcome == "fail" else None
+    if fm_fn is not None:
+        failures = fm_fn(
+            trajectory_sampler,  # type: ignore[arg-type]
+            action_plan,
+            cfg.num_sampling_attempts_per_step,
+            budget_exhausted=(
+                time.perf_counter() - start >= cfg.refinement_timeout_s
+            ),
+        )
+        if failures:
+            refiner_metadata["failures"] = failures
+            stuck_step_index = int(failures[0]["step_index"])  # type: ignore[call-overload]
+
+    wall_clock = time.perf_counter() - start
+    return outcome, wall_clock, refiner_metadata, stuck_step_index, error_info
 
 
 def collect_episode(
@@ -498,16 +582,22 @@ def collect_episode(
             tuple[list[RelationalAbstractState], list[GroundOperator]]
         ] = list(itertools.islice(pool_iter, cfg.K_max))
 
-        # Analytic mode (Restock3D-v3 synthetic collection) skips the real sampler/refiner
-        # entirely: each skeleton is labelled by pure geometry and given a synthetic
-        # wall-clock. The env was still reset above for x0/s0/goal/scene_geometry.
-        analytic = cfg.refiner_mode == "analytic"
+        # Refiner mode (Restock3D-v3): "analytic" labels every skeleton by pure geometry (no
+        # sampler/refiner); "hybrid_prune" classifies all K_max analytically, then real-refines
+        # only the analytic-feasible candidates + a 25% audit sample of the analytic-infeasible
+        # ones, trusting the analytic label for the rest; "real" (default, all other envs)
+        # motion-plans every candidate. The env was reset above for x0/s0/goal/scene_geometry.
+        mode = cfg.refiner_mode
+        analytic = mode == "analytic"
+        hybrid = mode == "hybrid_prune"
         trajectory_sampler = (
-            None if analytic else _make_trajectory_sampler(cfg, env_models)
+            _make_trajectory_sampler(cfg, env_models)
+            if mode in ("real", "hybrid_prune")
+            else None
         )
         block_dims: dict[str, tuple[float, float]] = {}
         positions: dict[str, tuple[float, float]] = {}
-        if analytic:
+        if analytic or hybrid:
             block_dims, positions = _restock3d_analytic_inputs(x0)
 
         skeleton_records: list[SkeletonRecord] = []
@@ -530,6 +620,7 @@ def collect_episode(
             error_info: dict[str, str] | None = None
             refiner_metadata: dict[str, object] = {}
             stuck_step_index: int | None = None
+            label_source: str | None = None
 
             if analytic:
                 outcome, wall_clock, refiner_metadata, stuck_step_index = (
@@ -542,42 +633,70 @@ def collect_episode(
                         cfg.refinement_timeout_s,
                     )
                 )
-            else:
-                refiner = _make_refiner(cfg, obs, trajectory_sampler, seed)
-                # Rejections accumulate on the sampler, which outlives the candidate loop.
-                if hasattr(trajectory_sampler, "clear"):
-                    trajectory_sampler.clear()  # type: ignore[union-attr]
-
-                start = time.perf_counter()
-                try:
-                    plan = refiner(
-                        x0, state_plan, action_plan, cfg.refinement_timeout_s, bpg
-                    )
-                    outcome = "success" if plan is not None else "fail"
-                except BaseException as exc:  # pylint: disable=broad-exception-caught
-                    outcome = "error"
-                    error_info = {"cls": type(exc).__name__, "msg": str(exc)}
-
-                # Harvest the observed failure (SB2D / Restock3D). Observation-only -- every
-                # field was computed by the acceptance check the refiner already ran.
-                fm_fn = (
-                    _failure_metadata_fn(cfg.model_name) if outcome == "fail" else None
+                label_source = "analytic"
+            elif hybrid:
+                # Classify once; real-refine iff analytic-feasible OR drawn into the 25% audit
+                # of analytic-infeasible candidates; else trust the analytic label. The audit
+                # draw is keyed on a string (deterministic across processes -- a tuple's hash
+                # would be PYTHONHASHSEED-dependent), independent of the refiner seed.
+                fm = _restock3d_classify(
+                    action_plan,
+                    block_dims,
+                    positions,
+                    cfg.num_sampling_attempts_per_step,
                 )
-                if fm_fn is not None:
-                    failures = fm_fn(
-                        trajectory_sampler,  # type: ignore[arg-type]
+                analytic_feasible = fm is None
+                audit = (
+                    random.Random(
+                        f"prune_audit:{cfg.refinement_seed_rule}:{problem_id}:{idx}"
+                    ).random()
+                    < _HYBRID_AUDIT_FRAC
+                )
+                if analytic_feasible or audit:
+                    (
+                        outcome,
+                        wall_clock,
+                        refiner_metadata,
+                        stuck_step_index,
+                        error_info,
+                    ) = _real_refine_candidate(
+                        cfg,
+                        obs,
+                        trajectory_sampler,
+                        bpg,
+                        x0,
+                        state_plan,
                         action_plan,
-                        cfg.num_sampling_attempts_per_step,
-                        budget_exhausted=(
-                            time.perf_counter() - start >= cfg.refinement_timeout_s
-                        ),
+                        seed,
                     )
-                    if failures:
-                        refiner_metadata["failures"] = failures
-                        step_i = failures[0]["step_index"]
-                        stuck_step_index = int(step_i)  # type: ignore[call-overload]
-
-                wall_clock = time.perf_counter() - start
+                    label_source = "real"
+                    refiner_metadata["prune_reason"] = (
+                        "analytic_feasible" if analytic_feasible else "audit_sample"
+                    )
+                else:
+                    outcome, wall_clock, refiner_metadata, stuck_step_index = (
+                        _restock3d_outcome_from_fm(fm, seed, cfg.refinement_timeout_s)
+                    )
+                    label_source = "analytic"
+                    refiner_metadata["prune_reason"] = "analytic_trusted"
+            else:
+                (
+                    outcome,
+                    wall_clock,
+                    refiner_metadata,
+                    stuck_step_index,
+                    error_info,
+                ) = _real_refine_candidate(
+                    cfg,
+                    obs,
+                    trajectory_sampler,
+                    bpg,
+                    x0,
+                    state_plan,
+                    action_plan,
+                    seed,
+                )
+                label_source = "real"
 
             total_wall_clock += wall_clock
 
@@ -593,6 +712,7 @@ def collect_episode(
                     stuck_step_index=stuck_step_index,
                     error_info=error_info,
                     refiner_metadata=refiner_metadata,
+                    label_source=label_source,  # type: ignore[arg-type]
                 )
             )
 

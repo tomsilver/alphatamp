@@ -189,6 +189,11 @@ class OutcomeRecord:
     refiner_metadata: dict[str, object] = field(default_factory=dict)
     # v2.2.1: typed post-mortem evidence (populated for "fail" outcomes at collection).
     post_mortem: Optional[PostMortemRecord] = None
+    # hybrid-prune (Restock3D-v3 real collection): how THIS candidate's label was obtained --
+    # "real" (motion-planned) or "analytic" (trusted geometry classifier). SPECTRE does not
+    # digest this field; it is provenance for the real-vs-synthetic audit. None for legacy /
+    # single-mode collections. The finer reason is in ``refiner_metadata["prune_reason"]``.
+    label_source: Optional[Literal["real", "analytic"]] = None
 
 
 @dataclass(frozen=True)

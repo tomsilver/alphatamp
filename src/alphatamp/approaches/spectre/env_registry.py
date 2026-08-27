@@ -136,6 +136,10 @@ _TYPE_AUG_POLICIES: dict[str, dict[str, bool]] = {
     # restock3d_v3: per-object widths + heights near the cutoff (4 strata). Same movable
     # interchangeability; no region state objects.
     "restock3d_v3": _RESTOCK3D_TYPE_AUG_POLICY,
+    # restock3d_v3_real: the REAL (hybrid-prune) v3 collection -- same env/strata/generator as
+    # restock3d_v3 but labelled by real PyBullet motion planning (analytic-feasible + 25% audit)
+    # instead of the pure-geometry classifier. Same augmentation policy as restock3d_v3.
+    "restock3d_v3_real": _RESTOCK3D_TYPE_AUG_POLICY,
 }
 
 
