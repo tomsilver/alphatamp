@@ -1,0 +1,13 @@
+# Restock3D v3 (per-object widths + heights near the short/tall cutoff) — the REAL (hybrid-prune)
+# PyBullet collection. Same env/strata/generator/schema as the SYNTHETIC restock3d_v3; only the
+# on-disk tree label and the labels themselves differ (train = hybrid_prune, val/test = real MP;
+# collected by experiments/spectre/restock3d_v3_real_run_all.sh, driver flags override the strata
+# defaults). Four block-count strata n=6/7/8/9, pooled under the stratum-encoded problem ids of
+# envs/restock3d/strata_v3.py (v3 rides the SHARED 4-band, so compare.stratum_of decodes it with
+# no routing edit). `env_id` lets spectre_build_vocab.py resolve the env (vocab is over the fixed
+# op/pred/type set, so any registered v3 stratum id works), and `model_name` selects the shared
+# create_restock3d_v3_models dispatch — both stay `restock3d_v3`; only `env_variant` retargets the
+# raw/derived layout.
+env_id: "spectre/Restock3Dv3-r0-v0"
+env_variant: "restock3d_v3_real"
+model_name: "restock3d_v3"

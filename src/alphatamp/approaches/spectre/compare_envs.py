@@ -600,8 +600,11 @@ RESTOCK3D = EnvSpec(
 
 RESTOCK3D_V3 = EnvSpec(
     key="restock3d_v3",
-    title="restock3D-v3 — SPECTRE vs PIGINet, LAZY (SYNTHETIC dataset)",
-    env_variant="restock3d_v3",
+    title="restock3D-v3 — SPECTRE vs astar (REAL hybrid-prune dataset, INTERMEDIATE)",
+    # Repointed 2026-08-27 from the SYNTHETIC restock3d_v3 to the REAL (hybrid-prune) collection.
+    # The synthetic result is preserved in docs/git + on disk; the `key` stays "restock3d_v3" so
+    # the notebook dropdown / SPECTRE_COMPARE_ENV selector is unchanged.
+    env_variant="restock3d_v3_real",
     # Stratum = block count n (6/7/8/9), banded 0..3 on the SHARED 4-stratum band (unlike v2's
     # 5-stratum local band), so compare.stratum_of decodes it with no routing edit.
     stratum_labels={0: "n=6", 1: "n=7", 2: "n=8", 3: "n=9"},
@@ -615,24 +618,27 @@ RESTOCK3D_V3 = EnvSpec(
         "Larger n = tighter feasible-split set (fewer valid tall/short assignments)."
     ),
     stratum_axis_label="block count n",
-    has_ablations=True,  # single-feature-isolation ablation (§4.3) — 2026-08-21
-    has_timing=True,  # per-candidate refinement_wall_clock_s present (SYNTHETIC; see caveats)
+    has_ablations=False,  # SPECTRE+astar intermediate: no ablation arms trained on the real data
+    has_timing=False,  # real wall-clock exists but §2b deferred pending a real feasible-tail cap
     caveats=(
-        "**⚠️ SYNTHETIC dataset — the whole comparison runs on analytic labels, not real "
-        "refinement.** Every candidate here was labelled by the pure-geometry analytic refiner "
-        "(`feasibility_v3.classify_skeleton`, no motion planning), and each `refinement_wall_"
-        "clock_s` is a synthetic estimate (a fail = the full r_cap; a success = U[0.6,0.8]·r_cap "
-        "by stratum, r_cap ∈ {50,70,90,110} s). So the **FP** headline reflects the geometry "
-        "classifier, and **§2b wall-clock is not measured** — both are a pipeline / "
-        "representation probe, not a real-BiRRT result. The real refiner remains the future "
-        "paper-eval instrument (collect with `refiner_mode='real'`).",
-        "**Four strata n=6/7/8/9, 3 seeds (0,1,2), 100/25/25 per stratum.** All learned rows "
-        "(SPECTRE, PIGINet, LAZY) are 3 seeds so §1/§2 carry an across-seed ±. Pools come from "
-        "the geometry-informed nearest-first generator (not hff); a problem is kept iff ≥1 "
-        "candidate is analytically feasible.",
+        "**⚠️ REAL but INTERMEDIATE dataset — collection is still running.** Labels are real "
+        "PyBullet motion planning: **train** is `hybrid_prune` (the analytic classifier prunes "
+        "the K_max pool, real MP labels the analytic-feasible candidates + a deterministic 25% "
+        "audit of the infeasible ones), **val/test** are full `real`. At this cut **train is "
+        "complete (300)** but the hardest stratum **n=9 test is only partially collected "
+        "(~6-14/20)** and val ~6-10/10 — so the n=9 column is small-sample-noisy and the pooled "
+        "ALL under-weights it. This **replaces** the earlier SYNTHETIC restock3d_v3 comparison; "
+        "the analytic result (SPECTRE 11.11 vs PIGINet 38.11) is preserved in docs/git as the "
+        "geometry **upper bound** this real cut audits.",
+        "**SPECTRE + astar only (no PIGINet / LAZY).** This intermediate retrains only SPECTRE on "
+        "the real data (3 seeds, the deployed `--scene-3d --atom-mode profiles --repeat-feats` "
+        "recipe verbatim); PIGINet and LAZY are **not yet** retrained on real labels, so the "
+        "SPECTRE-vs-PIGINet real-label representation-crossover audit — the point of the real "
+        "collection — is **deferred** to the full collection. The §4.3 ablation and §2b "
+        "wall-clock sections are disabled for this cut.",
         "**Read the crowded n=8/9, not the pooled ALL.** Smaller n is feasible-denser (easier); "
-        "any representation / adaptivity contrast, if one exists, lives at the tighter "
-        "feasible-split strata where block *selection* bites.",
+        "any representation / adaptivity contrast lives at the tighter feasible-split strata "
+        "where block *selection* bites — but note n=9 is the least-collected stratum here.",
     ),
     render_scene=_restock_scene,
     plan_label=_restock_plan_label,
@@ -645,6 +651,73 @@ RESTOCK3D_V3 = EnvSpec(
     ),
 )
 
+# ---------------------------------------------------------------------------------------
+# compare_methods_simple.py: SPECTRE with the earlier/simple coverage/waste
+# (--legacy-coverage) + repeat carrying SB2D. Same episodes as the parent; only the
+# SPECTRE rows (§1/§2) and the +scalars ablation arm are native to the simple cache. Every
+# baseline (astar/PIGINet/LAZY/VLMPlan) and the definition-invariant static/+records/+recjac
+# ablation arms are grafted from the parent cache. docs/decisions/07 2026-08-27.
+# ---------------------------------------------------------------------------------------
+_SIMPLE_CAVEAT = (
+    "**This is the SIMPLE coverage/waste variant** (`--legacy-coverage`: "
+    "`coverage=|S∩culprits|/|culprits|`, `waste=|S\\culprits|/|S|`), not the deployed "
+    "unified definitions. The SPECTRE rows are trained with the deployed two-stage "
+    "residual recipe but this coverage/waste; every baseline is grafted UNCHANGED from "
+    "the parent cache, so only the SPECTRE rows and the §4 `+scalars`/`full` arms differ "
+    "from the deployed notebook. §2b wall-clock is omitted (has_timing off)."
+)
+DD2D_SIMPLE = EnvSpec(
+    key="dd2d_simple",
+    title="DD2D (simple coverage/waste) — SPECTRE vs PIGINet, LAZY, VLMPlan, pure planning",
+    env_variant="dd2d_v4_simple",
+    stratum_labels=DD2D.stratum_labels,
+    stratum_meaning=DD2D.stratum_meaning,
+    stratum_axis_label=DD2D.stratum_axis_label,
+    legacy_variant="dd2d_v4",
+    # Every baseline is byte-identical to the deployed dd2d_v4 run (same episodes, same
+    # checkpoints) -> grafted. VLMPlan-32B is omitted (it is itself grafted from dd2d_v3 in
+    # the deployed notebook, a second hop).
+    legacy_only=("astar-dist", "PIGINet", "LAZY-adaptive", "VLMPlan-GPT5.6"),
+    has_ablations=True,
+    has_timing=False,
+    caveats=(_SIMPLE_CAVEAT,),
+    render_scene=DD2D.render_scene,
+    plan_label=DD2D.plan_label,
+    scene_legend=DD2D.scene_legend,
+)
+SB2D_SIMPLE = EnvSpec(
+    key="sb2d_simple",
+    title=(
+        "StickButton2D (simple coverage/waste, repeat-on) — SPECTRE vs PIGINet, LAZY, "
+        "VLMPlan, pure planning"
+    ),
+    env_variant="stickbutton2d_v1_simple",
+    stratum_labels=SB2D.stratum_labels,
+    stratum_meaning=SB2D.stratum_meaning,
+    stratum_axis_label=SB2D.stratum_axis_label,
+    legacy_variant="stickbutton2d_v1",
+    legacy_only=("astar-dist", "PIGINet", "LAZY-adaptive", "VLMPlan-32B"),
+    has_ablations=True,
+    has_timing=False,
+    caveats=(
+        _SIMPLE_CAVEAT,
+        "**Simple coverage/waste is identically inert on SB2D** (it reads `r.culprits` "
+        "only, and SB2D reports `dev_blame`), so SB2D's adaptive signal is carried by "
+        "`repeat` — which required RESURRECTING the `step_certificate` probe on the four "
+        "press schemas (isolated to `stickbutton2d_v1_simple` via domain `_SB2D_REPEAT`; "
+        "the deployed `stickbutton2d_v1` stays inert/byte-reproducible). That probe was "
+        "retired 2026-08-26 as UNSOUND (~10.9% of feasible SB2D candidates flagged; the "
+        "promising −0.79 FP was 1-seed) — `repeat` here is a learned column the model can "
+        "down-weight, not a sound veto. Read accordingly.",
+        "**PIGINet is the schematic-crop row** grafted from `stickbutton2d_v1` (2.02), not "
+        "the kinder-rendered crops (2.28); both are documented and do not separate. "
+        "VLMPlan-GPT5.6 (terra) is omitted (kinder-cache only).",
+    ),
+    render_scene=SB2D.render_scene,
+    plan_label=SB2D.plan_label,
+    scene_legend=SB2D.scene_legend,
+)
+
 #: Registry. Order sets the notebook's default (first entry). Only the kinder-rendered
 #: SB2D variant is kept (the schematic `sb2d` entry was retired 2026-08-03); the two
 #: `_holdout_` entries are the held-out-stratum generalization sections (2026-08-09).
@@ -655,6 +728,8 @@ ENVS: dict[str, EnvSpec] = {
     for spec in (
         SB2D_KINDER,
         DD2D,
+        DD2D_SIMPLE,
+        SB2D_SIMPLE,
         RESTOCK3D,
         RESTOCK3D_V3,
         DD2D_GEN_SHAPEONLY,

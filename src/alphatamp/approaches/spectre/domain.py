@@ -319,6 +319,23 @@ _SB2D = DomainSpec(
     axioms={s: QueryAxioms() for s in _SB2D_PRESS_SCHEMAS},
 )
 
+#: StickButton2D with the ``repeat`` transfer probe **deliberately resurrected** on the
+#: four press schemas -- used ONLY by ``compare_methods_simple.py`` (env_variant
+#: ``stickbutton2d_v1_simple``; docs/decisions/07 2026-08-27). Under the simple/legacy
+#: coverage/waste (``--legacy-coverage``) SB2D's coverage/waste is identically 0 (it reads
+#: ``r.culprits`` only, and SB2D reports ``dev_blame``), so ``repeat`` is what carries its
+#: adaptive signal. This re-declares the ``step_certificate`` the deployed ``_SB2D`` retired
+#: on 2026-08-25 because it is **UNSOUND** here -- a press failure is context-dependent, so
+#: the bare ``(schema, args)`` step key over-vetoes (~55% of candidates, ~10.9% leakage of
+#: *feasible* candidates; a 1-seed probe showed +repeat -0.79 FP, b5-concentrated). It is a
+#: **learned** column the model can down-weight, not a hard prune. Isolated to the simple
+#: env_variant so the deployed unified ``_SB2D`` (and its cached numbers) stay byte-identical.
+#: ``proof_tier()`` stays False (``monotone``/``local``/``exact`` absent), so
+#: ``dead``/demotion/token-holdout are byte-unchanged, exactly as on ``_RESTOCK3D_V3``.
+_SB2D_REPEAT = DomainSpec(
+    axioms={s: QueryAxioms(step_certificate=True) for s in _SB2D_PRESS_SCHEMAS},
+)
+
 #: An environment that declares nothing. Everything is hint-tier and the ranker must
 #: learn from evidence alone -- the "learning is the floor" control.
 EMPTY_SPEC = DomainSpec()
@@ -382,6 +399,12 @@ DOMAINS: dict[str, DomainSpec] = {
     # place_short as `step_certificate` for the F3 `repeat` feature (2026-08-21); proof_tier
     # stays False, so `dead`/demotion/token-holdout are unchanged vs the EMPTY_SPEC baseline.
     "restock3d_v3": _RESTOCK3D_V3,
+    # restock3d_v3_real: the REAL (hybrid-prune) v3 collection -- same env/strata/generator/
+    # schema as synthetic restock3d_v3, only the labels differ (real PyBullet MP). It MUST
+    # reuse `_RESTOCK3D_V3` so the F3 `step_certificate` is present: both training's val-
+    # selection rollout and scoring/precompute call `spec_for(env_variant)` with this name, and
+    # EMPTY_SPEC would silently make `--repeat-feats` inert (2026-08-27).
+    "restock3d_v3_real": _RESTOCK3D_V3,
     # StickButton2D. Effectively EMPTY_SPEC: the press schemas are named but declare no
     # `step_certificate` (graceful degradation, 2026-08-25 -- the `repeat` transfer probe was
     # retired because it leaks ~10.9% on SB2D; see `_SB2D`). All SB2D collections share the
@@ -392,6 +415,14 @@ DOMAINS: dict[str, DomainSpec] = {
     "stickbutton2d_v1_kinder_holdout_b5": _SB2D,
     "stickbutton2d_v1_holdout_b5": _SB2D,
     "stickbutton2d_v2": _SB2D,
+    # compare_methods_simple.py's SB2D arm: same episodes as stickbutton2d_v1, but the
+    # `repeat` step_certificate probe is resurrected (see `_SB2D_REPEAT`) so `repeat`
+    # carries SB2D under the simple coverage/waste. Isolated here so `stickbutton2d_v1`
+    # stays inert/byte-reproducible (2026-08-27).
+    "stickbutton2d_v1_simple": _SB2D_REPEAT,
+    # compare_methods_simple.py's DD2D arm: same DD2D operator contract (repeat inert;
+    # the simple coverage/waste carries DD2D), so it maps to the same `_DD2D` spec.
+    "dd2d_v4_simple": _DD2D,
 }
 
 

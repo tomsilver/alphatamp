@@ -194,6 +194,7 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
         "aggregate_records",
         "coverage_feats",
         "coverage_mode",
+        "unified_coverage",
         "repeat_feats",
         "regroup_feats",
         "state_delta",
@@ -205,6 +206,9 @@ def test_load_checkpoint_round_trips_the_deploy_kwargs(tmp_path) -> None:
     assert deploy["coverage_feats"] is True
     assert deploy["aggregate_records"] is True
     assert deploy["coverage_mode"] == "both"
+    # coverage/waste *definition*: unified by default; `.get(..., True)` keeps every
+    # pre-flag checkpoint scoring unified (only `--legacy-coverage` carries False).
+    assert deploy["unified_coverage"] is True
     assert deploy["state_delta"] is False
     # emission-only, defaults to the historical holdout (P-1 flips it off explicitly)
     assert deploy["record_holdout"] is True

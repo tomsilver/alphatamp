@@ -4,6 +4,119 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-28-compare-methods-simple-simple-coverage-waste"></a>
+## 2026-08-28 — compare_methods_simple: simple coverage/waste + repeat-carries-SB2D results (DD2D + SB2D, 3 seeds)
+
+<!--strip-->
+> **id** `2026-08-28-compare-methods-simple-simple-coverage-waste` · **status** active
+> · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**What.** Reran the full `compare_methods.py` comparison in the new
+`compare_methods_simple.py`, with SPECTRE trained on the re-added **simple/legacy**
+coverage/waste (`--legacy-coverage`) instead of the deployed unified definitions, and
+`repeat` turned on to carry SB2D (isolated `_SB2D_REPEAT` spec). Deployed two-stage residual
+recipe otherwise unchanged; only the coverage-bearing `+scalars`/`full` arms retrained
+(3 seeds each, warm-started from the deployed static trunks), static/+records/+recjac +
+every baseline grafted from the parent cache. ADR
+[2026-08-28](../decisions/07-stickbutton2d.md#2026-08-28-simple-coverage-waste-re-added-option-compare).
+Test n=100, uncensored, 3 seeds.
+
+**Result.** The representation advantage **survives the simpler feature**, and `repeat`
+carries SB2D as intended.
+
+*DD2D (`dd2d_v4_simple`; simple coverage/waste, repeat inert):*
+
+| method | ALL | s0 | s1 | s2 | s3 |
+|---|---|---|---|---|---|
+| **SPECTRE-adaptive** | **8.23 ± 1.65** | 0.00 | 8.25 | 11.80 | 12.87 |
+| PIGINet | 17.27 ± 0.19 | 0.05 | 5.04 | 18.77 | 45.20 |
+| SPECTRE-static | 18.35 ± 2.15 | 0.00 | 21.84 | 21.09 | 30.45 |
+| LAZY-adaptive | 23.26 ± 0.50 | 0.36 | 9.59 | 24.44 | 58.65 |
+| astar-dist | 34.52 | 0.00 | 2.24 | 17.08 | 118.76 |
+| VLMPlan-GPT5.6 | 35.23 | — | — | — | — |
+
+- §4.3 residual ablation: static 18.35 → +records 17.87 (Δ −0.48, ns) → +recjac 14.42
+  (Δ −3.93 *) → **+scalars 8.56 (Δ −9.78 *)** → full 8.23 (Δ −10.12 *). **Scalars carry the
+  bulk**, records a modest net-positive residual (full 8.23 < scalars 8.56) — same shape as the
+  deployed unified decomposition.
+
+*SB2D (`stickbutton2d_v1_simple`; simple coverage/waste INERT, `repeat` carries it):*
+
+| method | ALL | b1 | b2 | b3 | b5 |
+|---|---|---|---|---|---|
+| **SPECTRE-adaptive** | **1.78 ± 0.29** | 0.08 | 0.29 | 1.00 | 5.75 |
+| LAZY-adaptive | 1.85 ± 0.02 | 0.08 | 0.36 | 2.32 | 4.63 |
+| PIGINet | 2.02 ± 0.19 | 0.08 | 0.32 | 1.31 | 6.39 |
+| SPECTRE-static | 2.22 ± 0.36 | 0.08 | 0.36 | 1.52 | 6.92 |
+| VLMPlan-32B | 13.18 | 0.70 | 1.30 | 6.20 | 44.50 |
+| astar-dist | 16.29 | 0.08 | 0.56 | 2.96 | 61.56 |
+
+- §4.3 residual ablation: static 2.22 → +records 2.19 (Δ −0.03, ns) → +recjac 2.16
+  (Δ −0.06, ns) → **+scalars 1.50 (Δ −0.72 *)** → full 1.78 (Δ −0.44 *). Since simple
+  coverage/waste is identically 0 on SB2D, the `+scalars` arm **is** the repeat arm — its
+  **−0.72 reproduces the retired 2026-08-22 probe's −0.79** almost exactly. **Records HURT
+  SB2D here** (full 1.78 > scalars 1.50) — the W3 interference: the record channel degrades
+  the repeat signal, so the deployed `full` is *not* the best SB2D arm.
+
+**Takeaway / next.** (1) **The abstract-representation win is not an artifact of the unified
+feature-engineering** — the simple, easy-to-explain coverage/waste keeps SPECTRE first on
+DD2D (8.23 vs PIGINet 17.27 / astar 34.52) and best-or-tied on SB2D (1.78, non-separation with
+LAZY/PIGINet as always). (2) DD2D pays **~1.8 FP** for the simplicity (8.23 vs the deployed
+unified 6.42) — the unified definition's extra structure buys that, but simple still dominates
+every baseline. (3) **`repeat` genuinely carries SB2D** (−0.72), vindicating the user's recollection
+of the promising probe — but it is the *unsound* probe (see the ADR caveats), and on SB2D
+**records should be dropped** (scalars 1.50 < full 1.78). Deliverable `compare_methods_simple.py`
+renders clean headless on both envs; §2b wall-clock omitted (`has_timing=False`). ⚠️ SB2D `repeat`
+is an unsound learned column, not a sound veto — read with the ADR's soundness caveat.
+
+---
+
+<a id="2026-08-27-restock3d-v3-real-intermediate-spectre-eval"></a>
+## 2026-08-27 — restock3d_v3_real intermediate SPECTRE eval (real hybrid-prune, partial s3)
+
+<!--strip-->
+> **id** `2026-08-27-restock3d-v3-real-intermediate-spectre-eval` · **status** active
+> · **tracks** method, evaluation, env-restock3d
+<!--/strip-->
+
+**What.** Train + evaluate SPECTRE on the fresh **REAL (hybrid-prune PyBullet)**
+`restock3d_v3_real` dataset for an **intermediate** checkpoint (the advisor wanted one before
+collection finishes). Collection state at the cut: **train 300 (complete)**, val 57/60,
+test 107/120 — stratum-3 (n=9) still filling by real MP. SPECTRE-only (no PIGINet/LAZY real
+retrain), deployed recipe **verbatim** (`--scene-3d --atom-mode profiles … --repeat-feats
+--step-join`), 3 seeds; the `compare_methods.py` restock3d_v3 entry repointed to the real cache.
+Protocol / wiring in [decisions 2026-08-27](../decisions/07-stickbutton2d.md#2026-08-27-restock3d-v3-real-intermediate-spectre-only-real-label).
+
+**Result — SPECTRE beats the naive order on real labels** (test n=107, uncensored deployed FP,
+3 seeds; best val-FP per seed 2.08 / 2.27 / 1.82):
+
+| arm | ALL | s0 n=6 | s1 n=7 | s2 n=8 | s3 n=9 |
+|---|---|---|---|---|---|
+| SPECTRE-adaptive | **2.48 ± 0.32** | 1.07 | 1.20 | 7.17 | 4.38 ± 3.14 |
+| SPECTRE-static | 2.92 ± 0.55 | — | — | — | — |
+| astar-dist | 11.76 | 5.88 | 3.15 | 35.30 | 27.29 |
+
+Paired bootstrap SPECTRE-adaptive − astar = **−9.28, 95% CI [−13.42, −5.66]** (excludes 0). The
+`spectre_score.py` headline (2.48) equals the `compare_methods.py` adaptive row exactly (the two
+rollout paths agree).
+
+**Result — adaptivity is live on real labels.** adaptive 2.48 < static 2.92 (Δ ≈ −0.44): the F3
+exact-step certificate `--repeat-feats` carries signal here just as on the synthetic v3 —
+*unlike* DD2D/SB2D where it is inert (graceful degradation). So the restock3d adaptivity is not
+a synthetic-label artifact.
+
+**Takeaway/next.** INTERMEDIATE — three caveats to quote together: (1) **s3 (n=9) test is only
+~6-14/20** at the cut → that column is small-sample-noisy and the pooled ALL under-weights it;
+(2) **SPECTRE + astar only** — PIGINet/LAZY real retrain deferred, so the SPECTRE-vs-PIGINet
+real-label crossover audit (does the synthetic −27 survive real MP labels?) is **not answered
+here**; (3) **not directly comparable to the synthetic 11.11** (different methods + analytic
+labels). Labels are real for train (hybrid-prune: analytic-feasible real-MP + 25% audit) and
+val/test (full real). When collection completes: rebuild vocab + cache, retrain PIGINet + LAZY
+on real, re-score the full s3, re-enable §4.3 / §2b.
+
+---
+
 <a id="2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section"></a>
 ## 2026-08-27 — Residual-adaptive re-do — records fixed, refreshed 5-section numbers
 
@@ -30,12 +143,13 @@ preserved (`docs/joint_refresh_snapshot.md` + cache backups). ADR:
 | dd2d_holdout_s3 | **5.07 ± 0.87** | 26.32 | 27.88 | — | 34.52 |
 | sb2d_holdout_b5 | 1.81 ± 0.26 | 2.21 | **1.68 ± 0.20** | — | 16.29 |
 
-§4 residual 4-arm ablation (Δ vs static, paired bootstrap); joint values in brackets:
+§4 residual 5-arm ablation (Δ vs static, paired bootstrap); joint `+records` in brackets:
 
 | arm | dd2d ALL | dd2d Δ vs static | sb2d ALL | sb2d Δ vs static |
 |---|---|---|---|---|
 | static | 18.35 | — | 2.22 | — |
-| +records | 17.87 | **−0.48 [−1.23, +0.18]** (joint +1.33) | 2.19 | **−0.03 [−0.09, +0.01]** (joint +0.14) |
+| +records | 17.87 | −0.48 [−1.23, +0.18] (joint +1.33) | 2.19 | −0.03 [−0.09, +0.01] (joint +0.14) |
+| +records +jaccard | 14.42 | **−3.93 [−5.74, −2.26]** | 2.16 | −0.06 [−0.16, +0.02] |
 | +scalars | 6.63 | −11.72 [−15.61, −8.30] | 1.90 | −0.32 [−0.52, −0.16] |
 | full (deployed) | 6.42 | −11.93 [−15.79, −8.54] | 1.98 | −0.24 [−0.49, −0.01] |
 
@@ -44,14 +158,18 @@ preserved (`docs/joint_refresh_snapshot.md` + cache backups). ADR:
 **net-positive (−0.48, helping s1 18.99 vs 21.84, no longer hurting s2/s3)** as a frozen-trunk
 residual — matching the X2 as-built exactly; SB2D goes +0.14 → −0.03 (net-neutral, no longer
 hurting). Freezing the trunk is what makes raw failure records net-useful, confirming the W3
-interference diagnosis. **Bonus:** the residual deployed model is *at least as good as joint*
-(DD2D 6.42 < 7.11; SB2D 1.98 ≈ 1.88), the scalars still carry the bulk (DD2D −11.72), and the
-whole cross-env / generalization story is intact (SPECTRE ≪ PIGINet ≪ astar; holdout-s3 5.07
-vs PIGINet 27.88; SB2D non-separation). The `+records` Δ CI still grazes 0 (small, s1-variance
-marginal at 3 seeds), so it is *net-positive-to-neutral*, not a large win — records are a
-modest, protected residual on top of the load-bearing scalars. Per-seed tables (§1b/§2b.1/
-§4.3b) now expose the individual-seed spread (e.g. DD2D `+records` beats static on 2/3 seeds,
-seed-2 an outlier).
+interference diagnosis. **The `+records +jaccard` arm (added 2026-08-27) is the cleaner
+version of the claim:** adding just the **simple jaccard-overlap column** (candidate × failed-set
+similarity — hardly a complicated feature) to the records residual lifts DD2D from marginal
+**−0.48 (grazes 0) → −3.93 [−5.74, −2.26], CI-clean**, while the compiled coverage/waste scalars
+add the rest (−11.72). So the progression is: raw records alone are marginal; records + a trivial
+overlap feature clear significance; the hand-compiled scalars do the bulk. (SB2D stays marginal
+throughout, −0.06 — no overlap signal, its standing non-separation.) **Bonus:** the residual
+deployed model is *at least as good as joint* (DD2D 6.42 < 7.11; SB2D 1.98 ≈ 1.88), and the whole
+cross-env / generalization story is intact (SPECTRE ≪ PIGINet ≪ astar; holdout-s3 5.07 vs PIGINet
+27.88; SB2D non-separation). The raw-`+records` Δ CI still grazes 0 (small, s1-variance marginal
+at 3 seeds) — records alone are a modest, protected residual; the jaccard anchor is what makes
+them clearly net-positive. Per-seed tables (§1b/§2b.1/§4.3b) expose the individual-seed spread.
 
 ---
 
@@ -116,16 +234,17 @@ compromise. **Freeze** the round-2 workstream; all machinery stays flag-gated of
 
 <!--strip-->
 > **id** `2026-08-26-dd2d-sb2d-spectre-refresh-5-section-numbers` · **status**
-> partially-superseded
-> · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
-> **superseded by** 2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section
+> partially-superseded · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
+> **superseded by**
+> 2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section
 >
 > ⚠️ **PARTIALLY SUPERSEDED** by
 > [2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section](#2026-08-27-residual-adaptive-re-do-records-fixed-refreshed-5-section):
-> these are the **joint-trained** numbers (SPECTRE-adaptive DD2D 7.11 / SB2D 1.88, `+records`
-> inert-to-negative). The refresh was re-done residual-adaptive on 2026-08-27 (deployed 6.42,
-> `+records` net-positive −0.48). Read this as the motivation; the numbers here are the joint
-> baseline (frozen in `docs/joint_refresh_snapshot.md`).
+> these are the **joint-trained** numbers (SPECTRE-adaptive DD2D 7.11 / SB2D 1.88,
+> `+records` inert-to-negative). The refresh was re-done residual-adaptive on
+> 2026-08-27 (deployed 6.42, `+records` net-positive −0.48). Read this as the
+> motivation; the numbers here are the joint baseline (frozen in
+> `docs/joint_refresh_snapshot.md`).
 <!--/strip-->
 
 **What.** Refreshed the stale `compare_methods.py` DD2D + SB2D SPECTRE rows: retrained the deployed

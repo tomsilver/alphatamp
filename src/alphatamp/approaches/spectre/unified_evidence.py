@@ -7,16 +7,20 @@ non-goal objects". That is true on DD2D and false wherever tools exist: on Stick
 every candidate has ``S(c) = {stick}``, so that coverage was identically 0 (the culprit
 buttons are goal objects, structurally barred from ``S``) and that waste was identically
 1 for every stick-using plan — including the plan that responds perfectly to the
-evidence. Blind and anti-signed respectively. That formula has been removed; the
-definitions below are the sole coverage/waste path.
+evidence. Blind and anti-signed respectively. The definitions below are the **default**
+coverage/waste path; the earlier simple formula was re-added 2026-08-27 as a selectable
+option (``TrainConfig.unified_coverage=False`` / ``--legacy-coverage``), a value swap
+inside the same two columns — used by ``compare_methods_simple.py`` (docs/decisions/07
+2026-08-27).
 
 The replacements here derive everything from the **operator schemas**: which objects a
 failure's own explanation names, and which of a candidate's steps the abstraction's
 causal chain cannot account for. Nothing below names a drawer, a button or a stick.
 
-**Status: deployed.** These are the coverage/waste definitions ``dataset`` emits (the
-deployed definition since 2026-07-31; the earlier ``S(c) = args \\ goal_objects``
-formula has been removed). The module still
+**Status: deployed (default).** These are the coverage/waste definitions ``dataset``
+emits by default (the deployed definition since 2026-07-31); the earlier
+``S(c) = args \\ goal_objects`` formula is available again behind ``--legacy-coverage``.
+The module still
 carries its own lightweight :class:`UnifiedRecord` rather than extending
 :class:`failure_record.FailureRecord`, which is now a deliberate boundary rather than a
 staging area: ``FailureRecord`` is what a collection *stored*, this is what the features

@@ -889,6 +889,7 @@ def build_example(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    unified_coverage: bool = True,
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
@@ -1138,13 +1139,14 @@ def build_example(
     _uni_records: list = []
     _uni_pool: frozenset = frozenset()
     _uni_universal: frozenset = frozenset()
+    culprits: frozenset = frozenset()  # simple/legacy path: observed-culprit union
     _rr_repeat_steps: set = set()  # exact (schema, canon-args) certificates (repeat)
     _rr_charts: list = []  # seating charts: list[frozenset[(schema, args)]]
     _cand_step_sets: list = []  # per-candidate set of (schema, canon-args) steps
     if ctx and not hide:
         blocked = [subsets[f] for f in ctx if spec.licenses_demotion(canon.outcomes[f])]
         failed = [subsets[f] for f in ctx]
-        if want_cov:
+        if want_cov and unified_coverage:
             # Lifted operators come from the pool's own `GroundOperator.parent`, so the
             # filters stay env-agnostic -- nothing here needs to know the domain.
             lifted = frozenset(
@@ -1159,6 +1161,20 @@ def build_example(
                 for r in _uni_records
                 for n in _unified_blame(r)
                 if n in actionable and n not in _uni_universal
+            )
+        elif want_cov:
+            # The earlier/simple definition, re-added 2026-08-27 as `--legacy-coverage`
+            # (`unified_coverage=False`). S(c) = `spec.manipulated` (args \ goal_objects,
+            # = `subsets[i]`) scored against the running union of observed culprits:
+            #   coverage(c) = |S(c) ∩ culprits| / |culprits|
+            #   waste(c)    = |S(c) \ culprits| / |S(c)|.
+            # It reads `r.culprits` only (never `dev_blame`), so it is identically 0 on
+            # class-2 envs (SB2D) by design -- there the adaptive signal is `repeat`.
+            culprits = frozenset(
+                o
+                for f in ctx
+                for r in records_for_candidate(canon, f, spec)
+                for o in r.culprits
             )
         if want_rr:
             _cand_step_sets = [
@@ -1210,7 +1226,7 @@ def build_example(
                 dead if want_dead else 0.0,
                 float(jaccard) if want_jac else 0.0,
             ]
-            if want_cov:
+            if want_cov and unified_coverage:
                 # The unified definitions (`unified_evidence.py`). Deployed since
                 # 2026-07-31. Computes discretionary work from the candidate's own
                 # causal structure -- "does this candidate discharge the culprit before
@@ -1227,6 +1243,16 @@ def build_example(
                 row += [
                     _cov if want_coverage else 0.0,
                     _wst if want_waste else 0.0,
+                ]
+            elif want_cov:
+                # The simple/legacy formula (`unified_coverage=False`); `si` = S(c).
+                row += [
+                    (
+                        len(si & culprits) / max(len(culprits), 1)
+                        if want_coverage
+                        else 0.0
+                    ),
+                    (len(si - culprits) / max(len(si), 1) if want_waste else 0.0),
                 ]
             if want_rr:
                 steps_i = _cand_step_sets[i]

@@ -4,6 +4,144 @@
 Index and cross-reference tables: [README.md](README.md).
 
 ---
+<a id="2026-08-28-simple-coverage-waste-re-added-option-compare"></a>
+## 2026-08-28 — Simple coverage/waste re-added as an option; compare_methods_simple.py (repeat carries SB2D)
+
+<!--strip-->
+> **id** `2026-08-28-simple-coverage-waste-re-added-option-compare` · **status**
+> active · **tracks** method, evaluation, env-dd2d, env-stickbutton2d
+<!--/strip-->
+
+**Context.** The deployed **unified** coverage/waste (`unified_evidence.py`,
+[2026-07-31](06-v3-performance.md#2026-07-31-unified-coverage-waste-is-the-deployed-definition))
+derives discretion from each candidate's own causal structure — powerful but hard to explain.
+The **earlier/simple** definition — `coverage=|S(c)∩culprits|/|culprits|`,
+`waste=|S(c)\culprits|/|S(c)|` with `S(c)=args\goal_objects`, `culprits` = the observed-culprit
+union — was removed in the 2026-08-12 publication de-versioning (`37b477c`). We want it back as a
+selectable option (unified stays the default) and a parallel comparison notebook that runs the
+full `compare_methods.py` experiments under it. The simple formula reads `r.culprits` only, so it
+is **identically inert on StickButton2D** (SB2D failures are culprit-free class-2 `dev_blame`
+deviations), which is exactly why the unified definition was built. Rather than re-engineer the
+simple formula for SB2D, the user's directive is to let **`repeat`** carry SB2D — the F3
+exact-step certificate that is load-bearing on restock3d but documented **inert on DD2D/SB2D**
+([2026-08-26](#2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm)). A prior 1-seed
+probe ([2026-08-22](#2026-08-22-adaptive-feature-isolation-ablation-repeat-activated-dd2d))
+measured SB2D `+repeat` at **−0.79 FP (significant, b5-concentrated)**, but it was an
+**intentionally unsound** transfer probe (~10.9% of *feasible* SB2D candidates flagged) and was
+**retired** because a press failure is context-dependent, so a bare `(schema,args)` step key
+over-vetoes.
+
+**Decision.**
+1. **Re-add the simple definition** behind `TrainConfig.unified_coverage` (default **True**) /
+   `train --legacy-coverage`, threaded through `build_example` → the checkpoint cfg →
+   `inference.load_checkpoint`'s deploy-kwargs (`cfg.get("unified_coverage", True)`, so every
+   pre-flag checkpoint keeps scoring unified) → `deployed_rollout_traced`. A **value swap inside
+   the same two `cand_overlap` columns** — shape identical, so unified and legacy checkpoints load
+   interchangeably (`N_OVERLAP_COV=4` unchanged).
+2. **Resurrect `repeat` on SB2D, isolated.** New domain spec `_SB2D_REPEAT` (=`_SB2D` +
+   `step_certificate=True` on the four press schemas), routed **only** to the new env_variant
+   `stickbutton2d_v1_simple`; the deployed `_SB2D`/`stickbutton2d_v1` stays inert and
+   byte-reproducible. `proof_tier()` stays False (dead/demotion/token-holdout unchanged). The
+   probe's known unsoundness is disclosed in code + the notebook caveats; `repeat` is a *learned*
+   column the model can down-weight, not a sound veto. (Confirmed by the user 2026-08-27.)
+3. **compare_methods_simple.py** (DD2D + SB2D). New env_variants `dd2d_v4_simple` (symlink of
+   dd2d_v4; `_DD2D`, repeat inert) and `stickbutton2d_v1_simple` (episodes **copied with
+   `provenance.env_variant` rewritten** so `run_training`'s `spec_for(probe.provenance...)` resolves
+   `_SB2D_REPEAT`). SPECTRE is trained with the **deployed two-stage residual recipe** but
+   `--legacy-coverage` (+`--repeat-feats`); **only the coverage-bearing `+scalars` and `full` arms
+   are retrained** (static/+records/+recjac are definition-invariant and **grafted** from the parent
+   cache), warm-started from the existing deployed static trunks. Every **baseline**
+   (astar/PIGINet/LAZY/VLMPlan) is grafted unchanged from the parent cache via `EnvSpec.legacy_only`.
+   Precompute onboards the variants via a dedicated `_SPECTRE_ONLY_VARIANTS` gate (no native
+   v2/PIGINet row). DD2D repeat stays **inert** (simple coverage/waste carries DD2D); env scope
+   excludes restock3d.
+
+**Consequences.**
+- Verified end-to-end pre-training: `build_example --legacy-coverage` gives a **live** DD2D
+  coverage/waste signal (coverage ∈ {0,0.2,0.4,0.6}) and is **inert** on SB2D (coverage≡0, waste≡1
+  constant→ranking-inert); `repeat` fires on SB2D **only** under `_SB2D_REPEAT` (38/200 in a b5
+  pool) and is 0 under `_SB2D`. Deployed unified checkpoints round-trip unchanged
+  (`unified_coverage=True`, identical rollout) — the new `elif` branches are dead when unified.
+- Tests: `test_coverage_mode.py` gains the `unified_coverage` deploy-kwarg assertion;
+  `test_simple_coverage_repeat.py` locks the legacy definition's distinctness on DD2D and the SB2D
+  repeat gating. Full fast suite green except the 4 **pre-existing** doclog dead-link failures
+  (archived-doc links, unrelated).
+- **Standing invariant:** `inference.load_checkpoint` must default `unified_coverage` to **True**
+  (`cfg.get(..., True)`) — a False default would silently re-score every existing unified
+  checkpoint under the simple formula.
+- **Results** (SPECTRE-simple FP + §4 residual ablation, 3 seeds, test n=100; full tables in
+  [`notebook/07` 2026-08-28](../notebook/07-stickbutton2d.md#2026-08-28-compare-methods-simple-simple-coverage-waste)):
+  the abstract-representation win **survives the simpler feature**. DD2D SPECTRE-adaptive **8.23 ±
+  1.65** — first by far (PIGINet 17.27, LAZY 23.26, astar 34.52), ~1.8 FP behind the deployed
+  unified 6.42, scalars carrying the bulk (Δ −9.78). SB2D SPECTRE-adaptive **1.78 ± 0.29** —
+  best/tied (LAZY 1.85, PIGINet 2.02), with **`repeat` carrying it**: the `+scalars` arm (= repeat,
+  since simple coverage/waste is inert on SB2D) gives Δ **−0.72**, reproducing the retired
+  2026-08-22 probe's −0.79. **Records HURT SB2D** (full 1.78 > scalars 1.50, W3 interference), so the
+  deployed `full` is not the best SB2D arm there. `compare_methods_simple.py` renders clean headless
+  on both envs; §2b wall-clock omitted (`has_timing=False`).
+
+---
+
+<a id="2026-08-27-restock3d-v3-real-intermediate-spectre-only-real-label"></a>
+## 2026-08-27 — restock3d_v3_real intermediate: SPECTRE-only real-label cut, comparison repointed
+
+<!--strip-->
+> **id** `2026-08-27-restock3d-v3-real-intermediate-spectre-only-real-label` ·
+> **status** active · **tracks** method, evaluation, env-restock3d, data
+<!--/strip-->
+
+**Context.** The synthetic `restock3d_v3` comparison
+([2026-08-20](#2026-08-20-restock3d-v3-synthetic-dataset-analytic-refiner-collection)) is
+explicitly an **upper bound** — analytic labels are the exact geometric feasibility function
+with no motion-planning noise, which favours the geometry-encoding representation. The real
+(hybrid-prune PyBullet) collection `restock3d_v3_real`
+([2026-08-25](#2026-08-25-restock3d-v3-real-hybrid-prune-collection)) — the audit of that
+bound — is **still running** (train complete at 300; val/test stratum-3 n=9 still filling by
+real MP). The advisor asked for an **intermediate** SPECTRE checkpoint + eval on whatever is
+collected, not the final one.
+
+**Decision.**
+- **Scope = SPECTRE + astar only** on the real data (explicit request). PIGINet/LAZY are NOT
+  retrained on real labels, so the SPECTRE-vs-PIGINet real-label representation-crossover audit
+  — the scientific point of the real collection — is **deferred** to the completed collection.
+- **`restock3d_v3_real` reuses everything from synthetic `restock3d_v3`** (env / strata /
+  generator / schema / vocab op-pred-type set); only the data-tree label + the labels differ
+  (train `hybrid_prune`, val/test `real`). The deployed recipe is trained **verbatim**
+  (`--scene-3d --atom-mode profiles … --repeat-feats --step-join`, 3 seeds) via
+  `experiments/spectre/restock3d_v3_real_train.sh` →
+  `checkpoints_spectre_atoms_repeat/restock3d_v3_real/`. Vocab rebuilt from the real train split
+  (`max_pool_size=185`, val/test OOV-clean).
+- **`domain.py` `DOMAINS` MUST map `restock3d_v3_real -> _RESTOCK3D_V3`** — a required
+  one-liner, not optional: `spec_for` is an exact-dict lookup and both training's val-selection
+  rollout and scoring/precompute fetch the spec by the *real* variant name, so `EMPTY_SPEC`
+  would silently make the load-bearing `--repeat-feats` F3 `step_certificate` **inert**. *(New
+  standing trap: a new restock3d env-variant must be added to `DOMAINS`, or its
+  `step_certificate` features go dark with no error.)*
+- **The `compare_methods.py` restock3d_v3 entry is repointed** — `RESTOCK3D_V3.env_variant =
+  "restock3d_v3_real"` (`key` unchanged so the dropdown / `SPECTRE_COMPARE_ENV` selector is
+  stable), with `has_ablations=False` / `has_timing=False` (no ablation arms trained; real §2b
+  wall-clock deferred pending a real feasible-tail cap). Precompute registered the variant
+  (`_PIGINET_PATHS` / `_V3_ARM_OVERRIDES` / `_REFINE_CAP_S`). The synthetic result is preserved
+  in docs/git + its on-disk caches untouched.
+
+**Consequences.**
+- SPECTRE beats the naive planner order on real labels: **adaptive 2.48 ± 0.32 vs astar 11.76**
+  (paired Δ −9.28, 95% CI [−13.42, −5.66]); full table + caveats in
+  [notebook 2026-08-27](../notebook/07-stickbutton2d.md#2026-08-27-restock3d-v3-real-intermediate-spectre-eval).
+  **Adaptivity is live** (adaptive 2.48 < static 2.92) — the F3 `repeat` certificate reproduces
+  on real labels, unlike its inertness on DD2D/SB2D.
+- **Read as INTERMEDIATE:** test s3 (n=9) only ~6-14/20 collected → that column is
+  small-sample-noisy and the pooled ALL under-weights it. The number is on real labels but is
+  **not** directly comparable to the synthetic 11.11 (which is a SPECTRE-vs-PIGINet margin on
+  analytic labels), so "does the synthetic −27 SPECTRE−PIGINet gap survive real labels?" is
+  **not answerable from this cut** — it needs the PIGINet/LAZY real retrains + the completed s3.
+- **Follow-ups when collection finishes:** rebuild vocab + cache; retrain PIGINet + LAZY on the
+  real data; re-enable §4.3 ablation (`has_ablations=True` + `_ISOLATION_ARMS_BY_VARIANT`) and
+  §2b (`has_timing=True` + a real feasible-tail-calibrated `_REFINE_CAP_S`, not the current 90 s
+  placeholder); re-score the full s3.
+
+---
+
 <a id="2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via"></a>
 ## 2026-08-27 — SPECTRE residual-adaptive deployed — records net-positive via frozen residual; per-seed tables
 
@@ -45,6 +183,12 @@ superseded entry stands unchanged.
   no longer hurts s2/s3) — matching the as-built X2. SB2D `+records` +0.14 → **−0.03**
   (net-neutral, no longer hurting). **Freezing the trunk is what makes failure records
   net-useful.**
+- **The `+records +jaccard` arm (5th, 2026-08-27) is the CI-clean version of the claim.**
+  Adding just the simple jaccard-overlap column (candidate × failed-set similarity — a trivial
+  feature) to the records residual lifts DD2D from marginal **−0.48 (grazes 0) → −3.93 [−5.74,
+  −2.26]** (CI excludes 0); the compiled coverage/waste scalars then add the rest (−11.72). So:
+  raw records marginal → records + a cheap overlap feature clearly significant → hand-compiled
+  scalars carry the bulk. SB2D stays marginal (−0.06), its standing non-separation.
 - **The deployed residual is at least as good as joint.** DD2D SPECTRE-adaptive **6.42 ±
   1.28** (< joint 7.11); SB2D **1.98** (≈ joint 1.88). Scalars still carry the bulk (DD2D
   `+scalars` Δ −11.72 [−15.61, −8.30]; SB2D −0.32). Story intact: SPECTRE ≪ PIGINet 17.27 ≪
@@ -112,17 +256,19 @@ isolated +records is net-inert, and X2 is the actual records gain. Numbers: `doc
 <!--strip-->
 > **id** `2026-08-26-spectre-refresh-repeat-graceful-degradation-4-arm` · **status**
 > partially-superseded · **tracks** method, evaluation, env-dd2d, env-stickbutton2d ·
-> **superseded by** 2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via
+> **superseded by**
+> 2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via
 >
 > ⚠️ **PARTIALLY SUPERSEDED** by
 > [2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via](#2026-08-27-spectre-residual-adaptive-deployed-records-net-positive-via):
-> the **joint-trained** deployed model + 4-arm ablation below (`checkpoints_spectre_atoms_v3final`,
-> SPECTRE-adaptive 7.11, `+records` inert-to-negative +1.33, step-join in the recipe) were
-> **re-done as residual-adaptive** on 2026-08-27 — the deployed model is now the frozen-trunk
+> the **joint-trained** deployed model + 4-arm ablation below
+> (`checkpoints_spectre_atoms_v3final`, SPECTRE-adaptive 7.11, `+records`
+> inert-to-negative +1.33, step-join in the recipe) were **re-done as
+> residual-adaptive** on 2026-08-27 — the deployed model is now the frozen-trunk
 > full-residual (6.42) and `+records` is net-positive (−0.48). Read this entry for the
-> repeat graceful-degradation (unchanged) and as the **motivation** for the residual fix; the
-> deployed FP + ablation-training numbers here are the superseded joint baseline (frozen in
-> `docs/joint_refresh_snapshot.md`).
+> repeat graceful-degradation (unchanged) and as the **motivation** for the residual
+> fix; the deployed FP + ablation-training numbers here are the superseded joint
+> baseline (frozen in `docs/joint_refresh_snapshot.md`).
 <!--/strip-->
 
 **Context.** The `compare_methods.py` DD2D + SB2D SPECTRE numbers were **stale** — the deployed

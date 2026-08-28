@@ -154,6 +154,11 @@ def load_checkpoint(
         "aggregate_records": bool(cfg.get("aggregate_records")),
         "coverage_feats": bool(cfg.get("coverage_feats")),
         "coverage_mode": str(cfg.get("coverage_mode", "both")),
+        # Emitted-only coverage/waste *definition* (value swap, not a width change):
+        # `.get(..., True)` keeps every pre-key checkpoint scoring under the unified
+        # definitions it was trained with; only a `--legacy-coverage` checkpoint carries
+        # False and deploys the simple formula (docs/decisions/07 2026-08-27).
+        "unified_coverage": bool(cfg.get("unified_coverage", True)),
         # Emitted-only (no architectural submodule): the width is the single point the
         # scorer Linear cares about, and it is recomputed above from the same flags.
         "repeat_feats": bool(cfg.get("repeat_feats")),
@@ -228,6 +233,7 @@ def deployed_rollout_traced(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    unified_coverage: bool = True,
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
@@ -334,6 +340,7 @@ def deployed_rollout_traced(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
+            unified_coverage=unified_coverage,
             repeat_feats=repeat_feats,
             regroup_feats=regroup_feats,
             state_delta=state_delta,

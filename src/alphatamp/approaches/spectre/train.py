@@ -127,6 +127,13 @@ class TrainConfig:
     # Which of the pair the net sees, by zeroing the other column: both | coverage |
     # waste. They have only ever been measured together, so this isolates them.
     coverage_mode: str = "both"
+    # Coverage/waste *definition*: True = the unified evidence-grounded definitions
+    # (`unified_evidence.py`, deployed since 2026-07-31); False = the earlier/simple
+    # `|S∩culprits|/|culprits|`, `|S\culprits|/|S|` (re-added 2026-08-27 via
+    # `--legacy-coverage`). A value swap inside the same two columns -- shape identical,
+    # so unified and legacy checkpoints load interchangeably. Default True so every
+    # pre-flag checkpoint (all unified) keeps scoring unified.
+    unified_coverage: bool = True
     # `repeat` overlap column: the F3 exact-step certificate veto (fires on a candidate
     # containing the exact failed step of a blameless, exhausted failure of a
     # `step_certificate` schema). The deployed restock3d_v3 feature (2026-08-21): it
@@ -321,6 +328,7 @@ class SpectreDataset(Dataset):
             aggregate_records=self.cfg.aggregate_records,
             coverage_feats=self.cfg.coverage_feats,
             coverage_mode=self.cfg.coverage_mode,
+            unified_coverage=self.cfg.unified_coverage,
             repeat_feats=self.cfg.repeat_feats,
             regroup_feats=self.cfg.regroup_feats,
             state_delta=self.cfg.use_state_delta,
@@ -415,6 +423,7 @@ def deployed_val_fp(
     aggregate_records: bool = False,
     coverage_feats: bool = False,
     coverage_mode: str = "both",
+    unified_coverage: bool = True,
     repeat_feats: bool = False,
     regroup_feats: bool = False,
     state_delta: bool = False,
@@ -443,6 +452,7 @@ def deployed_val_fp(
             aggregate_records=aggregate_records,
             coverage_feats=coverage_feats,
             coverage_mode=coverage_mode,
+            unified_coverage=unified_coverage,
             repeat_feats=repeat_feats,
             regroup_feats=regroup_feats,
             state_delta=state_delta,
@@ -696,6 +706,7 @@ def run_training(
                 aggregate_records=cfg.aggregate_records,
                 coverage_feats=cfg.coverage_feats,
                 coverage_mode=cfg.coverage_mode,
+                unified_coverage=cfg.unified_coverage,
                 repeat_feats=cfg.repeat_feats,
                 regroup_feats=cfg.regroup_feats,
                 state_delta=cfg.use_state_delta,
@@ -825,6 +836,16 @@ def main(argv=None) -> int:
         choices=["both", "coverage", "waste"],
         help="which of the coverage/waste pair the net sees; the other column is "
         "zeroed (shape unchanged). Only meaningful with --coverage-feats",
+    )
+    ap.add_argument(
+        "--legacy-coverage",
+        action="store_false",
+        dest="unified_coverage",
+        default=TrainConfig.unified_coverage,
+        help="use the earlier/simple coverage/waste (|S∩culprits|/|culprits|, "
+        "|S\\culprits|/|S|) instead of the unified evidence-grounded definitions. "
+        "Same two columns, so unified and legacy checkpoints load interchangeably; "
+        "inert on class-2 envs (SB2D) by design. Only meaningful with --coverage-feats",
     )
     ap.add_argument(
         "--repeat-feats",
@@ -1030,6 +1051,7 @@ def main(argv=None) -> int:
         evidence_attn=a.evidence_attn,
         coverage_feats=a.coverage_feats,
         coverage_mode=a.coverage_mode,
+        unified_coverage=a.unified_coverage,
         repeat_feats=a.repeat_feats,
         regroup_feats=a.regroup_feats,
         use_state_delta=a.state_delta,

@@ -271,6 +271,27 @@ _PIGINET_PATHS = {
         / "piginet_clip_cache",
         "domain": "restock3d",
     },
+    # restock3d_v3_real (REAL hybrid-prune dataset). Registered so `restock3d_v3_real` is a legal
+    # `--env-variant` (the argparse choices are `set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)`) and
+    # future-proofs a later PIGINet real retrain; the SPECTRE+astar intermediate does NOT invoke
+    # the piginet method, so these checkpoint paths need not exist yet.
+    "restock3d_v3_real": {
+        "ckpt": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v3_real"
+        / "piginet_s{seed}"
+        / "ckpt.pt",
+        "data": REPO / "data" / "spectre",
+        "cache": REPO
+        / "data"
+        / "spectre"
+        / "checkpoints"
+        / "restock3d_v3_real"
+        / "piginet_clip_cache",
+        "domain": "restock3d",
+    },
 }
 
 # Which SPECTRE-v2 deployed checkpoint a collection uses. The training run name encodes
@@ -286,6 +307,14 @@ _V2_CKPT_SUBDIR = {
     # is measured against -- so it must be the same recipe, not a re-tuned one.
     "dd2d_v4": "checkpoints_v2_evidence_ov",
 }
+
+#: Variants onboarded for the SPECTRE methods ONLY -- no native v2/PIGINet row, because the
+#: comparison notebook grafts every baseline (astar/PIGINet/LAZY/VLMPlan) from the parent
+#: (legacy) collection's cache. Used only to satisfy the --env-variant CLI gate and the
+#: `_configure_paths` `known` check. compare_methods_simple.py (docs/decisions/07 2026-08-27):
+#: `dd2d_v4_simple`/`stickbutton2d_v1_simple` reuse the parent episodes but score a SPECTRE
+#: trained with the simple/legacy coverage/waste + repeat.
+_SPECTRE_ONLY_VARIANTS = {"dd2d_v4_simple", "stickbutton2d_v1_simple"}
 
 # SPECTRE arms: cache sub-dir prefix -> checkpoint sub-dir ({seed} substituted).
 #
@@ -326,6 +355,19 @@ _V3_ARM_OVERRIDES: dict[str, dict[str, str]] = {
     # `--out-suffix _repeat`). `regroup` is off/deprecated (adds nothing here).
     "restock3d_v3": {
         "spectre3": "checkpoints_spectre_atoms_repeat",
+    },
+    # restock3d_v3_real reuses the identical deployed recipe (--repeat-feats), so the arm dir is
+    # the same: checkpoints_spectre_atoms_repeat/restock3d_v3_real/seed_<s>/best.pt.
+    "restock3d_v3_real": {
+        "spectre3": "checkpoints_spectre_atoms_repeat",
+    },
+    # compare_methods_simple.py: the deployed "full" cell trained with the simple/legacy
+    # coverage/waste (--legacy-coverage) + repeat. `train.py` -> `_atoms_simple_full`.
+    "dd2d_v4_simple": {
+        "spectre3": "checkpoints_spectre_atoms_simple_full",
+    },
+    "stickbutton2d_v1_simple": {
+        "spectre3": "checkpoints_spectre_atoms_simple_full",
     },
 }
 
@@ -374,6 +416,14 @@ _ISOLATION_ARMS_BY_VARIANT: dict[str, dict[str, str]] = {
     "dd2d_v4": _ABLATION_4ARM,
     "stickbutton2d_v1": _ABLATION_4ARM,
     "restock3d_v3": _ABLATION_ISOLATION_ARMS,
+    # compare_methods_simple.py: only the coverage-bearing +scalars arm is retrained under
+    # the simple recipe (`checkpoints_spectre_norec_atoms_simple_scalars`); the definition-
+    # invariant static / +records / +recjac arms are grafted from the parent cache by the
+    # notebook (they have no coverage columns), so they are NOT scored here.
+    "dd2d_v4_simple": {"abl_scalars": "checkpoints_spectre_norec_atoms_simple_scalars"},
+    "stickbutton2d_v1_simple": {
+        "abl_scalars": "checkpoints_spectre_norec_atoms_simple_scalars"
+    },
 }
 
 
@@ -477,7 +527,7 @@ def _configure_paths(env_variant: str, ckpt_variant: str | None = None) -> None:
     global PIGINET_CKPT, PIGINET_DATA, PIGINET_CACHE, PIGINET_DOMAIN
     global CACHE_DIR, N_PROBLEMS, REFINE_CAP_S, _STRATA_KEEP
     ckpt_variant = ckpt_variant or env_variant
-    known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)
+    known = set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS) | _SPECTRE_ONLY_VARIANTS
     for _v, _flag in ((env_variant, "--test-variant"), (ckpt_variant, "--env-variant")):
         if _v not in known:
             raise SystemExit(
@@ -594,6 +644,9 @@ _REFINE_CAP_S: dict[str, float] = {
     "dd2d_v4": 2.0,
     "stickbutton2d_v1": 10.0,
     "stickbutton2d_v1_kinder": 10.0,
+    # compare_methods_simple.py: identical episodes as the parent, so the same §2b cap.
+    "dd2d_v4_simple": 2.0,
+    "stickbutton2d_v1_simple": 10.0,
     # Held-out-stratum variants share their backing collection's cap so §2b is comparable.
     "dd2d_v4_holdout_s3": 2.0,
     "stickbutton2d_v1_holdout_b5": 10.0,
@@ -616,6 +669,11 @@ _REFINE_CAP_S: dict[str, float] = {
     # feasible censored) while still cutting the n=9 dead-ends (110 s). The §2b numbers here are
     # not real measurements -- see the RESTOCK3D_V3 EnvSpec caveats.
     "restock3d_v3": 90.0,
+    # restock3d_v3_real: real PyBullet wall-clock IS available (val/test are real-refined), but
+    # §2b is disabled for the intermediate (RESTOCK3D_V3 EnvSpec `has_timing=False`) pending a
+    # real feasible-tail cap calibration, so this value is inert -- kept only so `_configure_paths`
+    # does not fall back to the 2 s dd2d default. Placeholder above the strata r_caps (60-75 s).
+    "restock3d_v3_real": 90.0,
 }
 # Rebound per-variant by `_configure_paths`; the module default keeps the historical dd2d
 # behaviour for any variant not listed above.
@@ -1385,7 +1443,7 @@ def main() -> None:
         # v2.2 checkpoint" -- so StickButton2D, where v2.2 was deliberately never trained,
         # was rejected at the CLI even though it has PIGINet and v3 rows. A variant is
         # runnable if *any* method map knows it; a method it lacks fails on its own.
-        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)),
+        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS) | _SPECTRE_ONLY_VARIANTS),
         help="Which collection to score: repoints vocab, checkpoints and PIGINet's "
         "checkpoint; also the test split, cache dir and PIGINet data UNLESS "
         "--test-variant overrides them. With --test-variant this is the TRAIN variant.",
@@ -1393,7 +1451,7 @@ def main() -> None:
     parser.add_argument(
         "--test-variant",
         default=None,
-        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS)),
+        choices=sorted(set(_V2_CKPT_SUBDIR) | set(_PIGINET_PATHS) | _SPECTRE_ONLY_VARIANTS),
         help="Score THIS collection's test episodes while loading the vocab, model config "
         "and checkpoints from --env-variant -- the train-old / test-new generalization "
         "eval (e.g. --env-variant dd2d_v4 --test-variant dd2d_v4gen_shapeonly). The "
