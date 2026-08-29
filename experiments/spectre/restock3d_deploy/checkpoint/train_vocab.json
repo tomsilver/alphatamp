@@ -1,0 +1,51 @@
+{
+  "config_hash": "71eed39a7be9",
+  "max_atoms_per_state": 10,
+  "max_objects_per_state": 10,
+  "max_objects_per_type": {
+    "Kinematic3DCuboid": 9,
+    "Kinematic3DRobot": 1
+  },
+  "max_operator_arity": 2,
+  "max_pool_size": 185,
+  "max_predicate_arity": 2,
+  "max_skeleton_length": 18,
+  "operators": {
+    "<OOV>": 0,
+    "pick": 1,
+    "place_short": 2,
+    "place_tall": 3
+  },
+  "predicates": {
+    "<OOV>": {
+      "arity": 0,
+      "idx": 0
+    },
+    "HandEmpty": {
+      "arity": 1,
+      "idx": 1
+    },
+    "Holding": {
+      "arity": 2,
+      "idx": 2
+    },
+    "OnFloor": {
+      "arity": 1,
+      "idx": 3
+    },
+    "Stored": {
+      "arity": 1,
+      "idx": 4
+    }
+  },
+  "type_aug_policy": {
+    "Kinematic3DCuboid": true,
+    "Kinematic3DRobot": true,
+    "region": false
+  },
+  "types": {
+    "<OOV>": 0,
+    "Kinematic3DCuboid": 1,
+    "Kinematic3DRobot": 2
+  }
+}

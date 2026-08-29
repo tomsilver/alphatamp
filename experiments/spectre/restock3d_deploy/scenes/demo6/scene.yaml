@@ -1,0 +1,33 @@
+# Worked 6-object Restock3D-v3 scene for the real-robot proof-of-concept.
+#
+# Coordinates are in the robot's home frame, meters. Two objects are tall (height > 0.12 m, so
+# they MUST go in the bottom/tall section); four are short. A feasible packing exists
+# (tall section: goal1+goal2; short section: goal3..goal6), so the run should find a plan.
+#
+# See ../../README.md for the full schema and constraints.
+
+objects:
+  - name: obj_goal1        # tall
+    width:  0.05
+    height: 0.15
+    floor:  [-0.70, 0.75]
+  - name: obj_goal2        # tall
+    width:  0.05
+    height: 0.14
+    floor:  [-0.50, 0.75]
+  - name: obj_goal3        # short
+    width:  0.05
+    height: 0.10
+    floor:  [-0.30, 0.75]
+  - name: obj_goal4        # short
+    width:  0.06
+    height: 0.11
+    floor:  [-0.70, 1.05]
+  - name: obj_goal5        # short
+    width:  0.05
+    height: 0.09
+    floor:  [-0.50, 1.05]
+  - name: obj_goal6        # short
+    width:  0.05
+    height: 0.10
+    floor:  [-0.30, 1.05]
