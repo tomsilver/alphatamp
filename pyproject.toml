@@ -9,14 +9,15 @@ description = "Learning to accelerate TAMP."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-utils",
-   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=prpl-llm-utils",
-   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=toms-geoms-2d",
-   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@df145d5c509f24933670270d3759b25918662e01#subdirectory=relational-structs",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=prpl-utils",
+   "prpl_llm_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=prpl-llm-utils",
+   "tomsgeoms2d@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=toms-geoms-2d",
+   "relational_structs@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git@e215d1fc5fe01fa11d3a77a13551c5312594289c#subdirectory=relational-structs",
    "seaborn>=0.12.0",
    "types-seaborn>=0.13.2",
    "scikit-learn",
    "torch",
+   "torch_geometric",  # LAZY baseline GAT policy (GATv2Conv); see baselines/lazy/
    "pymunk==7.1.0",
    "scipy-stubs",
    "hydra-joblib-launcher",
@@ -24,7 +25,7 @@ dependencies = [
    "kinder-bilevel-planning",
    "bilevel-planning",
    "kinder-models",
-   "kindergarden[kinematic2d]==0.0.8",
+   "kindergarden==0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -32,10 +33,23 @@ develop = [
     "black",
     "docformatter",
     "isort",
+    "marimo",
     "mypy",
     "pylint>=2.14.5",
     "pytest-pylint>=0.18.0",
-    "pytest>=7.2.2"
+    # pytest capped <8: pytest-pylint (latest 0.21.0) uses the `path` collect
+    # hook removed in pytest 8.0, so `pytest . --pylint` (run_ci_checks.sh)
+    # INTERNALERRORs on pytest>=8. Lift when pytest-pylint ships a pytest-8+
+    # compatible release. See docs/spectre/decisions.md 2026-07-18.
+    "pytest>=7.2.2,<8",
+    "wandb"
+]
+# Tote-and-Tray Decluttering benchmark (self-contained sub-project under
+# approaches/spectre/ttd/). Shapely is the authoritative 2D-geometry layer; the
+# version is pinned per TTD_SPEC_v1.3 §12.3 ("versions pinned Shapely/GEOS").
+# pybullet / scikit-learn / etc. are added by the later chunks that need them.
+ttd = [
+    "shapely>=2.0,<3",
 ]
 
 [tool.setuptools.packages.find]
@@ -52,7 +66,7 @@ target-version = ["py311"]
 py_version = 311
 profile = "black"
 multi_line_output = 2
-skip_glob = ["venv/*", ".venv/*"]
+skip_glob = ["venv/*", ".venv/*", "kb/*", "**/baselines/drake-tamp/*", "_archive_local/*"]
 split_on_trailing_comma = true
 
 [tool.docformatter]
@@ -64,21 +78,77 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*"]
+exclude = [
+    "venv/*",
+    ".venv/*",
+    "experiments/spectre/analyze_spectre\\.py$",
+    "experiments/spectre/compare_dd2d_methods(_archive)?\\.py$",
+    "experiments/spectre/precompute_dd2d_cache\\.py$",
+    # marimo notebook (cell-scoped locals, untyped `scienceplots` import); like
+    # analyze_spectre.py above, not worth annotating notebook cells.
+    "experiments/spectre/compare_methods\\.py$",
+    # marimo notebook (cell-scoped locals, widget-display statements); excluded like
+    # compare_methods.py above.
+    "experiments/spectre/shelf3d_difficulty\\.py$",
+    # Dev diagnostic script (one-off holdout-vs-full comparison); excluded like the
+    # marimo notebooks rather than annotating throwaway analysis code.
+    "experiments/spectre/holdout_vs_full\\.py$",
+    # Restock3D one-off diagnostic / calibration harnesses (stage-0 gate, demo render,
+    # FP probe, difficulty table, oracle+K_max calibration). Sibling-module imports and
+    # dynamic job tuples; excluded like shelf3d_difficulty.py / holdout_vs_full.py above.
+    # The real collection entry point restock3d_collect.py stays type-checked.
+    "experiments/spectre/restock3d_(stage0|demos|probe|difficulty|harness|oracle|kmax|base_nav_demo|blocking_sweep|relocate_demo|clutter_sweep|coverage_probe|stage0)\\.py$",
+    # The real-robot deploy kit's entry point imports its two sibling modules (deploy_scene,
+    # robot_export) from its own folder, which mypy cannot resolve statically. Those two
+    # modules stay type-checked; only the script wrapper is excluded, like the demos above.
+    "experiments/spectre/restock3d_deploy/deploy\\.py$",
+    # Vendored DD2D environment (migrated from the envsearch repo, see
+    # envs/dd2d/MIGRATION_DD2D.md). Excluded from strict mypy like lib/ vendoring;
+    # the negative lookahead keeps SPECTRE's own adapter (spectre_operators.py,
+    # spectre_convert.py) type-checked.
+    "src/alphatamp/approaches/spectre/envs/dd2d/(?!spectre_)",
+    # The PIGINet re-implementation, lifted out of envs/dd2d/ on 2026-08-01 to take a
+    # second environment. It was covered by the exclusion above for its whole life, so
+    # it is carried here rather than newly type-checked -- moving a file is not the
+    # moment to impose strict typing on it. `domain.py`, `record.py` and the per-env
+    # adapters are ours and stay checked.
+    "src/alphatamp/approaches/spectre/baselines/piginet/(?!domain|record|.*_adapter)",
+    # The LAZY baseline's torch_geometric GAT stack, same treatment as PIGINet's ML
+    # modules: the env-agnostic contract files (domain, tree, feasibility) stay checked;
+    # the graph/model/dataset/rollout/train/eval modules (torch_geometric, untyped) are
+    # excluded from strict mypy. See baselines/lazy/PROVENANCE.md.
+    "src/alphatamp/approaches/spectre/baselines/lazy/(?!domain|tree|feasibility|__init__)",
+    # Untracked sibling reference checkout (see .gitignore /kb/). Not part of
+    # alphatamp; excluded from repo-wide `mypy .`.
+    "^kb/",
+    # Vendored LAZY reference clone (py2-era; see .gitignore). Reference only.
+    "src/alphatamp/approaches/spectre/baselines/drake-tamp/",
+    # Pre-refactor local safety archive (gitignored copies of pre-refactor code that
+    # import removed symbols). Never type-checked. See docs/decisions 2026-08-12 ADR.
+    "^_archive_local/",
+]
 
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+# `kb` = untracked sibling reference checkout (see .gitignore /kb/); `drake-tamp` = the
+# vendored LAZY reference clone (py2-era). Both are kept out so `pytest . --pylint` never
+# collects/lints them.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "kb", "drake-tamp", "_archive_local"]
 
 [tool.uv.sources]
-kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning" }
-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git", subdirectory = "bilevel-planning" }
-kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-models" }
+kinder-bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-bilevel-planning", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }
+bilevel-planning = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git", subdirectory = "bilevel-planning", rev = "e215d1fc5fe01fa11d3a77a13551c5312594289c" }
+kinder-models = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines.git", subdirectory = "kinder-models", rev = "4c731dc81d68ee6888ef3a989034991cd0694630" }
 
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
     "sklearn.*",
+    "shapely.*",
+    "spatialmath.*",
+    # C-extension, no type stubs; imported directly by the restock3d real-collision probes.
+    "pybullet",
 ]
 ignore_missing_imports = true
