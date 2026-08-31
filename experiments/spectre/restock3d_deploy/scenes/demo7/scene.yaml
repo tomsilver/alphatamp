@@ -1,0 +1,36 @@
+# Custom 7-object Restock3D-v3 test scene.
+#
+# Three tall objects (height > 0.12 m, must go in the bottom/tall section) and four short
+# ones. Tall widths sum to 0.16 m and short widths sum to 0.20 m, so both sections satisfy
+# the packing bound (sum(width) + 0.06*(n-1) + 0.08 <= 0.50). All floor positions are inside
+# x in (-0.80, -0.20), y in (0.60, 1.20) and at least 0.12 m apart.
+
+objects:
+  - name: obj_goal1        # tall
+    width:  0.05
+    height: 0.16
+    floor:  [-0.72, 0.70]
+  - name: obj_goal2        # tall
+    width:  0.06
+    height: 0.14
+    floor:  [-0.55, 0.70]
+  - name: obj_goal3        # tall
+    width:  0.05
+    height: 0.13
+    floor:  [-0.38, 0.70]
+  - name: obj_goal4        # short
+    width:  0.05
+    height: 0.11
+    floor:  [-0.25, 0.72]
+  - name: obj_goal5        # short
+    width:  0.05
+    height: 0.09
+    floor:  [-0.70, 0.95]
+  - name: obj_goal6        # short
+    width:  0.06
+    height: 0.10
+    floor:  [-0.52, 0.95]
+  - name: obj_goal7        # short
+    width:  0.04
+    height: 0.08
+    floor:  [-0.34, 0.95]
