@@ -1,0 +1,48 @@
+# Demo6 heights restaged into two open-top bins, so the story answers "why not a side
+# grasp?": the bin walls make a horizontal grasp geometrically impossible, and only the
+# 45-degree front grasp threads in and out from above.
+#
+# Grouping rule: the DEEP bin (0.15 m walls, back row) holds exactly the tall objects
+# (height > 0.12, which must go to the bottom shelf section); the SHALLOW bin (0.08 m
+# walls, front row) holds the shorts. Tall objects' grasps ride high (EE at bottom
+# + 0.13), so their entries clear the deep wall; a short object's entry would graze it,
+# hence the strict grouping, and both talls are exactly 0.15 so their grasp heights are
+# equal (the front grasp clips its EE offset per height; a 0.14 object grips 5 mm lower
+# and its reach-in grazes the 0.15 wall). Wall heights sit above each group's top-grasp
+# height, so side grasps are blocked for every object.
+#
+# Bin walls stand >= 0.05 m from every object face (finger clearance) and the shallow
+# bin's front wall is ~0.65 m from the robot's staging corridor, clear of the real
+# chassis (half-footprint ~0.27 m) at every pick standoff.
+
+objects:
+  - name: obj_goal1        # tall -> deep bin
+    width:  0.05
+    height: 0.15
+    floor:  [-0.62, 1.05]
+  - name: obj_goal2        # tall -> deep bin
+    width:  0.05
+    height: 0.15
+    floor:  [-0.42, 1.05]
+  - name: obj_goal3        # short -> shallow bin
+    width:  0.05
+    height: 0.10
+    floor:  [-0.74, 0.75]
+  - name: obj_goal4        # short -> shallow bin
+    width:  0.06
+    height: 0.10
+    floor:  [-0.57, 0.75]
+  - name: obj_goal5        # short -> shallow bin
+    width:  0.05
+    height: 0.09
+    floor:  [-0.40, 0.75]
+  - name: obj_goal6        # short -> shallow bin
+    width:  0.05
+    height: 0.10
+    floor:  [-0.23, 0.75]
+
+bins:
+  # shallow bin around the short row
+  - {x: [-0.81, -0.16], y: [0.675, 0.825], height: 0.08}
+  # deep bin around the tall row
+  - {x: [-0.70, -0.34], y: [0.975, 1.125], height: 0.15}

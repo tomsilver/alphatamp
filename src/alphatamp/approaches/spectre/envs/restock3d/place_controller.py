@@ -167,6 +167,12 @@ def _base_nav_collision_ids(
     itself: nav must not avoid the thing it is reaching for or carrying.
     """
     ids = set(sim.shelf_structure_ids())
+    # Staging bins are deliberately NOT base obstacles: the kinematic point base's
+    # PyBullet contacts against the low walls are unreliable (false positives at
+    # decimetre range would make nearby base plans fail spuriously), and the same
+    # flakiness is why the step-time base check excludes them (see the env's
+    # ``_robot_or_held_object_collision_exists``). Keeping the base out of the bins is
+    # a scene-design constraint, validated offline against the exported trajectory.
     for name in sim.movable_names():
         if name in exclude:
             continue
@@ -761,7 +767,8 @@ class RestockFrontPickController(GroundPickController):
 
 
 class RestockFrontPlaceController(BasePlaceController):
-    """Translate-only place of an upright block into a region (keeps its orientation fixed).
+    """Translate-only place of an upright block into a region (keeps its orientation
+    fixed).
 
     The EE pose is derived from the ACTUAL grasp so the object is *translated*, not rotated:
     ``ee = desired_object_pose(upright) . grasp^-1``. The pre-place standoff backs off along the

@@ -176,6 +176,31 @@ def _build_config(raw: dict) -> Restock3DEnvConfig:
     shelf = raw.get("shelf") or {}
     sections = raw.get("sections") or {}
     kwargs: dict[str, Any] = {}
+    if raw.get("bins"):
+        # Staging bins: open-top walled boxes the objects start in, so only the 45deg
+        # front grasp can get them out (a horizontal side grasp is walled off). Each
+        # entry gives the INNER floor extents and wall height:
+        #   bins:
+        #     - {x: [-0.81, -0.16], y: [0.675, 0.825], height: 0.10}
+        # Walls are collision bodies; motion planning lifts grasped objects over them.
+        bins = []
+        for i, entry in enumerate(raw["bins"], start=1):
+            try:
+                (x_lo, x_hi), (y_lo, y_hi) = entry["x"], entry["y"]
+                bins.append(
+                    (
+                        float(x_lo),
+                        float(x_hi),
+                        float(y_lo),
+                        float(y_hi),
+                        float(entry["height"]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"bin #{i} needs 'x: [lo, hi]', 'y: [lo, hi]' and 'height'"
+                ) from exc
+        kwargs["bins"] = tuple(bins)
     if "clearances" in sections:
         cl = sections["clearances"]
         kwargs["section_clearances"] = (float(cl[0]), float(cl[1]))
