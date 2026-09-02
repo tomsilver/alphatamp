@@ -204,13 +204,29 @@ def _build_config(raw: dict) -> Restock3DEnvConfig:
     if "clearances" in sections:
         cl = sections["clearances"]
         kwargs["section_clearances"] = (float(cl[0]), float(cl[1]))
+        # A custom shelf also moves the analytic arm-insertion cutoffs (F3): the
+        # calibrated rule is ~0.10 m of entry headroom under each section's ceiling
+        # board, so the cutoffs follow the clearances unless the scene pins them
+        # explicitly (``sections: {cutoffs: [tall, short]}``). The library treats
+        # these as train-time constants, so for this proof-of-concept deployment we
+        # rebind the module attributes; every consumer (the packing feasibility, the
+        # skeleton generator, the refiner's F3 probe via ``collect``'s call-time
+        # import, and this file's validator) reads them through the module.
+        cutoffs = sections.get("cutoffs") or [float(cl[0]) - 0.10, float(cl[1]) - 0.10]
+        F.TALL_CUTOFF = float(cutoffs[0])
+        F.SHORT_CUTOFF = float(cutoffs[1])
+        F.CUTOFF["tall"] = F.TALL_CUTOFF
+        F.CUTOFF["short"] = F.SHORT_CUTOFF
     if shelf:
-        # Only x/y are honoured (z is floor-referenced); keep the rest of v3_config.
+        # x/y and the bottom placement-surface height are honoured; keep the rest of
+        # v3_config.
         from pybullet_helpers.geometry import Pose  # local: geometry dep
 
         sx = float(shelf.get("x", config.shelf_pose.position[0]))
         sy = float(shelf.get("y", config.shelf_pose.position[1]))
         kwargs["shelf_pose"] = Pose((sx, sy, 0.0))
+        if "bottom_surface_z" in shelf:
+            kwargs["bottom_surface_z"] = float(shelf["bottom_surface_z"])
     if not kwargs:
         return config
     from dataclasses import replace

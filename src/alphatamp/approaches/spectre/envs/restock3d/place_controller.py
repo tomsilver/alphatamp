@@ -167,12 +167,13 @@ def _base_nav_collision_ids(
     itself: nav must not avoid the thing it is reaching for or carrying.
     """
     ids = set(sim.shelf_structure_ids())
-    # Staging bins are deliberately NOT base obstacles: the kinematic point base's
-    # PyBullet contacts against the low walls are unreliable (false positives at
-    # decimetre range would make nearby base plans fail spuriously), and the same
-    # flakiness is why the step-time base check excludes them (see the env's
-    # ``_robot_or_held_object_collision_exists``). Keeping the base out of the bins is
-    # a scene-design constraint, validated offline against the exported trajectory.
+    # Structures the kinematic point base cannot reliably collision-check (its PyBullet
+    # contacts against low geometry misfire at decimetre range) are excluded here and in
+    # the env's step-time base check: the staging bins and a near-floor bottom shelf
+    # board (see the env's ``_base_unreliable_ids``). The base still avoids the shelf
+    # footprint via the higher boards; real-chassis clearance from low structures is a
+    # scene-design constraint validated offline against the exported trajectory.
+    ids -= set(getattr(sim, "_base_unreliable_ids", ()))
     for name in sim.movable_names():
         if name in exclude:
             continue

@@ -379,6 +379,8 @@ def main() -> None:
     # --- 7. LIVE rank -> refine -> re-rank ---------------------------------------
     tried: list[int] = []
     winner = None  # (pick, plan, action_plan)
+    # Pure-geometry inputs for the analytic pre-filter below (constant per scene).
+    analytic_dims, analytic_pos = C._restock3d_analytic_inputs(x0)
     while len(tried) < len(pool):
         example, records = build_example(
             _episode(),
@@ -414,6 +416,30 @@ def main() -> None:
         log(f"attempt {len(tried)}: skeleton #{pick} | {_ops_str(action_plan)}")
 
         seed = C._refinement_seed(cfg.refinement_seed_rule, _PID, pick)
+
+        # Analytic pre-filter: classify the skeleton with the same pure-geometry
+        # classifier the collection's hybrid prune uses. A provably infeasible
+        # candidate is recorded as a failure (with the first-violation dict, so the
+        # adaptive re-ranker conditions on it exactly as on a real one) without
+        # paying real refinement -- a ranked-order misfire costs milliseconds
+        # instead of the full per-candidate budget.
+        fm = C._restock3d_classify(
+            action_plan, analytic_dims, analytic_pos, cfg.num_sampling_attempts_per_step
+        )
+        if fm is not None:
+            outcomes[pick] = OutcomeRecord(
+                skeleton_idx=pick,
+                outcome="fail",
+                refinement_wall_clock_s=0.0,
+                refinement_seed=seed,
+                stuck_step_index=fm.get("step_index"),
+                error_info=None,
+                refiner_metadata={"failures": [fm]},
+                label_source="analytic",
+            )
+            log(f"  -> skipped, analytically infeasible: {_attribution({'failures': [fm]})}")
+            continue
+
         plan, outcome, wall, meta, stuck, err = _refine_capture(
             cfg, sampler, bpg, x0, state_plan, action_plan, seed
         )

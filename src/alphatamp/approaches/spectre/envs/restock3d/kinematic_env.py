@@ -252,6 +252,18 @@ class ObjectCentricRestock3DEnv(
                 set_pose(bid, Pose(pos), self.physics_client_id)
                 self._bin_ids.append(bid)
 
+        # Bodies the kinematic point base cannot reliably collision-check: its PyBullet
+        # contacts against LOW geometry misfire (phantom contacts at decimetre range),
+        # so the staging bins and any shelf board sitting near the floor (a re-staged
+        # shelf can put the bottom board at ~0.10 m) are excluded from the base-side
+        # checks. The arm keeps checking against all of them; the base still avoids the
+        # shelf footprint via the higher boards, and clearing low structures with the
+        # real chassis is a scene-design constraint validated offline.
+        self._base_unreliable_ids: set[int] = set(self._bin_ids)
+        for i, cz in enumerate(board_zs):
+            if float(cz) + config.shelf_height / 2 < 0.15:
+                self._base_unreliable_ids.add(self._shelf_ids[f"shelf_board_{i}"])
+
     # -- geometry access --------------------------------------------------
     def region_infos(self) -> dict[str, RegionInfo]:
         return self._region_infos
@@ -333,7 +345,7 @@ class ObjectCentricRestock3DEnv(
         against the bins; the base's clearance from them is enforced at plan time
         (``_base_nav_collision_ids`` includes the bins) and by scene design.
         """
-        if not self._bin_ids:
+        if not self._base_unreliable_ids:
             return super()._robot_or_held_object_collision_exists()
         collision_bodies = self._get_collision_object_ids()
         if self._grasped_object_id is not None:
@@ -352,7 +364,7 @@ class ObjectCentricRestock3DEnv(
             return False
         return check_mobile_base_collisions(
             self.robot.base,
-            collision_bodies - set(self._bin_ids),
+            collision_bodies - self._base_unreliable_ids,
             self.physics_client_id,
         )
 
