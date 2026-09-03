@@ -52,9 +52,7 @@ def build_ir(plan, action_plan, scene, *, meta: Optional[dict] = None) -> dict:
     sx, sy = scene.config.shelf_pose.position[0], scene.config.shelf_pose.position[1]
     warnings: list[str] = []
     for op in action_plan:
-        target = next(
-            (p.name for p in op.parameters if p.name in cylinder_of), None
-        )
+        target = next((p.name for p in op.parameters if p.name in cylinder_of), None)
         if target is None:
             raise ValueError(f"Operator {op.name} has no scene object argument")
         cyl = cylinder_of[target]

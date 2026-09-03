@@ -438,7 +438,9 @@ def main() -> None:
                 refiner_metadata={"failures": [fm]},
                 label_source="analytic",
             )
-            log(f"  -> skipped, analytically infeasible: {_attribution({'failures': [fm]})}")
+            log(
+                f"  -> skipped, analytically infeasible: {_attribution({'failures': [fm]})}"
+            )
             continue
 
         plan, outcome, wall, meta, stuck, err = _refine_capture(

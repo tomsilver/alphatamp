@@ -454,7 +454,10 @@ class RestockRecordingSampler(ParameterizedControllerTrajectorySampler):
         # ``grasp_blockers`` / ``reach_over_culprits`` remain defined for the eager tables, generator and
         # coverage probe; they are simply no longer consulted here (also skips two collision probes per
         # pick rejection -- a real-collection speedup).
-        del state, a  # unused now: no probe on picks (signature kept for _probe dispatch)
+        del (
+            state,
+            a,
+        )  # unused now: no probe on picks (signature kept for _probe dispatch)
         return (), "C2"
 
 

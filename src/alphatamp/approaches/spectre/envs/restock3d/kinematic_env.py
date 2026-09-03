@@ -239,8 +239,14 @@ class ObjectCentricRestock3DEnv(
             cz = height / 2
             wall_specs = [
                 # front (-y) and back (+y) walls span the bin width plus the corners
-                (((x_hi - x_lo) / 2 + 2 * th, th, cz), ((x_lo + x_hi) / 2, y_lo - th, cz)),
-                (((x_hi - x_lo) / 2 + 2 * th, th, cz), ((x_lo + x_hi) / 2, y_hi + th, cz)),
+                (
+                    ((x_hi - x_lo) / 2 + 2 * th, th, cz),
+                    ((x_lo + x_hi) / 2, y_lo - th, cz),
+                ),
+                (
+                    ((x_hi - x_lo) / 2 + 2 * th, th, cz),
+                    ((x_lo + x_hi) / 2, y_hi + th, cz),
+                ),
                 # end walls (+/-x)
                 ((th, (y_hi - y_lo) / 2, cz), (x_lo - th, (y_lo + y_hi) / 2, cz)),
                 ((th, (y_hi - y_lo) / 2, cz), (x_hi + th, (y_lo + y_hi) / 2, cz)),

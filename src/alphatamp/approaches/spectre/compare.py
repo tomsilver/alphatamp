@@ -140,7 +140,8 @@ def stratum_of(seed: int, env_variant: str | None = None) -> int:
         # Local import breaks the strata_v2 <-> compare import cycle (strata_v2 imports
         # SPLIT_BAND from here at module load).
         from alphatamp.approaches.spectre.envs.restock3d.strata_v2 import (
-            stratum_of as _v2_stratum_of,)
+            stratum_of as _v2_stratum_of,
+        )
 
         return _v2_stratum_of(int(seed))
     return min(3, (int(seed) % SPLIT_BAND) // STRATUM_BAND)
