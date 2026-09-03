@@ -73,6 +73,7 @@ from pathlib import Path
 # deploy_scene and robot_export are sibling modules in this folder. deploy.py runs as a
 # script, so its own directory is on sys.path and they import directly.
 import deploy_scene as DS
+import ir_export
 import numpy as np
 import robot_export
 import torch
@@ -484,9 +485,11 @@ def main() -> None:
         "r_cap_s": r_cap,
     }
     paths = robot_export.export_plan(plan, action_plan, sim, out_dir, meta=meta)
+    ir_path = ir_export.export_ir(plan, action_plan, scene, out_dir, meta=meta)
     log(f"exported: {paths['level_a']}")
     log(f"          {paths['level_b_json']}")
     log(f"          {paths['level_b_npz']}")
+    log(f"          {ir_path}")
     if args.render:
         mp4 = Path(out_dir) / "plan.mp4"
         _render_plan(sim, plan, mp4)
