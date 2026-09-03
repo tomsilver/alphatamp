@@ -44,6 +44,7 @@ from alphatamp.approaches.spectre.envs.restock3d.generator_v3 import (
     _rgba,
     v3_config,
 )
+from alphatamp.approaches.spectre.envs.restock3d import place_controller as PC
 from alphatamp.approaches.spectre.envs.restock3d.kinematic_env import (
     ObjectCentricRestock3DEnv,
     ObjectCentricRestock3DEnvV3,
@@ -173,6 +174,11 @@ def load_scene(path: str | Path) -> DeployScene:
 def _build_config(raw: dict) -> Restock3DEnvConfig:
     """The v3 env config, plus optional ``shelf``/``sections`` file overrides."""
     config = v3_config()
+    # Hand scenes have no buffer: the staging spots come from the real lab and can
+    # overlap the trained buffer rectangle, which would classify a staged object as
+    # OnBuffer (unpickable, so the skeleton pool comes up empty). Same rebinding
+    # caveat as the F3 cutoffs below.
+    PC._BUFFER_ZONE_X = (float("inf"), float("inf"))
     shelf = raw.get("shelf") or {}
     sections = raw.get("sections") or {}
     kwargs: dict[str, Any] = {}
