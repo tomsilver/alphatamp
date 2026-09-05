@@ -33,15 +33,15 @@ objects:
     height: 0.233
     depth:  0.075
     floor:  [-0.1925, 1.32]
-  - name: obj_goal4        # BBQ Pringles, purple (short)
-    width:  0.075
-    height: 0.12
-    depth:  0.075
+  - name: obj_goal4        # Campbell's-size can (short)
+    width:  0.065
+    height: 0.10
+    depth:  0.065
     floor:  [-0.9386, 1.07]
-  - name: obj_goal5        # Skippy peanut butter jar
-    width:  0.07
-    height: 0.125
-    depth:  0.07
+  - name: obj_goal5        # Campbell's-size can (short)
+    width:  0.065
+    height: 0.10
+    depth:  0.065
     floor:  [-0.8473, 1.2378]
   - name: obj_goal6        # Campbell's chicken noodle soup can
     width:  0.065
