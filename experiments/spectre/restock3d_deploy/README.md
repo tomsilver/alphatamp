@@ -60,7 +60,21 @@ objects:
 # Optional (omit to match the trained shelf):
 # shelf:    { x: 0.4, y: 1.4 }
 # sections: { clearances: [0.27, 0.22] }   # [tall(bottom), short(top)]
+# Optional staging bins (omit for objects on the open floor):
+# bins:
+#   - {x: [-0.81, -0.16], y: [0.675, 0.825], height: 0.10}
 ```
+
+### Bins
+
+A `bins:` entry builds an open-top walled box (inner floor extents + wall height) as
+real collision geometry, so grasp approaches and the held-object retract are
+motion-planned over the walls. This makes the front grasp the only way in or out — a
+horizontal side grasp is walled off — which is the story `scenes/demo6_bins` stages:
+a shallow (0.08 m) bin for the short objects and a deep (0.15 m) bin for the talls.
+Constraints (see the scene file's comments): walls ≥ 0.05 m from every object face;
+tall objects only behind walls up to ~0.15 m (their grasps ride at bottom + 0.13 m);
+short objects only behind walls up to ~0.08 m (their entries cross lower).
 
 Each object is modeled as an axis-aligned box `width × depth × height`. Real objects should be
 ones that grasp like a box (cuboids, or cylinders/toys that a box closing on the ±x faces can

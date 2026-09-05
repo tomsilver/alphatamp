@@ -44,6 +44,7 @@ from alphatamp.approaches.spectre.envs.restock3d.generator_v3 import (
     _rgba,
     v3_config,
 )
+from alphatamp.approaches.spectre.envs.restock3d import place_controller as PC
 from alphatamp.approaches.spectre.envs.restock3d.kinematic_env import (
     ObjectCentricRestock3DEnv,
     ObjectCentricRestock3DEnvV3,
@@ -173,19 +174,65 @@ def load_scene(path: str | Path) -> DeployScene:
 def _build_config(raw: dict) -> Restock3DEnvConfig:
     """The v3 env config, plus optional ``shelf``/``sections`` file overrides."""
     config = v3_config()
+    # Hand scenes have no buffer: the staging spots come from the real lab and can
+    # overlap the trained buffer rectangle, which would classify a staged object as
+    # OnBuffer (unpickable, so the skeleton pool comes up empty). Same rebinding
+    # caveat as the F3 cutoffs below.
+    PC._BUFFER_ZONE_X = (float("inf"), float("inf"))
     shelf = raw.get("shelf") or {}
     sections = raw.get("sections") or {}
     kwargs: dict[str, Any] = {}
+    if raw.get("bins"):
+        # Staging bins: open-top walled boxes the objects start in, so only the 45deg
+        # front grasp can get them out (a horizontal side grasp is walled off). Each
+        # entry gives the INNER floor extents and wall height:
+        #   bins:
+        #     - {x: [-0.81, -0.16], y: [0.675, 0.825], height: 0.10}
+        # Walls are collision bodies; motion planning lifts grasped objects over them.
+        bins = []
+        for i, entry in enumerate(raw["bins"], start=1):
+            try:
+                (x_lo, x_hi), (y_lo, y_hi) = entry["x"], entry["y"]
+                bins.append(
+                    (
+                        float(x_lo),
+                        float(x_hi),
+                        float(y_lo),
+                        float(y_hi),
+                        float(entry["height"]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"bin #{i} needs 'x: [lo, hi]', 'y: [lo, hi]' and 'height'"
+                ) from exc
+        kwargs["bins"] = tuple(bins)
     if "clearances" in sections:
         cl = sections["clearances"]
         kwargs["section_clearances"] = (float(cl[0]), float(cl[1]))
+        # A custom shelf also moves the analytic arm-insertion cutoffs (F3): the
+        # calibrated rule is ~0.10 m of entry headroom under each section's ceiling
+        # board, so the cutoffs follow the clearances unless the scene pins them
+        # explicitly (``sections: {cutoffs: [tall, short]}``). The library treats
+        # these as train-time constants, so for this proof-of-concept deployment we
+        # rebind the module attributes; every consumer (the packing feasibility, the
+        # skeleton generator, the refiner's F3 probe via ``collect``'s call-time
+        # import, and this file's validator) reads them through the module.
+        cutoffs = sections.get("cutoffs") or [float(cl[0]) - 0.10, float(cl[1]) - 0.10]
+        F.TALL_CUTOFF = float(cutoffs[0])
+        F.SHORT_CUTOFF = float(cutoffs[1])
+        F.CUTOFF["tall"] = F.TALL_CUTOFF
+        F.CUTOFF["short"] = F.SHORT_CUTOFF
     if shelf:
-        # Only x/y are honoured (z is floor-referenced); keep the rest of v3_config.
+        # x/y and the bottom placement-surface height are honoured; keep the rest of
+        # v3_config.
         from pybullet_helpers.geometry import Pose  # local: geometry dep
 
         sx = float(shelf.get("x", config.shelf_pose.position[0]))
         sy = float(shelf.get("y", config.shelf_pose.position[1]))
         kwargs["shelf_pose"] = Pose((sx, sy, 0.0))
+        if "bottom_surface_z" in shelf:
+            kwargs["bottom_surface_z"] = float(shelf["bottom_surface_z"])
     if not kwargs:
         return config
     from dataclasses import replace

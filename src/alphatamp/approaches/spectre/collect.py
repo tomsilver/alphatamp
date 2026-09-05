@@ -535,9 +535,7 @@ def _real_refine_candidate(
             trajectory_sampler,  # type: ignore[arg-type]
             action_plan,
             cfg.num_sampling_attempts_per_step,
-            budget_exhausted=(
-                time.perf_counter() - start >= cfg.refinement_timeout_s
-            ),
+            budget_exhausted=(time.perf_counter() - start >= cfg.refinement_timeout_s),
         )
         if failures:
             refiner_metadata["failures"] = failures

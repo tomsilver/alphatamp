@@ -1,0 +1,55 @@
+# The real lab objects on the re-staged shelf (measured 2026-09-02).
+#
+# Shelf, floor-up: bottom (tall) placement surface at 0.10 m, tall clear gap 0.425 m
+# (ceiling underside 0.525), top (short) surface at 0.538, short clear gap 0.249
+# (ceiling underside 0.787), unit top ~0.80. With ~0.10 m of angled-insertion headroom
+# the effective cutoffs are tall <= ~0.325, short <= ~0.149: the three tall cans fit
+# ONLY the bottom section (23.3 cm doesn't even statically fit under the 24.9 cm top
+# gap), and the story is enforced by the physical shelf, not just the model.
+#
+# Objects are cylinders modeled as bounding boxes (width = depth = diameter); the
+# widths (6.5-7.5 cm) all clear the ~8.5 cm gripper aperture.
+#
+# Floor positions are the real staging spots (the zigzag rows inside the two boxes,
+# logged from the ceiling camera), mapped from the lab map frame to this home frame by
+# the shelf alignment (map (1.63, 1.51) -> home (0.40, 1.40), axes parallel). The
+# boxes themselves are not modeled here; the kinder side plans the box-aware picks.
+# Talls sit in the deep-box row beside the shelf, shorts in the rotated shallow-box
+# row farther out.
+
+objects:
+  - name: obj_goal1        # Original Pringles, red (extra tall)
+    width:  0.075
+    height: 0.29
+    depth:  0.075
+    floor:  [-0.4525, 1.32]
+  - name: obj_goal2        # Lysol can (tall)
+    width:  0.075
+    height: 0.208
+    depth:  0.075
+    floor:  [-0.3225, 1.44]
+  - name: obj_goal3        # Sour Cream & Onion Pringles, green (tall)
+    width:  0.075
+    height: 0.233
+    depth:  0.075
+    floor:  [-0.1925, 1.32]
+  - name: obj_goal4        # Campbell's-size can (short)
+    width:  0.065
+    height: 0.10
+    depth:  0.065
+    floor:  [-0.9386, 1.07]
+  - name: obj_goal5        # Campbell's-size can (short)
+    width:  0.065
+    height: 0.10
+    depth:  0.065
+    floor:  [-0.8473, 1.2378]
+  - name: obj_goal6        # Campbell's chicken noodle soup can
+    width:  0.065
+    height: 0.10
+    depth:  0.065
+    floor:  [-0.6867, 1.1343]
+
+shelf:
+  bottom_surface_z: 0.10
+sections:
+  clearances: [0.425, 0.249]

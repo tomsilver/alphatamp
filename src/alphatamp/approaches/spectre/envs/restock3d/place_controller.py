@@ -167,6 +167,13 @@ def _base_nav_collision_ids(
     itself: nav must not avoid the thing it is reaching for or carrying.
     """
     ids = set(sim.shelf_structure_ids())
+    # Structures the kinematic point base cannot reliably collision-check (its PyBullet
+    # contacts against low geometry misfire at decimetre range) are excluded here and in
+    # the env's step-time base check: the staging bins and a near-floor bottom shelf
+    # board (see the env's ``_base_unreliable_ids``). The base still avoids the shelf
+    # footprint via the higher boards; real-chassis clearance from low structures is a
+    # scene-design constraint validated offline against the exported trajectory.
+    ids -= set(getattr(sim, "_base_unreliable_ids", ()))
     for name in sim.movable_names():
         if name in exclude:
             continue
@@ -761,7 +768,8 @@ class RestockFrontPickController(GroundPickController):
 
 
 class RestockFrontPlaceController(BasePlaceController):
-    """Translate-only place of an upright block into a region (keeps its orientation fixed).
+    """Translate-only place of an upright block into a region (keeps its orientation
+    fixed).
 
     The EE pose is derived from the ACTUAL grasp so the object is *translated*, not rotated:
     ``ee = desired_object_pose(upright) . grasp^-1``. The pre-place standoff backs off along the

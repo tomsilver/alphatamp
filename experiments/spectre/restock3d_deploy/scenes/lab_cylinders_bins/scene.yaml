@@ -1,0 +1,57 @@
+# The real lab objects staged inside the two real boxes (measured 2026-09-02), on the
+# re-staged shelf. Box dims are the measured inner extents; the sim's 12 mm walls are
+# thicker than the cardboard, which only adds slack.
+#
+# Shallow box (32 x 40, 11.5 tall) holds the shorts. Rows use the 0.12 m minimum
+# spacing, centered in each box: the open gripper's fingers reach ~6 cm from the object
+# center along +-x, so end objects need >= ~2 cm of finger room to the end walls
+# (0.15 m spacing left only ~3.7 cm center-to-wall and every end pick jammed).
+# The rows sit back from the front walls so the 45-degree entries
+# (grasp EE at ~bottom+0.085-0.11) cross the 11.5 cm rim with margin. Deep box
+# (39.5 x 29.75, 21.5 tall) holds the talls, staged toward its BACK wall: their grasp
+# rides at bottom+0.13, below the rim, so the diagonal entry needs ~13 cm of front
+# clearance to clear it. The 29 cm can pokes 7.5 cm above the deep rim (a side grasp
+# over the rim is conceivable for that one); the other talls sit essentially flush.
+
+objects:
+  - name: obj_goal1        # Original Pringles, red (extra tall)
+    width:  0.075
+    height: 0.29
+    depth:  0.075
+    floor:  [-0.62, 1.10]
+  - name: obj_goal2        # Lysol can (tall)
+    width:  0.075
+    height: 0.208
+    depth:  0.075
+    floor:  [-0.50, 1.10]
+  - name: obj_goal3        # Sour Cream & Onion Pringles, green (tall)
+    width:  0.075
+    height: 0.233
+    depth:  0.075
+    floor:  [-0.38, 1.10]
+  - name: obj_goal4        # BBQ Pringles, purple (short)
+    width:  0.075
+    height: 0.12
+    depth:  0.075
+    floor:  [-0.62, 0.78]
+  - name: obj_goal5        # Skippy peanut butter jar
+    width:  0.07
+    height: 0.125
+    depth:  0.07
+    floor:  [-0.50, 0.78]
+  - name: obj_goal6        # Campbell's chicken noodle soup can
+    width:  0.065
+    height: 0.10
+    depth:  0.065
+    floor:  [-0.38, 0.78]
+
+shelf:
+  bottom_surface_z: 0.10
+sections:
+  clearances: [0.425, 0.249]
+
+bins:
+  # shallow box, 40 cm side along x, shorts row set 12 cm from the front wall
+  - {x: [-0.70, -0.30], y: [0.66, 0.98], height: 0.115}
+  # deep box, 39.5 cm side along x, talls ~13 cm from the front wall, ~10 from the back
+  - {x: [-0.6975, -0.3025], y: [0.9325, 1.23], height: 0.215}

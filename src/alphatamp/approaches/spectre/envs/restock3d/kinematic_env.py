@@ -39,6 +39,10 @@ from kinder.envs.kinematic3d.object_types import (
 from kinder.envs.kinematic3d.shelf3d import Shelf3DObjectCentricState
 from kinder.envs.kinematic3d.utils import Kinematic3DObjectCentricState
 from pybullet_helpers.geometry import Pose, set_pose
+from pybullet_helpers.inverse_kinematics import (
+    check_collisions_with_held_object,
+    check_mobile_base_collisions,
+)
 from pybullet_helpers.utils import create_pybullet_block
 from relational_structs import Object, ObjectCentricState
 from relational_structs.utils import create_state_from_dict
@@ -106,6 +110,16 @@ class Restock3DEnvConfig(Kinematic3DEnvConfig, metaclass=FinalConfigMeta):
     # so a small short gap does not raise the (reachable) short placement surface.
     bottom_surface_z: float = 0.29
     section_clearances: tuple[float, float] = (0.34, 0.15)
+
+    # Staging bins: open-top walled boxes around the floor objects, so the only way in
+    # or out is from above (the 45deg front grasp) -- a horizontal side grasp is walled
+    # off. Each entry is the bin's INNER floor extents plus its wall height:
+    # ``(x_lo, x_hi, y_lo, y_hi, height)``. Walls are real collision bodies included in
+    # ``_get_collision_object_ids``, so grasp approaches and the held-object retract are
+    # motion-planned over them. Empty (the default) builds no bins.
+    bins: tuple[tuple[float, float, float, float, float], ...] = ()
+    bin_wall_thickness: float = 0.012
+    bin_rgba: tuple[float, float, float, float] = (0.35, 0.45, 0.65, 1.0)
 
     # Region layout (front strip along the shelf width).
     region_front_offset: float = 0.05  # region y = shelf_y - offset (front, robot side)
@@ -215,6 +229,47 @@ class ObjectCentricRestock3DEnv(
             set_pose(sid, Pose(pos), self.physics_client_id)
             self._shelf_support_ids.append(sid)
 
+        # Staging bins (see the config field): four walls per bin, open top and no floor
+        # panel (objects rest on the room floor at their scene z, so a solid bin bottom
+        # would intersect them). Unlike the shelf's cosmetic side walls these ARE
+        # collision bodies -- being obstacles is their entire purpose.
+        self._bin_ids: list[int] = []
+        th = config.bin_wall_thickness
+        for x_lo, x_hi, y_lo, y_hi, height in config.bins:
+            cz = height / 2
+            wall_specs = [
+                # front (-y) and back (+y) walls span the bin width plus the corners
+                (
+                    ((x_hi - x_lo) / 2 + 2 * th, th, cz),
+                    ((x_lo + x_hi) / 2, y_lo - th, cz),
+                ),
+                (
+                    ((x_hi - x_lo) / 2 + 2 * th, th, cz),
+                    ((x_lo + x_hi) / 2, y_hi + th, cz),
+                ),
+                # end walls (+/-x)
+                ((th, (y_hi - y_lo) / 2, cz), (x_lo - th, (y_lo + y_hi) / 2, cz)),
+                ((th, (y_hi - y_lo) / 2, cz), (x_hi + th, (y_lo + y_hi) / 2, cz)),
+            ]
+            for half, pos in wall_specs:
+                bid = create_pybullet_block(
+                    config.bin_rgba, half, physics_client_id=self.physics_client_id
+                )
+                set_pose(bid, Pose(pos), self.physics_client_id)
+                self._bin_ids.append(bid)
+
+        # Bodies the kinematic point base cannot reliably collision-check: its PyBullet
+        # contacts against LOW geometry misfire (phantom contacts at decimetre range),
+        # so the staging bins and any shelf board sitting near the floor (a re-staged
+        # shelf can put the bottom board at ~0.10 m) are excluded from the base-side
+        # checks. The arm keeps checking against all of them; the base still avoids the
+        # shelf footprint via the higher boards, and clearing low structures with the
+        # real chassis is a scene-design constraint validated offline.
+        self._base_unreliable_ids: set[int] = set(self._bin_ids)
+        for i, cz in enumerate(board_zs):
+            if float(cz) + config.shelf_height / 2 < 0.15:
+                self._base_unreliable_ids.add(self._shelf_ids[f"shelf_board_{i}"])
+
     # -- geometry access --------------------------------------------------
     def region_infos(self) -> dict[str, RegionInfo]:
         return self._region_infos
@@ -226,9 +281,12 @@ class ObjectCentricRestock3DEnv(
         return set(self._shelf_ids.values())
 
     def shelf_structure_ids(self) -> set[int]:
-        """The shelf's COLLISION bodies = the boards. The side walls + back panel are cosmetic
-        (visual-only, not collision) so they don't block off-centre placements near the shelf edges;
-        F3 is a *board* (ceiling) collision, not a wall collision."""
+        """The shelf's COLLISION bodies = the boards.
+
+        The side walls + back panel are cosmetic (visual-only, not collision) so they
+        don't block off-centre placements near the shelf edges; F3 is a *board*
+        (ceiling) collision, not a wall collision.
+        """
         return set(self._shelf_ids.values())
 
     # -- required abstract methods ---------------------------------------
@@ -273,9 +331,48 @@ class ObjectCentricRestock3DEnv(
         raise ValueError(f"Unrecognized object name: {object_name}")
 
     def _get_collision_object_ids(self) -> set[int]:
-        # Boards + movables only; the side walls / back panel (``_shelf_support_ids``) are cosmetic
-        # (they render but do not collide), so they never spuriously block a placement.
-        return set(self._shelf_ids.values()) | set(self._movable_ids.values())
+        # Boards + movables + bin walls; the shelf's side walls / back panel
+        # (``_shelf_support_ids``) are cosmetic (they render but do not collide), so they
+        # never spuriously block a placement. Bin walls DO collide: motion planning must
+        # route grasp approaches and the held-object retract over them.
+        return (
+            set(self._shelf_ids.values())
+            | set(self._movable_ids.values())
+            | set(self._bin_ids)
+        )
+
+    def _robot_or_held_object_collision_exists(self) -> bool:
+        """Parent behaviour, except the step-time BASE check excludes the bin walls.
+
+        The kinematic mobile base is a degenerate point body whose PyBullet contact
+        reports against the low bin walls are unreliable (false positives at decimetre
+        range), so every base step near the bins would spuriously revert and the
+        trajectory would deviate from the plan. The arm and held object keep checking
+        against the bins; the base's clearance from them is enforced at plan time
+        (``_base_nav_collision_ids`` includes the bins) and by scene design.
+        """
+        if not self._base_unreliable_ids:
+            return super()._robot_or_held_object_collision_exists()
+        collision_bodies = self._get_collision_object_ids()
+        if self._grasped_object_id is not None:
+            collision_bodies.discard(self._grasped_object_id)
+        collision_bodies -= self._get_inside_object_ids()
+        if check_collisions_with_held_object(
+            self.robot.arm,
+            collision_bodies,
+            self.physics_client_id,
+            self._grasped_object_id,
+            self._grasped_object_transform,
+            self.robot.arm.get_joint_positions(),
+        ):
+            return True
+        if not self.config.check_base_collisions:
+            return False
+        return check_mobile_base_collisions(
+            self.robot.base,
+            collision_bodies - self._base_unreliable_ids,
+            self.physics_client_id,
+        )
 
     def _get_movable_object_names(self) -> set[str]:
         return set(self._movable_ids)
@@ -457,7 +554,7 @@ class Restock3DV2Env(Restock3DEnv):
 
 
 class ObjectCentricRestock3DEnvV3(ObjectCentricRestock3DEnv):
-    """v3 continuous-packing env with **per-object sampled dims** (width + height).
+    """V3 continuous-packing env with **per-object sampled dims** (width + height).
 
     v2 keeps object dims as type-keyed constants (only positions vary per seed). v3 samples each
     object's ``(half_x, half_z)`` per seed via ``spec_fn(seed)``, so the movable PyBullet BODIES are
